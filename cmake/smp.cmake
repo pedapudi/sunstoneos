@@ -136,7 +136,7 @@ if(SUNSTONE_PARTITIONED_SCHEDULER)
       -Wl,--defsym=SUNSTONE_SMP_STACKS=8
       "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
       "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/scheduler-${variant}-qemu.map")
-    set_target_properties(scheduler-${variant}-qemu PROPERTIES SUFFIX ".elf"
+    set_target_properties(scheduler-${variant}-qemu PROPERTIES SUFFIX ".elf" SUNSTONE_TIMER_PPI_CHECK ON
       LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
     sunstone_scheduler_partitioned_bind(scheduler-${variant}-qemu "${smp_build}")
   endforeach()
@@ -160,7 +160,7 @@ if(SUNSTONE_PARTITIONED_SCHEDULER)
     -Wl,--defsym=SUNSTONE_SMP_STACKS=8
     "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/scheduler-objects-qemu.map")
-  set_target_properties(scheduler-objects-qemu PROPERTIES SUFFIX ".elf"
+  set_target_properties(scheduler-objects-qemu PROPERTIES SUFFIX ".elf" SUNSTONE_TIMER_PPI_CHECK ON
     LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
   sunstone_scheduler_partitioned_bind(scheduler-objects-qemu "${smp_build}")
 endif()

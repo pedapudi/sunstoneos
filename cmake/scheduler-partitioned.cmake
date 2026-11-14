@@ -2,14 +2,6 @@
 include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/patch.cmake")
 option(SUNSTONE_PARTITIONED_SCHEDULER "Select the private owner scheduler in SMP images" ON)
-# docs/designs/scheduler-partitioned.md, "One-shot local timers replace periodic scheduler ticks".
-option(SUNSTONE_LOCAL_TIMERS "CPUs 1-7 arm their own one-shot timers for their deadlines instead of CPU0's tick releasing them" OFF)
-if(SUNSTONE_LOCAL_TIMERS AND NOT SUNSTONE_PARTITIONED_SCHEDULER)
-  message(FATAL_ERROR "Local timers are part of the partitioned scheduler")
-endif()
-if(SUNSTONE_LOCAL_TIMERS AND (SUNSTONE_CONTROL_IRQ OR SUNSTONE_LATENCY_CONTROL))
-  message(FATAL_ERROR "The control interrupt measurement's task path uses PPI 30 on cores 1-7, which local timers own")
-endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/current-tcb.cmake")
 function(sunstone_scheduler_partitioned_prepare output smp_tasks)
@@ -81,7 +73,12 @@ function(sunstone_scheduler_partitioned_bind target output)
   set_source_files_properties(${kernel_sources} PROPERTIES COMPILE_OPTIONS "-mgeneral-regs-only"
     INCLUDE_DIRECTORIES "${output}/include;${root}/kernel/scheduler" COMPILE_DEFINITIONS "configSS_PARTITIONED_SCHEDULER=1")
   target_include_directories(${target} BEFORE PRIVATE "${output}/include" "${root}/kernel/scheduler")
+  # CPUs 1-7 arm their own one-shot timers (docs/designs/scheduler-partitioned.md, "One-shot local timers replace
+  # periodic scheduler ticks"); a platform that never publishes the counter time base keeps CPU0's periodic release.
+  # Two builds own PPI 30 on CPUs 1-7 themselves: the control interrupt measurement and the QEMU checks that set
+  # the target property SUNSTONE_TIMER_PPI_CHECK.
+  set(local_timers "$<NOT:$<OR:$<BOOL:${SUNSTONE_CONTROL_IRQ}>,$<BOOL:${SUNSTONE_LATENCY_CONTROL}>,$<BOOL:$<TARGET_PROPERTY:SUNSTONE_TIMER_PPI_CHECK>>>>")
   target_compile_definitions(${target} PRIVATE configSS_PARTITIONED_SCHEDULER=1
-    "$<$<BOOL:${SUNSTONE_LOCAL_TIMERS}>:SUNSTONE_LOCAL_TIMERS=1>")
+    "$<${local_timers}:SUNSTONE_LOCAL_TIMERS=1>")
   target_compile_options(${target} PRIVATE -march=armv8.1-a+lse)
 endfunction()

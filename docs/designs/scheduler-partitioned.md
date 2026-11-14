@@ -889,14 +889,21 @@ numerical ordering, and no application header enters the OS.
 
 ## One-shot local timers replace periodic scheduler ticks
 
-Status: CPUs 1-7 are implemented behind `SUNSTONE_LOCAL_TIMERS` (default off); CPU0
-keeps its tick. By default the fork keeps the periodic 1 ms tick: CPU0's PPI30
-advances global time (`ssKernelTick`), samples every owner's next deadline and slice
-deadline, and forces owner service on a remote CPU when one is due. Secondaries
-execute WFI when idle and receive only SGIs. `configUSE_TICKLESS_IDLE` is rejected at
-compile time.
+Status: CPUs 1-7 arm their own timers in every partitioned-scheduler image on
+AArch64; CPU0 keeps its periodic 1 ms tick. The board run that showed this
+(entry 1794692009857062646-48facc67, `docs/evidence/scheduler.jsonl`) halved the
+awake fraction of CPUs 1-3 and cut CPU0's busy tick from 49,703 to 14,018 cycles.
+`configUSE_TICKLESS_IDLE` is rejected at compile time.
 
-With `SUNSTONE_LOCAL_TIMERS`, the platform publishes the counter value at which kernel
+A platform that publishes no counter time base keeps the periodic release: CPU0's
+PPI30 advances global time (`ssKernelTick`), samples every owner's next deadline and
+slice deadline, and forces owner service on a remote CPU when one is due.
+Secondaries then execute WFI when idle and receive only SGIs. Two builds keep the
+periodic release at compile time because they use PPI30 on CPUs 1-7 themselves: the
+control-interrupt measurement (`SUNSTONE_CONTROL_IRQ`, `SUNSTONE_LATENCY_CONTROL`)
+and the QEMU wake checks (`SS_WAKE`; target property `SUNSTONE_TIMER_PPI_CHECK`).
+
+The platform publishes the counter value at which kernel
 time began and the counter periods per tick when it starts CPU0's tick
 (`ss_kernel_timebase`; `platform/a733-smp-cached` and `platform/qemu-smp` do). From
 then on, kernel time on every CPU is the counter's whole periods since that epoch, and
@@ -908,9 +915,7 @@ and it stops the timer when it has neither deadline. So a CPU with nothing due t
 no timer interrupt and stays in WFI. The PPI30 handler stops the timer, and the
 interrupt exit's service expires the deadline and arms the next one. EL0 cannot write
 the timer (`CNTKCTL_EL1.EL0PTEN` is clear), so a task-level change to an earlier tick
-sends the CPU SGI 0, and the arm happens at the interrupt exit, at EL1. A platform
-that publishes no time base keeps the ticked behaviour. The option excludes the
-control-interrupt measurement, whose task path uses PPI30 on CPUs 1-7.
+sends the CPU SGI 0, and the arm happens at the interrupt exit, at EL1.
 The sub-tick wait for drivers is a separate consumer:
 `sunstone_deadline_wait_until()` (`include/sunstone_deadline.h`, `runtime/deadline.c`) shares CPU0's generic-timer compare through a fixed 16-slot table (`DEADLINE_SLOTS`).
 
