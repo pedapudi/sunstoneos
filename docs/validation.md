@@ -253,10 +253,19 @@ mean cores and peak resident memory of one gate, all measured with a sampler on 
 `jobs_per_slot` divides the usable cores across the slots. Change a measurement there, not the code, when the host or the gate changes.
 
 The steps whose result depends on wall time hold the exclusive `~/.cache/sunstoneos/gate-timing.lock` while they run and run alone in
-their gate: the soak, `scheduler-control-linked.py` (which also runs the yield models, whose wake bound is the critical path described above; its perturbation sweep kills a QEMU run that exceeds four times the slowest measured point, 85.7 s, recorded in the same
-file; the runs count instructions, so the host load does not change them), `smp-ticket-lock.py`, `tick-footprint-budget.py`, `gpu-conformance.py`, `land.py`, `submit-wait.py` and the `SERIAL_CHECKS`. The two CPU/NPU
+their gate: the soak, `smp-ticket-lock.py`, `tick-footprint-budget.py`, `gpu-conformance.py`, `land.py`, `submit-wait.py` and the `SERIAL_CHECKS`. The two CPU/NPU
 checks (`cpu-npu-concurrency.py`, `cpu-npu-return-chain.py`) need no lock: their producer runs the application's threads on a
-virtual counter (`checks/cpu-npu-concurrency/producer.c`), so two runs write the same receipt whatever the host load. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
+virtual counter (`checks/cpu-npu-concurrency/producer.c`), so two runs write the same receipt whatever the host load.
+`scheduler-control-linked.py` needs no lock either: the wake bound of its yield models is the critical path described above, counted in
+instructions, and its worst values (41,924 and 17,022 instructions) were the same in a run on a host at a load of about 20 and in a run
+beside 24 busy processes on 2026-11-13. Its other models compare guest ticks only with liveness bounds. Those tick counts are not
+always the same from run to run, because QEMU's round-robin of the vCPUs on one thread usually repeats exactly but not always under
+host load (in one full run of the check beside 24 busy processes, 11 of 71 QEMU logs differed from a quieter run). The local-wake phase of
+`scheduler-partitioned-qemu` takes 905 ticks in nearly every run, 1,600 in about one run in fifty under host load and 1,891 under the
+heaviest perturbation, against a bound of 7,600; each progress wait of `scheduler-objects-qemu` has 4,000 ticks, and how close a run
+comes to that is not recorded.
+The perturbation sweep kills a QEMU run that exceeds eight times the slowest measured point,
+85.7 s, recorded in the same file; the slowest run took 192 s beside 24 busy processes. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
 pass criteria do not change. `checks/gate-slots.py` runs two gates at once, the exclusive timing lock, a landing that goes ahead of an
 older worker and a killed waiter.
 

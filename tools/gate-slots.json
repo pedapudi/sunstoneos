@@ -17,7 +17,6 @@
     "check-soak8"
   ],
   "timing_checks": [
-    "scheduler-control-linked.py",
     "smp-ticket-lock.py",
     "tick-footprint-budget.py",
     "gpu-conformance.py",
@@ -25,9 +24,9 @@
     "submit-wait.py"
   ],
   "perturb": {
-    "_comment": "checks/scheduler-control-linked.py: QEMU runs on the instruction counter, so a run's host time is its instruction work, not the host load (serial and eight at once measured 85.1 s and 85.7 s for the slowest point, perturb-scheduler-partitioned-qemu-control-open-3000, 30 runs, 427 s in all). The kill limit is a hang backstop: kill_multiplier times the slowest measured point.",
+    "_comment": "checks/scheduler-control-linked.py: the slowest point, perturb-scheduler-partitioned-qemu-control-open-3000, took 85.1 s serial and 85.7 s eight at once (30 runs, 427 s in all). The check is not a timing step, so it runs beside other gates' work: on 2026-11-13 its slowest QEMU run took 113 s on a host at a load of about 20 and 192 s beside 24 busy processes. The kill limit is a hang backstop, kill_multiplier times the slowest measured point (686 s), so the loaded run stays under a third of it.",
     "slowest_point_seconds": 85.7,
-    "kill_multiplier": 4
+    "kill_multiplier": 8
   },
   "latency_control": {
     "_comment": "checks/latency-control-integration.py runs the control models on one TCG thread with a fixed icount (24 concurrent runs under 24 busy processes and 10 alone gave one identical log); the busy model with --allow-runtime-error takes 33.0 s, with --negative-wrapper-order 33.5 s, the idle model 15.6 s. The kill limit is a hang backstop: kill_multiplier times the slowest.",

@@ -6,7 +6,7 @@ Every case runs real processes on a temporary home directory, so the file locks 
                three slots, a host with less memory or fewer cores gives fewer, and a different measurement gives a different count;
   two-gates    three worker gates start: two run at once in slots 1 and 2, never in slot 0, and the third waits until one ends;
   timing-lock  two gates enter the timing lock: the second waits until the first leaves, and a gate that holds a slot is not
-               blocked by it; the scheduler perturbation sweep, the soak and the SERIAL_CHECKS of the index are timing steps;
+               blocked by it; the soak and the SERIAL_CHECKS of the index are timing steps, the scheduler perturbation sweep is not;
   landing-jump slots held by a landing and two workers; an older worker and a newer landing wait: the slot a worker frees goes to
                the landing, then the next free slot to the worker, and a landing takes slot 0 when it frees;
   perturb-limit the kill limit of the perturbation sweep is a multiple of its slowest measured point in the same JSON;
@@ -148,17 +148,13 @@ def case_timing_lock(home):
             if process:
                 process.end()
     serial = set(('cpu-pmu-smp.py', 'smp-port-cost.py', 'pcie-qemu.py', 'npu-runtime-bounds.py'))
-    for name, script in (('image-scheduler-control-linked', 'scheduler-control-linked.py'), ('check-soak8', None),
+    for name, script in (('check-soak8', None),
                          ('indexed-smp-ticket-lock', 'smp-ticket-lock.py'), ('indexed-pcie-qemu', 'pcie-qemu.py')):
         assert gate_slots.is_timing_step(CONFIG, name, script, serial), name + ' is a wall-time step'
     assert not gate_slots.is_timing_step(CONFIG, 'indexed-memory-layout', 'memory-layout.py', serial)
-    # The models that fail first under host load run inside scheduler-control-linked.py (3 of 24 runs of scheduler-yield-qemu failed
-    # beside other gates' work, 0 of 5 alone: a vCPU that QEMU's round-robin leaves waiting makes its wakes late on the shared counter),
-    # so the timing lock covers them through that script; the case names them so a move out of it is noticed.
-    linked = (ROOT / 'checks/scheduler-control-linked.py').read_text()
-    for model in ('scheduler-yield-qemu', 'scheduler-yield-storm-qemu', 'scheduler-partitioned-qemu', 'scheduler-objects-qemu'):
-        assert "'" + model + "'" in linked, model + ' no longer runs inside scheduler-control-linked.py, a timing step'
-    assert 'scheduler-control-linked.py' in CONFIG['timing_checks']
+    # The yield models' wake bound is a critical path in instructions (tools/qemu-critical-path.c), the same in every run whatever the
+    # host load, so the sweep and the linked models run beside other work: they hold no timing lock.
+    assert not gate_slots.is_timing_step(CONFIG, 'image-scheduler-control-linked', 'scheduler-control-linked.py', serial)
     for script in CONFIG['timing_checks']:
         assert (ROOT / 'checks' / script).is_file(), script + ' is listed as a timing check but is not in checks/'
     spec = importlib.util.spec_from_file_location('check_index', ROOT / 'checks/check-index.py')
