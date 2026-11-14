@@ -442,6 +442,8 @@ def policy(info, args, session=None):
         require(not getattr(args, 'marker_clear_test', False) and not getattr(args, 'wifi', None) and not args.storage_write,
                 '--boot-once-slot is incompatible with --marker-clear-test, --wifi and --storage-write.')
         boot_once_slot(args)
+    require(not getattr(args, 'boot_once_measure', None) or getattr(args, 'boot_once_slot', None),
+            '--boot-once-measure applies only to a --boot-once-slot run.')
     # The radio stage limit shapes the radio profile; an image without the radio's result channel has none.
     require(not getattr(args, 'radio_stage_limit', 0) or 'os_radio_result_descriptor' in (info.get('symbols') or {}),
             '--radio-stage-limit applies only to the radio scan image.')
@@ -719,9 +721,18 @@ def boot_once_slot(args):
 
     It first requires a measured watchdog recovery for every stage of the chain (tools/boot_chain.py): a stage that hangs
     with no WDT0 reset leaves the board off USB until the card is removed."""
-    problems = load('boot_once_chain', ROOT/'tools/boot_chain.py').unproven()
-    require(not problems, 'Boot-once refused: a stage of the card boot chain has no measured watchdog recovery. ' +
-            ' '.join(problems))
+    chain = load('boot_once_chain', ROOT/'tools/boot_chain.py')
+    measure = getattr(args, 'boot_once_measure', None)
+    if measure:
+        # The card's stage 2 stops at the arming that covers this stage, so the run measures that arming's expiry
+        # (docs/designs/card-boot-chain.md, "Measuring the OS row").
+        require(getattr(args, 'approved_by', None) == 'coordinator', '--boot-once-measure requires --approved-by coordinator.')
+        reason = chain.measurable(measure)
+        require(reason is None, 'Boot-once measurement refused: %s.' % reason)
+    else:
+        problems = chain.unproven()
+        require(not problems, 'Boot-once refused: a stage of the card boot chain has no measured watchdog recovery. ' +
+                ' '.join(problems))
     path = Path(args.boot_once_slot)
     raw = path.read_bytes()
     try:

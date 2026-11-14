@@ -192,6 +192,19 @@ launch. Status includes running entries, eligible queued entries and the last
 start, result, withdrawal, pause and resume. Entry files and earlier evidence are retained.
 `--queue DIR`, before the subcommand, selects an isolated queue.
 
+The queue keeps each image once. An entry holds its image in up to four places: the submitted copy (`image.elf`), the
+runner's frozen copy (`run/image.elf`), the prepared bundle's copy (`run/bundle/image.elf`) and a template copy
+(`template/board/image.elf`). After a run has finished, the daemon replaces each copy with a hard link to
+`images/SHA256.elf` (or `.bin`) in the queue directory, and records an `images-folded` ledger event. Each path keeps its
+bytes, so nothing that the runner uploads or admits changes and no reader needs to resolve a hash. A copy is replaced
+only after its SHA-256 and size match the stored file, whose own SHA-256 is checked against its name first, and the
+replacement is an atomic rename. A stored file is read-only, so a write through one link cannot change another entry. The
+daemon folds nothing before a run, because a queued image is still an input. `tools/board_image_store.py fold --apply`
+folds every entry whose `entry.json` says it is done (an entry refused at claim never reaches the daemon's fold), and
+`verify` checks every stored file against its name; a stored file with a link count of 1 belongs to no entry. On
+2026-11-13 the fold held 2,711 copies (17.7 GB) as 678 stored images (4.2 GB). `checks/board-image-store.py` and the
+daemon cases of `checks/board-runner.py` check this.
+
 ## Resident completion test
 
 `--lifetime resident` selects the linked resident contract and requires
@@ -733,6 +746,16 @@ record `0x0c024041`, the marker `0x16aa16aa`, LAST `0x01115000` (stage `0x0111`,
 value `0x5000`) and no fault; the outcome is then `watchdog-reset` with
 `expected_reset: true`. Any other words give the same outcome with a
 `first_failure` that lists the expected and observed words.
+
+`--boot-once-measure os` adds to a boot-once run the measurement of the OS
+row's WDT0 arming after boot0 ([card-boot-chain.md](designs/card-boot-chain.md),
+"Measuring the OS row"). It requires `--approved-by coordinator` and is
+admitted only while `measurable()` in `tools/boot_chain.py` returns nothing.
+The card must hold the diagnostic stage 2, which parks after its `0x41`
+arming. The deadline then has no session term (64 s), and the pass is the
+warm record `0x0c024041`, the marker `0x16aa16aa`, the stage-2 tag
+`0x53320001`, LAST `0x0c030f00` and no fault. The result decodes the
+stage-2 progress words under `boot_once.decoded.stage2`.
 
 The runner uploads both loads, arms WDT0 in mode `0x41`, sets and reads back
 the session tag and the entry state, and executes `0x52000`. The request image

@@ -366,6 +366,52 @@ def board_failure(words, defines, elf):
     return record
 
 
+# The stage-2 monitor's progress words (boot/a733/stage2/marks.h, docs/designs/card-boot-chain.md "Stage-2 progress
+# words"). They share the RTC words with the session breadcrumbs and are told apart by the tag.
+STAGE2_TAG = 0x53320001
+STAGE2_STEPS = {1: 'entry: gate record consumed (detail 1), absent (0) or clear not read back (2)', 2: 'counter',
+                3: 'remote writers', 4: 'CPU owner and cache clean', 5: 'card open', 6: 'slot A header',
+                7: 'slot B header', 8: 'slot load', 9: 'entry policy and entry state', 0x0a: 'card stop',
+                0x0b: 'session framing', 0x0c: 'SID evidence', 0x0d: 'WDT0 0x41 arming started',
+                0x0e: 'WDT0 0x41 written and restarted', 0x0f: 'WDT0 0x41 armed'}
+STAGE2_ADMISSION = {0: 'admitted', 1: 'parent clock', 2: 'interrupts not masked', 3: 'bus gate or reset', 4: 'module clock',
+                    5: 'PF pin function', 6: 'PF pulls', 7: 'PF bank voltage', 8: 'command pending', 9: 'card busy',
+                    10: 'internal DMA', 11: 'PF6 writes', 12: 'module clock writes', 13: 'settle', 14: 'card absent'}
+STAGE2_CPU_WHERE = {0: 'entry checks', 1: 'CLIDR', 2: 'cache geometry', 0x30: 'final recheck', 0x40: 'cache clean'}
+
+
+def decode_stage2(words):
+    """Decode the stage-2 progress words: the last step reached, the snapshot word and the finish or exception record."""
+    last, snapshot, fault = words['last'], words['time'], words['fault']
+    result = {}
+    if last >> 16 == 0x0c03:
+        number = last >> 8 & 0xff
+        result['last'] = {'step': number, 'detail': last & 0xff, 'name': STAGE2_STEPS.get(number, 'unknown step')}
+    if snapshot >> 16 == 0x0c05:
+        where = snapshot & 0xff
+        name = STAGE2_CPU_WHERE.get(where) or {0x10: 'preflight', 0x20: 'static OFF write and wait'}.get(
+            where & 0xf0, 'unknown') + ' of core %d' % (where & 0xf)
+        result['cpu_refused'] = {'where': where, 'name': name, 'policy_written': bool(snapshot >> 8 & 0xff)}
+    elif snapshot:
+        refused = snapshot >> 16 & 0xff
+        result['sd_admission'] = {
+            'refused': refused, 'name': STAGE2_ADMISSION.get(refused, 'unknown check'),
+            'module_clock': hex(snapshot & 0x8700_1f1f), 'pf_mode': snapshot >> 5 & 3, 'selector': snapshot >> 7 & 1,
+            'detected_level': snapshot >> 13 & 3, 'bus_open': snapshot >> 15 & 1, 'pf6_function': snapshot >> 27 & 0xf}
+    if fault >> 16 == 0x0c04:
+        result['finish'] = {'status': fault & 0xff, 'parked': {0: False, 11: 'card stop failed', 12: 'CPU policy retained'}.get(
+            fault >> 8 & 0xff, 'unknown'), 'detail': hex(words['esr']), 'mmc_error': hex(words['elr']),
+            'mmc_interrupts': hex(words['far'])}
+    elif fault >> 16 == 0x0c0e:
+        result['exception'] = {'vector': fault & 0xff, 'esr': hex(words['esr']), 'elr': hex(words['elr']),
+                               'far': hex(words['far'])}
+    step = result.get('last', {}).get('name', 'no step')
+    result['summary'] = 'stage 2 reached step %s' % step + (
+        '; exception' if 'exception' in result else '; finish status %d' % result['finish']['status'] if 'finish' in result
+        else '')
+    return result
+
+
 def decode(words, epoch, elf=None):
     """Summarize the seven words; a tag of another session yields no stages.
     elf, the image ELF, symbolizes a board failure's caller."""
@@ -376,6 +422,10 @@ def decode(words, epoch, elf=None):
     result = {'words': {k: hex(v) for k, v in words.items()}}
     tag = words['tag']
     result['session'] = (tag >> 16 == defines['TAG_MAGIC'] and (tag & 0xffff) == (epoch & 0xffff))
+    if tag == STAGE2_TAG:
+        result['stage2'] = decode_stage2(words)
+        result['summary'] = result['stage2']['summary']
+        return result
     if not result['session']:
         result['summary'] = ('no breadcrumb of this session: the image stopped before its EL3 entry '
                              'or did not write RTC words')

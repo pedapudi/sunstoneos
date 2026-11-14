@@ -7,6 +7,7 @@ Optional --hello prepares a real generic CPU-return ELF without a board; the gen
 """
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -98,6 +99,15 @@ class Model:
             # the board through the warm path (card-once-other: boot0 found no package and entered FEL with the cold record).
             if self.variant=='card-once-other':
                 self.registers[flag]=0x0c029041
+            elif self.variant.startswith('card-once-measure'):
+                # The diagnostic stage 2 parked after its 0x41 arming (step 0x0f), or, in -early, at the card open (step 5)
+                # under the gate's 0xb1 after a finish that parked with the CPU policy retained.
+                early=self.variant=='card-once-measure-early'
+                self.registers[flag]=0x0c0240b1 if early else 0x0c024041
+                self.registers[board.crumbs.RTC+0x100]=board.crumbs.STAGE2_TAG
+                self.registers[board.crumbs.RTC+0x104]=0x0c030500 if early else 0x0c030f00
+                if early:
+                    self.registers[board.crumbs.RTC+0x110]=0x0c040c02
             else:
                 self.registers[flag]=0x0c024041
                 self.registers[board.crumbs.RTC+0x100]=0x5c0d0001
@@ -935,6 +945,29 @@ def boot_once_cases(out):
     command=board.Queue.runner_command(job,'3-1')
     assert 'boot_once_slot' in board.FROZEN_OPTIONS and command[command.index('--boot-once-slot')+1]=='/slot.json',command
     passed('boot-once-requires-coordinator-approval-and-is-frozen')
+    # --boot-once-measure os: the diagnostic stage 2 parks after its 0x41 arming; the pass is step 0x0f with the stage-2 tag
+    # and the warm record of a 0x41 expiry, and the wait has no session term.
+    def measure(variant):
+        def configure(args):
+            args.boot_once_slot=out/'slot.json';args.approved_by='coordinator';args.boot_once_measure='os'
+        with patch.object(images,'boot_once_slot',return_value=slot):
+            return lifecycle(out/variant,variant,resident=True,configure=configure)
+    result,model,owner=measure('card-once-measure')
+    boot=result['boot_once']
+    assert boot['passed'] and result['expected_reset'] and boot['measure']=='os',boot
+    assert boot['deadline']['resident_session_s']==0 and boot['deadline']['total_s']==64,boot['deadline']
+    assert boot['expected']=={'gp2':0x0c024041,'marker':board.crumbs.MARKER_KEYED,'last':0x0c030f00,'fault':0,
+                              'tag':board.crumbs.STAGE2_TAG},boot['expected']
+    assert boot['decoded']['stage2']['last']['step']==0x0f,boot['decoded']
+    assert_no_launch(model)
+    passed('boot-once-measure-os-pass-is-step-0f')
+    result,model,owner=measure('card-once-measure-early')
+    boot=result['boot_once']
+    assert not boot['passed'] and result['first_failure']['site']=='boot-once',result
+    stage2=boot['decoded']['stage2']
+    assert stage2['last']['step']==5 and stage2['finish']=={'status':2,'parked':'CPU policy retained','detail':'0x0',
+                                                            'mmc_error':'0x0','mmc_interrupts':'0x0'},stage2
+    passed('boot-once-measure-earlier-stop-is-named-by-the-words')
 
 
 def boot_once_slot_cases(out):
@@ -950,6 +983,24 @@ def boot_once_slot_cases(out):
     try:images.boot_once_slot(args)
     except ValueError as error:assert 'no measured watchdog recovery' in str(error) and 'after boot0' in str(error),error
     else:raise AssertionError('A boot-once run was admitted while a chain stage has no measured recovery')
+    # A measuring run of the OS row needs the coordinator and is otherwise judged by tools/boot_chain.py measurable().
+    args.boot_once_measure='os'
+    try:images.boot_once_slot(args)
+    except ValueError as error:assert '--approved-by coordinator' in str(error),error
+    else:raise AssertionError('A measuring boot-once run was admitted without the coordinator')
+    args.approved_by='coordinator'
+    for stage,word in (('stage2','only the last stage'),('boot0','only the last stage')):
+        args.boot_once_measure=stage
+        try:images.boot_once_slot(args)
+        except ValueError as error:assert word in str(error),error
+        else:raise AssertionError(('measuring admitted for',stage))
+    args.boot_once_measure='os'
+    real_load=images.load
+    with patch.object(images,'load',lambda name,path:types.SimpleNamespace(flat_runtime=lambda image:runtime)
+                      if name=='boot_once_runtime' else real_load(name,path)):
+        assert images.boot_once_slot(args)['slot']=='A'
+    args.boot_once_measure=args.approved_by=None
+    passed('boot-once-measure-only-the-last-unproven-stage')
     card=types.SimpleNamespace(flat_runtime=lambda image:runtime,unproven=lambda:[])
     with patch.object(images,'load',return_value=card):
         write(images.hashlib.sha256(runtime).hexdigest())
@@ -1607,9 +1658,24 @@ def daemon_cases(out):
         if n==0:Path(job['image']).write_bytes(b'mutated queued image')
     # Real runner child processes refuse these non-image fixtures in preflight.
     # Even an attempted discovery is a defect; these have no watchdog marker.
+    held={j:Path(j).read_bytes() for j in (json.loads(p.read_text())['image'] for p in (q.root/'entries').glob('*/entry.json'))}
     q.serve(once=True)
     state=json.loads((q.root/'state.json').read_text())
     assert not state['jobs'] and state['history'],state
+    # After each run the daemon holds the entry's image as a hard link to QUEUE/images/SHA256 (tools/board_image_store.py). The
+    # entry refused at claim (its queued bytes changed) never ran; the queue-wide fold holds it too. Every path keeps its bytes.
+    folded=[json.loads(line) for line in (q.root/'ledger.jsonl').read_text().splitlines() if '"images-folded"' in line]
+    assert len(folded)==2 and all(e['copies']>=1 for e in folded),folded
+    ran={e['job'] for e in folded}
+    store=images.load('board_image_store',ROOT/'tools/board_image_store.py')
+    for path,data in held.items():
+        stored=q.root/'images'/(hashlib.sha256(data).hexdigest()+Path(path).suffix)
+        assert Path(path).read_bytes()==data and os.path.exists(stored)==(Path(path).parent.name in ran),path
+    assert not store.fold_queue(q.root,apply=True)['mismatches']
+    for path,data in held.items():
+        stored=q.root/'images'/(hashlib.sha256(data).hexdigest()+Path(path).suffix)
+        assert Path(path).read_bytes()==data and os.path.samefile(path,stored),path
+    passed('daemon-folds-finished-entry-images-into-the-store-with-bytes-unchanged')
     finished=[json.loads((Path(j['directory'])/'entry.json').read_text()) for j in state['history']]
     assert all(j['state']=='done' and j['result']['outcome']=='refused-before-launch' for j in finished)
     assert all(not j['result'].get('launch_attempted') for j in finished)

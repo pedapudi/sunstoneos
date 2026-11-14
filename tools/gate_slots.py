@@ -3,7 +3,7 @@
 Gates used to run one at a time behind CACHE/gate.lock. A gate is mostly one or two busy cores for most of its length, so the
 host runs N of them at once: CACHE/gate.lock.0 to gate.lock.N-1, each held with flock by the gate that runs in it. N and the
 -j that a slot gives its build and check workers come from the measurements in tools/gate-slots.json, not from constants in
-code (slot_count, jobs_per_slot).
+code (slot_count, jobs_per_slot), and so do how many images a gate builds at once and the -j of each (image_builds).
 
 A gate that waits writes a ticket (CACHE/gate-queue/CLASS-TIME-PID.ticket) and holds a flock on it for as long as it waits, so a
 ticket whose owner died is recognised and removed. Every waiter orders the live tickets the same way, landings before workers
@@ -60,6 +60,21 @@ def jobs_per_slot(config, slots, cores=None):
     if cores is None:
         cores = host_facts()[0]
     return max(2, int(usable_cores(config, cores) // slots))
+
+
+def image_builds(config, build_jobs):
+    """How many image builds a gate runs at once, the -j of each and the measured peak resident set of one, in GiB.
+
+    The count is the measured choice (config: image_builds.concurrency), lowered if that many builds at the measured peak of one
+    would exceed the gate's own measured peak (gate.peak_rss_gb), so side-by-side builds never raise the memory that slot_count
+    budgets per slot. The slot's build cores are divided across the builds, rounded up. No image_builds entry: one build at a
+    time with all of them."""
+    entry = config.get('image_builds')
+    if not entry:
+        return 1, build_jobs, 0.0
+    peak = entry['peak_rss_gb']
+    count = max(1, min(entry['concurrency'], int(config['gate']['peak_rss_gb'] // peak)))
+    return count, max(1, -(-build_jobs // count)), peak
 
 
 def reserved_slots(config, slots):
