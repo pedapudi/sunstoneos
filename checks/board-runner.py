@@ -880,7 +880,12 @@ def boot_once_slot_cases(out):
         manifest.write_text(json.dumps({'kind':'a733-boot-slot-plan','slot':'A','generation':3,'entry':0x41000000,
             'extents':[{'name':'runtime.bin','kind':1,'load':0x41000000,'bytes':len(runtime),'sha256':digest},
                        {'name':'session.bin','kind':2,'load':0x41f00000,'bytes':4,'sha256':'1'*64}],**extra}))
-    card=types.SimpleNamespace(flat_runtime=lambda image:runtime)
+    # The card boot chain lacks a measured recovery (tools/boot_chain.py): refused before the manifest is read.
+    write(images.hashlib.sha256(runtime).hexdigest())
+    try:images.boot_once_slot(args)
+    except ValueError as error:assert 'no measured watchdog recovery' in str(error) and 'after boot0' in str(error),error
+    else:raise AssertionError('A boot-once run was admitted while a chain stage has no measured recovery')
+    card=types.SimpleNamespace(flat_runtime=lambda image:runtime,unproven=lambda:[])
     with patch.object(images,'load',return_value=card):
         write(images.hashlib.sha256(runtime).hexdigest())
         record=images.boot_once_slot(args)

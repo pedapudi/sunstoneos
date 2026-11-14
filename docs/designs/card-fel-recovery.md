@@ -312,7 +312,7 @@ gate record. The sequence is:
 2. The gate finds the value and takes its cold path with the marker set. It
    writes the cold record, `0x0c02` in bits 31:16, `COLD | ONCE`
    (`0x8000 | 0x1000`) and the WDT0 mode read at entry, over the boot-once
-   value, and reads the record back. Only then does it arm WDT0 for 16 s and
+   value, and reads the record back. Only then does it disarm WDT0, arm it for 16 s and
    enter boot0. A record that does not read back sends the gate to its warm
    path, so the board enters FEL instead of booting the card.
 3. Stage 2 accepts that record with WDT0 at `0xb1`, clears GP2 and renews WDT0
@@ -351,7 +351,8 @@ lie outside every partition.
   unmeasured, so that gate could have parked a board after a watchdog reset
   with no USB device. The revision checks them only before arming WDT0, and a
   watchdog refusal enters FEL. The cold path writes `0x16aa16aa` to
-  `0x070901f0` and reads it back, arms WDT0 at 16 seconds, and continues at
+  `0x070901f0` and reads it back, disarms WDT0 and arms it at 16 seconds
+  ([card-boot-chain.md](card-boot-chain.md)), and continues at
   boot0's reset stub `0x47b00`; if boot0 then hangs, the watchdog reset reaches
   the warm path and FEL. A marker that does not read back selects FEL.
 - **Gate record.** The warm and cold paths leave the LAST and fault words
@@ -373,7 +374,7 @@ lie outside every partition.
   every card read, and keeps the record in its report word `reserved1[22]`
   (offset 368 of the report at `0x47008200`;
   [monitor notes](../../boot/a733/stage2/README.md)). It then switches WDT0 to
-  the four-second mode when it arms the loaded image.
+  the four-second mode, after a disarm, when it arms the loaded image.
 - **Runner marker and reads.** At every new FEL instance, before the
   session's first watchdog reset, `tools/board.py` reads `0x07090108`,
   `0x070901f0`, `0x07090160` and the WDT0 configuration and output words, and

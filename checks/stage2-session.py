@@ -216,14 +216,21 @@ def main():
         results.append(dict(name=name, accepted=expected, linked=True))
     # The card first stage's cold state at arming: WDT0 already counting at 0xb1
     # with configuration 1 and output 2 and GP2 cleared by the loader's entry.
-    # Arming switches it to mode 0x41 with the same four writes as a disarmed
-    # entry. Every other watchdog state is refused with no WDT0 write.
+    # Arming disarms it, then switches it to mode 0x41 with the same four
+    # writes as a disarmed entry: the board has shown expiry only for an
+    # arming from mode 0. Every other watchdog state is refused with no WDT0
+    # write.
     gate = {0x02050014: 0xb1, 0x02050010: 1, 0x02050018: 2}
     result = native_entry(image, plain, gate, consumed=True)
     assert result['terminal'] == 'entered', 'gate-state-arms'
-    assert [address for address, _ in result['writes']] == [0x02050018, 0x02050010, 0x02050014, 0x0205000c]
+    assert result['writes'][:1] == [[0x02050014, 0x16aa0000]], result['writes']
+    assert [address for address, _ in result['writes']] == [0x02050014, 0x02050018, 0x02050010, 0x02050014, 0x0205000c]
     assert result['registers'][0x02050014] == 0x41 and result['registers'][0x02050010] == 1
     assert result['registers'][0x02050018] == 2
+    # The arming the chain table records for the OS stage (tools/boot_chain.py) is the one this code makes.
+    chain = module('stage2_chain', 'tools/boot_chain.py')
+    stage = next(s for s in chain.STAGES if s['name'] == 'os')
+    assert chain.armings(result['writes'], 0xb1) == [(stage['arming'], stage['mode'])], result['writes']
     results.append(dict(name='gate-state-arms', accepted=True, linked=True))
     for name, changed in (('wdt-0xb1-not-consumed', {}), ('wdt-armed-0x41', {0x02050014: 0x41}), ('wdt-0xb1-config-2', {0x02050010: 2}),
                           ('wdt-0xb1-output-1', {0x02050018: 1}), ('wdt-0xb1-config-bit8', {0x02050010: 0x101}),

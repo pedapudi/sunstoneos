@@ -708,7 +708,13 @@ def boot_once_slot(args):
 
     The manifest is the plan of tools/boot-slots.py (or the card build's manifest): its kind 1 extent holds the flat runtime
     image, whose SHA-256 must equal the hash of the flat runtime built from the submitted ELF (apps/os/card.py). The run then
-    names exactly what the card boots; no byte of the card is read or written."""
+    names exactly what the card boots; no byte of the card is read or written.
+
+    It first requires a measured watchdog recovery for every stage of the chain (tools/boot_chain.py): a stage that hangs
+    with no WDT0 reset leaves the board off USB until the card is removed."""
+    problems = load('boot_once_chain', ROOT/'tools/boot_chain.py').unproven()
+    require(not problems, 'Boot-once refused: a stage of the card boot chain has no measured watchdog recovery. ' +
+            ' '.join(problems))
     path = Path(args.boot_once_slot)
     raw = path.read_bytes()
     try:
