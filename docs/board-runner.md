@@ -192,6 +192,19 @@ launch. Status includes running entries, eligible queued entries and the last
 start, result, withdrawal, pause and resume. Entry files and earlier evidence are retained.
 `--queue DIR`, before the subcommand, selects an isolated queue.
 
+The queue keeps each image once. An entry holds its image in up to four places: the submitted copy (`image.elf`), the
+runner's frozen copy (`run/image.elf`), the prepared bundle's copy (`run/bundle/image.elf`) and a template copy
+(`template/board/image.elf`). After a run has finished, the daemon replaces each copy with a hard link to
+`images/SHA256.elf` (or `.bin`) in the queue directory, and records an `images-folded` ledger event. Each path keeps its
+bytes, so nothing that the runner uploads or admits changes and no reader needs to resolve a hash. A copy is replaced
+only after its SHA-256 and size match the stored file, whose own SHA-256 is checked against its name first, and the
+replacement is an atomic rename. A stored file is read-only, so a write through one link cannot change another entry. The
+daemon folds nothing before a run, because a queued image is still an input. `tools/board_image_store.py fold --apply`
+folds every entry whose `entry.json` says it is done (an entry refused at claim never reaches the daemon's fold), and
+`verify` checks every stored file against its name; a stored file with a link count of 1 belongs to no entry. On
+2026-11-13 the fold held 2,711 copies (17.7 GB) as 678 stored images (4.2 GB). `checks/board-image-store.py` and the
+daemon cases of `checks/board-runner.py` check this.
+
 ## Resident completion test
 
 `--lifetime resident` selects the linked resident contract and requires
@@ -329,6 +342,29 @@ and for every worker. [host_priority.py](../tools/host_priority.py) sets the pri
 
 The gate's image-copying checks write sparse copies (`harness.copy_image`, `cp --sparse=always --reflink=auto`): the `fat32-rw` sweep wrote
 271 GiB in 5,339 copies of a 52 MiB image of which 55 of 13,312 blocks hold data, and writes about 1.4 GiB now.
+
+Three more rules keep a run's FEL work off the load of the gates (measured 2026-11-13; the host stages of run `1794607200843702122-d2ed7876` took
+launch 10.7 s, DRAM 3.0 s and a total of 27.2 s with four gates running, against about 6.7, 2.2 and 21 s):
+
+- **The journal syncs only where recovery needs it.** The runner saved and synced `session.json` before and after every FEL transaction
+  (182 saves of two syncs each in a 91-transaction run, 364 syncs, and 42 more for the readback files); one `fsync` takes 1.3 ms on an idle host
+  and 66 ms at the median, 980 ms at the 99th percentile beside three writers, even in the idle I/O class, because the ext4 journal is shared.
+  `tools/board.py` now classifies each transaction (`fel_effects`) and syncs the write-ahead entry only before one that recovery must know:
+  a register write (rail, clock, watchdog and power state, and any write that is not wholly inside the SRAM ranges the runner stages into or wholly in DRAM, so an MMIO bulk write or a range straddling a boundary is synced), an execute (`exe`, `reset64`, `spl`; each starts a new DRAM epoch) and the first DRAM
+  write of an epoch (the DRAM ownership). A read, an SRAM staging write (wholly inside `FEL_SRAM`: the launcher reservation, the ROM scratch at 0x71000, shared SRAM 0x74000 to 0xf3fff; the helpers an `exe` starts, and every `exe` syncs) and the later DRAM
+  writes of an epoch are saved without sync: the atomic replacement survives the death of the runner, and the next synced entry, which holds the
+  whole record, carries them to disk. The readback files and the journal are synced once at the end of the run. A host crash in the middle of a
+  run can therefore lose the unsynced reads and staging writes of the last stretch; it cannot lose the record of anything that changed the board.
+  The queue's own recovery (`Queue.recover`) reads no journal, only `result.json` and the runner's process record; a person or
+  `tools/finish-fel-read.py` reads `session.json` to learn what the board may hold.
+- **A gate holds its next step during the FEL work.** The runner holds a shared lock on `~/.cache/sunstoneos/board-fel.lock` from the start of the run,
+  releases it while the board runs the application, and takes it again for the restore. A gate (`gate_slots.wait_for_board`) asks for the
+  lock without waiting before it starts each step and waits while a runner holds it; the steps already running continue. The kernel frees the
+  lock when a runner dies, and a runner that hangs holds a gate for no longer than the 60 s deadline it wrote into the lock file.
+- **Gates stay off CPU 23.** The xhci interrupt of the board's USB port is handled almost entirely on CPU 23 (1.19 million of its interrupts
+  there, `/proc/interrupts`), and the runner's FEL transfers wait on it. The gate and everything it starts run with CPU 23 removed from their
+  affinity (`reserved_cpus` in `tools/gate-slots.json`). A nice +10 process does not delay a normal-priority thread's wake-up (99th percentile
+  0.14 ms with 48 busy processes), so this is protection for the interrupt, not for the runner's threads.
 
 Every result carries `host_pressure.start` and `host_pressure.end`: the kernel's `/proc/pressure/io`, `cpu` and `memory` figures
 (`some` and `full`, `avg10`, `avg60`, `avg300` and `total`) read when the run began and when it finished. The totals are microseconds of
@@ -710,6 +746,16 @@ record `0x0c024041`, the marker `0x16aa16aa`, LAST `0x01115000` (stage `0x0111`,
 value `0x5000`) and no fault; the outcome is then `watchdog-reset` with
 `expected_reset: true`. Any other words give the same outcome with a
 `first_failure` that lists the expected and observed words.
+
+`--boot-once-measure os` adds to a boot-once run the measurement of the OS
+row's WDT0 arming after boot0 ([card-boot-chain.md](designs/card-boot-chain.md),
+"Measuring the OS row"). It requires `--approved-by coordinator` and is
+admitted only while `measurable()` in `tools/boot_chain.py` returns nothing.
+The card must hold the diagnostic stage 2, which parks after its `0x41`
+arming. The deadline then has no session term (64 s), and the pass is the
+warm record `0x0c024041`, the marker `0x16aa16aa`, the stage-2 tag
+`0x53320001`, LAST `0x0c030f00` and no fault. The result decodes the
+stage-2 progress words under `boot_once.decoded.stage2`.
 
 The runner uploads both loads, arms WDT0 in mode `0x41`, sets and reads back
 the session tag and the entry state, and executes `0x52000`. The request image

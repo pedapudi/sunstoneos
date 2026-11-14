@@ -50,6 +50,10 @@ if os.environ.get('GATE_TEST_SLEEP') and args and args[0].startswith(('checks/',
     time.sleep(float(os.environ['GATE_TEST_SLEEP']))
     with open(os.environ['GATE_TEST_TIMES'], 'a') as f:
         f.write(json.dumps([args[0], began, time.time()]) + '\\n')
+if os.environ.get('GATE_TEST_BUILD_SLEEP') and args[:1] == ['--build'] and 'help' not in args:
+    time.sleep(float(os.environ['GATE_TEST_BUILD_SLEEP']))
+    with open(os.environ['GATE_TEST_TIMES'], 'a') as f:
+        f.write(json.dumps([args[1], began, time.time()]) + '\\n')
 if '--target' in args and 'help' in args:
     print('... all\\n... clean\\n... kernel-check\\n... other-image\\n... ignored.o')
 if os.environ.get('GATE_TEST_TOUCH'):
@@ -747,6 +751,23 @@ exec "$REAL" "$@"
         self.assertFalse(any(self.overlap(a, b) for a in serial for b in spans if a is not b))
         environment = (self.sandbox / 'build/gate-case/environment.txt').read_text()
         self.assertIn('PATH=' + str(self.sandbox / 'host/usr/lib/llvm-21/bin'), environment)
+
+    def test_images_build_side_by_side_with_their_share_of_the_cores(self):
+        self.full_catalogue()
+        self.env['GATE_TEST_BUILD_SLEEP'] = '0.4'
+        result = self.run_gate('--reason', 'Parallel builds', '--full')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        count, jobs, _ = gate_slots.image_builds(gate_slots.load_config(), 12)    # a full gate builds with -j 12
+        self.assertGreater(count, 1)
+        builds = [c for c in self.records() if c[0] == 'cmake' and c[1:2] == ['--build'] and '/gate-os-' in c[2]]
+        self.assertGreaterEqual(len(builds), 2)
+        self.assertTrue(all(c[c.index('-j') + 1] == str(jobs) for c in builds), builds)
+        spans = [s for s in self.intervals() if '/gate-os-' in s[0]]
+        self.assertEqual(len(spans), len(builds))
+        self.assertTrue(any(self.overlap(a, b) for a in spans for b in spans if a is not b))
+        events = sorted([(span[1], 1) for span in spans] + [(span[2], -1) for span in spans])
+        running = [sum(step for _, step in events[:index + 1]) for index in range(len(events))]
+        self.assertLessEqual(max(running), count, 'more builds at once than measured')
 
     def test_single_worker_never_overlaps_and_index_names_serial_checks(self):
         self.full_catalogue()

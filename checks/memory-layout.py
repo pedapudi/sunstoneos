@@ -32,6 +32,7 @@ TODAY = {
     'image.entry': 0x41000000,
     'image.code': (0x41000000, 0x41200000),
     'image.ram': (0x41200000, 0x42000000),
+    'image.os_rodata': (0x41200000, 0x41400000),
     'image.image_ram': (0x41000000, 0x42200000),
     'image.bss_limit': 0x42000000,
     'image.writable_ceiling': 0x41c00000,
@@ -110,6 +111,12 @@ def check_sources(record):
     cached = linker_script(ROOT / 'platform/a733-smp-cached/link.ld', record)
     require('ASSERT(__bss_end <= 0x%x' % record['image']['bss_limit'] in cached, 'linker script bss limit differs')
     linker_script(ROOT / 'apps/board-single-core/link.ld', record)
+    # The OS link script: read-only data in its own block, RAM after it.
+    patch = (ROOT / 'apps/os/sealed-link.patch').read_text()
+    rodata, ram = record['image']['os_rodata'], record['image']['ram']
+    require('+    RODATA (r) : ORIGIN = 0x%x, LENGTH = %dM' % (rodata[0], (rodata[1] - rodata[0]) // MIB) in patch and
+            '+    RAM (rw) : ORIGIN = 0x%x, LENGTH = %dM' % (rodata[1], (ram[1] - rodata[1]) // MIB) in patch,
+            'apps/os/sealed-link.patch: RODATA or RAM differs from the record')
     for symbol, key in (('.result', 'result'), ('.contract', 'contract')):
         match = re.search(r'\%s (0x[0-9a-f]+) \(NOLOAD\)' % symbol, cached)
         require(match and number(match[1]) == record['monitor'][key][0], 'linker script %s address differs' % symbol)

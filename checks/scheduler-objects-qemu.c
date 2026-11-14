@@ -31,19 +31,32 @@ volatile unsigned ss_wake_stop;
 void ss_kernel_test_admin_enter(unsigned cpu) { (void)cpu; }
 static uint64_t frequency(void) { uint64_t v; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(v)); return v; }
 static void field(const char *name, uint64_t value) { platform_puts(name); platform_hex(value); }
-/* A tick budget that scales with a delay injected at a kernel site (perturb.h), so a delay alone cannot exhaust it; a lost
- * wake still exceeds any scaled budget. One loaded turn costs a few instructions; a kernel call costs hundreds. */
-static TickType_t budget(unsigned ms)
+/* The factor by which a delay injected at a kernel site (perturb.h) stretches the model's time: one loaded turn costs a
+ * few instructions and a kernel call costs hundreds. Tick bounds and the interrupt senders' period scale by it, so a
+ * delay alone neither exhausts a bound nor buries the tasks under interrupts that arrive faster than the kernel can
+ * serve them. */
+static unsigned delay_scale(void)
 {
 #ifdef SS_KERNEL_TEST_PERTURB
     const volatile uint32_t *table = (const volatile uint32_t *)(uintptr_t)SS_KERNEL_TEST_PERTURB;
     unsigned turns = 0;
     for (unsigned site = 0; site < SS_PERTURB_SITES; ++site) turns += table[1 + site];
-    return pdMS_TO_TICKS(ms) * (1 + turns / 100);
+    return 1 + turns / 100;
 #else
-    return pdMS_TO_TICKS(ms);
+    return 1;
 #endif
 }
+static TickType_t budget(unsigned ms) { return pdMS_TO_TICKS(ms) * delay_scale(); }
+/* Liveness bounds of the control task's waits in milliseconds (ticks at configTICK_RATE_HZ 1,000), before scaling: 4 times
+ * the slowest value measured over the five perturbation sites of kernel/scheduler/perturb.h at 300, 1,000 and 3,000 loop
+ * turns and an unperturbed run, on the global-section and the empty-drain control paths, each measured value divided by
+ * its delay scale. The slowest values were 80, 14, 444, 50, 92 and 3,099 ticks, all but one of them unperturbed. */
+#define READY_MS 320U
+#define PROGRESS_MS 55U
+#define STOP_MS 1776U
+#define PRODUCERS_MS 200U
+#define CONSUMERS_MS 368U
+#define WORKERS_MS 12396U
 
 /* ---- Phase 1 ------------------------------------------------------------------------------------------------- */
 #define CANDIDATES 48U
@@ -263,12 +276,14 @@ static void spawn(TaskFunction_t function, const char *name, uintptr_t argument,
                                               &task_state[task_next], 1U << core));
     ++task_next;
 }
-static void wait_for(volatile unsigned *value, unsigned target)
+/* Waits for a count to reach its target, polling once per scaled tick so that the waiting task leaves its core to the
+ * tasks it waits for. The bound only ends a run that hangs. */
+static void wait_for(volatile unsigned *value, unsigned target, unsigned ms)
 {
     const TickType_t start = xTaskGetTickCount();
     while (__atomic_load_n(value, __ATOMIC_ACQUIRE) < target) {
-        configASSERT(xTaskGetTickCount() - start < budget(4000));
-        vTaskDelay(1);
+        configASSERT(xTaskGetTickCount() - start < budget(ms));
+        vTaskDelay(delay_scale());
     }
 }
 static void phase1(void)
@@ -297,16 +312,16 @@ static void phase1(void)
     slow_object = slow_queue;
     spawn(holder_task, "holder", 0, 3, 1);
     for (unsigned core = 2; core < CORES; ++core) spawn(independent_task, "independent", core, 3, core);
-    for (unsigned core = 1; core < CORES; ++core) wait_for(&phase1_ready[core], 1);
+    for (unsigned core = 1; core < CORES; ++core) wait_for(&phase1_ready[core], 1, READY_MS);
     for (unsigned core = 2; core < CORES; ++core) {
         const TickType_t start = xTaskGetTickCount();
         while (__atomic_load_n(&progress[core], __ATOMIC_ACQUIRE) < 2) {
-            configASSERT(xTaskGetTickCount() - start < budget(4000));
-            vTaskDelay(1);
+            configASSERT(xTaskGetTickCount() - start < budget(PROGRESS_MS));
+            vTaskDelay(delay_scale());
         }
     }
     __atomic_store_n(&hold_open, 1, __ATOMIC_RELEASE);
-    wait_for(&phase1_stop, 1);
+    wait_for(&phase1_stop, 1, STOP_MS);
     __atomic_store_n(&hold_open, 0, __ATOMIC_RELEASE);
     vTaskDelay(2);
     field("phase1 holds=", holds_taken); field(" expired=", holds_expired);
@@ -326,7 +341,8 @@ static void phase2(void)
     group = xEventGroupCreateStatic(&group_state);
     stream = xStreamBufferCreateStatic(sizeof(stream_storage) - 1, 1, stream_storage, &stream_state);
     configASSERT(shared && mutex && counting && group && stream);
-    ss_wake_period = frequency() / 8000; /* each core takes an interrupt-level sender about every 125 us */
+    /* Each core takes an interrupt-level sender about every 125 us, stretched with an injected delay. */
+    ss_wake_period = frequency() / 8000 * delay_scale();
     for (unsigned core = 1; core < CORES; ++core) portYIELD_CORE(core); /* a core arms its timer on its first interrupt */
     for (unsigned core = 1; core <= 3; ++core) spawn(produce, "produce", core, 3, core);
     spawn(consume, "consume", 0, 3, 4);
@@ -341,21 +357,23 @@ static void phase2(void)
     spawn(stream_sender, "sender", 0, 3, 6);
     spawn(stream_receiver, "receiver", 0, 3, 7);
     spawn(semaphore_taker, "taker", 0, 3, 2);
-    wait_for(&producers_done, 3);
+    wait_for(&producers_done, 3, PRODUCERS_MS);
     isr_stop = 1;
     ss_wake_stop = 1;
-    wait_for(&consumers_done, 2);
-    wait_for(&workers_done, 10);
+    wait_for(&consumers_done, 2, CONSUMERS_MS);
+    wait_for(&workers_done, 10, WORKERS_MS);
     uint32_t sent = 0, got = 0;
     for (unsigned i = 0; i < SOURCES; ++i) { sent += produced_ok[i]; got += received[i]; configASSERT(received[i] == produced_ok[i]); }
     field("phase2 messages sent=", sent); field(" received=", got); field(" mutex-entries=", mutex_entries);
     field(" mutex-timeouts=", inherit_waits); field(" group-sets=", group_sets); field(" group-successes=", group_successes);
     field(" stream-sent=", stream_sent); field(" stream-received=", stream_received); field(" stream-bad=", stream_bad);
     field(" isr-gives=", isr_gives); field(" task-takes=", task_takes); platform_puts("\n");
-    configASSERT(sent == got && sent > 3 * PRODUCED / 2);
+    /* Progress floors: a quarter of the fewest messages (1,348) and event-group successes (4) measured over the same
+     * points. Short timeouts expire more often as an injected delay grows, so these counts shrink without any loss. */
+    configASSERT(sent == got && sent > 337);
     configASSERT(in_critical == 0 && mutex_entries > 100);
     configASSERT(stream_bad == 0 && stream_sent == stream_received && stream_sent > 100);
-    configASSERT(group_successes > 20);
+    configASSERT(group_successes >= 1);
     configASSERT(task_takes > 10 && task_takes <= isr_gives);
 }
 static void control(void *unused)
