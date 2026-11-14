@@ -9,6 +9,7 @@
  * Out: nothing. Clobbers x0..x17 and the flags; preserves x18..x30 apart
  *      from x30, which bl sets. */
 #include "a733_fault.h"
+#include "sunstone_current_tcb.h"
 .arch armv8-a+crc
 .section .text.a733_fault_capture,"ax"
 .balign 4
@@ -63,7 +64,8 @@ a733_fault_capture:
     // of image RAM, which is coherent with EL1.
     adrp x15, pxCurrentTCBs
     add x15, x15, :lo12:pxCurrentTCBs
-    ldr x12, [x15, x0, lsl #3]
+    add x15, x15, x0, lsl #portCURRENT_TCB_SHIFT
+    ldr x12, [x15]
     cbz x12, 2f
     tst x12, #7
     b.ne 2f

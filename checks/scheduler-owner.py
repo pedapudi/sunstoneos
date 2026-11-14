@@ -30,9 +30,13 @@ def build_and_check(build, compiler='clang-21', objdump='llvm-objdump-21'):
     assert 'ss_owner_test_scan' not in disassembly
     assert not re.search(r'\b(?:ldaxr|stlxr|ldxr|stxr)\b', disassembly), 'LL/SC is forbidden'
     producer = disassembly.split('<ss_owner_publish>:', 1)[1].split('\n\n', 1)[0]
-    assert len(re.findall(r'\bldsetl\b', producer)) == 2
-    assert len(re.findall(r'\bswpal\b', producer)) == 1
-    assert re.search(r'\bdmb\s+ish\b', producer)
+    # The outbox path stores the entry and releases the count; only the spill
+    # path uses read-modify-writes. No store-to-load barrier: the owner's
+    # dispatch state is never read.
+    assert len(re.findall(r'\bstlrh\b', producer)) == 1
+    assert len(re.findall(r'\bldsetl\b', producer)) == 1
+    assert len(re.findall(r'\bldaddl\b', producer)) == 1
+    assert not re.search(r'\bdmb\b', producer), 'publication needs no DMB'
     assert re.search(r'\bdsb\s+ishst\b', producer)
     last_put = disassembly.split('<ss_owner_put>:', 1)[1].split('\n\n', 1)[0]
     assert re.search(r'\bldaddl\b.*\bdmb\s+ish\b.*\bldar\b', last_put, re.S), \

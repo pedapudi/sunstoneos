@@ -35,10 +35,13 @@ CHECK_INPUTS = ['tools/qemu-tick-footprint.c', 'tools/tick-footprint.py', 'tools
                 'checks/tick-footprint-budget.json']
 GATE_RUNS = [['--build', '{build:latency-cause-model}', '--output', '{output}']]
 WINDOWS = 240
-# The busy phase lasts a fixed number of wake samples, not of ticks; under
-# multi-threaded TCG it spanned 234 to 370 ticks depending on host load. Fewer
-# than this many traced ticks means the phase did not run.
+# The busy phase lasts a fixed number of wake samples, not of ticks. Under multi-threaded TCG, where guest time is host time, it
+# spanned 195 to 370 ticks depending on host load, and one landing gate kept 195. The model now runs on one TCG thread with a fixed
+# icount, so guest time follows the instructions executed and the phase spans 2,599 ticks (2026-11-14). Fewer than this many traced
+# ticks means the phase did not run.
 MINIMUM = 200
+_LIMIT = json.loads((ROOT / 'tools/gate-slots.json').read_text())['tick_footprint']
+QEMU_KILL_SECONDS = _LIMIT['kill_multiplier'] * _LIMIT['slowest_run_seconds']      # a hang backstop, from the measured runs
 BUSY = 2  # enum phase in apps/latency/workload.c: QUIET, IDLE, BUSY, STOP
 
 
@@ -131,11 +134,14 @@ def main():
                    f'value={BUSY}', f'windows={WINDOWS}', f'skip={worker:x}-{worker + worker_size:x}',
                    f'out={trace}'] + [f'mark={hooks[n]:x}' for n in ('release_begin', 'release_end',
                                                                     'state_begin', 'state_end')]
+    # One host thread and guest time that follows the instructions executed (fixed shift, no sleeping): host load cannot change how
+    # many ticks the busy phase spans. Six runs beside twelve busy processes kept the same 240 windows and the same line counts; the
+    # traces still differ in a few branches, because QEMU's round-robin switch between vCPUs can be advanced by its host-timed main loop.
     command = [str(args.qemu), '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
-               '-accel', 'tcg,thread=multi', '-cpu', 'cortex-a55', '-smp', '8', '-m', '128M',
+               '-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a55', '-smp', '8', '-m', '128M',
                '-nographic', '-monitor', 'none', '-semihosting-config', 'enable=on,target=native',
                '-device', f'loader,file={elf},cpu-num=0', '-plugin', ','.join([str(plugin)] + plugin_args)]
-    run = subprocess.run(command, capture_output=True, text=True, timeout=600)
+    run = subprocess.run(command, capture_output=True, text=True, timeout=QEMU_KILL_SECONDS)
     (out / 'qemu.log').write_text(run.stdout + run.stderr)
     # The footprint needs only the traced busy ticks; the model's later functional
     # assertions are covered by its own checks and may see the plugin's slowdown.
@@ -196,9 +202,9 @@ def main():
                 limit = budget.get(kind, {}).get(key)
                 if limit is None or value > limit:
                     # Code counts follow the path each wake takes, which varies
-                    # with host load under multi-threaded TCG (a remote release
-                    # reached 59 lines against 56 with four checks running at
-                    # once). They are reported; data counts decide.
+                    # with the interleaving of the cores (under multi-threaded TCG
+                    # a remote release reached 59 lines against 56 with four checks
+                    # running at once). They are reported; data counts decide.
                     (code_over if key.startswith('code ') else over).append(
                         {'segment': kind, 'structure': key, 'lines': value, 'budget': limit})
         result['over_budget'] = over

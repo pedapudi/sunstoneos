@@ -32,10 +32,7 @@ static void adopt(void *context, unsigned slot, void *task, const struct ss_cont
 static bool drained(void *context, unsigned cpu, unsigned slot)
 {
     (void)context; assert(cpu == current_cpu && slot == 0);
-    for (unsigned p = 0; p < SS_OWNER_PRIORITIES; ++p)
-        if ((atomic_load_explicit(&run[cpu].incoming[p][0], memory_order_acquire) |
-             run[cpu].detached[p][0]) & 1) return false;
-    return true;
+    return !ss_owner_slot_pending(&run[cpu], slot);
 }
 static void retired(void *context, unsigned slot, uint64_t incarnation)
 { (void)context; assert(slot == 0 && incarnation == 1); ++retirements; }
@@ -53,8 +50,7 @@ static void pump(void)
         for (current_cpu = 0; current_cpu < 3; ++current_cpu) {
             ss_control_drain(&control, current_cpu);
             ss_owner_drain(&run[current_cpu], inspect, NULL);
-            if (ss_owner_commit_dispatch(&run[current_cpu], 6, false))
-                ss_owner_continue(&run[current_cpu]);
+            ss_owner_continue(&run[current_cpu]);
         }
 }
 static void setup(void)
@@ -66,7 +62,7 @@ static void setup(void)
     for (unsigned c = 0; c < 3; ++c) {
         atomic_store(&interrupts[c], 0); inspected[c] = 0;
         ss_owner_init(&run[c], c, &backend);
-        assert(!ss_owner_commit_dispatch(&run[c], 6, false));
+        assert(!ss_owner_has_pending(&run[c]));
     }
     ss_control_init(&control, 7, &backend, &ops);
     struct ss_owner_retirement notification = { .notify=retirement, .slot=0 };
@@ -96,7 +92,7 @@ static void delayed_publisher(void)
     assert(home == 1 && control.slot[0].phase == 3 && !control.slot[0].old_drained);
     assert(ss_control_route_pin(&control, 0, &next));
     assert(next.owner == 1 && next.epoch == 1);
-    ss_owner_publish(&run[old.owner], 0, 5);
+    ss_owner_publish(&run[old.owner], 0, 0, 5);
     ss_control_route_put(&old);
     current_cpu = 0;
     ss_control_drain(&control, 0);
@@ -118,7 +114,7 @@ static void *stale_snapshot(void *unused)
         abort();
     }
     /* Exactly one failed attempt: epoch-neutral activation reaches every owner. */
-    for (unsigned c = 0; c < 3; ++c) ss_owner_publish(&run[c], 0, 5);
+    for (unsigned c = 0; c < 3; ++c) ss_owner_publish(&run[c], 7, 0, 5);
     ss_owner_put(&descriptor);
     return NULL;
 }
@@ -145,7 +141,7 @@ static void delete_during_transfer(void)
     assert(control.slot[0].phase == 2 && home == 0);
     command(deletion, 0); pump();
     assert(home == 1 && adoptions == 1 && !retirements);
-    ss_owner_publish(&run[old.owner], 0, 5);
+    ss_owner_publish(&run[old.owner], 0, 0, 5);
     ss_control_route_put(&old); ss_owner_put(&descriptor); pump();
     assert(retirements && ss_owner_references_retired(&descriptor));
 }

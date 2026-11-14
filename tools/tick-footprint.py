@@ -275,7 +275,7 @@ def analyze(elf, trace, marks, complete=True):
     pcs = sorted({r[1] for w in full for r in w if r[0] != 'M'})
     where = symbolize(elf, pcs)
     stacks = symbol(elf, '__exception_stacks')
-    # A release that enters ss_owner_publish takes the owner's incoming path;
+    # A release that enters ss_owner_publish takes the owner's mailbox path;
     # segment_kinds budgets CPU0's own release on that path separately.
     publish = function_range(elf, 'ss_owner_publish') or (0, 0)
     functions = function_starts(elf)

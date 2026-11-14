@@ -323,14 +323,14 @@ void __wrap_vTaskSwitchContext(BaseType_t cpu)
 {
     /* Every context save has just stored the outgoing task's SP_EL0 in the first word of its
      * control block. It must lie in a task stack, which here is static data, and be aligned. */
-    uintptr_t saved = *(uintptr_t *)pxCurrentTCBs[cpu];
+    uintptr_t saved = *(uintptr_t *)portCURRENT_TCB(cpu);
     configASSERT(saved >= (uintptr_t)__bss_start && saved < (uintptr_t)__bss_end && !(saved & 15));
     in_switch[cpu] = 1;
     __real_vTaskSwitchContext(cpu);
     in_switch[cpu] = 0;
     __atomic_fetch_add(&switches[cpu], 1, __ATOMIC_RELAXED);
     /* TPIDRRO still identifies the saved outgoing frame until port restore. */
-    unsigned idle = uxTaskPriorityGet(pxCurrentTCBs[cpu]) == 0;
+    unsigned idle = uxTaskPriorityGet(portCURRENT_TCB(cpu)) == 0;
     __atomic_store_n(&selected_idle[cpu], idle, __ATOMIC_RELAXED);
     if (idle) __atomic_fetch_add(&idle_selected[cpu], 1, __ATOMIC_RELAXED);
 }

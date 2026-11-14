@@ -70,10 +70,49 @@ static void *gate_caller(void *context)
     }
     return NULL;
 }
+/* The owners' empty check, as the kernel makes it (ssKernelControlDue): only
+ * the inbox line while its request count equals the one last checked. Every
+ * drain below goes through it, so a path that makes a request due without
+ * counting it leaves that request unapplied and fails the later assertions. */
+static struct ss_owner_inbox inbox[2];
+static uint32_t checked[2];
+static unsigned skipped;
+static bool due(unsigned cpu)
+{
+    unsigned gate = atomic_load_explicit(&inbox[cpu].gate, memory_order_acquire);
+    if (gate == SS_GATE_ACQUIRING || gate == SS_GATE_HELD) return true;
+    uint32_t requests = atomic_load_explicit(&inbox[cpu].control, memory_order_acquire);
+    if (requests == checked[cpu]) { ++skipped; return false; }
+    if (ss_control_has_pending(&control, cpu)) return true;
+    checked[cpu] = requests;
+    return false;
+}
 static void drain(void)
 {
     for (unsigned n = 0; n < 32; ++n)
-        for (unsigned cpu = 0; cpu < 2; ++cpu) ss_control_drain(&control, cpu);
+        for (unsigned cpu = 0; cpu < 2; ++cpu)
+            if (due(cpu)) ss_control_drain(&control, cpu);
+}
+/* Each path that makes a request pending and not parked counts it once;
+ * parking alone does not. */
+static void request_counts(void)
+{
+    const unsigned slot = 9;
+    uint32_t before = atomic_load(&inbox[1].control);
+    ss_control_park(&control, 1, slot);
+    assert(atomic_load(&inbox[1].control) == before && !ss_control_has_pending(&control, 1));
+    ss_control_wake(&control, 1, slot);
+    assert(atomic_load(&inbox[1].control) == before + 1 && ss_control_has_pending(&control, 1));
+    assert(ss_control_drain_slot(&control, 1, slot) == 1);
+    ss_control_park(&control, 1, slot);
+    const uint64_t slots[2] = { UINT64_C(1) << slot, 0 };
+    ss_control_wake_mask(&control, 1, slots, &control.slot[slot].serving);
+    assert(atomic_load(&inbox[1].control) == before + 2 && ss_control_has_pending(&control, 1));
+    const uint64_t none[2] = {0};
+    ss_control_wake_mask(&control, 1, none, &control.slot[slot].serving);
+    assert(atomic_load(&inbox[1].control) == before + 2);
+    assert(ss_control_drain_slot(&control, 1, slot) == 1);
+    assert(!ss_control_has_pending(&control, 1));
 }
 /* Negative control: reproduce the old command path's general drain while
  * retaining the assertions about the one-request contract. */
@@ -129,11 +168,13 @@ int main(void)
     struct ss_control_ops ops = { .apply = apply, .detach = detach, .adopt = adopt,
         .drained = drained, .retired = retirement, .dispatch = dispatch };
     ss_control_init(&control, 3, &backend, &ops);
+    for (unsigned cpu = 0; cpu < 2; ++cpu) ss_control_attach_inbox(&control, cpu, &inbox[cpu]);
     for (unsigned slot = 0; slot < SS_OWNER_SLOTS; ++slot) {
         ss_owner_descriptor_init(&descriptor[slot], &descriptor[slot], 1);
         ss_control_register(&control, slot, &descriptor[slot], 1, 0, 1, 3);
     }
     single_request_and_remaining_batch();
+    request_counts();
     pthread_t threads[2];
     for (unsigned n = 0; n < 2; ++n) assert(!pthread_create(&threads[n], NULL, publisher, (void *)(uintptr_t)n));
     while (atomic_load(&publications) < 2) drain();
@@ -178,6 +219,8 @@ int main(void)
     for (unsigned n = 0; n < 2; ++n) assert(!pthread_create(&threads[n], NULL, gate_caller, (void *)(uintptr_t)n));
     for (unsigned n = 0; n < 2; ++n) assert(!pthread_join(threads[n], NULL));
     assert(atomic_load(&control.gate_phase) == SS_GATE_OPEN);
+    for (unsigned cpu = 0; cpu < 2; ++cpu) assert(atomic_load(&inbox[cpu].gate) == SS_GATE_OPEN);
+    assert(skipped && "most empty checks read only the inbox");
     puts("scheduler control: one-request drain, remaining-batch continuation, concurrent publication, off-CPU suspend/transfer, late publisher, retirement and FIFO nested gate passed");
     return 0;
 }

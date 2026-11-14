@@ -9,9 +9,13 @@ Every case runs real processes on a temporary home directory, so the file locks 
   two-gates    three worker gates start: two run at once in slots 1 and 2, never in slot 0, and the third waits until one ends;
   timing-lock  two gates enter the timing lock: the second waits until the first leaves, and a gate that holds a slot is not
                blocked by it; the soak and the SERIAL_CHECKS of the index are timing steps, the scheduler perturbation sweep is not;
+  timing-landing-first  a worker holds the timing lock, another worker waits, then a landing waits: the landing enters when the
+               holder leaves, the worker after the landing, and no ticket stays;
   landing-jump slots held by a landing and two workers; an older worker and a newer landing wait: the slot a worker frees goes to
                the landing, then the next free slot to the worker, and a landing takes slot 0 when it frees;
   perturb-limit the kill limit of the perturbation sweep is a multiple of its slowest measured point in the same JSON;
+  footprint-run the tick-footprint check runs QEMU on one thread with a fixed icount, so host load cannot change how many busy
+               ticks it traces, and kills it at a multiple of its slowest measured run in the same JSON;
   board-hold   a gate holds its step while a runner is in its FEL work, a dead runner holds nothing, and gates keep off the reserved CPUs;
   stale-ticket a waiting gate that is killed leaves no ticket behind that holds the queue.
 Usage: gate-slots.py --output DIR
@@ -54,7 +58,7 @@ TIMER = '''
 import sys
 sys.path.insert(0, %r)
 import gate_slots
-with gate_slots.timing_lock(%r, %r, announce=lambda message: print("WAIT", flush=True)):
+with gate_slots.timing_lock(%r, %r, announce=lambda message: print("WAIT", flush=True), priority=%r, poll=0.05):
     print("IN", flush=True)
     sys.stdin.readline()
 print("OUT", flush=True)
@@ -94,8 +98,19 @@ def holder(home, slots, priority, label):
     return Process(HOLDER % (str(ROOT / 'tools'), str(home), slots, priority, label))
 
 
-def timer(home, label):
-    return Process(TIMER % (str(ROOT / 'tools'), str(home), label))
+def timer(home, label, priority=gate_slots.WORKER):
+    return Process(TIMER % (str(ROOT / 'tools'), str(home), label, priority))
+
+
+def wait_timing_ticket(home, label):
+    """Block until the gate with this label waits for the timing lock (its ticket exists)."""
+    deadline = time.monotonic() + WAIT
+    while time.monotonic() < deadline:
+        for path in (home / 'gate-timing-queue').glob('*.ticket'):
+            if label in path.read_text():
+                return
+        time.sleep(0.05)
+    raise AssertionError('%s never waited for the timing lock' % label)
 
 
 def case_derivation():
@@ -142,6 +157,33 @@ def case_two_gates(home):
             process.release()
     finally:
         for process in (first, second, third):
+            if process:
+                process.end()
+
+
+def case_timing_landing_first(home):
+    """A landing that starts waiting after a worker takes the timing lock first when the step that holds it ends."""
+    holding = worker = landing = None
+    try:
+        holding = timer(home, 'holding')
+        assert holding.line(WAIT) == 'IN'
+        worker = timer(home, 'waiting-worker')
+        wait_timing_ticket(home, 'waiting-worker')
+        landing = timer(home, 'landing', gate_slots.LANDING)
+        wait_timing_ticket(home, 'landing')
+        assert worker.line(WAIT) == 'WAIT' and landing.line(WAIT) == 'WAIT'
+        holding.release()
+        assert holding.line(WAIT) == 'OUT'
+        assert landing.line(WAIT) == 'IN', 'the landing did not take the timing lock first'
+        assert worker.line(1.0) is None, 'the worker entered while the landing held the timing lock'
+        landing.release()
+        assert landing.line(WAIT) == 'OUT'
+        assert worker.line(WAIT) == 'IN', 'the worker did not enter after the landing left'
+        worker.release()
+        assert worker.line(WAIT) == 'OUT'
+        assert not list((home / 'gate-timing-queue').glob('*.ticket')), 'a ticket stayed after its gate took the lock'
+    finally:
+        for process in (holding, worker, landing):
             if process:
                 process.end()
 
@@ -249,6 +291,18 @@ def case_perturb_limit():
     assert "['perturb']" in text and 'gate-slots.json' in text
 
 
+def case_footprint_run():
+    """The tick-footprint check runs QEMU on one thread with a fixed icount and a kill limit from the same JSON, not a literal.
+    Under multi-threaded TCG a landing gate kept 195 busy ticks, below the check's minimum of 200, when other gates loaded the host."""
+    measured = CONFIG['tick_footprint']
+    assert measured['slowest_run_seconds'] > 0 and measured['kill_multiplier'] >= 4, measured
+    text = (ROOT / 'checks/tick-footprint-budget.py').read_text()
+    assert "'tcg,thread=single', '-icount', 'shift=0,sleep=off'" in text and 'thread=multi' not in text, \
+        'the footprint model runs with guest time taken from the host'
+    assert 'timeout=QEMU_KILL_SECONDS' in text and 'timeout=600' not in text, 'the footprint run is killed on a literal limit'
+    assert "['tick_footprint']" in text and 'gate-slots.json' in text
+
+
 def case_board_hold(home):
     """A gate holds its next step while a runner is in its FEL work, a dead runner holds nothing, a hung one holds until its deadline,
     and a gate stays off the CPUs that config reserves."""
@@ -295,8 +349,10 @@ def main():
     print('PASS image-builds')
     case_perturb_limit()
     print('PASS perturb-limit')
-    for name, case in (('two-gates', case_two_gates), ('timing-lock', case_timing_lock), ('landing-jump', case_landing_jump),
-                       ('stale-ticket', case_stale_ticket), ('board-hold', case_board_hold)):
+    case_footprint_run()
+    print('PASS footprint-run')
+    for name, case in (('two-gates', case_two_gates), ('timing-lock', case_timing_lock), ('timing-landing-first', case_timing_landing_first),
+                       ('landing-jump', case_landing_jump), ('stale-ticket', case_stale_ticket), ('board-hold', case_board_hold)):
         home = args.output / name
         home.mkdir()
         case(home)

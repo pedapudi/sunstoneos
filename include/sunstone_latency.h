@@ -162,6 +162,7 @@ void ss_latency_gpu_post(unsigned client);
 void ss_latency_gpu_received(unsigned client);
 void ss_latency_tick_hook(void);
 void ss_latency_task_ready(void *task);
+void ss_latency_current_set(unsigned core, void *task, int idle);
 #define SS_LATENCY_RECORD(core, region, start, site) \
     ss_latency_record((core), (region), (start), (uintptr_t)(site))
 #define SS_LATENCY_EVENT_BEGIN(region) ss_latency_event_begin(region)
@@ -180,6 +181,12 @@ void ss_latency_task_ready(void *task);
 #define SS_LATENCY_GPU_ARM() ((void)0)
 #define SS_LATENCY_GPU_POST(client) ((void)0)
 #define SS_LATENCY_GPU_RECEIVED(client) ((void)0)
+#endif
+#ifdef SUNSTONE_LATENCY_SERVICE_CYCLES
+/* Measurement build only (kernel/scheduler/service_cycles.h): the latency
+ * workload copies the service cycle report after every CPU has frozen. */
+struct ss_service_cycles_report;
+bool ss_service_cycles_snapshot(struct ss_service_cycles_report *out);
 #endif
 #ifdef __cplusplus
 }

@@ -21,8 +21,11 @@
 
 #define LATENCY_CORES 8U
 /* The manifest's output_limit (apps/latency/cmake/application.cmake): traced
- * and control profiles declare 131072 bytes, the cause profile 147456. */
-#ifdef SUNSTONE_LATENCY_CAUSE
+ * and control profiles declare 131072 bytes, the cause profile 147456 and
+ * the cause profile with service cycles 180224. */
+#if defined(SUNSTONE_LATENCY_SERVICE_CYCLES)
+#define LATENCY_RESULT_LIMIT 180224U
+#elif defined(SUNSTONE_LATENCY_CAUSE)
 #define LATENCY_RESULT_LIMIT 147456U
 #else
 #define LATENCY_RESULT_LIMIT 131072U
@@ -77,6 +80,12 @@ struct latency_result {
     struct latency_cause_ping_report ping;
     uint64_t cause_footer[8] __attribute__((aligned(64)));
 #endif
+#ifdef SUNSTONE_LATENCY_SERVICE_CYCLES
+    /* After the cause footer, so a decoder that strips this section's footer
+     * and the section finds the cause report as before. */
+    struct ss_service_cycles_report service __attribute__((aligned(64)));
+    uint64_t service_footer[8] __attribute__((aligned(64)));
+#endif
 };
 _Static_assert(offsetof(struct latency_result, core) == 320 &&
     offsetof(struct latency_result, phases) == 5440 &&
@@ -116,7 +125,12 @@ _Static_assert(offsetof(struct latency_result, pmu_windows) % 64 == 0 &&
     sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT, "scheduler PMU report tail layout");
 #endif
 
-#ifdef SUNSTONE_LATENCY_CAUSE
+#if defined(SUNSTONE_LATENCY_SERVICE_CYCLES)
+_Static_assert(sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT &&
+    offsetof(struct latency_result, service) == offsetof(struct latency_result, cause_footer) + 64 &&
+    offsetof(struct latency_result, service_footer) + 64 == sizeof(struct latency_result),
+    "service cycle section follows the cause footer and fits the declared result region");
+#elif defined(SUNSTONE_LATENCY_CAUSE)
 _Static_assert(sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT &&
     offsetof(struct latency_result, cause_footer) + 64 == sizeof(struct latency_result),
     "cause diagnostic and footer fit the declared result region");
