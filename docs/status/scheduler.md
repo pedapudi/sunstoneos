@@ -57,7 +57,7 @@ Queues, event groups and stream buffers lock their own hashed slot instead of th
 Board results are records in `docs/evidence/scheduler.jsonl` (runs and their summaries); host results and unrun predictions of the design are in `docs/evidence/scheduler-partitioned.jsonl` and `docs/evidence/scheduler-realtime.jsonl`. Earlier prose evidence is in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-107 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+108 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -168,4 +168,5 @@ Board results are records in `docs/evidence/scheduler.jsonl` (runs and their sum
 | `1793685044692933691-b170207f` | 2026-11-03 | 3-1 | `d6266b6d0843` | returned | passed | run_total 71.875 s, run_total 71.875 s, recognition_alone 106.997 ms |
 | `1793685079986070508-ab781052` | 2026-11-03 | 3-1 | `c73c4017ec3f` | returned | passed | run_total 122.634 s, run_total 122.634 s, p99_4khz 7.67 us, p999_4khz 10.17 us, max_4khz 15.33 us, wakes_ge10us_4khz 110, soak_mean 107.426 ms, control_max 3.25 us |
 | `1793685086096699705-1b726ad3` | 2026-11-03 | 3-1 | `c73c4017ec3f` | returned | passed | run_total 252.401 s, run_total 252.401 s, p99_4khz 7.67 us, p999_4khz 16.83 us, max_4khz 26.17 us, wakes_ge10us_4khz 224, soak_mean 107.691 ms, control_max 3.291 us |
+| `1794685533239173548-a5db9331` | 2026-11-14 | 3-1 | `06d84cf4c44d` | watchdog-reset | failed | run_total 37.124 s, launch 22.44 s, terminal_crumb 13.3957 s |
 <!-- evidence-table:end -->

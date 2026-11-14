@@ -263,8 +263,8 @@ class Model(prior.Model):
             self.uc.mem_write(self.s['a733_cached_records'] + c * 128, struct.pack('<3Q', prior.EPOCH, c, 3))
             rdist = 0x03460000 + c * 0x20000
             self.put32(rdist + 0x14, 0)
-            self.put32(rdist + 0x10100, 0x40000001)
-            self.put32(rdist + 0x10200, 0x40000001)
+            self.put32(rdist + 0x10100, prior.scheduler_interrupts())
+            self.put32(rdist + 0x10200, prior.scheduler_interrupts())
             if c:
                 self.put32(0x07052008 + c * 0x1000, 8)
             self.uc.reg_write(prior.fault.REGS[0], c)
@@ -327,7 +327,8 @@ def main():
         elif case == 'active-interrupt':
             model.put32(0x03460000 + 3 * 0x20000 + 0x10300, 1)
         elif case == 'unrelated-pending':
-            model.put32(0x03460000 + 3 * 0x20000 + 0x10200, 0x40000003)
+            # SGI 4 is no scheduler interrupt: the capture must not drain it.
+            model.put32(0x03460000 + 3 * 0x20000 + 0x10200, prior.scheduler_interrupts() | 1 << 4)
         elif case in ('wrong-image-alias', 'wrong-region-alias'):
             block = 9 if case == 'wrong-image-alias' else (next(low for low, _ in regions if low < 0x80000000) - 0x40000000) >> 21
             entry = image.symbols['a733_cached_el3_l2'] + block * 8
@@ -383,7 +384,8 @@ def main():
         if case != 'success' and case != 'expired-deadline':
             model.put64(model.report + 32, model.time + 300000)
         outcome = model.execute(contexts, missing=missing, budget=4000000)
-        assert outcome == ('rom' if case == 'success' else 'retained'), (case, outcome)
+        # The report's error word (offset 48) is the reason the capture or cleanup retained the cores.
+        assert outcome == ('rom' if case == 'success' else 'retained'), (case, outcome, 'reason', model.u64(model.report + 48))
         assert not model.postclean, (case, model.postclean[:4])
         if case == 'success':
             # Each secondary cleans its own L1 and L2 by set/way, exactly once per set and way; core 0 also cleans L3, and only

@@ -134,9 +134,9 @@ static void local_boot(unsigned c,uint64_t epoch)
                        "every band priority is representable at Non-secure EL1");
         sync_memory();
         *(volatile uint32_t *)(g+0x400)=word;
-        *(volatile uint32_t *)(g+0x100)=0xeu;
+        *(volatile uint32_t *)(g+0x100)=SS_SCHEDULER_SGI_BITS&~UINT32_C(1);
         sync_memory();
-        if(*(volatile uint32_t *)(g+0x400)!=word || (*(volatile uint32_t *)(g+0x100)&0xfu)!=0xfu)failed(c,0x73a);
+        if(*(volatile uint32_t *)(g+0x400)!=word || (*(volatile uint32_t *)(g+0x100)&SS_SCHEDULER_SGI_BITS)!=SS_SCHEDULER_SGI_BITS)failed(c,0x73a);
     }
 #endif
 #ifdef SUNSTONE_TASK_DEADLINES

@@ -6,9 +6,13 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "a733_fault.h"
+#include "../../kernel/scheduler/bands.h"
 #define DEVICE __attribute__((section(".bss.a733_smp_monitor"),aligned(128)))
 #define GICD UINT32_C(0x03400000)
 #define MAGIC UINT64_C(0x3154525133333741)
+/* The interrupts the workload owns on each core: the tick (PPI30) and every
+ * scheduler SGI. The capture disables and drains exactly these. */
+#define OWNED (UINT32_C(1)<<30|SS_SCHEDULER_SGI_BITS)
 volatile struct qualification_report a733_qualification_report DEVICE;
 unsigned char a733_qualification_stacks[QUAL_CORES][QUAL_STACK_BYTES]
     __attribute__((section(".bss.a733_smp_monitor"),aligned(4096)));
@@ -112,9 +116,9 @@ _Noreturn void a733_qualification_captured(unsigned core)
     barrier();c->captured=r->epoch;barrier();
     for(unsigned i=0;i<8;++i)while(r->cpu[i].captured!=r->epoch){if(!before() || r->error)retained(core,5);barrier();}
     uintptr_t base=0x03460000+core*0x20000,g=base+0x10000;
-    wr(g+0x180,UINT32_C(0x40000001));
-    if(!wait_word(base,8,0) || rd(g+0x300) || (rd(g+0x200)&~UINT32_C(0x40000001)))retained(core,6);
-    wr(g+0x280,UINT32_C(0x40000001));
+    wr(g+0x180,OWNED);
+    if(!wait_word(base,8,0) || rd(g+0x300) || (rd(g+0x200)&~OWNED))retained(core,6);
+    wr(g+0x280,OWNED);
     if(rd(g+0x200) || rd(g+0x100))retained(core,7);
     c->drained_epoch=r->epoch;barrier();
     for(unsigned i=0;i<8;++i)while(r->cpu[i].drained_epoch!=r->epoch){

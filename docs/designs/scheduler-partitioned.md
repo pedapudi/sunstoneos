@@ -317,6 +317,15 @@ crypto engine, video unit and G2D are polled and enable no interrupt. The
 control interrupt class (stored 0xa0) sits above the API mask.
 `checks/scheduler-bands.py` checks these rules on the values `bands.h` yields
 for both platforms and on every route table in the source.
+
+Each A733 core enables SGIs 0 to 3 (`SS_SCHEDULER_SGI_BITS`,
+`platform/a733-smp-cached/continue.c`). The returning image's capture disables
+and drains every one of them with the tick before it requires the core's SGI
+and PPI enables and pending bits to read zero
+(`apps/cpu-runtime-qualification/runtime.c`, `apps/os/return-runtime.patch`).
+A capture that disabled SGI 0 alone parked every core until the watchdog reset
+the board (entry `1794685533239173548-a5db9331`); `checks/os-cpu-return.py`
+models the enables and pending bits the band image leaves.
 The final check and WFI occur with `DAIF.I` masking IRQ entry and the GIC
 priority mask admitting the reschedule interrupt, so a pending eligible IRQ
 prevents indefinite sleep.

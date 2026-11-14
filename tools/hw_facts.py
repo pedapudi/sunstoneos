@@ -444,7 +444,7 @@ def source_facts():
         out.append(dict(name=name, source='source: ' + ref, view=dict(el=3, security='secure', interface='monitor code'), core=None,
                         status=FROM_SOURCE, value=value, source_ref=ref, note=text))
     for intid in LOCAL_VISIBLE:
-        for field, value, ref in (('group', 1, 'platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)'),
+        for field, value, ref in (('group', 1, 'platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)'),
                                   ('group_modifier', 0, 'platform/a733/cpu_continue.c:116')):
             out.append(dict(name='config.intid%d.%s' % (intid, field), source='GICR_IGROUPR0/IGRPMODR0 bit %d as EL3 sets it' % intid,
                             view=dict(el=3, security='secure', interface='gic-redistributor-sgi-frame'), core='all', status=FROM_SOURCE,
@@ -455,7 +455,7 @@ def source_facts():
                                      (1, 'stored_priority', 0xf0, 'platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(1))'),
                                      (2, 'stored_priority', 0xe8, 'platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(2))'),
                                      (3, 'stored_priority', 0xe0, 'platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(3))'),
-                                     (27, 'trigger_level', 1, 'platform/a733-smp-cached/continue.c:122-124'),
+                                     (27, 'trigger_level', 1, 'platform/a733-smp-cached/continue.c:152-154'),
                                      (30, 'trigger_level', 1, 'platform/a733/cpu_continue.c:118'),
                                      (30, 'stored_priority_written_ns', 0xb0, 'platform/a733-smp-cached/platform.c:118 (portMAX_API_PRIORITY_MASK, the API level, written at Non-secure EL1)'),
                                      (27, 'stored_priority_written_ns', 0xb0, 'platform/a733-smp-cached/platform.c:126 (portMAX_API_PRIORITY_MASK, written at Non-secure EL1 under SUNSTONE_TASK_DEADLINES)')):

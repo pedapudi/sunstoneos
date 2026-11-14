@@ -74,4 +74,12 @@ static inline unsigned ss_band_switch_mask(unsigned c, unsigned mask)
 }
 #endif
 #endif
+/* The redistributor enable bits of the scheduler's SGIs: SGI 0, and SGIs 1-3
+ * with bands. Code that disables, drains or checks the scheduler's interrupts
+ * on a core, such as the CPU-return capture, covers all of them. */
+#if configSS_BAND_SGIS
+#define SS_SCHEDULER_SGI_BITS ((UINT32_C(1) << (SS_BANDS + 1u)) - 1u)
+#else
+#define SS_SCHEDULER_SGI_BITS UINT32_C(1)
+#endif
 #endif

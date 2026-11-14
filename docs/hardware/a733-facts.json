@@ -20913,7 +20913,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -20941,7 +20941,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -20969,7 +20969,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -20997,7 +20997,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21025,7 +21025,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21053,7 +21053,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21081,7 +21081,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21109,7 +21109,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21137,7 +21137,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21165,7 +21165,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21193,7 +21193,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21221,7 +21221,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21249,7 +21249,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21277,7 +21277,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21305,7 +21305,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21333,7 +21333,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21361,7 +21361,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21389,7 +21389,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:120-121)",
+   "source_ref": "platform/a733/cpu_continue.c:115 (verified for SGIs and PPIs 29 and 30 at :126-127; PPI 27 at platform/a733-smp-cached/continue.c:150-151)",
    "note": "Non-secure Group 1"
   },
   {
@@ -21464,7 +21464,7 @@
   },
   {
    "name": "config.intid27.trigger_level",
-   "source": "source: platform/a733-smp-cached/continue.c:122-124",
+   "source": "source: platform/a733-smp-cached/continue.c:152-154",
    "view": {
     "el": 3,
     "security": "secure",
@@ -21473,7 +21473,7 @@
    "core": "all",
    "status": "from-source",
    "value": 1,
-   "source_ref": "platform/a733-smp-cached/continue.c:122-124",
+   "source_ref": "platform/a733-smp-cached/continue.c:152-154",
    "note": "the value the code sets"
   },
   {
