@@ -2217,8 +2217,43 @@ static bool ssKernelControlPause(void *context, unsigned c)
     (void)context;
     return ssKernelCPUs[c].reschedule || ss_owner_has_pending(&ssKernelCPUs[c].run);
 }
+/* Whether a drain on this CPU has work: an admitted control request (pending and not parked), or a gate that is being
+ * acquired or is held, which the drain answers with a checkpoint. Acquire loads only; the mask is not changed. */
+static inline bool ssKernelControlDue(unsigned c)
+{
+    unsigned gate = atomic_load_explicit(&ssKernelControl.gate_phase, memory_order_acquire);
+    return gate == SS_GATE_ACQUIRING || gate == SS_GATE_HELD || ss_control_has_pending(&ssKernelControl, c);
+}
+#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+static void ssKernelControlDrainTestAfter(unsigned c)
+{
+    for (unsigned w = 0; w < 2; ++w) {
+        uint64_t orphan = ssKernelCPUs[c].object_repair[w] &
+            ~atomic_load_explicit(&ssKernelControl.parked[c].word[w], memory_order_acquire) &
+            ~atomic_load_explicit(&ssKernelControl.pending[c].word[w], memory_order_acquire);
+        configASSERT(!orphan);
+    }
+    extern void ss_kernel_test_after_control_batch(unsigned) __attribute__((weak));
+    if (ss_kernel_test_after_control_batch) ss_kernel_test_after_control_batch(c);
+}
+#endif
+/* Most entries find no request. They test the pending words and the gate with acquire loads and return without
+ * raising the mask. A request published after the test is not lost: every publication that makes a request pending and
+ * not parked on a CPU signals that CPU with an SGI after the bit is visible (hint, ss_control_wake_mask), or is made by
+ * the CPU's own current task as it enters the owner (ss_control_suspend_current). The SGI enters the owner at the
+ * next point where the mask opens, and that entry's service drains the request. */
 static void ssKernelControlDrain(void)
 {
+    if (xSchedulerRunning) {
+        const unsigned c = ssKernelCPUId();
+        if (!ssKernelControlDue(c)) {
+            SS_KERNEL_PERTURB(SS_PERTURB_CONTROL_OPEN);
+#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+            ssKernelControlDrainTestAfter(c);
+#endif
+            return;
+        }
+    }
     const bool exception = ((ullPortGetTaskRegister() >> portTASK_REGISTER_EL1_BIT) & 1U) != 0;
     const bool disabled = ssKernelIrqsDisabled();
     UBaseType_t irq = portSET_INTERRUPT_MASK();
@@ -2256,14 +2291,7 @@ static void ssKernelControlDrain(void)
     SS_KERNEL_PERTURB(SS_PERTURB_CONTROL_OPEN);
     (void)ss_control_drain_excluding(&ssKernelControl, c, cpu->control_seen);
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
-    for (unsigned w = 0; w < 2; ++w) {
-        uint64_t orphan = cpu->object_repair[w] &
-            ~atomic_load_explicit(&ssKernelControl.parked[c].word[w], memory_order_acquire) &
-            ~atomic_load_explicit(&ssKernelControl.pending[c].word[w], memory_order_acquire);
-        configASSERT(!orphan);
-    }
-    extern void ss_kernel_test_after_control_batch(unsigned) __attribute__((weak));
-    if (ss_kernel_test_after_control_batch) ss_kernel_test_after_control_batch(c);
+    ssKernelControlDrainTestAfter(c);
 #endif
     if (xSchedulerRunning) {
         if (exception) (void)portSET_INTERRUPT_MASK_FROM_ISR();
