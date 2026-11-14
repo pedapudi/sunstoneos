@@ -15,6 +15,6 @@ enum { A733_MARK_TAG, A733_MARK_LAST, A733_MARK_GP2, A733_MARK_SNAPSHOT,
 #define A733_MARK_FINISH UINT32_C(0x0c040000)     /* FAULT: the finish() status in 7:0. */
 
 /* Defined once, in loader.c; it ignores GP2 and any word past FAR, so no call
- * can reach GP2 or the marker at 0x070901f0. */
+ * can reach GP2 or the cold-boot marker. */
 void a733_mark_word(unsigned word, uint32_t value);
 #endif
