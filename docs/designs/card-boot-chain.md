@@ -307,7 +307,9 @@ makes no card write and no clock-source write. It arms WDT0 only in modes and
 configurations the runner already uses:
 
 1. The first contact reads the RTC words, WDT0, `0x07090160`, `LOSC_CTRL`,
-   `LOSC_AUTO_SWT_STA` and the redirect words.
+   `LOSC_AUTO_SWT_STA` and the redirect words. The runner refuses the run
+   before any WDT0 write if `LOSC_CTRL` bit 0 reads set or a redirect word is
+   nonzero.
 2. The runner's `0x41` expiry resets the board through the gate's warm path,
    which starts an epoch after an expiry as the boot-once run did.
 3. The replay makes the gate's cold-path arming. Three seconds later it makes
@@ -321,7 +323,7 @@ request. That figure is the 4-second interval at the RC rate measured on port
 
 | Observation | Conclusion | Next step |
 | --- | --- | --- |
-| Contact reads `LOSC_CTRL` bit 0 set | B is possible: boot0's keyed store switches the WDT0 clock source | Stop before step 2; revise the run |
+| Contact reads `LOSC_CTRL` bit 0 set, or a redirect word nonzero | B is possible (boot0's keyed store switches the WDT0 clock source), or the gate could refuse | The runner refuses before step 2; revise the run |
 | Replay status other than 1 | The replayed `arm()` refused at the recorded access | Compare the recorded values with stage 2's admission |
 | No reset within 14 s of the stage-2 arming; the runner disarms WDT0 on the same instance | S holds on port 3-3 and boot0 is not required | Change stage 2's arming; test the change FEL-only first |
 | Reset 4 to 9 s after the stage-2 arming | S is refuted on port 3-3; the failure needs boot0's run | Card boot whose stage 2 leaves the gate's `0xb1` alone, proposed only after the contact rules out B |

@@ -921,6 +921,13 @@ class Live:
         place of boot0 and the stage-2 load, it runs stage 2's arm(), which disarms that arming and arms 0x41. Both run with
         the FEL execute command and return to FEL, so a 0x41 that never expires leaves the board in FEL on the same
         instance, where watch_expiry() disarms it."""
+        # The separation holds only while boot0 leaves WDT0's clock source alone and the gate can reach FEL: refuse, before
+        # any WDT0 write, a first contact with the crystal selected (LOSC_CTRL bit 0) or a nonzero ROM redirect word.
+        contact = self.record['power_epoch'][0]['contact']
+        redirects = [contact[name] for name in ('redirect_flag', 'redirect_entry', 'alternate_flag')]
+        require(not contact['losc_ctrl'] & 1 and not any(redirects),
+                'The stage-2 re-arm test requires the RTC on its RC source and clear ROM redirect words at first contact; '
+                'it read LOSC_CTRL 0x%x and redirect words %s.' % (contact['losc_ctrl'], [hex(x) for x in redirects]))
         mode = int(self.tx('readl', hex(crumbs.WDT_MODE)), 16) & 0xffff
         require(not mode & 1, 'The re-arm test starts from a disarmed WDT0; it read mode 0x%x.' % mode)
         self.reset()

@@ -383,7 +383,7 @@ class Model:
 
 
 def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False,entry=1,configure=None,
-              verify=None,uploads=None):
+              verify=None,uploads=None,setup=None):
     root.mkdir()
     args=arguments(root, development=resident or recovery)
     if configure:configure(args)
@@ -392,6 +392,7 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
     args.restore_rails=restore
     if verify:args.verify=verify
     model=Model(variant)
+    if setup:setup(model)
     owners=[]
     class Backend(board.Live):
         def __init__(self,*values):
@@ -921,6 +922,14 @@ def rearm_stage2_cases(out):
     mode,cfg,ocfg,restart=board.crumbs.WDT_MODE,board.crumbs.WDT_CONFIG,board.crumbs.WDT_OUTPUT,board.crumbs.WDT_RESTART
     gate=[(mode,key),(ocfg,key|2),(cfg,key|1),(mode,key|0xb1),(restart,0x14af)]
     stage2=[(mode,key),(ocfg,key|2),(cfg,key|1),(mode,key|0x41),(restart,0x14af),(board.crumbs.RTC+0x104,0x0c030e00)]
+    for variant,register,value in (('card-stage2-rearm-crystal',0x07090000,0x4011),('card-stage2-rearm-redirect',0x070501c4,0x20)):
+        # A first contact that shows the crystal selected or a redirect word set refuses the run before any WDT0 write.
+        result,model,owner=lifecycle(out/variant,variant,recovery=True,entry=2,configure=configure,
+                                     setup=lambda m,r=register,v=value:m.registers.__setitem__(r,v))
+        assert result['outcome']=='refused-before-launch' and not model.quarantined,(variant,result)
+        assert 'first contact' in result['first_failure']['detail'] and not owner.armed,result['first_failure']
+        assert not any(c[0]=='exe' or hex(key|0x41) in c for c in model.calls),model.calls
+        passed('rearm-expiry-'+variant+'-refused-at-contact')
     for variant in ('card-stage2-rearm-expires','card-stage2-rearm-stops','card-stage2-rearm-refused'):
         result,model,owner=lifecycle(out/variant,variant,recovery=True,entry=2,configure=configure)
         test,writes=result['rearm_expiry'],result['rearm_writes']

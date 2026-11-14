@@ -798,7 +798,9 @@ image, measures whether such a re-arm resets the board:
   `0xb1` over the runner's `0x41`, and the runner leaves it armed after the
   proof's FEL return.
 - `stage2`: the WDT0 history of a boot-once card boot without boot0, on a
-  board whose card holds the first stage. The runner's `0x41` expiry resets
+  board whose card holds the first stage. The run is refused before any WDT0
+  write when the first contact reads `LOSC_CTRL` bit 0 set (the crystal
+  selected) or a nonzero redirect word. The runner's `0x41` expiry resets
   the board through the card gate's warm path. On the new instance the runner
   uploads the arming replay (`boot/a733/rearm-stage2.S`) into the launcher
   SRAM and runs its two entry points with the FEL execute command. The first
