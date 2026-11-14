@@ -229,13 +229,16 @@ def test_models():
     gic = hw.GicModel()
     facts = hw.Facts()
     assert gic.mask == 0xf8 and gic.shifted and not facts.assumed.get('gic.cpuif.icc_pmr_el1.readback_after_write_ff')
-    # The model reproduces the measurements: an unmasked write reads back 0xf0, and the image's write of
+    # The model reproduces the measurements: an unmasked write reads back 0xf0, and the measured run's write of
     # 0xd8 to the priority byte of PPI 27 reads back 0xd0.
     assert gic.pmr_ns_read(gic.pmr_ns_write(0xf8, 0xff)) == facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 0)
     assert gic.pmr_ns_write(0x00, 0xff) == 0x00 and gic.pmr_ns_read(0x00) == 0
-    assert gic.ns_read(gic.ns_write(facts.value('config.intid27.stored_priority_written_ns'))) == facts.value('gic.redist.intid27.priority_after_write', 0)
-    # The priority-write path of checks/cpu-local-timer.py: a Non-secure write reads back through the same pair.
-    assert gic.ns_read(gic.ns_write(facts.value('config.intid27.stored_priority_written_ns'))) == facts.value('gic.redist.intid27.priority_after_write', 0)
+    intid27 = facts.entry('gic.redist.intid27.priority_after_write', 0)
+    assert gic.ns_read(gic.ns_write(intid27['written'])) == intid27['value'], 'INTID 27 written 0xd8 reads back 0xd0'
+    # The priority-write path of checks/cpu-local-timer.py: the source's Non-secure write of the API mask reads back as
+    # the API mask.
+    assert gic.ns_read(gic.ns_write(facts.value('config.intid27.stored_priority_written_ns'))) == \
+        facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_api_mask', 0)
     intid30 = next(f for f in facts.document['facts'] if f['name'] == 'gic.redist.intid30.priority_after_write' and f['core'] == 0)
     assert gic.ns_read(gic.ns_write(intid30['written'])) == intid30['value'], 'INTID 30 written 0xe0 reads back 0xe0'
     assert gic.ns_read(facts.value('config.spi97.stored_priority')) == facts.value('gic.dist.spi97.priority', 0), 'the stored route priority of INTID 97 as Non-secure EL1 reads it'
@@ -345,9 +348,13 @@ def test_helper():
     for intid in (71, 95, 97, 143):
         stored = facts.value('config.spi%d.stored_priority' % intid)
         assert facts.value('gic.dist.spi%d.priority' % intid, 0) == hw.ns_view(stored) == facts.value('config.spi%d.ns_view_priority' % intid)
-    ppi = facts.value('config.intid27.stored_priority_written_ns')
-    assert facts.value('gic.redist.intid27.priority_after_write', 0) == hw.ns_view(hw.stored_from_ns(ppi))
+    # The board measured the write rule on PPI 27 with the byte that run wrote; the source's write follows the same rule.
+    measured = facts.entry('gic.redist.intid27.priority_after_write', 0)
+    assert measured['value'] == hw.ns_view(hw.stored_from_ns(measured['written']))
     api = facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_api_mask', 0)
+    for ppi in (27, 30):
+        written = facts.value('config.intid%d.stored_priority_written_ns' % ppi)
+        assert hw.ns_view(hw.stored_from_ns(written)) == api, 'PPI %d reads the API level, above every band mask' % ppi
     assert hw.stored_from_ns(api) == facts.value('config.spi97.stored_priority'), 'the FreeRTOS API mask and the INTID 97 route priority meet'
 
 

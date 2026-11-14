@@ -28,6 +28,8 @@
 #endif
 #define configCORES_SHARE_TYPE(a, b) \
     ((((A733_SMP_A55_MASK >> (a)) ^ (A733_SMP_A55_MASK >> (b))) & 1u) == 0u)
+/* Publications use the band SGIs 1-3 (kernel/scheduler/bands.h). */
+#define configSS_BAND_SGIS 1
 #define configINTERRUPT_CONTROLLER_BASE_ADDRESS 0x080b0000UL
 #define configINTERRUPT_CONTROLLER_CPU_INTERFACE_OFFSET 0
 #define INCLUDE_vTaskDelete 1

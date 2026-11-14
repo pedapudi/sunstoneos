@@ -3,6 +3,7 @@
 #include "task.h"
 #include "workload.h"
 #include <stdatomic.h>
+#include <stdbool.h>
 #ifdef SUNSTONE_LATENCY_MODEL
 #include "platform.h"
 #endif
@@ -55,6 +56,124 @@ static atomic_uint phase, ready_mask, stop_load;
 static TickType_t began;
 static struct latency_result *report;
 
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+/* The band probes (workload.h). Probe i and background task i run on CPU
+ * 1 + i; CPU3's wake task notifies the background tasks. */
+#define BAND_NOTIFIER 3U
+#define BAND_PROBE_PRIORITY 6U
+#define BAND_BACKGROUND_PRIORITY 2U
+static StaticTask_t probe_state[LATENCY_BAND_PROBES], background_state[LATENCY_BAND_PROBES];
+static StackType_t probe_stack[LATENCY_BAND_PROBES][1024], background_stack[LATENCY_BAND_PROBES][1024];
+static TaskHandle_t probe_task[LATENCY_BAND_PROBES], background_task[LATENCY_BAND_PROBES];
+/* armed: the probe's window is open; CPU3 notifies only into an open window.
+ * notified: CPU3's notification count. One line each. */
+static struct { _Alignas(64) atomic_uint armed; } band_armed[LATENCY_BAND_PROBES];
+static struct { _Alignas(64) atomic_uint notified; } band_notify;
+static struct { _Alignas(64) atomic_uint runs; } band_background[LATENCY_BAND_PROBES];
+static struct latency_band_report bands;
+static inline uint64_t band_cycles(void)
+{
+    uint64_t value;
+    __asm__ volatile("mrs %0, pmccntr_el0" : "=r"(value) :: "memory");
+    return value;
+}
+static unsigned band_bin(uint64_t gap)
+{
+    unsigned bin = 0;
+    for (uint64_t edge = 512; bin + 1 < LATENCY_BAND_BINS && gap >= edge; edge <<= 1) ++bin;
+    return bin;
+}
+/* One window: from the probe's start to LATENCY_BAND_MARGIN_CYCLES after
+ * CPU3's next notification. The loop touches only the cycle counter, the
+ * notification line and the phase until it sees a gap. */
+static void band_window(unsigned i, unsigned c)
+{
+    struct latency_band_cell w = {0};
+    const unsigned on = ss_band_switch_on(c);
+    const unsigned given = atomic_load_explicit(&band_notify.notified, memory_order_acquire);
+    uint64_t irqs = ss_latency_cause_irq_count(c);
+    unsigned seen = atomic_load_explicit(&wake[c].completed, memory_order_acquire);
+    atomic_store_explicit(&band_armed[i].armed, 1, memory_order_release);
+    const uint64_t begin = band_cycles();
+    uint64_t previous = begin, end = 0;
+    int finished = 0;
+    for (;;) {
+        uint64_t now = band_cycles();
+        const uint64_t gap = now - previous;
+        if (gap > LATENCY_BAND_GAP_CYCLES) {
+            const unsigned done = atomic_load_explicit(&wake[c].completed, memory_order_acquire);
+            const uint64_t taken = ss_latency_cause_irq_count(c);
+            if (done != seen) {
+                ++w.own;
+                if (gap > w.own_max) w.own_max = gap;
+                seen = done;
+            } else {
+                ++w.foreign;
+                w.foreign_sum += gap;
+                if (gap > w.foreign_max) w.foreign_max = gap;
+                if (taken != irqs) ++w.foreign_irq;
+                ++w.bins[band_bin(gap)];
+            }
+            irqs = taken;
+            now = band_cycles();
+        }
+        previous = now;
+        if (end) {
+            if (now >= end) { finished = 1; break; }
+        } else if (atomic_load_explicit(&band_notify.notified, memory_order_acquire) != given) {
+            end = now + LATENCY_BAND_MARGIN_CYCLES;
+        } else if (atomic_load_explicit(&phase, memory_order_relaxed) != BUSY) break;
+    }
+    atomic_store_explicit(&band_armed[i].armed, 0, memory_order_release);
+    w.windows = 1;
+    w.cycles = previous - begin;
+    if (!finished) { ++bands.unfinished[i]; return; }
+    if (ss_band_switch_on(c) != on) { ++bands.discarded[i]; return; }
+    struct latency_band_cell *cell = &bands.cell[i][on];
+    cell->windows += w.windows; cell->cycles += w.cycles;
+    cell->foreign += w.foreign; cell->foreign_irq += w.foreign_irq; cell->foreign_sum += w.foreign_sum;
+    if (w.foreign_max > cell->foreign_max) cell->foreign_max = w.foreign_max;
+    cell->own += w.own;
+    if (w.own_max > cell->own_max) cell->own_max = w.own_max;
+    for (unsigned b = 0; b < LATENCY_BAND_BINS; ++b) cell->bins[b] += w.bins[b];
+}
+/* Started by its core's wake task after each busy-phase sample. */
+static void probe_worker(void *argument)
+{
+    unsigned i = (unsigned)(uintptr_t)argument, c = 1 + i;
+    for (;;) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        configASSERT(portGET_CORE_ID() == c);
+        if (atomic_load_explicit(&phase, memory_order_acquire) == BUSY) band_window(i, c);
+    }
+}
+static void background_worker(void *argument)
+{
+    unsigned i = (unsigned)(uintptr_t)argument;
+    for (;;) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        configASSERT(portGET_CORE_ID() == 1 + i);
+        atomic_fetch_add_explicit(&band_background[i].runs, 1, memory_order_relaxed);
+    }
+}
+/* CPU3's wake task, after its own sample: wait, bounded, until each probe's
+ * window is open or its core has no more samples, then notify both
+ * background tasks. */
+static void band_notify_background(void)
+{
+    if (atomic_load_explicit(&phase, memory_order_acquire) != BUSY) return;
+    const uint64_t deadline = ss_latency_now() + ss_latency_counter_frequency() / 5000u; /* 200 us */
+    for (unsigned i = 0; i < LATENCY_BAND_PROBES; ++i)
+        while (!atomic_load_explicit(&band_armed[i].armed, memory_order_acquire) &&
+               atomic_load_explicit(&wake[1 + i].completed, memory_order_acquire) <
+                   LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES) {
+            if (ss_latency_now() >= deadline) { ++bands.wait_timeouts; break; }
+        }
+    for (unsigned i = 0; i < LATENCY_BAND_PROBES; ++i) xTaskNotifyGive(background_task[i]);
+    ++bands.notified;
+    atomic_fetch_add_explicit(&band_notify.notified, 1, memory_order_release);
+}
+#endif
 __attribute__((weak)) void latency_workload_progress(void) {}
 #if defined(SUNSTONE_LATENCY_DMA)
 static void latency_dma_model_tick(void) {}
@@ -208,9 +327,17 @@ static void wake_worker(void *argument)
                 wake[c].released, running, wake[c].metric,
                 wake[c].metric == SS_LAT_SCHED_IDLE ? LATENCY_WAKE_IDLE : LATENCY_WAKE_BUSY};
             ss_latency_record_at(c, wake[c].metric, wake[c].released, running, (uintptr_t)wake_worker);
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+            bands.wake_on[c][index / 64] |= (uint64_t)(ss_band_switch_on(c) & 1u) << (index % 64);
+#endif
             atomic_fetch_add_explicit(&wake[c].completed, 1, memory_order_release);
         }
         atomic_store_explicit(&wake[c].pending, 0, memory_order_release);
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+        if (c - 1u < LATENCY_BAND_PROBES && atomic_load_explicit(&phase, memory_order_acquire) == BUSY)
+            xTaskNotifyGive(probe_task[c - 1u]);
+        if (c == BAND_NOTIFIER) band_notify_background();
+#endif
     }
 }
 static void load_worker(void *argument)
@@ -311,6 +438,15 @@ void latency_workload_init(void)
     }
 #ifdef SUNSTONE_LATENCY_CAUSE
     latency_cause_ping_init();
+#endif
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+    for (unsigned i = 0; i < LATENCY_BAND_PROBES; ++i) {
+        probe_task[i] = ss_task_create_static_affinity_set(probe_worker, "latency-band-probe", 1024,
+            (void *)(uintptr_t)i, BAND_PROBE_PRIORITY, probe_stack[i], &probe_state[i], 1U << (1 + i));
+        background_task[i] = ss_task_create_static_affinity_set(background_worker, "latency-band-background", 1024,
+            (void *)(uintptr_t)i, BAND_BACKGROUND_PRIORITY, background_stack[i], &background_state[i], 1U << (1 + i));
+        configASSERT(probe_task[i] && background_task[i]);
+    }
 #endif
 }
 void latency_workload_run(struct latency_result *out)
@@ -423,5 +559,19 @@ void latency_workload_run(struct latency_result *out)
     const uint64_t service_footer[8] = {SS_SERVICE_CYCLES_FOOTER_MAGIC, 1, sizeof(*out),
         offsetof(struct latency_result, service), sizeof(out->service), 0, 0, 0};
     for (unsigned word = 0; word < 8; ++word) out->service_footer[word] = service_footer[word];
+#endif
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+    /* After the service section, so the lines above are unchanged. */
+    bands.magic = LATENCY_BAND_MAGIC; bands.version = 1; bands.bytes = sizeof(bands);
+    bands.gap_cycles = LATENCY_BAND_GAP_CYCLES; bands.margin_cycles = LATENCY_BAND_MARGIN_CYCLES;
+    bands.switch_shift = ss_band_switch_shift();
+    for (unsigned i = 0; i < LATENCY_BAND_PROBES; ++i)
+        bands.background_runs[i] = atomic_load_explicit(&band_background[i].runs, memory_order_relaxed);
+    configASSERT(ss_band_pmr_snapshot(bands.pmr_count, bands.pmr_cycles));
+    bands.complete = 1;
+    out->bands = bands;
+    const uint64_t band_footer[8] = {LATENCY_BAND_FOOTER_MAGIC, 1, sizeof(*out),
+        offsetof(struct latency_result, bands), sizeof(out->bands), 0, 0, 0};
+    for (unsigned word = 0; word < 8; ++word) out->band_footer[word] = band_footer[word];
 #endif
 }

@@ -87,7 +87,9 @@ static void requeue(struct ss_owner *o, bool front)
 void ss_owner_preempt(struct ss_owner *o) { requeue(o, true); }
 struct ss_owner_task *ss_owner_yield(struct ss_owner *o)
 { requeue(o, false); return ss_owner_select(o); }
-static void signal(struct ss_owner *o)
+/* Signal the owner for hints of `priority`: the band SGI where the backend
+ * has one, which a target running a higher band holds until its band falls. */
+static void signal(struct ss_owner *o, unsigned priority)
 {
 #ifdef SUNSTONE_LATENCY_CAUSE
     ss_latency_cause_sgi_begin(o->inbox.cpu);
@@ -96,7 +98,8 @@ static void signal(struct ss_owner *o)
     __asm__ volatile("dsb ishst" ::: "memory");
 #endif
     const struct ss_owner_backend *b = o->inbox.backend;
-    if (b && b->sgi) b->sgi(b->context, o->inbox.cpu);
+    if (b && b->publish) b->publish(b->context, o->inbox.cpu, priority);
+    else if (b && b->sgi) b->sgi(b->context, o->inbox.cpu);
 #ifdef SUNSTONE_LATENCY_CAUSE
     ss_latency_cause_sgi_end(o->inbox.cpu);
 #endif
@@ -131,7 +134,7 @@ void ss_owner_publish(struct ss_owner *o, unsigned source, unsigned slot, unsign
     /* The backend completes DSB ISHST before the SGI write, so the owner's
      * exception entry, which takes the SGI, finds the hint. An SGI that is
      * already pending at the GIC is taken after this hint is visible too. */
-    signal(o);
+    signal(o, priority);
 }
 #ifdef SS_OWNER_TEST_STATS
 /* Host fixtures count inbox loads, outbox entry loads and spill exchanges;
@@ -242,8 +245,30 @@ bool ss_owner_slot_pending(const struct ss_owner *o, unsigned slot)
     }
     return false;
 }
+int ss_owner_pending_top(const struct ss_owner *o)
+{
+    int top = -1;
+    for (unsigned p = SS_OWNER_PRIORITIES; p-- > 0;)
+        if (o->detached[p][0] | o->detached[p][1] ||
+            atomic_load_explicit(&o->spill[p][0], memory_order_acquire) |
+            atomic_load_explicit(&o->spill[p][1], memory_order_acquire)) { top = (int)p; break; }
+    for (unsigned s = 0; s < SS_OWNER_SOURCES; ++s) {
+        uint16_t n = atomic_load_explicit(&o->inbox.published[s], memory_order_acquire);
+        for (uint16_t t = o->taken[s]; t != n; ++t) {
+            int p = (int)(atomic_load_explicit(&o->outbox[s].entry[t % SS_OWNER_RING],
+                                               memory_order_relaxed) >> 7);
+            if (p > top) top = p;
+        }
+    }
+    return top;
+}
+/* A continuation of hints signals at the band of the highest pending one, so
+ * a target running a higher band keeps holding hints it could not run. */
 void ss_owner_continue(struct ss_owner *o)
-{ if (ss_owner_has_pending(o)) signal(o); }
+{
+    int top = ss_owner_pending_top(o);
+    if (top >= 0) signal(o, (unsigned)top);
+}
 static void descriptor_init(struct ss_owner_descriptor *d, void *task,
                             uint64_t i, bool admitted,
                             const struct ss_owner_retirement *retirement)

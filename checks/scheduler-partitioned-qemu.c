@@ -977,6 +977,94 @@ static void control_races_verify(void)
     vTaskDelete(migration_target);
     platform_puts("control races: 8 empty SGIs, freeze after local suspension, parked abort preserves next wait, shielded linked-event repair, incoming hint during redirected handoff\n");
 }
+#if configSS_BAND_SGIS
+#include "bands.h"
+/* Reschedule bands (kernel/scheduler/bands.h) on an idle core. A band-3 publication arrives on SGI 3; a task resumed
+ * by the context restore runs at its band's mask; a same-band publication preempts a spinning band-3 task; a band-1
+ * publication waits for it; and an interrupt exit restores the core's current mask, not a stale saved one. */
+#define BAND_CORE 3U
+/* An open mask of 0xff reads back with the unimplemented low priority bits clear. */
+#define BAND_OPEN_READBACK ((0xffu >> portPRIORITY_SHIFT) << portPRIORITY_SHIFT)
+extern uint32_t qemu_smp_sgis[configNUMBER_OF_CORES][SS_BANDS + 1];
+static StaticTask_t band_state[3];
+static StackType_t band_stack[3][1024];
+static TaskHandle_t band_low, band_high, band_top;
+static unsigned band_high_running, band_release, band_top_ran, band_low_ran;
+static uint64_t band_high_pmr, band_high_samples, band_high_other, band_top_pmr, band_top_stale, band_low_pmr;
+/* The fixture's tasks run at EL0: the mask call returns the mask it replaced, and the clear reopens it. */
+static uint64_t band_pmr(void) { UBaseType_t v = portSET_INTERRUPT_MASK(); portCLEAR_INTERRUPT_MASK(v); return v; }
+static void band_high_task(void *unused)
+{
+    (void)unused;
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    __atomic_store_n(&band_high_pmr, band_pmr(), __ATOMIC_RELAXED);
+    __atomic_store_n(&band_high_running, 1, __ATOMIC_RELEASE);
+    /* Every mask seen while spinning. The first sample after the band-3 preemption below reads the mask the context
+     * restore wrote; the clear in band_pmr reopens to the band mask, so later samples would hide a wrong restore. */
+    while (!__atomic_load_n(&band_release, __ATOMIC_ACQUIRE)) {
+        const uint64_t v = band_pmr();
+        __atomic_store_n(&band_high_samples, band_high_samples + 1, __ATOMIC_RELAXED);
+        if (v != SS_BAND_MASK(3)) __atomic_store_n(&band_high_other, band_high_other + 1, __ATOMIC_RELAXED);
+    }
+    for (;;) ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+}
+static void band_top_task(void *unused)
+{
+    (void)unused;
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    __atomic_store_n(&band_top_pmr, band_pmr(), __ATOMIC_RELAXED);
+    /* The core's band falls while the mask is held: the clear opens to the current mask (every priority here), not
+     * to the saved band-3 mask. */
+    UBaseType_t saved = portSET_INTERRUPT_MASK();
+    portSET_OPEN_MASK(BAND_CORE, 0xffu);
+    portCLEAR_INTERRUPT_MASK(saved);
+    __atomic_store_n(&band_top_stale, band_pmr(), __ATOMIC_RELAXED);
+    saved = portSET_INTERRUPT_MASK();
+    portSET_OPEN_MASK(BAND_CORE, ss_band_mask(7));
+    portCLEAR_INTERRUPT_MASK(saved);
+    __atomic_store_n(&band_top_ran, 1, __ATOMIC_RELEASE);
+    for (;;) ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+}
+static void band_low_task(void *unused)
+{
+    (void)unused;
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    __atomic_store_n(&band_low_pmr, band_pmr(), __ATOMIC_RELAXED);
+    __atomic_store_n(&band_low_ran, 1, __ATOMIC_RELEASE);
+    for (;;) ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+}
+static void bands_verify(void)
+{
+    band_high = xTaskCreateStaticAffinitySet(band_high_task, "band-high", 1024, NULL, 6, band_stack[0], &band_state[0], 1U << BAND_CORE);
+    band_top = xTaskCreateStaticAffinitySet(band_top_task, "band-top", 1024, NULL, 7, band_stack[1], &band_state[1], 1U << BAND_CORE);
+    band_low = xTaskCreateStaticAffinitySet(band_low_task, "band-low", 1024, NULL, 1, band_stack[2], &band_state[2], 1U << BAND_CORE);
+    configASSERT(band_high && band_top && band_low);
+    vTaskDelay(4);
+    const uint32_t sgi3 = __atomic_load_n(&qemu_smp_sgis[BAND_CORE][3], __ATOMIC_RELAXED);
+    xTaskNotifyGive(band_high);
+    for (unsigned wait = 0; wait < limit(200) && !__atomic_load_n(&band_high_running, __ATOMIC_ACQUIRE); ++wait) vTaskDelay(1);
+    configASSERT(__atomic_load_n(&band_high_running, __ATOMIC_ACQUIRE));
+    configASSERT(__atomic_load_n(&qemu_smp_sgis[BAND_CORE][3], __ATOMIC_RELAXED) > sgi3); /* published on SGI 3 */
+    xTaskNotifyGive(band_top);
+    for (unsigned wait = 0; wait < limit(200) && !__atomic_load_n(&band_top_ran, __ATOMIC_ACQUIRE); ++wait) vTaskDelay(1);
+    configASSERT(__atomic_load_n(&band_top_ran, __ATOMIC_ACQUIRE)); /* the same band preempts */
+    vTaskDelay(4);
+    configASSERT(__atomic_load_n(&band_top_pmr, __ATOMIC_RELAXED) == SS_BAND_MASK(3));
+    configASSERT(__atomic_load_n(&band_top_stale, __ATOMIC_RELAXED) == BAND_OPEN_READBACK);
+    configASSERT(__atomic_load_n(&band_high_pmr, __ATOMIC_RELAXED) == SS_BAND_MASK(3));
+    configASSERT(__atomic_load_n(&band_high_samples, __ATOMIC_RELAXED) && !__atomic_load_n(&band_high_other, __ATOMIC_RELAXED));
+    xTaskNotifyGive(band_low);
+    vTaskDelay(10);
+    configASSERT(!__atomic_load_n(&band_low_ran, __ATOMIC_ACQUIRE)); /* a lower band waits */
+    __atomic_store_n(&band_release, 1, __ATOMIC_RELEASE);
+    for (unsigned wait = 0; wait < limit(200) && !__atomic_load_n(&band_low_ran, __ATOMIC_ACQUIRE); ++wait) vTaskDelay(1);
+    configASSERT(__atomic_load_n(&band_low_ran, __ATOMIC_ACQUIRE) && __atomic_load_n(&band_low_pmr, __ATOMIC_RELAXED) == BAND_OPEN_READBACK);
+    platform_puts("bands core="); platform_hex(BAND_CORE);
+    for (unsigned i = 0; i <= SS_BANDS; ++i) { platform_puts(" sgi"); platform_hex(i); platform_puts("="); platform_hex(qemu_smp_sgis[BAND_CORE][i]); }
+    platform_puts(" band3-mask="); platform_hex(SS_BAND_MASK(3)); platform_puts(" stale-restore="); platform_hex(band_top_stale);
+    platform_puts(" band1-pmr="); platform_hex(band_low_pmr); platform_puts("\n");
+}
+#endif
 static void control(void *unused)
 {
     (void)unused;
@@ -1107,6 +1195,10 @@ static void control(void *unused)
     configASSERT(local_phase_locks == 0);
     for (unsigned id = 0; id < 8; ++id)
         configASSERT(__atomic_load_n(&scheduling_locks[id], __ATOMIC_RELAXED) == 0);
+#if configSS_BAND_SGIS
+    control_phase = 0x700;
+    bands_verify();
+#endif
     control_phase = 7;
     extern unsigned long ss_kernel_test_continuations(void);
 #ifdef SUNSTONE_OWNER_COUNTERS

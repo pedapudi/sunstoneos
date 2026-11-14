@@ -21408,7 +21408,21 @@
   },
   {
    "name": "config.intid0.stored_priority",
-   "source": "source: platform/a733/cpu_continue.c:120",
+   "source": "source: platform/a733-smp-cached/continue.c:136 (SS_BAND_COMMAND_PRIORITY, the API level)",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 216,
+   "source_ref": "platform/a733-smp-cached/continue.c:136 (SS_BAND_COMMAND_PRIORITY, the API level)",
+   "note": "the value the code sets"
+  },
+  {
+   "name": "config.intid1.stored_priority",
+   "source": "source: platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(1))",
    "view": {
     "el": 3,
     "security": "secure",
@@ -21417,7 +21431,35 @@
    "core": "all",
    "status": "from-source",
    "value": 240,
-   "source_ref": "platform/a733/cpu_continue.c:120",
+   "source_ref": "platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(1))",
+   "note": "the value the code sets"
+  },
+  {
+   "name": "config.intid2.stored_priority",
+   "source": "source: platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(2))",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 232,
+   "source_ref": "platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(2))",
+   "note": "the value the code sets"
+  },
+  {
+   "name": "config.intid3.stored_priority",
+   "source": "source: platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(3))",
+   "view": {
+    "el": 3,
+    "security": "secure",
+    "interface": "gic-redistributor-sgi-frame"
+   },
+   "core": "all",
+   "status": "from-source",
+   "value": 224,
+   "source_ref": "platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(3))",
    "note": "the value the code sets"
   },
   {
@@ -21450,7 +21492,7 @@
   },
   {
    "name": "config.intid30.stored_priority_written_ns",
-   "source": "source: platform/a733-smp-cached/platform.c:116 (portLOWEST_USABLE_INTERRUPT_PRIORITY << 4, written at Non-secure EL1)",
+   "source": "source: platform/a733-smp-cached/platform.c:118 (portMAX_API_PRIORITY_MASK, the API level, written at Non-secure EL1)",
    "view": {
     "el": 1,
     "security": "non-secure",
@@ -21458,13 +21500,13 @@
    },
    "core": "all",
    "status": "from-source",
-   "value": 224,
-   "source_ref": "platform/a733-smp-cached/platform.c:116 (portLOWEST_USABLE_INTERRUPT_PRIORITY << 4, written at Non-secure EL1)",
+   "value": 176,
+   "source_ref": "platform/a733-smp-cached/platform.c:118 (portMAX_API_PRIORITY_MASK, the API level, written at Non-secure EL1)",
    "note": "the value the code writes; a Non-secure write of v stores ((v >> 1) | 0x80) & 0xf8"
   },
   {
    "name": "config.intid27.stored_priority_written_ns",
-   "source": "source: platform/a733-smp-cached/platform.c:121 (written at Non-secure EL1 under SUNSTONE_TASK_DEADLINES)",
+   "source": "source: platform/a733-smp-cached/platform.c:126 (portMAX_API_PRIORITY_MASK, written at Non-secure EL1 under SUNSTONE_TASK_DEADLINES)",
    "view": {
     "el": 1,
     "security": "non-secure",
@@ -21472,8 +21514,8 @@
    },
    "core": "all",
    "status": "from-source",
-   "value": 216,
-   "source_ref": "platform/a733-smp-cached/platform.c:121 (written at Non-secure EL1 under SUNSTONE_TASK_DEADLINES)",
+   "value": 176,
+   "source_ref": "platform/a733-smp-cached/platform.c:126 (portMAX_API_PRIORITY_MASK, written at Non-secure EL1 under SUNSTONE_TASK_DEADLINES)",
    "note": "the value the code writes; a Non-secure write of v stores ((v >> 1) | 0x80) & 0xf8"
   },
   {

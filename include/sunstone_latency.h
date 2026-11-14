@@ -188,6 +188,14 @@ void ss_latency_current_set(unsigned core, void *task, int idle);
 struct ss_service_cycles_report;
 bool ss_service_cycles_snapshot(struct ss_service_cycles_report *out);
 #endif
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+/* Measurement build only (kernel/scheduler/bands.h): the band mask setting a
+ * core applied last (1 on, 0 off), the counter bit that switches it, and the
+ * PMR change cost samples the cause bench took (count[2], cycles[2][64]). */
+unsigned ss_band_switch_on(unsigned core);
+unsigned ss_band_switch_shift(void);
+bool ss_band_pmr_snapshot(uint64_t count[2], uint64_t cycles[2][64]);
+#endif
 #ifdef __cplusplus
 }
 #endif

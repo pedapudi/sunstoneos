@@ -41,9 +41,9 @@
 +#ifdef SUNSTONE_LATENCY
 +    if( uxNewMaskValue > portMAX_API_PRIORITY_MASK ) ss_latency_mask_close( portGET_CORE_ID(), ( uintptr_t ) __builtin_return_address( 0 ) );
 +#endif
-     __asm volatile (
-         "MSR DAIFSET, #2        \n"
-         "DSB SY                 \n"
+     #if ( configNUMBER_OF_CORES > 1 )
+         /* As vPortClearInterruptMask: open to the current band mask. */
+         if( uxNewMaskValue > portMAX_API_PRIORITY_MASK )
 @@ -1467,6 +1483,9 @@
  UBaseType_t uxPortSetInterruptMask( void )
  {

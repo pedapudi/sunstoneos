@@ -11,6 +11,8 @@
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 0
 #define configENABLE_MPU 0
 #define configUSE_PASSIVE_IDLE_HOOK 0
+/* Publications use the band SGIs 1-3 (kernel/scheduler/bands.h). */
+#define configSS_BAND_SGIS 1
 #define configINTERRUPT_CONTROLLER_BASE_ADDRESS 0x080b0000UL
 #define configINTERRUPT_CONTROLLER_CPU_INTERFACE_OFFSET 0
 #define INCLUDE_vTaskDelete 1

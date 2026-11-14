@@ -15,6 +15,7 @@
 #include "latency_trace.h"
 #include "latency_pmu.h"
 #include "latency_cause.h"
+#include "bands.h"
 
 /* The private fork rejects optional configurations whose API branches have
  * not been converted. No enabled public API may fall through to legacy lists.
@@ -336,7 +337,37 @@ static inline bool ssKernelIrqsDisabled(void)
     return false;
 #endif
 }
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+struct ss_band_switch_core ss_band_switch[configNUMBER_OF_CORES];
+unsigned ss_band_switch_shift(void) { return SS_BAND_SWITCH_SHIFT; }
+unsigned ss_band_switch_on(unsigned core)
+{ return core < configNUMBER_OF_CORES ? ss_band_switch[core].on : 0u; }
+#endif
+#if configSS_BAND_SGIS
+/* The publication SGI of a task of `priority`: its band's SGI (bands.h). The
+ * owner's DSB ISHST precedes it, as for ssKernelSGI. */
+static __attribute__((noinline)) void ssKernelPublishSGI(void *context, unsigned cpu, unsigned priority)
+{
+    (void)context;
+    if (cpu == (unsigned)portGET_CORE_ID() && ssKernelCPUs[cpu].control_draining) return;
+#ifdef SUNSTONE_IRQ_COUNT
+    if (xSchedulerRunning) ssKernelSgiCount((uintptr_t)__builtin_return_address(0), cpu);
+#endif
+    if (xSchedulerRunning) {
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_sgi_begin(cpu);
+        ss_latency_cause_sgi_sent(cpu);
+#endif
+        vInterruptCore(ss_band(priority), (uint8_t)cpu);
+#ifdef SUNSTONE_LATENCY_CAUSE
+        ss_latency_cause_sgi_end(cpu);
+#endif
+    }
+}
+static const struct ss_owner_backend ssKernelBackend = { .sgi = ssKernelSGI, .publish = ssKernelPublishSGI };
+#else
 static const struct ss_owner_backend ssKernelBackend = { .sgi = ssKernelSGI };
+#endif
 /* The kernel backend's barrier is the architectural default, so a pin passes
  * no backend and reads no backend or registry line besides the descriptor. */
 static bool ssKernelHandlePin(void *task, struct ss_kernel_pin *pin)
@@ -445,6 +476,37 @@ static inline __attribute__((always_inline)) void ssKernelForce(unsigned cpu)
     ss_latency_cause_sgi_end(cpu);
 #endif
 }
+#if configSS_BAND_SGIS
+/* CPU c, with the API mask held: its running task is now of `priority`, so
+ * its open mask becomes that priority's band mask (bands.h). Every later exit
+ * from the API mask writes it (portmacro.h, portOPEN_MASK). */
+static inline __attribute__((always_inline)) void ssKernelBandSet(unsigned c, unsigned priority)
+{
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+    portSET_OPEN_MASK(c, ss_band_switch_mask(c, ss_band_mask(priority)));
+#else
+    portSET_OPEN_MASK(c, ss_band_mask(priority));
+#endif
+}
+/* Signal CPU c, from c itself, for its highest pending hint at that hint's
+ * band, as its publication did: a pending lower band stays held while c runs
+ * a higher one. Nothing pending sends nothing. */
+static inline void ssKernelSignalPending(unsigned c)
+{
+    int top = ss_owner_pending_top(&ssKernelCPUs[c].run);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_begin(c);
+#endif
+    ss_owner_barrier(&ssKernelBackend);
+    if (top >= 0) ssKernelPublishSGI(NULL, c, (unsigned)top);
+#ifdef SUNSTONE_LATENCY_CAUSE
+    ss_latency_cause_sgi_end(c);
+#endif
+}
+#else
+#define ssKernelBandSet(c, priority) ((void)0)
+#define ssKernelSignalPending(c) ssKernelForce(c)
+#endif
 static void ssKernelWaitSetWakeCPU(struct ssKernelWaitSet *wait, unsigned cpu)
 {
     uint64_t slots[2];
@@ -1475,6 +1537,16 @@ static bool ssKernelServiceOnce(unsigned c, struct ssKernelCPU *cpu)
 static unsigned long ssKernelContinuations;
 unsigned long ss_kernel_test_continuations(void) { return ssKernelContinuations; }
 #endif
+#if configSS_BAND_SGIS
+/* The rest of a service pass's work that is not a hint: due deadlines,
+ * controls and repairs, which SGI 0 carries. */
+static bool ssKernelCommandDue(unsigned c, struct ssKernelCPU *cpu)
+{
+    uint64_t next;
+    return (ss_deadline_next(&cpu->deadlines, &next) && next <= ssKernelNow()) ||
+        ssKernelControlPending(c) || ssKernelRepairDue(cpu, c);
+}
+#endif
 static void SS_SERVICE_DEFINITION(void)
 {
     const bool disabled = ssKernelIrqsDisabled();
@@ -1498,7 +1570,13 @@ static void SS_SERVICE_DEFINITION(void)
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
         ++ssKernelContinuations;
 #endif
+#if configSS_BAND_SGIS
+        /* Hints alone continue at their band, so a lower band stays held. */
+        if (ssKernelCommandDue(c, cpu)) ssKernelForce(c);
+        else ssKernelSignalPending(c);
+#else
         ssKernelForce(c);
+#endif
     }
     SS_PMU_LEAVE(1);
     SS_PH_END(2);
@@ -1620,6 +1698,7 @@ static void ssKernelSwitch(unsigned c)
     s->off_cpu = false;
     ssKernelPullIdle(c, (((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0);
     __atomic_store_n(&portCURRENT_TCB(c), selected->context, __ATOMIC_RELEASE);
+    ssKernelBandSet(c, selected->priority);
     portCURRENT_TCB(c)->xTaskRunState = (BaseType_t)c;
     traceCURRENT_TCB_SET(c, selected->context, (((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0);
 #ifndef SS_KERNEL_TEST_NO_IDLE_PULL
@@ -1645,10 +1724,12 @@ static void ssKernelSwitch(unsigned c)
 #endif
     cpu->reschedule = false;
     /* A publication always sends its own SGI; this check only spares the
-     * exception round trip for hints that arrived during selection. */
+     * exception round trip for hints that arrived during selection. It
+     * signals at the band of the highest pending hint, as the publication
+     * did, so a hint of a lower band than the selected task stays held. */
     if (ss_owner_has_pending(&cpu->run)) {
         cpu->reschedule = true;
-        ssKernelForce(c);
+        ssKernelSignalPending(c);
     }
     cpu->direct_suspend = false;
     if (mandatory) {
@@ -1931,7 +2012,14 @@ BaseType_t ssKernelOwnerIRQExit(void)
 #endif
     /* Set PSTATE.I before restoring the mask: portCLEAR_INTERRUPT_MASK_FROM_ISR clears it after the write, and an
      * ordinary interrupt taken then would be a second outermost exit inside this one. */
-    __asm__ volatile("msr daifset, #2\n dsb sy\n isb\n msr icc_pmr_el1, %0\n dsb sy\n isb" :: "r"((uint64_t)previous) : "memory");
+    /* An open previous mask reopens to the core's current band mask, which
+     * this exit's selection or priority change may have moved (bands.h). */
+#if configSS_BAND_SGIS
+    const uint64_t restore = previous > portMAX_API_PRIORITY_MASK ? portOPEN_MASK() : (uint64_t)previous;
+#else
+    const uint64_t restore = (uint64_t)previous;
+#endif
+    __asm__ volatile("msr daifset, #2\n dsb sy\n isb\n msr icc_pmr_el1, %0\n dsb sy\n isb" :: "r"(restore) : "memory");
 #ifdef SUNSTONE_LATENCY
     /* The mask was raised through portSET_INTERRUPT_MASK_FROM_ISR, which opens the latency build's masked span; this
      * restore bypasses portCLEAR_INTERRUPT_MASK_FROM_ISR, so close the span here, as that macro would. Otherwise it
@@ -2432,6 +2520,10 @@ static bool ssKernelApplyMasked(void *context, unsigned slot, void *task,
         if (queued) configASSERT(ss_owner_remove(&cpu->run, &s->ready));
         s->ready.priority = priority;
         t->uxPriority = priority;
+        /* In the same masked region as the store: the next exit from the API
+         * mask opens to the new band, so a lowered task never holds a
+         * publication that should preempt it. */
+        if (cpu->run.current == &s->ready) ssKernelBandSet(c, priority);
         if (queued && eligible) configASSERT(ss_owner_enqueue(&cpu->run, &s->ready, false));
         atomic_store_explicit(&s->effective, priority, memory_order_release);
         cpu->reschedule = true;

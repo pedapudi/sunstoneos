@@ -449,11 +449,16 @@ def source_facts():
             out.append(dict(name='config.intid%d.%s' % (intid, field), source='GICR_IGROUPR0/IGRPMODR0 bit %d as EL3 sets it' % intid,
                             view=dict(el=3, security='secure', interface='gic-redistributor-sgi-frame'), core='all', status=FROM_SOURCE,
                             value=value, source_ref=ref, note='Non-secure Group 1' if field == 'group' else 'Group 1 modifier clear'))
-    for intid, field, value, ref in ((0, 'stored_priority', 0xf0, 'platform/a733/cpu_continue.c:120'),
+    # platform/a733/cpu_continue.c:120 writes SGI 0 at stored 0xf0; with reschedule bands (kernel/scheduler/bands.h)
+    # platform/a733-smp-cached/continue.c then writes SGIs 0-3 and enables SGIs 1-3.
+    for intid, field, value, ref in ((0, 'stored_priority', 0xd8, 'platform/a733-smp-cached/continue.c:136 (SS_BAND_COMMAND_PRIORITY, the API level)'),
+                                     (1, 'stored_priority', 0xf0, 'platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(1))'),
+                                     (2, 'stored_priority', 0xe8, 'platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(2))'),
+                                     (3, 'stored_priority', 0xe0, 'platform/a733-smp-cached/continue.c:136 (SS_BAND_SGI_PRIORITY(3))'),
                                      (27, 'trigger_level', 1, 'platform/a733-smp-cached/continue.c:122-124'),
                                      (30, 'trigger_level', 1, 'platform/a733/cpu_continue.c:118'),
-                                     (30, 'stored_priority_written_ns', 0xe0, 'platform/a733-smp-cached/platform.c:116 (portLOWEST_USABLE_INTERRUPT_PRIORITY << 4, written at Non-secure EL1)'),
-                                     (27, 'stored_priority_written_ns', 0xd8, 'platform/a733-smp-cached/platform.c:121 (written at Non-secure EL1 under SUNSTONE_TASK_DEADLINES)')):
+                                     (30, 'stored_priority_written_ns', 0xb0, 'platform/a733-smp-cached/platform.c:118 (portMAX_API_PRIORITY_MASK, the API level, written at Non-secure EL1)'),
+                                     (27, 'stored_priority_written_ns', 0xb0, 'platform/a733-smp-cached/platform.c:126 (portMAX_API_PRIORITY_MASK, written at Non-secure EL1 under SUNSTONE_TASK_DEADLINES)')):
         out.append(dict(name='config.intid%d.%s' % (intid, field), source='source: ' + ref, view=dict(el=3 if 'written_ns' not in field else 1,
                         security='secure' if 'written_ns' not in field else SECURITY, interface='gic-redistributor-sgi-frame'),
                         core='all', status=FROM_SOURCE, value=value, source_ref=ref,

@@ -8,6 +8,9 @@
 #include "a733_fault.h"
 #endif
 #include <stddef.h>
+#include "FreeRTOS.h"
+#include "a733_gic_priority.h"
+#include "../../kernel/scheduler/bands.h"
 #ifdef SUNSTONE_LATENCY_CAUSE
 #include "latency_cause.h"
 #endif
@@ -112,6 +115,30 @@ static void local_boot(unsigned c,uint64_t epoch)
     if(!a733_cpu_continue_init(&s,&config))failed(c,3);
     while(a733_cpu_continue_poll(&s)==A733_CONTINUE_PENDING) {}
     if(s.state!=A733_CONTINUE_GIC_READY)failed(c,4);
+#if configSS_BAND_SGIS
+    {
+        /* Reschedule SGIs (kernel/scheduler/bands.h), in the stored view: SGI 0 at the API level, SGIs 1-3 one level
+         * each below it, band 3 nearest. The continuation wrote SGI 0 at the lowest level and enabled SGI 0 only;
+         * this enables SGIs 1-3 as well. Group and modifier stay as the continuation verified them. */
+        uintptr_t g=s.redistributor+0x10000;
+        const uint32_t word=(uint32_t)A733_GIC_STORED_FROM_NS(SS_BAND_COMMAND_PRIORITY)|
+            (uint32_t)A733_GIC_STORED_FROM_NS(SS_BAND_SGI_PRIORITY(1))<<8|
+            (uint32_t)A733_GIC_STORED_FROM_NS(SS_BAND_SGI_PRIORITY(2))<<16|
+            (uint32_t)A733_GIC_STORED_FROM_NS(SS_BAND_SGI_PRIORITY(3))<<24;
+        /* Each priority survives the stored round trip, so Non-secure EL1 reads SGI 0 at 0xb0 and SGIs 1-3 at
+         * 0xe0, 0xd0 and 0xc0, and the band masks hold exactly the lower bands. */
+        _Static_assert(A733_GIC_NS_VIEW(A733_GIC_STORED_FROM_NS(SS_BAND_COMMAND_PRIORITY))==SS_BAND_COMMAND_PRIORITY &&
+                       A733_GIC_NS_VIEW(A733_GIC_STORED_FROM_NS(SS_BAND_SGI_PRIORITY(1)))==SS_BAND_SGI_PRIORITY(1) &&
+                       A733_GIC_NS_VIEW(A733_GIC_STORED_FROM_NS(SS_BAND_SGI_PRIORITY(2)))==SS_BAND_SGI_PRIORITY(2) &&
+                       A733_GIC_NS_VIEW(A733_GIC_STORED_FROM_NS(SS_BAND_SGI_PRIORITY(3)))==SS_BAND_SGI_PRIORITY(3),
+                       "every band priority is representable at Non-secure EL1");
+        sync_memory();
+        *(volatile uint32_t *)(g+0x400)=word;
+        *(volatile uint32_t *)(g+0x100)=0xeu;
+        sync_memory();
+        if(*(volatile uint32_t *)(g+0x400)!=word || (*(volatile uint32_t *)(g+0x100)&0xfu)!=0xfu)failed(c,0x73a);
+    }
+#endif
 #ifdef SUNSTONE_TASK_DEADLINES
     if(!c){
         /* GIC-600/IHI0069: PPI27 is the level-sensitive virtual timer.
