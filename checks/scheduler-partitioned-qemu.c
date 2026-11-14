@@ -87,6 +87,14 @@ void kernel_main(void)
 _Static_assert(configSS_PARTITIONED_SCHEDULER == 1, "exercise the private fork");
 _Static_assert(configNUMBER_OF_CORES == 8, "exercise every owner");
 #define ROUNDS 64U
+/* The local-wake phase (ROUNDS wakes of a receiver on a busy home core with an idle eligible peer, each followed by one tick of delay) is
+ * bounded for progress, not for latency. It guards that the phase finishes: a lost wake already fails the sender's own one-second wait
+ * for the reply, and a global lock taken on the local path fails local_phase_locks == 0, so the bound only ends a phase that stops
+ * advancing. Under QEMU's round-robin icount the elapsed ticks include the instructions of every core that spins while it waits, so the
+ * phase takes 905 ticks in nearly every run, 1,600 in about one run in fifty under host load and 1,891 with the 3,000-turn owner-drain
+ * perturbation of checks/scheduler-control-linked.py: the old one-second bound sat at 90 percent of the normal value and failed a gate
+ * once. The bound is 4 times the slowest value measured at configTICK_RATE_HZ 1,000: 7,600 ms. */
+#define LOCAL_PHASE_LIVENESS_MS 7600U
 #define VICTIMS 32U
 #define WITHHOLD_ROUNDS 16U
 static StaticTask_t worker_state[8], busy_state[8], mover_state[2], control_state, victim_state[VICTIMS];
@@ -1023,13 +1031,8 @@ static void control(void *unused)
     uint64_t busy_start = __atomic_load_n(&busy[1], __ATOMIC_RELAXED);
     xTaskNotifyGive(local_sender);
     control_phase = 0x514;
-    /* A liveness bound, not a latency assertion: the 64 local-wake rounds must all complete (the assertions after the print below),
-     * and this wait only ends a run that hangs. Under QEMU's round-robin icount the elapsed ticks include the instructions of every
-     * core that spins while it waits, so the phase takes 905 ticks in nearly every run, 1,600 in about one run in fifty under host
-     * load, and 1,891 with the 3,000-turn owner-drain perturbation of checks/scheduler-control-linked.py (the old 2,000 ms bound failed
-     * a gate once). The bound is 4 times the slowest value measured, 1,891 ticks at configTICK_RATE_HZ 1,000: 7,600 ms. Like the
-     * phase's tick bound below, it scales with an injected scheduler delay (limit()). */
-    configASSERT(ulTaskNotifyTake(pdTRUE, limit(pdMS_TO_TICKS(7600))) == 1);
+    /* The phase's progress bound (LOCAL_PHASE_LIVENESS_MS), scaled like the fixture's other limits by an injected scheduler delay. */
+    configASSERT(ulTaskNotifyTake(pdTRUE, limit(pdMS_TO_TICKS(LOCAL_PHASE_LIVENESS_MS))) == 1);
     uint64_t busy_delta = __atomic_load_n(&busy[1], __ATOMIC_RELAXED) - busy_start;
     platform_puts("local-wake attempts="); platform_hex(local_wakes);
     platform_puts(" completions="); platform_hex(local_completed);
@@ -1041,7 +1044,7 @@ static void control(void *unused)
     platform_puts("\n");
     configASSERT(local_wakes == ROUNDS && local_completed == ROUNDS);
     configASSERT(peer_idle_samples == ROUNDS && busy_delta > 0);
-    configASSERT(local_ticks >= ROUNDS && local_ticks < limit(pdMS_TO_TICKS(1000)));
+    configASSERT(local_ticks >= ROUNDS && local_ticks < limit(pdMS_TO_TICKS(LOCAL_PHASE_LIVENESS_MS)));
     control_phase = 6;
     configASSERT(local_phase_locks == 0);
     home_blocker = xTaskCreateStaticAffinitySet(withhold_home, "home-blocker", 2048,
