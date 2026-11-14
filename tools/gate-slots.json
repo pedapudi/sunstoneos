@@ -12,6 +12,11 @@
     "mean_cores": 5.3,
     "peak_rss_gb": 10.9
   },
+  "image_builds": {
+    "_comment": "How many images a gate builds at once (tools/gate_slots.py image_builds); each gets the slot's build cores divided by this count, rounded up. Measured 2026-11-13: the 21 image builds of an affected gate (the project recipes left out), configured and built from empty directories, then rebuilt after touching kernel/scheduler/freertos.c, with a sampler on the whole process tree every 0.1 s. One at a time with -j 7: 168 s and 135 s, peak 0.75 GB (0.8 GB in a first pass under a load of 60). Three at a time with -j 3: 72 s and 48 s, peak 1.0 GB in all. Three with -j 7 gave 51 s and 36 s but 21 compile jobs per slot; four with -j 2 gave 69 s and 58 s under a load of 60. peak_rss_gb is one build at -j 7, which bounds one at a lower -j.",
+    "concurrency": 3,
+    "peak_rss_gb": 0.8
+  },
   "landing_reserved_slots": 1,
   "timing_steps": [
     "check-soak8"
