@@ -153,6 +153,7 @@ struct local_state {
     uint64_t mask_start, mask_site, lock_start[2], lock_site[2];
     unsigned mask_active, lock_depth[2], frozen;
     uint64_t span_wait; /* ticks spent waiting for a kernel lock since the mask opened */
+    uint64_t timer_due, timer_now, timer_site; /* a deferred timer sample; timer_now is zero when none waits */
 #ifdef SUNSTONE_LATENCY_PMU
     unsigned pmu_state, pmu_span; /* state: 0 not tried, 1 counting, 2 unavailable */
     struct ss_latency_site_pmu pmu_start;
@@ -312,6 +313,7 @@ void ss_latency_init(uint64_t frequency)
 }
 void ss_latency_freeze(unsigned core)
 {
+    ss_latency_timer_flush(core);
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     ss_sched_trace_freeze(core);
 #endif
@@ -346,6 +348,36 @@ void ss_latency_record_at(unsigned core, unsigned region, uint64_t start,
 }
 void ss_latency_record(unsigned core, unsigned region, uint64_t start, uintptr_t site)
 { ss_latency_record_at(core, region, start, ss_latency_now(), site); }
+/* A timer interrupt on CPUs 1-7 that a woken task follows keeps its sample
+ * until that task runs, so that recording it adds nothing to the wake. The
+ * kept sample changes only while none is kept: a second deferral before the
+ * flush records its own sample at once. Both sides run on the sample's core,
+ * the flush at EL0 or EL1, so the interrupt can only come between its steps:
+ * the flush reads the kept fields after it sees one kept, then takes it. */
+__attribute__((weak)) bool ss_latency_timer_defer(unsigned core) { (void)core; return false; }
+void ss_latency_timer_irq(unsigned core, uint64_t due, uint64_t now, uintptr_t site)
+{
+    struct local_state *l = &local[core & 7u];
+    if (core - 1u < 7u && !__atomic_load_n(&l->timer_now, __ATOMIC_RELAXED) && ss_latency_timer_defer(core)) {
+        l->timer_due = due;
+        l->timer_site = site;
+        __atomic_signal_fence(__ATOMIC_SEQ_CST);
+        __atomic_store_n(&l->timer_now, now, __ATOMIC_RELAXED);
+        return;
+    }
+    ss_latency_record_at(core, SS_LAT_IRQ, due, now, site);
+}
+void ss_latency_timer_flush(unsigned core)
+{
+    if (core >= 8) return;
+    struct local_state *l = &local[core];
+    if (!__atomic_load_n(&l->timer_now, __ATOMIC_RELAXED)) return;
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    const uint64_t due = l->timer_due, site = l->timer_site;
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    const uint64_t now = __atomic_exchange_n(&l->timer_now, 0, __ATOMIC_RELAXED);
+    ss_latency_record_at(core, SS_LAT_IRQ, due, now, site);
+}
 
 #ifdef SUNSTONE_LATENCY_SWEEP
 /* Every distinct (open site, close site) pair of a masked span, per core, with its count,
@@ -559,7 +591,7 @@ void ss_latency_gpu_received(unsigned client)
                           (uintptr_t)__builtin_return_address(0));
     taskEXIT_CRITICAL();
 }
-__attribute__((weak)) void ss_latency_tick_hook(void) {}
+__attribute__((weak)) void ss_latency_tick_hook(uint64_t due) { (void)due; }
 __attribute__((weak)) void ss_latency_task_ready(void *task) { (void)task; }
 __attribute__((weak)) void ss_latency_deadline_ready(void *task, uint64_t tick) { (void)task; (void)tick; }
 __attribute__((weak)) void ss_latency_current_set(unsigned core, void *task, int idle) { (void)core; (void)task; (void)idle; }

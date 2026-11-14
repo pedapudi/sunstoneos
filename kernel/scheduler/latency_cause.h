@@ -125,30 +125,44 @@ _Static_assert(sizeof(struct ss_latency_cause_report) == 17328u, "cause report w
  * 3 owner work start, 4 work done, 5 mask restored, 6 selection begin,
  * 7 selection end, 8 running. Segment s runs from point s to point s + 1. The
  * service parts (control drain, incoming, pull, expiry, slice) are summed over
- * the passes inside segment 3. Time from the wake's ready stamp to point 0 is
- * kept in generic counter ticks only, since ready is stamped on the releasing
- * core. A wake is linked when one outermost interrupt passed every point in
- * order and switched after the ready stamp; on CPUs 1-7 that interrupt must
- * start after the ready stamp, and on CPU0, which releases its own task inside
- * its tick, the ready stamp must fall inside the chain (its time before point
- * 0 is then recorded as zero). An interrupt that arrives after the switch and
- * before running starts a new chain but keeps the completed one, which then
- * links with the interrupt's time in its last segment. Any other wake is
- * counted unlinked. The last segment ends where the woken task marks its
- * running stamp (ss_wake_seg_mark), before its own bookkeeping. Cells are
- * filed by the band setting at running (1 when the build has no band switch).
- * CPU0's busy complete ticks are filed by the band setting at the tick's start,
- * and the first and second busy complete ticks are kept whole. A complete
- * tick released every CPU of the release mask and read the deadlines of every
- * CPU of the scan mask (header words 8 and 9): version 2 names both, and its
- * cores count their local timer arms (configSS_LOCAL_TIMERS) with each arm's
- * cycles net of an empty bracket. */
+ * the passes inside segment 3.
+ *
+ * Each wake has two start stamps in generic counter ticks. Its deadline is
+ * the counter value its wake was due at: the compare value of the timer
+ * interrupt that released it, CPU0's for a core CPU0's tick releases. Its
+ * release is the stamp at which the task became ready: on CPU0's tick for a
+ * released core, and the deadline itself for a core that times itself. A
+ * wake's latency runs from its deadline to running; the time from the
+ * deadline to point 0 is kept in ticks only, since the deadline is not a
+ * cycle count on the woken core.
+ *
+ * A wake is linked when one outermost interrupt passed every point in order
+ * and switched after the release; on CPUs 1-7 that interrupt must start
+ * after the release, and on CPU0, which releases its own task inside its
+ * tick, the release must fall inside the chain. An interrupt that arrives
+ * after the switch and before running starts a new chain but keeps the
+ * completed one, which then links with the interrupt's time in its last
+ * segment. Any other wake is counted unlinked. The last segment ends where the
+ * woken task marks its running stamp (ss_wake_seg_mark), before its own
+ * bookkeeping. Cells are filed by the band setting at running (1 when the
+ * build has no band switch). CPU0's busy complete ticks are filed by the band
+ * setting at the tick's start, and the first and second busy complete ticks
+ * are kept whole. A complete tick released every CPU of the release mask and
+ * read the deadlines of every CPU of the scan mask (header words 8 and 9).
+ * Cores count their local timer arms (configSS_LOCAL_TIMERS) with each arm's
+ * cycles net of an empty bracket.
+ *
+ * Version 3 adds the deadline to each sample, keeps each cell's three largest
+ * and its smallest cycles of every segment and part, and keeps the three
+ * largest wakes of each setting, measured from the deadline. */
 #define SS_WAKE_SEG_MAGIC UINT64_C(0x5353574b53454731)
 #define SS_WAKE_SEG_FOOTER_MAGIC UINT64_C(0x5353574b53454631)
-#define SS_WAKE_SEG_VERSION 2u
+#define SS_WAKE_SEG_VERSION 3u
 #define SS_WAKE_POINTS 9u
 #define SS_WAKE_SEGMENTS (SS_WAKE_POINTS - 1u)
 #define SS_WAKE_PARTS 5u
+#define SS_WAKE_SPANS (SS_WAKE_SEGMENTS + SS_WAKE_PARTS)
+#define SS_WAKE_WORST 3u
 struct ss_wake_seg_values {
     uint64_t cycles, events[SS_LATENCY_CAUSE_EVENTS];
 };
@@ -156,14 +170,20 @@ struct ss_wake_seg_values {
  * between the switch and running (its time is in the last segment), bit 33
  * when the chain's interrupt nested another. */
 struct ss_wake_seg_sample {
-    uint64_t ready, entry_tick, running, index;
+    uint64_t deadline, release, entry_tick, running, index;
     struct ss_wake_seg_values segment[SS_WAKE_SEGMENTS], part[SS_WAKE_PARTS];
 };
+/* pre_ticks sums deadline to point 0, whole_ticks deadline to running and
+ * release_ticks release to running. top[span] holds the span's three largest
+ * cycle counts, largest first, and least its smallest; spans are the
+ * segments, then the parts. */
 struct ss_wake_seg_cell {
-    uint64_t count, pre_ticks, whole_ticks;
+    uint64_t count, pre_ticks, whole_ticks, release_ticks;
     struct ss_wake_seg_values segment[SS_WAKE_SEGMENTS], part[SS_WAKE_PARTS];
+    uint64_t top[SS_WAKE_SPANS][SS_WAKE_WORST], least[SS_WAKE_SPANS];
 };
-/* first: busy sample #0; maximum[setting]: the largest whole wake after #0. */
+/* first: busy sample #0; worst[setting]: the three largest wakes after #0,
+ * from the deadline, largest first. */
 struct ss_wake_seg_core {
     /* linked counts every linked wake, #0 included; interrupted and nested
      * count linked wakes with those flags. */
@@ -174,7 +194,7 @@ struct ss_wake_seg_core {
      * measuring; arm_cycles sums their cycles and arm_max is the largest. */
     uint64_t first_state, arms, arm_cycles, arm_max;
     struct ss_wake_seg_cell cell[2];
-    struct ss_wake_seg_sample first, maximum[2];
+    struct ss_wake_seg_sample first, worst[2][SS_WAKE_WORST];
 };
 struct ss_wake_seg_tick {
     uint64_t count, cycles, outside_cycles, crossed;
@@ -189,8 +209,10 @@ struct ss_wake_seg_report {
     /* tick[setting]: busy complete ticks; first, second: busy complete ticks 1 and 2. */
     struct ss_wake_seg_tick tick[2], first, second;
 };
-_Static_assert(sizeof(struct ss_wake_seg_core) == 416u * 8u, "wake segment core layout");
-_Static_assert(sizeof(struct ss_wake_seg_report) == 128u + 8u * 416u * 8u + 4u * 62u * 8u, "wake segment report layout");
+_Static_assert(sizeof(struct ss_wake_seg_sample) == 83u * 8u, "wake segment sample layout");
+_Static_assert(sizeof(struct ss_wake_seg_cell) == 134u * 8u, "wake segment cell layout");
+_Static_assert(sizeof(struct ss_wake_seg_core) == 857u * 8u, "wake segment core layout");
+_Static_assert(sizeof(struct ss_wake_seg_report) == 128u + 8u * 857u * 8u + 4u * 62u * 8u, "wake segment report layout");
 
 #ifdef SUNSTONE_LATENCY_CAUSE
 #if !defined(SUNSTONE_LATENCY) || !defined(SUNSTONE_SCHED_LATENCY_TRACE)
@@ -234,14 +256,15 @@ void ss_latency_cause_sgi_sent(unsigned target);
 #ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
 /* Points 2-7 at EL1 on the named core (point 0 and 1 come from the IRQ hooks
  * above). A part brackets one service part inside the owner work. Running is
- * called by the woken task itself, at EL0 or EL1, with its ready and running
- * stamps, its busy sample index and the band setting it applied. */
+ * called by the woken task itself, at EL0 or EL1, with its deadline, release
+ * and running stamps, its busy sample index and the band setting it applied. */
 void ss_wake_seg_point(unsigned core, unsigned point);
 void ss_wake_seg_fast(unsigned core);
 void ss_wake_seg_part_begin(unsigned core);
 void ss_wake_seg_part_end(unsigned core, unsigned part);
 void ss_wake_seg_mark(unsigned core);
-void ss_wake_seg_running(unsigned core, uint64_t ready, uint64_t running, uint64_t index, unsigned setting);
+void ss_wake_seg_running(unsigned core, uint64_t deadline, uint64_t release, uint64_t running, uint64_t index,
+                         unsigned setting);
 bool ss_wake_seg_snapshot(struct ss_wake_seg_report *out);
 /* A local timer arm at EL1 (kernel/scheduler/freertos.c): begin takes two
  * stamps, the second closing an empty bracket; end counts the arm. */

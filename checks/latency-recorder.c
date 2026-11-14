@@ -1,4 +1,5 @@
 /* Deterministic interval inputs test maximum and first-failure provenance. */
+#include <stdbool.h>
 #include "FreeRTOS.h"
 #include "task.h"
 #include "platform.h"
@@ -7,6 +8,9 @@ extern _Noreturn void platform_exit_privileged(unsigned status);
 static struct ss_latency_core copy[8];
 static struct ss_latency_phase_core phases[SS_LAT_PHASES][8];
 static struct ss_latency_site sites[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS][SS_LAT_SITE_SLOTS];
+/* CPU2's timer samples wait for its woken task while this is set. */
+static bool defer_timer;
+bool ss_latency_timer_defer(unsigned core) { return defer_timer && core == 2; }
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 { (void)task; platform_panic(name, 1); }
 void kernel_main(void)
@@ -82,7 +86,28 @@ void kernel_main(void)
     ss_latency_lock_releasing(4, 1, 0x998);
     configASSERT(ss_latency_results[4].metric[SS_LAT_LOCK_HOLD1].count == 0);
     ss_latency_lock_releasing(4, 1, 0x400);
+    /* A timer sample that a woken task follows waits for that task's flush;
+     * a second one before the flush is recorded at once, and so is one whose
+     * core the fixture does not name. */
+    struct ss_latency_metric *t = &ss_latency_results[2].metric[SS_LAT_IRQ];
+    defer_timer = true;
+    ss_latency_timer_irq(2, 1000, 1040, 0x500);
+    configASSERT(t->count == 0);
+    ss_latency_timer_irq(2, 2000, 2010, 0x501);
+    configASSERT(t->count == 1 && t->maximum == 10 && t->site == 0x501);
+    ss_latency_timer_flush(2);
+    configASSERT(t->count == 2 && t->maximum == 40 && t->start == 1000 && t->site == 0x500);
+    ss_latency_timer_flush(2);
+    configASSERT(t->count == 2);
+    defer_timer = false;
+    ss_latency_timer_irq(2, 4000, 4001, 0x503);
+    configASSERT(t->count == 3);
+    /* A sample still kept when its core freezes is recorded first. */
+    defer_timer = true;
+    ss_latency_timer_irq(2, 5000, 5100, 0x504);
+    configASSERT(t->count == 3);
     for (unsigned c = 0; c < 8; ++c) ss_latency_freeze(c);
+    configASSERT(t->count == 4 && t->maximum == 100 && t->site == 0x504);
     /* Frozen close paths must not write either the metrics or site tables. */
     ss_latency_mask_open(4, ss_latency_now(), 0xdead);
     ss_latency_mask_close(4, 0xbeef);
@@ -117,6 +142,7 @@ void kernel_main(void)
     configASSERT(phases[SS_LAT_BUSY][5].metric[SS_LAT_GPU].site == 666);
     configASSERT(copy[0].metric[SS_LAT_IRQ].count == 4);
     configASSERT(copy[1].metric[SS_LAT_IRQ].count == 0);
-    platform_puts("PASS latency recorder maximum, nesting, first fault, phase quantiles, origin and freeze\n");
+    configASSERT(copy[2].metric[SS_LAT_IRQ].count == 4);
+    platform_puts("PASS latency recorder maximum, nesting, first fault, phase quantiles, origin, deferred timer samples and freeze\n");
     platform_exit_privileged(0);
 }

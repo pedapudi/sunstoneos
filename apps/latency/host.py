@@ -44,11 +44,24 @@ WAKE_POINTS = ('irq_entry', 'wrapper_return', 'exit_start', 'work_start', 'work_
 WAKE_SEGMENTS = tuple(f'{a}_to_{b}' for a, b in zip(WAKE_POINTS, WAKE_POINTS[1:]))
 WAKE_PARTS = ('drain', 'incoming', 'pull', 'expiry', 'slice')
 WAKE_VALUES = 1 + len(CAUSE_EVENTS)
-WAKE_SAMPLE_WORDS = 4 + (len(WAKE_SEGMENTS) + len(WAKE_PARTS)) * WAKE_VALUES
-WAKE_CELL_WORDS = 3 + (len(WAKE_SEGMENTS) + len(WAKE_PARTS)) * WAKE_VALUES
-WAKE_CORE_WORDS = 8 + 2 * WAKE_CELL_WORDS + 3 * WAKE_SAMPLE_WORDS
+WAKE_SPANS = len(WAKE_SEGMENTS) + len(WAKE_PARTS)
+WAKE_WORST = 3
 WAKE_TICK_WORDS = 4 + 2 * len(CAUSE_EVENTS) + 8 + 8 * len(CAUSE_EVENTS)
-WAKE_BYTES = 128 + 8 * 8 * WAKE_CORE_WORDS + 4 * 8 * WAKE_TICK_WORDS
+
+
+def wake_layout(version):
+    """Words per sample, cell and core, and the report's bytes. Version 3 adds each
+    sample's deadline, each cell's release ticks and per-span ranks, and keeps the
+    three largest wakes per setting where versions 1 and 2 kept one."""
+    v3 = version >= 3
+    sample = (5 if v3 else 4) + WAKE_SPANS * WAKE_VALUES
+    cell = (4 if v3 else 3) + WAKE_SPANS * WAKE_VALUES + (WAKE_SPANS * (WAKE_WORST + 1) if v3 else 0)
+    core = 8 + 2 * cell + (1 + 2 * (WAKE_WORST if v3 else 1)) * sample
+    return sample, cell, core, 128 + 8 * 8 * core + 4 * 8 * WAKE_TICK_WORDS
+
+
+WAKE_SAMPLE_WORDS, WAKE_CELL_WORDS, WAKE_CORE_WORDS, WAKE_BYTES = wake_layout(3)
+WAKE_BYTES_BY_VERSION = {version: wake_layout(version)[3] for version in (1, 2, 3)}
 BAND_CELL_FIELDS = ('windows', 'cycles', 'foreign', 'foreign_irq', 'foreign_max', 'foreign_sum', 'own', 'own_max')
 SERVICE_CELL = 464
 SERVICE_BINS = 105
@@ -755,11 +768,11 @@ def cycle_distribution(values):
 
 
 def wake_masks(payload):
-    """The release and scan masks a wake segment report names (version 2), or all eight cores (version 1)."""
+    """The release and scan masks a wake segment report names (version 2 and later), or all eight cores (version 1)."""
     if not payload:
         return 0xff, 0xff
     version, release, scan = (struct.unpack_from('<Q', payload, 8)[0], *struct.unpack_from('<2Q', payload, 64))
-    return (release, scan) if version == 2 else (0xff, 0xff)
+    return (release, scan) if version >= 2 else (0xff, 0xff)
 
 
 def timer_core_mask(irq_mask, wake_tail):
@@ -1040,7 +1053,7 @@ def peel_wake_segments(payload):
     if len(payload) < 64 or struct.unpack_from('<Q', payload, len(payload) - 64)[0] != WAKE_FOOTER_MAGIC:
         return payload, b''
     _, version, size, at, length, *rest = struct.unpack_from('<8Q', payload, len(payload) - 64)
-    if (version != 1 or size != len(payload) or length != WAKE_BYTES or at % 64 or
+    if (version != 1 or size != len(payload) or length not in WAKE_BYTES_BY_VERSION.values() or at % 64 or
             at + length > len(payload) - 64 or any(rest) or any(payload[at + length:-64])):
         raise ValueError('wake segment footer offsets, padding or report size are invalid')
     return payload[:at], payload[at:at + length]
@@ -1050,13 +1063,20 @@ def decode_wake_segments(payload, frequency):
     """Each busy wake's cycles and cache events by segment of its chain, from
     the interrupt that started it to the woken task's first instruction, and
     CPU0's busy complete ticks by band setting (kernel/scheduler/latency_cause.h)."""
-    words = struct.unpack('<' + 'Q' * (WAKE_BYTES // 8), payload)
+    if len(payload) < 16:
+        raise ValueError('wake segment header is invalid or incomplete')
+    version = struct.unpack_from('<Q', payload, 8)[0]
+    if version not in WAKE_BYTES_BY_VERSION or len(payload) != WAKE_BYTES_BY_VERSION[version]:
+        raise ValueError('wake segment header is invalid or incomplete')
+    size_bytes = WAKE_BYTES_BY_VERSION[version]
+    v3 = version >= 3
+    words = struct.unpack('<' + 'Q' * (size_bytes // 8), payload)
     header = words[:16]
     magic, version, size, cores, points, parts, shift, complete = header[:8]
-    # Version 2 names the release and scan masks and counts each core's local timer arms.
-    masks = header[8:10] if version == 2 else (0xff, 0xff)
+    # Version 2 and later name the release and scan masks and count each core's local timer arms.
+    masks = header[8:10] if version >= 2 else (0xff, 0xff)
     if ((magic, size, cores, points, parts, complete) !=
-            (WAKE_MAGIC, WAKE_BYTES, 8, len(WAKE_POINTS), len(WAKE_PARTS), 1) or version not in (1, 2) or
+            (WAKE_MAGIC, size_bytes, 8, len(WAKE_POINTS), len(WAKE_PARTS), 1) or
             any(header[10:]) or (version == 1 and any(header[8:10])) or
             not 0 < masks[0] <= 0xff or not 0 < masks[1] <= 0xff):
         raise ValueError('wake segment header is invalid or incomplete')
@@ -1078,19 +1098,29 @@ def decode_wake_segments(payload, frequency):
     def scaled(table, count):
         return {name: {key: value / count for key, value in row.items()} for name, row in table.items()}
 
+    def us(ticks):
+        return ticks * 1e6 / frequency
+
     def sample(core):
-        ready, entry, running, index = take(4)
+        deadline = take(1)[0] if v3 else None
+        release, entry, running, index = take(4)
+        if deadline is None:
+            deadline = release
         segments, part = values(WAKE_SEGMENTS), values(WAKE_PARTS)
         if not running:
-            if ready or entry or index or any(v for row in (*segments.values(), *part.values()) for v in row.values()):
+            if (deadline or release or entry or index or
+                    any(v for row in (*segments.values(), *part.values()) for v in row.values())):
                 raise ValueError('empty wake segment sample holds values')
             return None
         # CPU0 releases its own task inside the interrupt that starts its chain.
-        if not (entry <= ready <= running if core == 0 else ready <= entry <= running):
+        if not ((not v3 or deadline <= min(release, entry)) and
+                (entry <= release <= running if core == 0 else release <= entry <= running)):
             raise ValueError('wake segment sample is out of order')
+        # Versions 1 and 2 stamped the release only; their wake runs from it.
         return {'index': index & 0xffffffff, 'interrupted': bool(index >> 32 & 1), 'nested': bool(index >> 33 & 1),
-                'wake_us': (running - ready) * 1e6 / frequency,
-                'before_entry_us': (entry - ready) * 1e6 / frequency if core else 0.0,
+                'wake_us': us(running - deadline),
+                'release_to_running_us': us(running - release),
+                'before_entry_us': us(entry - deadline) if v3 or core else 0.0,
                 'chain_cycles': sum(row['cycles'] for row in segments.values()),
                 'segments': segments, 'parts': part}
 
@@ -1099,7 +1129,9 @@ def decode_wake_segments(payload, frequency):
               'scope': ('a chain starts at the outermost interrupt entry and is kept only when every point '
                         'follows in order and it carried the release (CPU0: release inside the chain); a chain '
                         'completed before a later interrupt links with that interrupt in its last segment; busy samples after '
-                        'the first are filed by the band setting at the wake; events are refills and backend stalls')}
+                        'the first are filed by the band setting at the wake; events are refills and backend stalls; '
+                        + ('wakes run from the deadline, the compare value of the timer interrupt that released them'
+                           if v3 else 'wakes run from the release stamp'))}
     for core in range(8):
         linked, unlinked, nested, interrupted, first_state, arms, arm_cycles, arm_max = take(8)
         if (nested > linked or interrupted > linked or (version == 1 and (arms or arm_cycles or arm_max)) or
@@ -1108,16 +1140,45 @@ def decode_wake_segments(payload, frequency):
         cells = {}
         for setting in ('off', 'on'):
             count, pre, whole = take(3)
+            release_ticks = take(1)[0] if v3 else None
             segments, part = values(WAKE_SEGMENTS), values(WAKE_PARTS)
-            if not count and (pre or whole):
+            ranks = None
+            if v3:
+                top = [take(WAKE_WORST) for _ in range(WAKE_SPANS)]
+                least = take(WAKE_SPANS)
+                if (any(list(row) != sorted(row, reverse=True) for row in top) or
+                        any(row[min(count, WAKE_WORST):] != (0,) * (WAKE_WORST - min(count, WAKE_WORST))
+                            for row in top) or
+                        (count and any(least[k] > top[k][0] for k in range(WAKE_SPANS)))):
+                    raise ValueError('wake segment cell ranks are invalid')
+                names = (*WAKE_SEGMENTS, *WAKE_PARTS)
+                ranks = {name: {'top_cycles': list(top[k][:min(count, WAKE_WORST)]),
+                                'least_cycles': least[k] if count else None}
+                         for k, name in enumerate(names)}
+            if not count and (pre or whole or release_ticks or (ranks and any(least))):
                 raise ValueError('empty wake segment cell holds values')
             cells[setting] = {'count': count,
-                'mean_wake_us': whole * 1e6 / frequency / count if count else None,
-                'mean_before_entry_us': pre * 1e6 / frequency / count if count else None,
+                'mean_wake_us': us(whole) / count if count else None,
+                'mean_release_to_running_us': us(release_ticks) / count if count and v3 else None,
+                'mean_before_entry_us': us(pre) / count if count else None,
                 'mean_segments': scaled(segments, count) if count else None,
-                'mean_parts': scaled(part, count) if count else None}
+                'mean_parts': scaled(part, count) if count else None,
+                **({'ranks': ranks} if v3 else {})}
         first = sample(core)
-        maxima = {setting: sample(core) for setting in ('off', 'on')}
+        if v3:
+            worst = {}
+            for setting in ('off', 'on'):
+                rows = [sample(core) for _ in range(WAKE_WORST)]
+                kept = [row for row in rows if row is not None]
+                if (rows[len(kept):] != [None] * (WAKE_WORST - len(kept)) or
+                        [row['wake_us'] for row in kept] != sorted((row['wake_us'] for row in kept), reverse=True) or
+                        len(kept) != min(cells[setting]['count'], WAKE_WORST)):
+                    raise ValueError('wake segment worst samples are out of order or miscounted')
+                worst[setting] = kept
+            maxima = {setting: rows[0] if rows else None for setting, rows in worst.items()}
+        else:
+            maxima = {setting: sample(core) for setting in ('off', 'on')}
+            worst = {setting: [row] if row else [] for setting, row in maxima.items()}
         if sum(cell['count'] for cell in cells.values()) + (first is not None) > linked:
             raise ValueError('wake segment cells exceed the linked count')
         result['cores'].append({'core': core, 'linked': linked, 'unlinked': unlinked, 'nested': nested,
@@ -1129,7 +1190,7 @@ def decode_wake_segments(payload, frequency):
                                 'first_state': {'seen': bool(first_state >> 16 & 1), 'linked': bool(first_state >> 8 & 1),
                                                 'through_held_chain': bool(first_state >> 9 & 1),
                                                 'current_chain_stage': first_state & 0xff},
-                                **cells, 'first': first, 'maximum': maxima})
+                                **cells, 'first': first, 'maximum': maxima, 'worst': worst})
 
     def tick():
         count, cycles, outside, crossed = take(4)

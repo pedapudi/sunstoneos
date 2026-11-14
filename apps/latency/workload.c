@@ -19,8 +19,10 @@ _Static_assert(SUNSTONE_LATENCY_STREAM_MASK > 0 && SUNSTONE_LATENCY_STREAM_MASK 
 #define LATENCY_STREAMS(c) ((SUNSTONE_LATENCY_STREAM_MASK >> (c)) & 1u)
 /* Cores whose wake CPU0's tick releases. The wake task of every other core
  * waits on its own deadline, one tick ahead, so its wake comes from that
- * core's own deadline expiry, and its ready stamp is the counter value at
- * which the deadline's tick begins. */
+ * core's own deadline expiry, and its release stamp is the counter value at
+ * which the deadline's tick begins. Every wake is measured from its deadline:
+ * that value for a core that times itself, and the compare value of CPU0's
+ * tick interrupt for a released core. */
 #ifndef SUNSTONE_LATENCY_RELEASE_MASK
 #define SUNSTONE_LATENCY_RELEASE_MASK 0xffu
 #endif
@@ -40,6 +42,7 @@ struct wake_slot {
     unsigned metric;
     _Atomic(void *) running;
     atomic_uint running_idle;
+    uint64_t deadline;
 };
 _Static_assert(sizeof(struct wake_slot) == 64, "one line per wake slot");
 struct load_slot {
@@ -247,8 +250,16 @@ void ss_latency_deadline_ready(void *task, uint64_t tick)
     const unsigned c = portGET_CORE_ID();
     if (c >= LATENCY_CORES || LATENCY_RELEASED(c) || task != wake_task[c] ||
         !atomic_load_explicit(&wake[c].pending, memory_order_acquire) || !admitted(c, p)) return;
-    wake[c].released = ss_latency_tick_counter(tick);
+    wake[c].released = wake[c].deadline = ss_latency_tick_counter(tick);
     wake[c].metric = p == IDLE ? SS_LAT_SCHED_IDLE : SS_LAT_SCHED_BUSY;
+}
+/* A core that times itself keeps its timer sample, taken at its interrupt's
+ * entry, until its woken task has recorded its own wake. */
+bool ss_latency_timer_defer(unsigned core)
+{
+    unsigned p = atomic_load_explicit(&phase, memory_order_relaxed);
+    return core < LATENCY_CORES && !LATENCY_RELEASED(core) && (p == IDLE || p == BUSY) &&
+        atomic_load_explicit(&wake[core].pending, memory_order_relaxed);
 }
 /* A core outside the release mask: wait one tick on this task's own deadline
  * while the phase wants samples from it, otherwise for the phase control's
@@ -308,7 +319,7 @@ static inline void tlbi_broadcast(void)
 #endif
 /* CPU0's periodic interrupt releases each pinned task. Remote-core samples
  * include SGI delivery. One outstanding sample prevents overwritten stamps. */
-void ss_latency_tick_hook(void)
+void ss_latency_tick_hook(uint64_t due)
 {
     unsigned p = atomic_load_explicit(&phase, memory_order_acquire);
     if (p == BUSY) latency_dma_model_tick();
@@ -332,6 +343,7 @@ void ss_latency_tick_hook(void)
         if (!LATENCY_RELEASED(c) || atomic_load_explicit(&wake[c].completed, memory_order_acquire) >= limit ||
             atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
         wake[c].metric = SS_LAT_METRICS;
+        wake[c].deadline = due;
         atomic_store_explicit(&wake[c].pending, 1, memory_order_release);
 #ifdef SUNSTONE_LATENCY_CAUSE
         ss_latency_cause_release_begin(c, p == IDLE ? 0u : 1u);
@@ -380,14 +392,14 @@ static void wake_worker(void *argument)
             ss_wake_seg_mark(c);
 #endif
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
-            ss_sched_trace_wake(c, wake[c].released, running, wake[c].metric == SS_LAT_SCHED_BUSY);
+            ss_sched_trace_wake(c, wake[c].deadline, running, wake[c].metric == SS_LAT_SCHED_BUSY);
 #endif
             unsigned index = atomic_load_explicit(&wake[c].completed, memory_order_relaxed);
             configASSERT(index < LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES);
             report->wakes[c][index] = (struct latency_wake_sample){
-                wake[c].released, running, wake[c].metric,
+                wake[c].deadline, running, wake[c].metric,
                 wake[c].metric == SS_LAT_SCHED_IDLE ? LATENCY_WAKE_IDLE : LATENCY_WAKE_BUSY};
-            ss_latency_record_at(c, wake[c].metric, wake[c].released, running, (uintptr_t)wake_worker);
+            ss_latency_record_at(c, wake[c].metric, wake[c].deadline, running, (uintptr_t)wake_worker);
 #ifdef SUNSTONE_LATENCY_BAND_SWITCH
             bands.wake_on[c][index / 64] |= (uint64_t)(ss_band_switch_on(c) & 1u) << (index % 64);
 #endif
@@ -398,11 +410,13 @@ static void wake_worker(void *argument)
 #else
                 const unsigned setting = 1u;
 #endif
-                ss_wake_seg_running(c, wake[c].released, running, index - LATENCY_IDLE_SAMPLES, setting);
+                ss_wake_seg_running(c, wake[c].deadline, wake[c].released, running, index - LATENCY_IDLE_SAMPLES,
+                                    setting);
             }
 #endif
             atomic_fetch_add_explicit(&wake[c].completed, 1, memory_order_release);
         }
+        ss_latency_timer_flush(c);
         atomic_store_explicit(&wake[c].pending, 0, memory_order_release);
 #ifdef SUNSTONE_LATENCY_BAND_SWITCH
         if (c - 1u < LATENCY_BAND_PROBES && atomic_load_explicit(&phase, memory_order_acquire) == BUSY)

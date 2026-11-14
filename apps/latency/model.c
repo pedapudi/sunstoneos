@@ -93,9 +93,21 @@ static void controller(void *argument)
         number(" arms=", w->arms);
         platform_puts("\n");
         configASSERT(filed && w->first.running && filed + 1 <= w->linked);
+        /* Each setting's worst wakes, largest first from the deadline; a released core's deadline is CPU0's. */
+        for (unsigned setting = 0; setting < 2; ++setting)
+            for (unsigned i = 0; i < SS_WAKE_WORST; ++i) {
+                const struct ss_wake_seg_sample *x = &w->worst[setting][i];
+                configASSERT(!x->running == (i >= w->cell[setting].count));
+                if (!x->running) continue;
+                configASSERT(x->deadline <= x->release && x->deadline <= x->entry_tick && x->release <= x->running);
+                if (core && !(SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u)) configASSERT(x->deadline == x->release);
+                if (i) configASSERT(x->running - x->deadline <= w->worst[setting][i - 1].running - w->worst[setting][i - 1].deadline);
+            }
 #if configSS_LOCAL_TIMERS
         /* CPUs 1-7 that wait on their own deadlines armed their timers; those CPU0 releases had nothing to arm. */
         if (core) configASSERT((SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u) ? !w->arms : w->arms != 0);
+        /* Their timer samples, kept until the woken task ran, were recorded. */
+        if (core && !(SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u)) configASSERT(result.core[core].metric[SS_LAT_IRQ].count);
 #endif
     }
     configASSERT(result.wake_segments.release_mask == SUNSTONE_LATENCY_RELEASE_MASK);

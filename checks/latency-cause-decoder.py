@@ -249,7 +249,8 @@ def main():
         for k in range(8 + 5):
             w += wake_values(100 * (k + 1))
         return w
-    wake = [host.WAKE_MAGIC, 1, host.WAKE_BYTES, 8, 9, 5, 20, 1] + [0] * 8
+    wake_v1 = host.WAKE_BYTES_BY_VERSION[1]
+    wake = [host.WAKE_MAGIC, 1, wake_v1, 8, 9, 5, 20, 1] + [0] * 8
     for core in range(8):
         wake += [5, 1, 0, 1, (1 << 16) | (1 << 8) | 8, 0, 0, 0]
         for setting in range(2):
@@ -261,7 +262,7 @@ def main():
         count = (40, 41, 1, 1)[n]
         wake += [count, count * 50000, count * 10000, n == 1] + [count * 3] * 5 + [count] * 5
         wake += [count * 2000] * 8 + [count] * 40
-    assert len(wake) * 8 == host.WAKE_BYTES
+    assert len(wake) * 8 == wake_v1
     wake = struct.pack(f'<{len(wake)}Q', *wake)
     # Bands absent: the wake section follows the service footer, which records the whole result's size.
     whole_wake = len(with_service) + len(wake) + 64
@@ -303,7 +304,7 @@ def main():
         harness.refused(lambda: host.decode_wake_segments(bytes(bad), 24000000), 'wake segment', ValueError)
         cases.append(name)
     # Version 2 (local timers): the report names the release and scan masks and counts each core's timer arms.
-    local = list(struct.unpack(f'<{host.WAKE_BYTES // 8}Q', wake))
+    local = list(struct.unpack(f'<{wake_v1 // 8}Q', wake))
     local[1], local[8], local[9] = 2, 0x11, 0x01
     local[16 + 5 * 416 + 5:16 + 5 * 416 + 8] = [130, 130 * 40, 75]
     local = struct.pack(f'<{len(local)}Q', *local)
@@ -323,6 +324,67 @@ def main():
         harness.refused(lambda: host.decode_wake_segments(bytes(bad), 24000000), 'wake segment', ValueError)
         cases.append(name)
     cases.append('a version 2 wake report names its release and scan masks and decodes timer arms')
+    # Version 3: each sample carries its deadline, each cell its release ticks and per-span ranks, and each setting
+    # keeps its three longest wakes from the deadline. CPU0's deadline precedes its chain; a released core's, its release.
+    def v3_sample(deadline, release, entry, index):
+        w = [deadline, release, entry, deadline + 240, index]
+        for k in range(8 + 5):
+            w += wake_values(100 * (k + 1))
+        return w
+
+    def v3_cell(count):
+        w = [count, count * 24, count * 240, count * 120]
+        for k in range(8 + 5):
+            w += [count * v for v in wake_values(100 * (k + 1))]
+        ranks = [[100 * (k + 1) + 10 * (2 - i) if i < count else 0 for i in range(3)] for k in range(13)]
+        return w + [v for row in ranks for v in row] + [100 * (k + 1) - 5 if count else 0 for k in range(13)]
+    v3 = [host.WAKE_MAGIC, 3, host.WAKE_BYTES, 8, 9, 5, 0, 1, 0x21, 0x01] + [0] * 6
+    for core in range(8):
+        v3 += [5, 1, 0, 1, (1 << 16) | (1 << 8) | 8, 0, 0, 0] + v3_cell(0) + v3_cell(2)
+
+        def at(base, core=core):
+            # CPU0: deadline, entry, release; CPU5 (released): deadline, release, entry; others time themselves.
+            return ((base, base + 24, base + 12) if core == 0 else (base, base + 120, base + 132) if core == 5 else
+                    (base, base, base + 24))
+        v3 += v3_sample(*at(1000), 0) + [0] * host.WAKE_SAMPLE_WORDS * 3
+        v3 += v3_sample(*at(3000), 7) + v3_sample(*at(2000), 3) + [0] * host.WAKE_SAMPLE_WORDS
+    for n in range(4):
+        count = (40, 41, 1, 1)[n]
+        v3 += [count, count * 50000, count * 10000, n == 1] + [count * 3] * 5 + [count] * 5
+        v3 += [count * 2000] * 8 + [count] * 40
+    assert len(v3) * 8 == host.WAKE_BYTES == host.WAKE_BYTES_BY_VERSION[3]
+    v3 = struct.pack(f'<{len(v3)}Q', *v3)
+    decoded = host.decode_wake_segments(v3, 24000000)
+    assert (decoded['version'], decoded['release_mask'], decoded['scan_mask']) == (3, 0x21, 0x01)
+    released, cpu0 = decoded['cores'][5], decoded['cores'][0]
+    assert released['on']['mean_wake_us'] == 10.0 and released['on']['mean_release_to_running_us'] == 5.0
+    assert released['on']['mean_before_entry_us'] == 1.0 and released['off']['ranks']['drain']['top_cycles'] == []
+    assert released['on']['ranks']['work_done_to_mask_restored']['top_cycles'] == [520, 510]
+    assert released['on']['ranks']['slice']['least_cycles'] == 1295
+    assert [w['index'] for w in released['worst']['on']] == [7, 3] and released['maximum']['on']['index'] == 7
+    assert released['worst']['on'][0]['release_to_running_us'] == 5.0 and released['worst']['on'][0]['wake_us'] == 10.0
+    assert cpu0['first']['before_entry_us'] == 0.5 and cpu0['first']['release_to_running_us'] == 9.0
+    assert host.wake_masks(v3) == (0x21, 0x01) and host.timer_core_mask(1, v3) == 0xff
+    assert host.peel_wake_segments(service_whole + v3 + struct.pack('<8Q', host.WAKE_FOOTER_MAGIC, 1,
+        len(service_whole) + len(v3) + 64, len(service_whole), len(v3), 0, 0, 0))[1] == v3
+    cases.append('a version 3 wake report decodes deadlines, release ticks, span ranks and the three longest wakes')
+    core5 = 16 + 5 * host.WAKE_CORE_WORDS
+    cell_on = core5 + 8 + host.WAKE_CELL_WORDS
+    ranks_on = cell_on + 4 + 13 * 6
+    first5 = core5 + 8 + 2 * host.WAKE_CELL_WORDS
+    worst_on = first5 + 4 * host.WAKE_SAMPLE_WORDS
+    for name, word, value in [('version 3 wake report size', 2, wake_v1),
+                              ('wake span ranks out of order', ranks_on, 1),
+                              ('wake span rank beyond the cell count', ranks_on + 2, 7),
+                              ('wake span least above its largest', ranks_on + 13 * 3, 10 ** 6),
+                              ('wake deadline after the release', first5, 1125),
+                              ('worst wakes out of order', worst_on + host.WAKE_SAMPLE_WORDS + 3, 10 ** 6),
+                              ('worst wakes beyond the cell count', worst_on + 2 * host.WAKE_SAMPLE_WORDS + 3, 4000)]:
+        bad = list(struct.unpack(f'<{len(v3) // 8}Q', v3))
+        bad[word] = value
+        harness.refused(lambda: host.decode_wake_segments(struct.pack(f'<{len(bad)}Q', *bad), 24000000),
+                        'wake segment', ValueError)
+        cases.append(name)
     # With local timers CPU0's tick releases CPUs 0 and 4 and reads CPU0's deadlines only; the retained tick holds
     # components for those cores alone.
     tick_word = 8 + 18 * 8 + 4 * 64 + 14 * 16

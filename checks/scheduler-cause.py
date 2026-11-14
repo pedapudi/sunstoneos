@@ -131,7 +131,8 @@ def build(out,name,defines,sources):
     subprocess.run([str(LLD),'-Ttext=0x41000000','-Tdata=0x41100000','-Tbss=0x41200000','-e','ss_latency_cause_arm',*map(str,objects),'-o',str(image)],check=True,env=environment())
     return image
 # struct ss_wake_seg_report (kernel/scheduler/latency_cause.h), in bytes.
-WAKE_CELL,WAKE_SAMPLE,WAKE_CORE,WAKE_TICK=81*8,82*8,416*8,62*8
+WAKE_CELL,WAKE_SAMPLE,WAKE_CORE,WAKE_TICK=134*8,83*8,857*8,62*8
+WAKE_FIRST=64+2*WAKE_CELL
 def wake_core(m,c):return m.sym['wake_report']+128+c*WAKE_CORE
 def wake_cell(m,c,setting):return wake_core(m,c)+64+setting*WAKE_CELL
 def wake_tick_cell(m,n):return m.sym['wake_report']+128+8*WAKE_CORE+n*WAKE_TICK
@@ -145,10 +146,14 @@ def wake_chain(m,core,skip=None,nest=False):
         if point==skip:continue
         m.call('ss_wake_seg_point',core,point)
         if point==3:m.call('ss_wake_seg_part_begin',core);m.call('ss_wake_seg_part_end',core,1)
-def run_wake(m,core,ready,running,index,setting,**options):
-    """The woken task marks its running stamp, then closes its chain (apps/latency/workload.c, wake_worker)."""
+def run_wake(m,core,ready,running,index,setting,deadline=None,**options):
+    """The woken task marks its running stamp, then closes its chain (apps/latency/workload.c, wake_worker). A core
+    that times itself is due at its release; pass `deadline` for a release that came later than the wake was due."""
     m.call('ss_wake_seg_mark',core,**options)
-    return m.call('ss_wake_seg_running',core,ready,running,index,setting,**options)
+    return m.call('ss_wake_seg_running',core,ready if deadline is None else deadline,ready,running,index,setting,**options)
+def worst(m,core,setting,i):
+    """worst[setting][i]: deadline, release, entry, running, index."""
+    return m.readq(wake_core(m,core)+WAKE_FIRST+(1+3*setting+i)*WAKE_SAMPLE,5)
 def wake_cases(image,results):
     m=Model(image);m.setup();assert m.row(0)[4]==12
     m.call('ss_latency_cause_irq_end',0)
@@ -157,15 +162,15 @@ def wake_cases(image,results):
     ready=m.clock;wake_chain(m,1);m.el1=False
     run_wake(m,1,ready,m.clock+10,0,1)
     assert m.readq(wake_core(m,1),3)==(1,0,0)
-    first=m.readq(wake_core(m,1)+64+2*WAKE_CELL,4)
-    assert first[0]==ready and ready<=first[1]<=first[2] and first[3]==0 and m.readq(wake_cell(m,1,1),1)[0]==0
+    first=m.readq(wake_core(m,1)+WAKE_FIRST,5)
+    assert first[0]==first[1]==ready and ready<=first[2]<=first[3] and first[4]==0 and m.readq(wake_cell(m,1,1),1)[0]==0
     ready=m.clock;wake_chain(m,1,nest=True);m.el1=False
     run_wake(m,1,ready,m.clock+10,1,1)
     assert m.readq(wake_core(m,1),3)==(2,0,1)
-    cell=m.readq(wake_cell(m,1,1),3+13*6)
-    segments=[cell[3+k*6] for k in range(8)];part=cell[3+8*6+6]
-    assert cell[0]==1 and cell[1]>0 and all(segments[:7]) and 0<part<segments[3],cell
-    assert m.readq(wake_core(m,1)+64+2*WAKE_CELL+WAKE_SAMPLE+WAKE_SAMPLE,4)[3]==1|1<<33
+    cell=m.readq(wake_cell(m,1,1),4+13*6)
+    segments=[cell[4+k*6] for k in range(8)];part=cell[4+8*6+6]
+    assert cell[0]==1 and cell[1]>0 and cell[3]==cell[2] and all(segments[:7]) and 0<part<segments[3],cell
+    assert worst(m,1,1,0)[4]==1|1<<33
     results.append('a remote wake chain from interrupt entry to the running task files its segments and service part; the first busy wake is kept apart; nesting is counted')
     ready=m.clock;wake_chain(m,1,skip=3);m.el1=False
     run_wake(m,1,ready,m.clock+10,2,1)
@@ -200,11 +205,19 @@ def wake_cases(image,results):
     run_wake(m,0,ready,m.clock+10,1,1)
     wake_chain(m,0);m.el1=False;run_wake(m,0,ready,m.clock+10,2,1)
     assert m.readq(wake_core(m,0),3)==(0,4,0) and m.readq(wake_cell(m,0,1),2)==(0,0)
-    m.core=0;m.el1=True;m.call('ss_latency_cause_irq_begin',0,30);ready=m.clock;m.call('ss_latency_cause_irq_end',0)
+    # CPU0's deadline is its tick's compare value, before the chain; a deadline inside the chain cannot link.
+    due=m.clock;m.core=0;m.el1=True;m.call('ss_latency_cause_irq_begin',0,30);ready=m.clock;m.call('ss_latency_cause_irq_end',0)
     for point in range(2,8):m.call('ss_wake_seg_point',0,point)
     m.el1=False;run_wake(m,0,ready,m.clock+10,1,1)
-    assert m.readq(wake_core(m,0),3)==(1,4,0) and m.readq(wake_cell(m,0,1),2)==(1,0)
-    results.append("CPU0's own wake links only when its release falls inside the tick chain, and records no time before entry")
+    assert m.readq(wake_core(m,0),3)==(0,5,0)
+    m.core=0;m.el1=True;m.call('ss_latency_cause_irq_begin',0,30);ready=m.clock;m.call('ss_latency_cause_irq_end',0)
+    for point in range(2,8):m.call('ss_wake_seg_point',0,point)
+    m.el1=False;running=m.clock+10;run_wake(m,0,ready,running,1,1,deadline=due)
+    x=worst(m,0,1,0);cell=m.readq(wake_cell(m,0,1),4)
+    assert m.readq(wake_core(m,0),3)==(1,5,0) and x[:2]==(due,ready) and x[0]<=x[2]<=x[1]
+    assert cell==(1,x[2]-due,running-due,running-ready),(cell,x)
+    results.append("CPU0's own wake links only when its release falls inside the tick chain and its deadline before it; "
+                   "its time before entry runs from the deadline")
     bad=Model(image);bad.setup();bad.call('ss_latency_cause_irq_end',0);bad.core=1
     bad.call('ss_latency_cause_irq_begin',1,30);bad.call('ss_latency_cause_irq_end',1);wake_chain(bad,1);bad.el1=False
     bad.regs['pmuserenr_el0']=4;run_wake(bad,1,0,bad.clock+10,1,1,allow_violation=True)
@@ -225,19 +238,42 @@ def wake_cases(image,results):
     m.el1=False;assert not m.call('ss_wake_seg_snapshot',OUTPUT)
     for c in range(8):m.core=c;m.call('ss_latency_cause_freeze',c)
     assert m.call('ss_wake_seg_snapshot',OUTPUT)
-    assert m.readq(OUTPUT,10)==(0x5353574b53454731,2,28736,8,9,5,0,1,0xff,0xff)
+    assert m.readq(OUTPUT,10)==(0x5353574b53454731,3,56960,8,9,5,0,1,0xff,0xff)
     results.append('the wake snapshot waits for every core to freeze and names its layout, release mask and scan mask')
     # The last segment ends at the woken task's mark, not after its bookkeeping (stage 3 counted the bookkeeping).
     m=Model(image);m.setup();m.call('ss_latency_cause_irq_end',0);m.core=1
     ready=m.clock;wake_chain(m,1);m.el1=False
     m.call('ss_wake_seg_mark',1);marked=m.regs['pmccntr_el0'];m.regs['pmccntr_el0']+=1000000
-    m.call('ss_wake_seg_running',1,ready,m.clock+10,0,1)
-    first=m.readq(wake_core(m,1)+64+2*WAKE_CELL,4+13*6)
-    last=first[4+7*6]
+    m.call('ss_wake_seg_running',1,ready,ready,m.clock+10,0,1)
+    first=m.readq(wake_core(m,1)+WAKE_FIRST,5+13*6)
+    last=first[5+7*6]
     assert m.readq(wake_core(m,1),1)[0]==1 and 0<last<1000000,last
-    m.call('ss_wake_seg_running',1,ready,m.clock+10,1,1)
+    m.call('ss_wake_seg_running',1,ready,ready,m.clock+10,1,1)
     assert m.readq(wake_core(m,1),2)==(1,1)
     results.append('the last wake segment ends at the running mark, and a running call without a mark is unlinked')
+    # Version 3: a released core's wake runs from CPU0's deadline; the cell ranks each span and keeps the worst three wakes.
+    m=Model(image);m.setup();m.call('ss_latency_cause_irq_end',0);m.core=4
+    m.call('ss_latency_cause_irq_begin',4,30);m.call('ss_latency_cause_irq_end',4)
+    due=m.clock;m.clock+=50;ready=m.clock;wake_chain(m,4);m.el1=False
+    run_wake(m,4,ready,m.clock+10,1,1,deadline=ready+1)
+    assert m.readq(wake_core(m,4),2)==(0,1)
+    results.append('a wake whose deadline follows its release is counted unlinked')
+    lengths=[]
+    for index,(late,stall) in enumerate([(30,4000),(10,9000),(70,1000),(20,6000),(40,2000)],start=2):
+        due=m.clock;m.clock+=late;ready=m.clock;wake_chain(m,4)
+        m.regs['pmccntr_el0']+=stall;m.el1=False;running=m.clock+10
+        run_wake(m,4,ready,running,index,1,deadline=due);lengths.append(running-due)
+    cell=m.readq(wake_cell(m,4,1),4)
+    ranks=m.readq(wake_cell(m,4,1)+(4+13*6)*8,13*4);top,least=ranks[:13*3],ranks[13*3:]
+    last=[top[7*3+i] for i in range(3)]
+    assert cell[0]==5 and cell[2]==sum(lengths) and cell[3]<cell[2] and cell[1]>0,cell
+    assert last[0]>=last[1]>=last[2] and last[0]-last[1]>=2900 and least[7]<=last[2] and least[7]+5000<last[0],(last,least[7])
+    assert all(top[k*3]>=top[k*3+1]>=top[k*3+2]>0 and 0<least[k]<=top[k*3+2] for k in [*range(8),9]),ranks
+    kept=[worst(m,4,1,i) for i in range(3)]
+    assert [x[3]-x[0] for x in kept]==sorted(lengths,reverse=True)[:3] and all(x[0]<x[1]<=x[2]<=x[3] for x in kept),kept
+    assert worst(m,4,0,0)==(0,0,0,0,0)
+    results.append("a released core's wake runs from the deadline before its release; each span keeps its three largest "
+                   "and smallest cycles, and each setting its three longest wakes from the deadline, longest first")
     # A local timer arm: an empty bracket is subtracted, and only an armed EL1 core counts.
     m=Model(image);m.setup();m.call('ss_latency_cause_irq_end',0);m.core=3
     m.call('ss_latency_cause_irq_begin',3,30);m.call('ss_latency_cause_irq_end',3)

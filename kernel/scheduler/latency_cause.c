@@ -158,11 +158,12 @@ void ss_wake_seg_part_end(unsigned core,unsigned part)
     struct ss_wake_seg_values now,d;values_now(&now);values_diff(&d,&c->part_begin,&now);
     values_add(&c->part[part],&d);c->part_open=0;
 }
-/* Whether a completed chain carried the wake released at ready. */
-static bool chain_links(unsigned core,const struct chain_state *c,uint64_t ready,uint64_t running)
+/* Whether a completed chain carried the wake due at deadline and released at release. */
+static bool chain_links(unsigned core,const struct chain_state *c,uint64_t deadline,uint64_t release,uint64_t running)
 {
-    return c->stage==SS_WAKE_POINTS-1 && c->entry_tick<=running && ready<=c->switch_tick &&
-        (core ? ready<=c->entry_tick : c->entry_tick<=ready);
+    return c->stage==SS_WAKE_POINTS-1 && deadline<=release && deadline<=c->entry_tick &&
+        c->entry_tick<=running && release<=c->switch_tick &&
+        (core ? release<=c->entry_tick : c->entry_tick<=release);
 }
 /* The woken task, right after its running stamp: the end of the last segment. */
 void ss_wake_seg_mark(unsigned core)
@@ -171,7 +172,16 @@ void ss_wake_seg_mark(unsigned core)
     struct wake_chain *w=&chain[core].c;
     values_now(&w->running);w->marked=true;
 }
-void ss_wake_seg_running(unsigned core,uint64_t ready,uint64_t running,uint64_t index,unsigned setting)
+/* One span's cycles into a cell's three largest, largest first, and its smallest. */
+static void span_rank(uint64_t top[SS_WAKE_WORST],uint64_t *least,uint64_t count,uint64_t v)
+{
+    if (count==1 || v<*least) *least=v;
+    for (unsigned i=0;i<SS_WAKE_WORST;++i)
+        if (v>top[i]) { for (unsigned j=SS_WAKE_WORST-1;j>i;--j) top[j]=top[j-1];top[i]=v;return; }
+}
+static uint64_t wake_ticks(const struct ss_wake_seg_sample *x)
+{ return x->running-x->deadline; }
+void ss_wake_seg_running(unsigned core,uint64_t deadline,uint64_t release,uint64_t running,uint64_t index,unsigned setting)
 {
     if (core>=SS_LATENCY_CAUSE_CORES || !active(core) || own()!=core) return;
     struct wake_chain *w=&chain[core].c;
@@ -179,15 +189,15 @@ void ss_wake_seg_running(unsigned core,uint64_t ready,uint64_t running,uint64_t 
     const struct ss_wake_seg_values now=w->running;w->marked=false;
     struct ss_wake_seg_core *r=&wake_report.core[core];
     const struct chain_state *c=NULL;bool interrupted=false;
-    if (chain_links(core,&w->cur,ready,running)) c=&w->cur;
-    else if (chain_links(core,&w->held,ready,running)) { c=&w->held;interrupted=true; }
+    if (chain_links(core,&w->cur,deadline,release,running)) c=&w->cur;
+    else if (chain_links(core,&w->held,deadline,release,running)) { c=&w->held;interrupted=true; }
     if (!index)
         r->first_state=UINT64_C(1)<<16|(uint64_t)(c!=NULL)<<8|(uint64_t)interrupted<<9|w->cur.stage;
     if (!c) { w->cur.stage=0;w->held.stage=0;++r->unlinked;return; }
     ++r->linked;
     if (c->nested) ++r->nested;
     if (interrupted) ++r->interrupted;
-    struct ss_wake_seg_sample x={.ready=ready,.entry_tick=c->entry_tick,.running=running,
+    struct ss_wake_seg_sample x={.deadline=deadline,.release=release,.entry_tick=c->entry_tick,.running=running,
         .index=(index&UINT32_MAX)|(uint64_t)interrupted<<32|(uint64_t)(c->nested!=0)<<33};
     for (unsigned k=0;k<SS_WAKE_SEGMENTS-1;++k) values_diff(&x.segment[k],&c->point[k],&c->point[k+1]);
     values_diff(&x.segment[SS_WAKE_SEGMENTS-1],&c->point[SS_WAKE_SEGMENTS-1],&now);
@@ -195,11 +205,22 @@ void ss_wake_seg_running(unsigned core,uint64_t ready,uint64_t running,uint64_t 
     w->cur.stage=0;w->held.stage=0;
     if (!index) { r->first=x;return; }
     struct ss_wake_seg_cell *cell=&r->cell[setting&1u];
-    ++cell->count;cell->pre_ticks+=core ? x.entry_tick-ready : 0;cell->whole_ticks+=running-ready;
-    for (unsigned k=0;k<SS_WAKE_SEGMENTS;++k) values_add(&cell->segment[k],&x.segment[k]);
-    for (unsigned k=0;k<SS_WAKE_PARTS;++k) values_add(&cell->part[k],&x.part[k]);
-    struct ss_wake_seg_sample *m=&r->maximum[setting&1u];
-    if (!m->running || running-ready>m->running-m->ready) *m=x;
+    ++cell->count;cell->pre_ticks+=x.entry_tick-deadline;
+    cell->whole_ticks+=running-deadline;cell->release_ticks+=running-release;
+    for (unsigned k=0;k<SS_WAKE_SEGMENTS;++k) {
+        values_add(&cell->segment[k],&x.segment[k]);
+        span_rank(cell->top[k],&cell->least[k],cell->count,x.segment[k].cycles);
+    }
+    for (unsigned k=0;k<SS_WAKE_PARTS;++k) {
+        values_add(&cell->part[k],&x.part[k]);
+        span_rank(cell->top[SS_WAKE_SEGMENTS+k],&cell->least[SS_WAKE_SEGMENTS+k],cell->count,x.part[k].cycles);
+    }
+    struct ss_wake_seg_sample *m=r->worst[setting&1u];
+    for (unsigned i=0;i<SS_WAKE_WORST;++i)
+        if (!m[i].running || wake_ticks(&x)>wake_ticks(&m[i])) {
+            for (unsigned j=SS_WAKE_WORST-1;j>i;--j) m[j]=m[j-1];
+            m[i]=x;return;
+        }
 }
 bool ss_wake_seg_snapshot(struct ss_wake_seg_report *out)
 {

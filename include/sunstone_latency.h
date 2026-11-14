@@ -160,7 +160,14 @@ void ss_latency_event_finish(unsigned region, uint64_t start);
 void ss_latency_gpu_arm(void);
 void ss_latency_gpu_post(unsigned client);
 void ss_latency_gpu_received(unsigned client);
-void ss_latency_tick_hook(void);
+/* CPU0's tick, with the compare value its interrupt was due at. */
+void ss_latency_tick_hook(uint64_t due);
+/* A timer interrupt's sample on its own core: recorded at once, or, on CPUs
+ * 1-7 when ss_latency_timer_defer (weak, false by default) names the core,
+ * kept until ss_latency_timer_flush on that core. */
+bool ss_latency_timer_defer(unsigned core);
+void ss_latency_timer_irq(unsigned core, uint64_t due, uint64_t now, uintptr_t site);
+void ss_latency_timer_flush(unsigned core);
 void ss_latency_task_ready(void *task);
 /* The kernel calls this on the owning core when a deadline at kernel tick
  * `tick` expires for `task`, before the task becomes ready. */
@@ -204,11 +211,12 @@ bool ss_band_pmr_snapshot(uint64_t count[2], uint64_t cycles[2][64]);
 #endif
 #ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
 /* Measurement build only (kernel/scheduler/latency_cause.h): the woken task
- * closes its wake chain with the release and running times and the band
+ * closes its wake chain with its deadline, release and running times and the band
  * setting at the wake; the workload copies the report after every CPU froze. */
 struct ss_wake_seg_report;
 void ss_wake_seg_mark(unsigned core);
-void ss_wake_seg_running(unsigned core, uint64_t ready, uint64_t running, uint64_t index, unsigned setting);
+void ss_wake_seg_running(unsigned core, uint64_t deadline, uint64_t release, uint64_t running, uint64_t index,
+                         unsigned setting);
 bool ss_wake_seg_snapshot(struct ss_wake_seg_report *out);
 #endif
 #ifdef __cplusplus

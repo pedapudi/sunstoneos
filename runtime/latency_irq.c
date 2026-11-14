@@ -50,9 +50,8 @@ void __wrap_vApplicationIRQHandler(uint64_t interrupt)
         /* CNTVOFF_EL2 is zero in both platforms. Compare assertion is the
          * timer's IRQ condition, so timestamp before the handler changes it. */
         if (now >= due) {
-            ss_latency_record_at((unsigned)core, SS_LAT_IRQ, due, now,
-                                  (uintptr_t)__wrap_vApplicationIRQHandler);
-            if (!core) ss_latency_tick_hook();
+            ss_latency_timer_irq((unsigned)core, due, now, (uintptr_t)__wrap_vApplicationIRQHandler);
+            if (!core) ss_latency_tick_hook(due);
         }
     }
     __real_vApplicationIRQHandler(interrupt);
