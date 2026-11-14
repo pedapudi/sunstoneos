@@ -57,7 +57,7 @@ Queues, event groups and stream buffers lock their own hashed slot instead of th
 Board results are records in `docs/evidence/scheduler.jsonl` (runs and their summaries); host results and unrun predictions of the design are in `docs/evidence/scheduler-partitioned.jsonl` and `docs/evidence/scheduler-realtime.jsonl`. Earlier prose evidence is in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-109 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+110 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -170,4 +170,5 @@ Board results are records in `docs/evidence/scheduler.jsonl` (runs and their sum
 | `1793685086096699705-1b726ad3` | 2026-11-03 | 3-1 | `c73c4017ec3f` | returned | passed | run_total 252.401 s, run_total 252.401 s, p99_4khz 7.67 us, p999_4khz 16.83 us, max_4khz 26.17 us, wakes_ge10us_4khz 224, soak_mean 107.691 ms, control_max 3.291 us |
 | `1794685533239173548-a5db9331` | 2026-11-14 | 3-1 | `06d84cf4c44d` | watchdog-reset | failed | run_total 37.124 s, launch 22.44 s, terminal_crumb 13.3957 s |
 | `1794686856094584863-be2b6699` | 2026-11-14 | 3-1 | `4cf527c5d956` | returned | inconclusive | run_total 24.328 s, first_contact_dcdc5 1000 mV, first_contact_dcdc3 800 mV, pmr_change 18 cycles, pmr_change_dsb_sy_isb 34 cycles, cpu1_on_worst 17.8 us, cpu1_off_worst 24.3 us, cpu2_on_worst 16 us, cpu2_off_worst 21.8 us, cpu0_worst 49.2 us, cpu0_on_worst 41.5 us, cpu3_worst 21 us, cpu4_worst 43.8 us, cpu5_worst 42.5 us, cpu6_worst 25 us, cpu7_worst 20.1 us, busy_tick 51479 cycles, busy_tick_l3 14.57, release_4_7 17589 cycles, release_4_7_l3 6.25 |
+| `1794689664672090836-4cd53bf9` | 2026-11-14 | 3-1 | `5c4672b99619` | returned | inconclusive | run_total 23.975 s, run_total 23.97 s, first_contact_dcdc3 800 mV, first_contact_dcdc5 800 mV, cpu4_worst_on 38.7 us, cpu5_worst_on 39.8 us, cpu0_worst_on 40.1 us, cpu0_first 75.5 us, first_tick 104097 cycles, first_tick_l3 46, second_tick 53023 cycles, second_tick_l3 17, cpu4_l3_to_switch_end 63.2, cpu5_l3_to_switch_end 65.9, cpu1_3_l3_to_switch_end 3.3, release4_7_on 17277 cycles, release4_7_off 16951 cycles, release4_7_l3_on 5.3, release4_7_l3_off 5.38 |
 <!-- evidence-table:end -->
