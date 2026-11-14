@@ -330,6 +330,29 @@ and for every worker. [host_priority.py](../tools/host_priority.py) sets the pri
 The gate's image-copying checks write sparse copies (`harness.copy_image`, `cp --sparse=always --reflink=auto`): the `fat32-rw` sweep wrote
 271 GiB in 5,339 copies of a 52 MiB image of which 55 of 13,312 blocks hold data, and writes about 1.4 GiB now.
 
+Three more rules keep a run's FEL work off the load of the gates (measured 2026-11-13; the host stages of run `1794607200843702122-d2ed7876` took
+launch 10.7 s, DRAM 3.0 s and a total of 27.2 s with four gates running, against about 6.7, 2.2 and 21 s):
+
+- **The journal syncs only where recovery needs it.** The runner saved and synced `session.json` before and after every FEL transaction
+  (182 saves of two syncs each in a 91-transaction run, 364 syncs, and 42 more for the readback files); one `fsync` takes 1.3 ms on an idle host
+  and 66 ms at the median, 980 ms at the 99th percentile beside three writers, even in the idle I/O class, because the ext4 journal is shared.
+  `tools/board.py` now classifies each transaction (`fel_effects`) and syncs the write-ahead entry only before one that recovery must know:
+  a register write (rail, clock, watchdog and power state, and any write that is not wholly inside the SRAM ranges the runner stages into or wholly in DRAM, so an MMIO bulk write or a range straddling a boundary is synced), an execute (`exe`, `reset64`, `spl`; each starts a new DRAM epoch) and the first DRAM
+  write of an epoch (the DRAM ownership). A read, an SRAM staging write (wholly inside `FEL_SRAM`: the launcher reservation, the ROM scratch at 0x71000, shared SRAM 0x74000 to 0xf3fff; the helpers an `exe` starts, and every `exe` syncs) and the later DRAM
+  writes of an epoch are saved without sync: the atomic replacement survives the death of the runner, and the next synced entry, which holds the
+  whole record, carries them to disk. The readback files and the journal are synced once at the end of the run. A host crash in the middle of a
+  run can therefore lose the unsynced reads and staging writes of the last stretch; it cannot lose the record of anything that changed the board.
+  The queue's own recovery (`Queue.recover`) reads no journal, only `result.json` and the runner's process record; a person or
+  `tools/finish-fel-read.py` reads `session.json` to learn what the board may hold.
+- **A gate holds its next step during the FEL work.** The runner holds a shared lock on `~/.cache/sunstoneos/board-fel.lock` from the start of the run,
+  releases it while the board runs the application, and takes it again for the restore. A gate (`gate_slots.wait_for_board`) asks for the
+  lock without waiting before it starts each step and waits while a runner holds it; the steps already running continue. The kernel frees the
+  lock when a runner dies, and a runner that hangs holds a gate for no longer than the 60 s deadline it wrote into the lock file.
+- **Gates stay off CPU 23.** The xhci interrupt of the board's USB port is handled almost entirely on CPU 23 (1.19 million of its interrupts
+  there, `/proc/interrupts`), and the runner's FEL transfers wait on it. The gate and everything it starts run with CPU 23 removed from their
+  affinity (`reserved_cpus` in `tools/gate-slots.json`). A nice +10 process does not delay a normal-priority thread's wake-up (99th percentile
+  0.14 ms with 48 busy processes), so this is protection for the interrupt, not for the runner's threads.
+
 Every result carries `host_pressure.start` and `host_pressure.end`: the kernel's `/proc/pressure/io`, `cpu` and `memory` figures
 (`some` and `full`, `avg10`, `avg60`, `avg300` and `total`) read when the run began and when it finished. The totals are microseconds of
 stall, so their difference is the stall time of the run itself, which attributes a slow host stage to the host.
@@ -638,7 +661,13 @@ instruction cache before each register command, and runs a frozen copy.
 At first contact with a board, before the session's watchdog reset, every
 session reads the cold-boot marker (RTC `IC_CHARA`, `0x070901f0`), the GP2 gate
 record, the crystal control word and the WDT0 configuration and output words,
-and records them as `power_epoch`. It then clears the gate record and, if the
+and records them as `power_epoch`. The same read-only transaction also reads
+all eight RTC general-purpose words `0x07090100..0x0709011c` (tag, LAST, GP2,
+time, fault, ESR, ELR, FAR) and the WDT0 interrupt status `0x02050004`, and
+records them under `contact`. These words survive a watchdog reset and a power
+loss short enough to keep VDD_RTC up. After a run that never returned, they
+are the only record of where the boot stopped, so nothing is written before
+they are read. It then clears the gate record and, if the
 marker's low half does not read `0x16aa`, writes the keyed value `0x16aa16aa`.
 A session whose marker or cleared record does not read back stops before
 launch. The marker is an RTC-domain register; it survives watchdog resets and
@@ -725,6 +754,31 @@ disarms WDT0. If the ROM does not re-enumerate, WDT0 resets the board to FEL;
 the result is `watchdog-reset` with the RTC words, crumbs and elapsed time
 recorded. Any other invalid receipt quarantines the instance. The evidence
 qualifies only these SRAM paths. Card loading remains a separate test.
+
+### WDT0 re-arm expiry test
+
+Every WDT0 expiry the board has shown followed an arming from mode 0. The
+card first stage and stage 2 once re-armed WDT0 over an enabled watchdog with
+no disarm, and the first card boot under test control never returned.
+`--rearm-expiry`, with `--approved-by coordinator` and the warm-entry proof
+image, measures whether such a re-arm resets the board:
+
+- `runner`: from a disarmed WDT0 the runner arms mode `0x41`, then writes
+  mode `0xb1` and a restart with no disarm between, and reads back `0xb1`,
+  configuration 1 and output 2. It uploads and launches nothing.
+- `gate`: the runner runs the warm-entry proof as above. The gate re-arms
+  `0xb1` over the runner's `0x41`, and the runner leaves it armed after the
+  proof's FEL return.
+
+The runner then reads WDT0 without a disarm and waits for a new FEL instance
+until 10 seconds after the 16-second interval. A reset 16 to 21 seconds after
+the re-arm (the restart, or the execute request for `gate`) matches the
+prediction: the outcome is `watchdog-reset` with `expected_reset: true`. An
+earlier reset means the 4-second arming fired and the re-arm did not apply. If
+no new instance appears, the board is still in FEL: the runner disarms WDT0
+on the same instance and the outcome is `failure-return`, so the port stays
+usable. The result's `rearm_expiry` records the mode read, the interval, the
+deadline, whether a reset came and its time.
 
 ## USB class probes require finite device cleanup
 

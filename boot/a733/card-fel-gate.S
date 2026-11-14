@@ -99,16 +99,23 @@ mode_checked:
     progress A733_CARD_FEL_MODE_CHECKED
     mov r7,#6                 /* Apply the policy while the request remains pending. */
     ldr r2,=0x16aa0000
+    /* A re-arm first disarms: every WDT0 arming that the board has shown to
+     * expire started from mode 0 (docs/designs/card-boot-chain.md). */
+    cmp r3,#0
+    strne r2,[r5]
+    dsb sy
     orr r2,r2,r3
     str r2,[r5]
-    ldr r2,=0x14af            /* WDT_CTRL restart key (A733 manual 8.3.6.4). */
-    cmp r3,#0
-    strne r2,[r5,#-8]
     dsb sy
     ldr r2,[r5]
     uxth r2,r2
     cmp r2,r3
     bne watchdog_refused
+    /* Restart only a mode that read back enabled. */
+    ldr r2,=0x14af            /* WDT_CTRL restart key (A733 manual 8.3.6.4). */
+    cmp r3,#0
+    strne r2,[r5,#-8]
+    dsb sy
     progress A733_CARD_FEL_WATCHDOG_SET
     mov r7,#0
 clear:
@@ -180,8 +187,14 @@ cold:
     ldr r2,[r0]
     cmp r2,r8
     bne warm
-    /* Arm WDT0 in the runner's measured order: output, system reset, mode,
-     * restart (docs/watchdog.md; A733 manual 8.3.6.4-8.3.6.7). */
+    /* Disarm, then arm WDT0 in the runner's measured order: output, system
+     * reset, mode, restart (docs/watchdog.md; A733 manual 8.3.6.4-8.3.6.7).
+     * After a watchdog reset WDT0 still reads the mode armed before it; the
+     * board has shown expiry only for an arming from mode 0
+     * (docs/designs/card-boot-chain.md). */
+    ldr r2,=0x16aa0000
+    str r2,[r5]
+    dsb sy
     ldr r2,=0x16aa0002
     str r2,[r5,#4]
     ldr r2,=0x16aa0001

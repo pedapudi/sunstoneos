@@ -36,6 +36,7 @@ import json
 from pathlib import Path
 from host_evidence import unique_directory
 import host_priority
+import build_graph
 import gate_images
 import gate_slots
 import host_space
@@ -282,6 +283,7 @@ def main(argv=None):
     # (a landing goes ahead of workers). The full suite takes its own lock so that it blocks no landing. The slot is held until
     # the process exits.
     slot_config = gate_slots.load_config()
+    gate_slots.reserve_cpus(slot_config)       # the gate and everything it starts stay off the CPU of the USB interrupt
     if args.full:
         gate_lock = take_gate_lock(cache, 'gate-full.lock')        # the full suite blocks no landing and uses no slot
         slots, build_jobs = 1, 12
@@ -296,7 +298,11 @@ def main(argv=None):
     variants = list(VARIANTS) if args.full else list(dict.fromkeys(args.variant))
     indexed, pending, affected_plan, hook_scope = [], [], None, None
     inputs, classified = None, {'supplied': [], 'board': [], 'waived': [], 'unsupplied': []}
-    if args.full or args.affected or args.changed:
+    # --check also names an indexed check (a script in checks/ with its own declared gate runs): it is selected as if its
+    # own file had changed, and only that check is kept, so the index's textual coverage of other checks adds nothing.
+    explicit = [] if args.full else [Path(name).stem for name in dict.fromkeys(args.check)
+                                      if name not in CORE_CHECKS and (source / 'checks' / (Path(name).stem + '.py')).is_file()]
+    if args.full or args.affected or args.changed or explicit:
         try:
             spec = importlib.util.spec_from_file_location('affected', source / 'checks/affected.py')
             selector = importlib.util.module_from_spec(spec)
@@ -337,6 +343,11 @@ def main(argv=None):
             else:
                 index = selector.indexer.generate()
                 affected_plan = selector.plan(args.affected, args.changed, index=index)
+                if explicit:
+                    own = selector.plan(changed=['checks/%s.py' % name for name in explicit], index=index)
+                    present = {check['check'] for check in affected_plan['checks']}
+                    affected_plan['checks'] += [check for check in own['checks']
+                                                if Path(check['check']).stem in explicit and check['check'] not in present]
                 indexed = [check for check in affected_plan['checks'] if check['status'] == 'runnable']
                 pending = [check for check in affected_plan['checks'] if check['status'] == 'pending']
                 affected_entries = gate_entries(affected_plan['checks'], index)
@@ -384,8 +395,8 @@ def main(argv=None):
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.error('invalid external application: ' + str(error))
     application_checks = {check: name for name, app in configured.items() for check in app['checks']}
-    known_checks = (*CORE_CHECKS, *application_checks)
-    checks = list(known_checks) if args.full else list(dict.fromkeys(args.check))
+    known_checks = (*CORE_CHECKS, *application_checks, *explicit)
+    checks = list(known_checks) if args.full else [c for c in dict.fromkeys(args.check) if c not in explicit]
     # Core commands already run these scripts with their established arguments.
     indexed = [check for check in indexed if Path(check['check']).stem not in set(checks) & set(CORE_SCRIPTS)]
     if any(check not in known_checks for check in checks):
@@ -432,7 +443,7 @@ def main(argv=None):
                 host_space.write_peak(output, [output, *build_root.glob('gate-*-' + tree)])
         except OSError:
             pass
-    atexit.register(record_peak)         # a failed gate keeps everything and still records its peak
+    atexit.register(record_peak)         # a gate that stops early still records its peak
 
     fail_fast = args.fail_fast
     jobs = 1 if fail_fast else args.jobs
@@ -466,6 +477,7 @@ def main(argv=None):
         with guard:
             with (output / 'commands.txt').open('a') as stream:
                 stream.write(name + ': ' + shlex.join(command) + '\n')
+        gate_slots.wait_for_board(cache, note)       # a board run in its FEL work is host-timed: do not start a step beside it
         started, detail = time.monotonic(), ''
         with (output / (name + '.log')).open('w') as log:
             try:
@@ -677,8 +689,10 @@ def main(argv=None):
                 note('CACHED img-' + image + ': built for this tree state (' + tree_key + ')')
                 continue
             flags = [value.replace('{source}', str(source)).replace('{cache}', str(cache)) for value in recipe['configure']]
-            if run('img-' + image + '-configure', [cfg, source, directory, *core_options, '-DSUNSTONE_A733_OS=ON',
-                                                   '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *flags]):
+            configure_command = ([cfg, source, directory, *core_options, '-DSUNSTONE_A733_OS=ON',
+                                  '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *flags] if 'project' not in recipe else
+                                 build_graph.configure_command(source, recipe, directory, cache))
+            if run('img-' + image + '-configure', configure_command):
                 if run('img-' + image + '-build', ['cmake', '--build', directory, '--target',
                                                   *([recipe['target']] if isinstance(recipe['target'], str) else recipe['target']), '-j', str(build_jobs)]):
                     mark_built(directory)
@@ -823,10 +837,36 @@ def main(argv=None):
     note('mode: ' + ('fail-fast' if fail_fast else 'keep-going, %d parallel checks, memory guard %g GiB'
                      % (jobs, args.min_available_gb)) + ('' if args.full else ', slot %d of %d, %s, -j %d' % (
                          gate_lock.index, slots, args.priority, build_jobs)) + (', strict documentation checks' if args.strict_docs else ''))
+    def conclude(code):
+        """Record the gate's peak disk use and the hashes of the images it built, then slim the evidence of every passing step
+        (and, when the gate passed, the earlier gates of its landing label; tools/clean-generated.py). A failing step keeps everything."""
+        record_peak()
+        built = {}
+        for image in [*variants, *recipes]:
+            step = ('os-' if image in VARIANTS else 'img-') + image + '-build'
+            path = image_file(image)
+            if results.get(step) == 'PASS' and path.is_file():
+                digest = hashlib.sha256()
+                with path.open('rb') as stream:
+                    for block in iter(lambda: stream.read(1 << 20), b''):
+                        digest.update(block)
+                built[image] = {'elf': str(path), 'bytes': path.stat().st_size, 'sha256': digest.hexdigest()}
+        if built:
+            (output / 'images.json').write_text(json.dumps(built, indent=1, sort_keys=True) + '\n')
+        try:
+            spec = importlib.util.spec_from_file_location('clean_generated', Path(__file__).with_name('clean-generated.py'))
+            cleaner = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(cleaner)
+            freed = cleaner.slim_after_gate(output, args.label, dict(results), code == 0)
+            note('retention: freed %.1f MiB of build products of passing steps' % (freed / 2**20))
+        except Exception as error:
+            note('retention skipped: %s' % error)
+        return code
+
     try:
         elapsed = run_steps()
     except Stop:
-        return 1
+        return conclude(1)
     failed = sorted(name for name, verdict in results.items() if verdict == 'FAIL')
     skipped = sorted(name for name, verdict in results.items() if verdict == 'SKIP')
     warned = sorted(name for name, verdict in results.items() if verdict == 'WARN')
@@ -835,10 +875,10 @@ def main(argv=None):
     (output / 'timing.txt').write_text(''.join('%8.1f %s\n' % (seconds, name) for name, seconds in
                                               sorted(timings, key=lambda item: -item[1])))
     if not unchanged('during the selected steps'):
-        return 1
+        return conclude(1)
     if failed or skipped:
         note('FAIL selected integration checks: ' + ', '.join(failed + skipped))
-        return 1
+        return conclude(1)
     if affected_plan and affected_plan.get('revisions') and not changes:
         # tools/land.py reuses this pass for a landing: the tree it ran on and the checks it selected with their inputs.
         tree_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=source, text=True).strip()
@@ -846,16 +886,7 @@ def main(argv=None):
         (output / 'gate-record.json').write_text(json.dumps({'tree': tree_hash, 'base': affected_plan['revisions'][0], 'checks': {
             name: index[name].get('inputs', []) for name in selected if name in index}}, indent=1) + '\n')
     note('PASS selected integration checks; unselected behavior is not revalidated')
-    # A passing gate removes its own bulky outputs and those of earlier gates of the same landing (tools/clean-generated.py).
-    record_peak()
-    try:
-        spec = importlib.util.spec_from_file_location('clean_generated', Path(__file__).with_name('clean-generated.py'))
-        cleaner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cleaner)
-        note('retention: freed %.1f MiB of bulky outputs' % (cleaner.slim_after_pass(output, args.label) / 2**20))
-    except Exception as error:
-        note('retention skipped: %s' % error)
-    return 0
+    return conclude(0)
 
 if __name__ == '__main__':
     sys.exit(main())
