@@ -171,6 +171,31 @@ def refusal(base, root, name, changes=None, session_edit=None, policy_edit=None,
         raise AssertionError('Producer accepted '+name)
 
 
+def boot_once_real_elf(base):
+    """The runner's boot-once admission (tools/board_images.py boot_once_slot) on the real runtime ELF and the slot plan the
+    card build wrote: the ELF flattens to the plan's kind 1 extent, and one changed instruction byte at the entry is refused."""
+    images = module('check_card_board_images', 'tools/board_images.py')
+    plan = base.output/'slot/plan.json'
+    runtime = [e for e in json.loads(plan.read_text())['extents'] if e['kind'] == 1]
+    record = images.boot_once_slot(SimpleNamespace(image=base.image, boot_once_slot=plan))
+    assert len(runtime) == 1 and record['runtime_sha256'] == runtime[0]['sha256'] and record['entry'] == 0x41000000, record
+    changed = bytearray(base.image.read_bytes())
+    phoff = struct.unpack_from('<Q', changed, 32)[0]
+    stride, count = struct.unpack_from('<2H', changed, 54)
+    for i in range(count):
+        kind, _, offset, load, _, size = struct.unpack_from('<II4Q', changed, phoff + i*stride)
+        if kind == 1 and load <= 0x41000000 < load + size:
+            changed[offset + 0x41000000 - load] ^= 1
+            break
+    else:
+        raise AssertionError('The runtime ELF has no load segment at the entry')
+    damaged = write(base.output.parent/'boot-once-damaged.elf', bytes(changed))
+    try:images.boot_once_slot(SimpleNamespace(image=damaged, boot_once_slot=plan))
+    except ValueError as error:assert 'another image' in str(error), error
+    else:raise AssertionError('A boot-once run of an ELF the slot does not hold was admitted')
+    passed('boot-once-slot-admits-the-real-runtime-elf-only')
+
+
 def end_to_end(base, root):
     result = card.prepare(base)
     assert result['physical_qualified'] is False and result['evidence_class'] == 'model-fixture'
@@ -189,6 +214,7 @@ def end_to_end(base, root):
     with base.card_image.open('rb') as source:
         source.seek(24576*512); stock = source.read(8192*512)
         source.seek(64 << 20); partition = hashlib.sha256(source.read(64 << 20)).digest()
+    boot_once_real_elf(base)
     slots.apply(SimpleNamespace(plan=base.output/'slot/plan.json', card_image=base.card_image, stop_after=None))
     first = slots.verify(SimpleNamespace(card_image=base.card_image))
     assert first['selected'] == result['slot'] == 'A'

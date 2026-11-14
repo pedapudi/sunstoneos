@@ -204,9 +204,19 @@ authorizes no owner-state modification.
    pending flag, executes `DMB ISH`, then acquire-checks all incoming and detached
    work. Remaining work requests a bounded continuation even when its priority is
    lower than the selected task.
+5. An owner pass that drains hints but commits no dispatch (it selects no task and
+   leaves no reschedule) still closes the handshake: it clears the SGI pending
+   flag, executes `DMB ISH`, then acquire-checks the incoming and detached work,
+   and takes another pass if any remains. Without this step the flag stays set
+   after the pass. The next publisher finds it set and sends no SGI, so its wake
+   waits for the owner's next timer deadline. A flag already clear needs no
+   barrier, because a publisher that finds it clear sends its own SGI.
 
 The two store-to-load barriers forbid both CPUs observing the old state and
-omitting the wakeup; acquire and release alone allow that store-buffering outcome
+omitting the wakeup. In steps 4 and 5 the owner's flag clear, `DMB ISH` and
+incoming check pair with the waker's incoming OR, `DMB ISH` and flag exchange:
+either the owner's check sees the publication, or the waker's exchange sees the
+cleared flag and sends the SGI; acquire and release alone allow that store-buffering outcome
 on AArch64. Negative model variants that remove essential ordering must produce a
 lost-wakeup trace.
 
@@ -227,6 +237,12 @@ owner: acquire exchange incoming_head[self] with zero
        acquire_check live incoming words, local detached words and control hints
        if any work remains: request bounded selection/continuation
        else: commit selected task or final masked WFI sequence
+
+owner pass that drained hints and commits no dispatch:
+       if relaxed_load(sgi_pending[self]) != 0:
+           release_store(sgi_pending[self], 0)
+           DMB ISH
+           if acquire_check(incoming and detached work): take another pass
 ```
 
 The final incoming check and WFI occur with `DAIF.I` masking IRQ entry and the GIC

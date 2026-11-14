@@ -34,6 +34,7 @@ int os_cpu_return_requested(void){return 0;}
 int os_cpu_return_failing(void){return 0;}
 int os_application_deadline(void){return 1;}
 unsigned os_application_activity_generation(void){return 7;}
+void os_application_wake_main(void){}
 static unsigned clock_busy;
 int os_cpu_clock_step(const struct a733_thermal_policy *p){(void)p;++clocks;return 1;}
 int os_cpu_clock_busy(void){return (int)clock_busy;}
@@ -112,8 +113,9 @@ int cadence_control(unsigned op,uint64_t at,uint64_t value)
     else if(op==9)valid_mask=(unsigned)value;
     else if(op==10)thermal.driver.fault=(unsigned)value;
     else if(op==11)atomic_store_explicit(&thermal.pending,1,memory_order_release);
-    else if(op==12)result=(int)idle_ticks();
+    else if(op==12)result=(int)idle_deadline();
     else if(op==13)clock_busy=(unsigned)value;
+    else if(op==14){rearm_ok=0;thermal.masked=1;}
     cadence_state[0]=atomic_load_explicit(&readings.count,memory_order_acquire);
     cadence_state[1]=readings.next;cadence_state[2]=reads;cadence_state[3]=clocks;
     cadence_state[4]=failures;cadence_state[5]=thermal.active;

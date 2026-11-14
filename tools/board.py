@@ -733,6 +733,47 @@ class Live:
         self.sanity()
         self.record['fresh_fel'] = True
 
+    def boot_once(self, session_seconds):
+        """Boot the card once under test control: write the boot-once value to GP2, reset through WDT0 and launch nothing.
+
+        The first-stage gate on the card replaces the value with its cold record and boots boot0, DRAM training, the stage-2
+        monitor and the slot's resident test image, which ends in a WDT0 reset through the gate's warm path. No FEL session
+        exists while the board is away; the wait is the worked deadline of boot_once_deadline(). The words at the next
+        contact are read in one transaction before the gate record is cleared, and are recorded as boot_once."""
+        flag, marker = crumbs.RESET_WORDS['flag'], crumbs.MARKER
+        terms = boot_once_deadline(session_seconds)
+        record = self.record['boot_once'] = {'gp2_written': crumbs.BOOT_ONCE, 'deadline': terms, 'passed': False}
+        values = [int(x, 16) for x in self.tx('writel', hex(flag), hex(crumbs.BOOT_ONCE), 'readl', hex(flag), 'readl', hex(marker)).split()]
+        require(len(values) == 2, 'Boot-once readback differs.')
+        record.update(gp2_readback=values[0], marker_before=values[1])
+        if values[0] != crumbs.BOOT_ONCE:
+            self.tx('writel', hex(flag), '0x0')
+            self.journal()
+            raise ValueError('The boot-once value read back 0x%08x from GP2; refused before any reset.' % values[0])
+        require(values[1] & 0xffff == crumbs.MARKER_SET, 'The cold-boot marker is not set; refused before any reset.')
+        self.journal()
+        old = self.identity
+        armed_at = self.now()
+        self.arm(0x41)
+        self.recovery_deadline = armed_at+terms['total_s']
+        record['reset_armed'] = True
+        self.journal()
+        self.wait(terms['total_s'], old)
+        record['seconds_to_return'] = round(self.now()-armed_at, 3)
+        self.returned()
+        back = self.record['watchdog_return']
+        words, reset = back['words'], back['reset_words']
+        if reset['flag'] == crumbs.BOOT_ONCE:
+            self.tx('writel', hex(flag), '0x0')  # the gate never consumed it; the next contact must not boot the card
+        decoded = crumbs.decode(words, words['tag'])
+        record.update(wdt_mode_before=back['before'], wdt_mode_after=back['after'], reset_words=reset, gate=back['gate'],
+                      breadcrumbs=words, decoded=decoded, last=words['last'], stop_value=words['last'] & 0xffff)
+        expected = {'gp2': BOOT_ONCE_RETURN_RECORD, 'marker': crumbs.MARKER_KEYED, 'last': BOOT_ONCE_STOP, 'fault': 0}
+        observed = {'gp2': reset['flag'], 'marker': reset['marker'], 'last': words['last'], 'fault': words['fault']}
+        record['expected'], record['observed'] = expected, observed
+        record['passed'] = bool(observed == expected and decoded['session'] and not decoded.get('board_failure'))
+        self.journal()
+
     def finish_pending(self):
         """A host error cannot release an armed run before its reset deadline."""
         if self.armed and not self.failed:
@@ -1133,6 +1174,31 @@ class Live:
             raise
 
 
+# The card boot under test control (--boot-once-slot). The record is the first-stage gate's warm record, 0x0c02 << 16 | WARM | the
+# WDT0 mode at entry (0x41), and the stop is the resident test's EL3 stop, stage 0x0111 with value 0x5000 (the stop-on-finish profile).
+BOOT_ONCE_RETURN_RECORD = crumbs.GATE_STAGE << 16 | crumbs.GATE_FLAGS['warm'] | 0x41
+BOOT_ONCE_STOP = crumbs.EL3_STOP << 16 | 0x5000
+BOOT_ONCE_SLOT_LOAD_S = 30      # the stage-2 loader's bound for the whole slot load (docs/boot-slots.md)
+BOOT_ONCE_GATE_COLD_MODE = 0xb1  # the gate arms WDT0 with this mode on its cold path; it covers boot0, DRAM training (about 5.1 s) and the package load
+BOOT_ONCE_MARGIN_S = 10         # the FEL re-enumeration margin every runner wait uses
+
+
+def boot_once_deadline(session_seconds):
+    """The worked deadline of a boot-once run, in seconds from the arming of WDT0, as named terms.
+
+    arm_expiry_s: the runner's WDT0 0x41 expires, resetting the board into the gate.
+    gate_watchdog_s: the gate's 16 s WDT0 bounds boot0, DRAM training and the package load up to the stage-2 monitor.
+    slot_load_s: the monitor renews WDT0 while it loads the slot; the loader's whole-load bound.
+    resident_session_s: the image's declared session duration (its watchdog marker), the bound the resident lifetime uses.
+    final_watchdog_s: the image stops renewing and WDT0 0x41 expires.
+    margin_s: FEL re-enumeration after the final reset."""
+    terms = {'arm_expiry_s': crumbs.interval(0x41), 'gate_watchdog_s': crumbs.interval(BOOT_ONCE_GATE_COLD_MODE),
+             'slot_load_s': BOOT_ONCE_SLOT_LOAD_S, 'resident_session_s': session_seconds,
+             'final_watchdog_s': crumbs.interval(0x41), 'margin_s': BOOT_ONCE_MARGIN_S}
+    terms['total_s'] = sum(terms.values())
+    return terms
+
+
 def port_idle(port):
     """Inspect only the host lock; never open a USB device."""
     with Path(f'/tmp/sunstoneos-a733-{port}.lock').open('a') as lock:
@@ -1223,6 +1289,7 @@ def run_image(args, backend=Live):
         args.image = frozen
         helper_only = args.kind == 'rail-helper'
         dma_binding = None
+        boot_slot = None
         if helper_only:
             require(result['image_sha256'] == state.RAIL_HELPER_SHA256,
                     'Rail helper binary differs from the pinned one.')
@@ -1231,6 +1298,9 @@ def run_image(args, backend=Live):
         else:
             info = images.inspect(frozen, args.kind, descriptor,args.host_tree)
             images.policy(info, args)
+            if getattr(args, 'boot_once_slot', None):
+                boot_slot = images.boot_once_slot(args)
+                result['boot_once_slot'] = boot_slot
             if info['entry_guard'] and getattr(args, 'restore_rails', None) is not False:
                 require(POST_RAIL_HELPER.is_file() and images.sha(POST_RAIL_HELPER) == POST_RAIL_HELPER_SHA256,
                         'Approved post-ROM rail helper is absent or changed; refused before device access.')
@@ -1258,6 +1328,16 @@ def run_image(args, backend=Live):
                 timed('usb-source-off', lambda: owner.usb_source_off('admission'))
                 if dma_binding is not None:
                     owner.dma_binding = timed('dma-identity', lambda: images.bind_dma_identity(dma_binding, args, owner.identity))
+                if boot_slot is not None:
+                    # The card boots instead of an upload: nothing is launched, no DRAM is brought up, the board is away.
+                    result['dram_mode'] = 'sram-only'
+                    timed('boot-once', lambda: owner.boot_once(info['watchdog']['session_seconds']))
+                    boot = result['boot_once'] = owner.record['boot_once']
+                    result.update(outcome='watchdog-reset', dram_lost=True, rom_returned=True, expected_reset=boot['passed'])
+                    if not boot['passed']:
+                        result['first_failure'] = {'site': 'boot-once', 'detail': 'The card boot did not end as expected: expected %s, observed %s.' % (
+                            {k: '0x%08x' % v for k, v in boot['expected'].items()}, {k: '0x%08x' % v for k, v in boot['observed'].items()})}
+                    return finish_result(result, evidence, started, stage, owner)
                 timed('reset', owner.reset)
                 if info.get('card_fel_recovery'):
                     result['dram_mode'] = 'sram-only'
@@ -1378,6 +1458,8 @@ def run_image(args, backend=Live):
     finally:
         if credential is not None:
             credential[:] = bytes(len(credential))
+    if owner is not None and 'boot_once' in owner.record:
+        result.setdefault('boot_once', owner.record['boot_once'])  # the words written and read before a refusal or a no-return
     return finish_result(result, evidence, started, stage)
 
 
@@ -1835,7 +1917,7 @@ class Queue:
         for name in FROZEN_OPTIONS:
             value = getattr(args,name)
             options[name] = str(value.resolve()) if isinstance(value,Path) else value
-        for name in ('records', 'decoder', 'manifest'):
+        for name in ('records', 'decoder', 'manifest', 'boot_once_slot'):
             path = getattr(args, name, None)
             if path:
                 target = directory/(name+path.suffix)
@@ -2144,7 +2226,7 @@ class Queue:
 # The caller-controlled launch options a submission freezes in its queue entry.
 # Frozen options whose False differs from leaving them out: --no-restore-rails opts out of the automatic restoration.
 NEGATABLE_OPTIONS = ('restore_rails',)
-FROZEN_OPTIONS = ('kind','lifetime','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit','marker_clear_test','verify')
+FROZEN_OPTIONS = ('kind','lifetime','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit','marker_clear_test','verify','boot_once_slot')
 
 
 def radio_stage_limit(text):
@@ -2178,6 +2260,11 @@ def run_options(parser, submit=False):
     parser.add_argument('--marker-clear-test', action='store_true',
                         help='At first contact, write 0x16aa0000 to the cold-boot marker, read it, set it again and record both '
                         'readbacks (docs/designs/card-fel-recovery.md); requires --approved-by coordinator.')
+    parser.add_argument('--boot-once-slot', type=Path, metavar='MANIFEST.json',
+                        help='Boot the card once instead of launching over FEL: write the boot-once value to GP2, reset through WDT0 and wait, '
+                        'with no FEL session, for the slot image to run and end in its watchdog reset. IMAGE is the slot\'s runtime ELF, '
+                        'checked against the slot manifest (the plan of tools/boot-slots.py); requires --lifetime resident and --approved-by '
+                        'coordinator (docs/board-runner.md).')
     parser.add_argument('--no-preflight', metavar='REASON',
                         help='Queue or check an image whose host pre-flight cannot run; REASON is recorded in the entry and the result.')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')

@@ -145,6 +145,99 @@ int bluetooth_headset_retain(struct bluetooth_application *a)
         atomic_store_explicit(&voice.terminal,2,memory_order_release);}
     return -1;
 }
+uint64_t bluetooth_headset_next_deadline(const struct bluetooth_application *a,uint64_t until)
+{
+    if(!a||a->self!=a||!until||xTaskGetCurrentTaskHandle()!=a->owner)return 0;
+    /* The OS admits capture modes 2 and 3. Playback and A2DP have different
+     * producer cadences and require their own event-owner integration. */
+    if(a->profile->headset.mode>=4)return 0;
+    if(!voice_state||voice.app!=a)return until;
+    if(voice.stage==DONE)return until;
+#define EARLIER(value) do{uint64_t at=(value);if(at&&at<until)until=at;}while(0)
+    EARLIER(voice.operation_deadline);
+    if(context.stop_phase&&context.stop_phase!=STOP_DONE&&context.stop_phase!=STOP_FAULT){
+        EARLIER(context.stop_deadline);EARLIER(context.close_deadline);
+    }
+    if(voice.stage>=IDLE&&voice.stage<CLOSE&&!voice.stop)EARLIER(voice.window);
+    if(voice.stage==CAPTURE){
+        EARLIER(voice.capture_deadline);
+        if(!voice.stop&&!voice.idle_close){
+            /* A full TX pool resumes on controller credit retirement. A due
+             * cadence alone cannot make progress while every slot is held. */
+            for(unsigned i=0;i<BT_SCO_PACKETS;++i)if(voice.audio.tx[i].state==BT_SCO_FREE){
+                EARLIER(voice.next_silence);break;
+            }
+        }
+    }
+    const struct bt_security *security=&voice.security;
+    if(security->self){EARLIER(security->deadline);if(security->pending)EARLIER(security->command_deadline);}
+    const struct bt_acl *acl=&voice.acl;
+    if(acl->state==BT_ACL_ACTIVE){
+        EARLIER(acl->return_deadline);
+        for(unsigned i=0;i<BT_ACL_LINKS;++i){
+            const struct bt_acl_link *link=&acl->links[i];
+            if(link->state!=BT_ACL_UNUSED&&link->state!=BT_ACL_CONNECTED&&link->state!=BT_ACL_CLOSED)
+                EARLIER(link->deadline);
+        }
+        for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i)
+            if(acl->packets[i].state>=BT_ACL_QUEUED&&acl->packets[i].state<=BT_ACL_SENT)
+                EARLIER(acl->packets[i].deadline);
+    }
+    const struct bt_l2cap *l2cap=&voice.l2cap;
+    if(l2cap->state==BT_L2CAP_ACTIVE){
+        for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i){
+            const struct bt_l2cap_channel *channel=&l2cap->channels[i];
+            if(channel->state==BT_L2CAP_CONNECTING||channel->state==BT_L2CAP_CONFIGURING||channel->state==BT_L2CAP_DISCONNECTING){
+                EARLIER(channel->deadline);
+                if(channel->timer!=BT_L2CAP_TIMER_NONE)EARLIER(channel->timer_deadline);
+            }
+        }
+        for(unsigned i=0;i<BT_L2CAP_PDUS;++i){
+            if(l2cap->tx[i].state==BT_L2CAP_TRANSMITTING)EARLIER(l2cap->tx[i].deadline);
+            if(l2cap->rx[i].state==BT_L2CAP_PARTIAL||l2cap->rx[i].state==BT_L2CAP_SIGNAL)EARLIER(l2cap->rx[i].deadline);
+        }
+    }
+    const struct bt_sdp *sdp=&voice.discovery;
+    if(sdp->phase!=BT_SDP_OFF&&sdp->phase!=BT_SDP_CLOSED){
+        if(sdp->status==BT_SDP_PENDING)EARLIER(sdp->deadline);
+        if(sdp->phase==BT_SDP_CLOSING)EARLIER(sdp->close_deadline);
+    }
+    if(voice.server.initialized)for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i){
+        const struct bt_sdp_server_session *session=&voice.server.sessions[i];
+        if(!session->channel||session->error)continue;
+        if(session->tx_serial||session->pending_length)EARLIER(session->deadline);
+        if(session->closing&&!session->close_started)EARLIER(session->close_deadline);
+    }
+    const struct bt_rfcomm *rfcomm=&voice.rfcomm;
+    if(rfcomm->phase!=BT_RFCOMM_OFF&&rfcomm->phase!=BT_RFCOMM_CLOSED&&rfcomm->phase!=BT_RFCOMM_FAULT){
+        if(rfcomm->phase==BT_RFCOMM_OPENING||rfcomm->phase==BT_RFCOMM_NEGOTIATING||
+           (rfcomm->incoming&&!rfcomm->channel))EARLIER(rfcomm->deadline);
+        if(rfcomm->phase==BT_RFCOMM_CLOSING)EARLIER(rfcomm->close_deadline);
+        EARLIER(rfcomm->timer);
+        for(unsigned i=0;i<BT_RFCOMM_SLOTS;++i)if(rfcomm->tx[i].state==BT_RFCOMM_QUEUED)EARLIER(rfcomm->tx[i].deadline);
+    }
+    const struct bt_hfp_ag *ag=&voice.ag;
+    if(ag->phase!=BT_HFP_AG_OFF&&ag->phase!=BT_HFP_AG_CLOSED&&ag->phase!=BT_HFP_AG_CLOSING&&ag->phase!=BT_HFP_AG_FAULT){
+        if(ag->phase==BT_HFP_AG_INITIALIZING)EARLIER(ag->setup_deadline);
+        EARLIER(ag->codec_deadline);EARLIER(ag->line_deadline);
+        if(ag->response_length&&!ag->response_accepted)EARLIER(ag->response_deadline);
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+        if(ag->calls&&ag->control.call.setup==1&&!ag->response_length&&!ag->line_deadline)EARLIER(ag->next_ring);
+#endif
+    }
+    const struct bt_sco *audio=&voice.audio;
+    if(audio->initialized){
+        EARLIER(audio->stop_deadline);if(audio->refuse)EARLIER(audio->refuse_deadline);
+        for(unsigned i=0;i<BT_SCO_LINKS;++i)
+            if(audio->links[i].phase!=BT_SCO_UNUSED&&audio->links[i].phase!=BT_SCO_OPEN&&audio->links[i].phase!=BT_SCO_CLOSED)
+                EARLIER(audio->links[i].deadline);
+        for(unsigned i=0;i<BT_SCO_PACKETS;++i)
+            if(audio->tx[i].state==BT_SCO_QUEUED||audio->tx[i].state==BT_SCO_PARTIAL||audio->tx[i].state==BT_SCO_SENT)
+                EARLIER(audio->tx[i].deadline);
+    }
+#undef EARLIER
+    return until;
+}
 /* Failure, stop, wake-up, publication, activation start and end, the
  * in-segment write and consumer admission are kept out of line: each runs at
  * most once per segment, packet or call, and inlining them into the per-poll
@@ -246,6 +339,11 @@ static int a2dp_poll(struct bluetooth_application *a,uint64_t now)
     return 0;
 }
 #endif
+static int receive_timely(const struct bluetooth_application *a,uint64_t now)
+{
+    return now>=voice.last_owner&&(a->uart.config.deferred_irq||
+        now-voice.last_owner<=a->profile->headset.receive_latency_us);
+}
 int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
 {
     if(!a||a->profile->version<2||!a->iteration_live||xTaskGetCurrentTaskHandle()!=a->owner)return -1;
@@ -254,7 +352,10 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
 #ifdef SUNSTONE_BLUETOOTH_A2DP
     if(atomic_load_explicit(&voice.terminal,memory_order_acquire))return live(a)?1:-1;
 #endif
-    if(!live(a)||now<voice.last_owner||now-voice.last_owner>a->profile->headset.receive_latency_us)return fail();
+    /* A deferred owner can sleep indefinitely without traffic. Its binding
+     * records the earliest pending IRQ and enforces IRQ-to-service latency
+     * before this call. Polling mode instead bounds the gap between passes. */
+    if(!live(a)||!receive_timely(a,now))return fail();
     voice.last_owner=now;
 #ifdef SUNSTONE_BLUETOOTH_MSBC
     /* No established stream exists to close yet. Stop setup and retain any
@@ -481,6 +582,87 @@ int bluetooth_headset_copy(struct bluetooth_application *a,unsigned kind,uint32_
  * advances only at the acknowledgement, so a borrowed slot never changes. */
 int bluetooth_headset_repeated(const struct bluetooth_application *a)
 {return a&&a->self==a&&a->profile&&a->profile->version>=3&&(a->profile->headset.mode==2||a->profile->headset.mode==3||a->profile->headset.mode==5); }
+/* The snapshot is an owner-only comparison vector, not a device operation. */
+int bluetooth_headset_work_state(const struct bluetooth_application *a,struct bluetooth_work_state *out)
+{
+    if(!a||a->self!=a||!a->profile||!out||xTaskGetCurrentTaskHandle()!=a->owner||
+       (voice_state&&voice.app&&voice.app!=a)||
+       (a->profile->version>=2&&a->profile->headset.mode>=4)||
+       !bt_range_disjoint(out,sizeof(*out),&context,sizeof(context))||
+       (voice_state&&!bt_range_disjoint(out,sizeof(*out),voice_state,sizeof(*voice_state))))return 0;
+    memset(out,0,sizeof(*out));
+    if(!voice_state)return 1;
+#define TAKE(name) target->name=source->name;
+    {struct bluetooth_work_headset *target=&out->headset;const struct bluetooth_headset_state *source=&voice;BT_WORK_HEADSET(TAKE)}
+    {struct bluetooth_work_security *target=&out->security;const struct bt_security *source=&voice.security;BT_WORK_SECURITY(TAKE)}
+    {struct bluetooth_work_acl *target=&out->acl;const struct bt_acl *source=&voice.acl;BT_WORK_ACL(TAKE)}
+    {struct bluetooth_work_l2cap *target=&out->l2cap;const struct bt_l2cap *source=&voice.l2cap;BT_WORK_L2CAP(TAKE)}
+    {struct bluetooth_work_rfcomm *target=&out->rfcomm;const struct bt_rfcomm *source=&voice.rfcomm;BT_WORK_RFCOMM(TAKE)}
+    {struct bluetooth_work_sdp *target=&out->discovery;const struct bt_sdp *source=&voice.discovery;BT_WORK_SDP(TAKE)}
+    {struct bluetooth_work_server *target=&out->server;const struct bt_sdp_server *source=&voice.server;BT_WORK_SERVER(TAKE)}
+    {struct bluetooth_work_ag *target=&out->ag;const struct bt_hfp_ag *source=&voice.ag;
+    /* HFP's field named voice is distinct from this file's state alias. */
+#undef voice
+    BT_WORK_AG(TAKE)
+#define voice (*voice_state)
+    }
+    {struct bluetooth_work_sco *target=&out->audio;const struct bt_sco *source=&voice.audio;BT_WORK_SCO(TAKE)}
+    for(unsigned i=0;i<BT_ACL_LINKS;++i){struct bluetooth_work_connection *target=&out->connections[i];
+        const struct bt_conn *source=&voice.security.connections[i];BT_WORK_CONNECTION(TAKE)}
+    for(unsigned i=0;i<BT_ACL_LINKS;++i){struct bluetooth_work_acl_link *target=&out->links[i];
+        const struct bt_acl_link *source=&voice.acl.links[i];BT_WORK_ACL_LINK(TAKE)}
+    for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i){struct bluetooth_work_acl_packet *target=&out->packets[i];
+        const struct bt_acl_packet *source=&voice.acl.packets[i];BT_WORK_ACL_PACKET(TAKE)}
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i){struct bluetooth_work_channel *target=&out->channels[i];
+        const struct bt_l2cap_channel *source=&voice.l2cap.channels[i];BT_WORK_CHANNEL(TAKE)}
+    for(unsigned i=0;i<BT_L2CAP_PDUS;++i){struct bluetooth_work_pdu *target=&out->tx[i];
+        const struct bt_l2cap_pdu *source=&voice.l2cap.tx[i];BT_WORK_PDU(TAKE)}
+    for(unsigned i=0;i<BT_L2CAP_PDUS;++i){struct bluetooth_work_pdu *target=&out->rx[i];
+        const struct bt_l2cap_pdu *source=&voice.l2cap.rx[i];BT_WORK_PDU(TAKE)}
+    for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i){struct bluetooth_work_fragment *target=&out->fragments[i];
+        const struct bt_l2cap_fragment *source=&voice.l2cap.fragments[i];BT_WORK_FRAGMENT(TAKE)}
+    for(unsigned i=0;i<BT_RFCOMM_SLOTS;++i){struct bluetooth_work_rfcomm_buffer *target=&out->rfcomm_tx[i];
+        const struct bt_rfcomm_buffer *source=&voice.rfcomm.tx[i];BT_WORK_RFCOMM_BUFFER(TAKE)}
+    for(unsigned i=0;i<BT_RFCOMM_DATA;++i){struct bluetooth_work_rfcomm_buffer *target=&out->rfcomm_rx[i];
+        const struct bt_rfcomm_buffer *source=&voice.rfcomm.rx[i];BT_WORK_RFCOMM_BUFFER(TAKE)}
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i){struct bluetooth_work_server_session *target=&out->sessions[i];
+        const struct bt_sdp_server_session *source=&voice.server.sessions[i];BT_WORK_SERVER_SESSION(TAKE)}
+    for(unsigned i=0;i<BT_SCO_LINKS;++i){struct bluetooth_work_sco_link *target=&out->audio_links[i];
+        const struct bt_sco_link *source=&voice.audio.links[i];BT_WORK_SCO_LINK(TAKE)}
+    for(unsigned i=0;i<BT_SCO_PACKETS;++i){struct bluetooth_work_sco_packet *target=&out->audio_tx[i];
+        const struct bt_sco_packet *source=&voice.audio.tx[i];BT_WORK_SCO_PACKET(TAKE)}
+    for(unsigned i=0;i<BT_SCO_PACKETS;++i){struct bluetooth_work_sco_packet *target=&out->audio_rx[i];
+        const struct bt_sco_packet *source=&voice.audio.rx[i];BT_WORK_SCO_PACKET(TAKE)}
+#undef TAKE
+    for(unsigned i=0;i<BT_ACL_LINKS;++i){
+        out->connections[i].flags=voice.security.connections[i].flags[0];
+        out->assembling[i]=voice.l2cap.assembling[i];out->next_id[i]=voice.l2cap.next_id[i];
+        out->peer_sequence[i]=voice.l2cap.peer_sequence[i];
+    }
+    for(unsigned i=0;i<BT_RFCOMM_DATA;++i)out->credit_after[i]=voice.rfcomm.credit_after[i];
+    for(unsigned i=0;i<BT_H4_SLOTS;++i)out->held_rx[i]=voice.audio.held_rx[i];
+#define PUBLIC(name) out->headset.name=atomic_load_explicit(&voice.name,memory_order_acquire);
+    PUBLIC(segment_head) PUBLIC(segment_tail) PUBLIC(segment_stop) PUBLIC(segment_flags)
+    PUBLIC(segment_disconnected) PUBLIC(segment_request) PUBLIC(terminal)
+#undef PUBLIC
+    out->stop_phase=context.stop_phase;out->snapshot_bytes=voice.snapshot.bytes;
+    out->snapshot_records=voice.snapshot.records;
+    return 1;
+}
+int bluetooth_headset_rx_unclassified(const struct bluetooth_application *a)
+{
+    if(!a||a->self!=a||xTaskGetCurrentTaskHandle()!=a->owner||
+       a->hci.transport.state!=BT_H4_ACTIVE||a->hci.transport.count>BT_H4_SLOTS||
+       (voice_state&&voice.app&&voice.app!=a))return -1;
+    uint64_t seen=0;
+    if(voice_state&&voice.acl.hci==&a->hci&&a->hci.acl_owner==&voice.acl)seen=voice.acl.seen_record;
+    for(unsigned i=0;i<a->hci.transport.count;++i){
+        const struct bt_h4_record *r=&a->hci.transport.records[i];
+        if(r->owner==BT_H4_OWNED&&r->serial>seen)return 1;
+    }
+    return 0;
+}
+
 int bluetooth_headset_wideband(const struct bluetooth_application *a)
 {return a&&a->self==a&&a->profile&&((a->profile->version==2&&a->profile->headset.mode==4)||(a->profile->version>=3&&(a->profile->headset.mode==3||a->profile->headset.mode==5)));}
 static int segment_live(struct bluetooth_application *a)
@@ -492,13 +674,19 @@ static __attribute__((noinline)) int consumer(struct bluetooth_application *a)
 /* A lost or spurious notification changes only latency: the consumer re-reads
  * the counters and the request word after every wake-up. */
 static __attribute__((noinline)) void wake(void){if(voice.segment_consumer)xTaskNotifyGive((TaskHandle_t)voice.segment_consumer);}
+static void owner_wake(struct bluetooth_application *a)
+{if(a->uart.config.deferred_irq&&a->owner)xTaskNotifyGive(a->owner);}
 int bluetooth_headset_segment_bind(struct bluetooth_application *a,void *consumer)
 {
     if(!bluetooth_headset_repeated(a)||!consumer||voice.segment_consumer||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     voice.segment_app=a;voice.segment_consumer=consumer;return 1;
 }
 int bluetooth_headset_segment_stop(struct bluetooth_application *a)
-{if(!segment_live(a))return -1;atomic_store_explicit(&voice.segment_stop,1,memory_order_release);return 1;}
+{
+    if(!segment_live(a))return -1;
+    if(!atomic_exchange_explicit(&voice.segment_stop,1,memory_order_acq_rel))owner_wake(a);
+    return 1;
+}
 int bluetooth_headset_segment_status(struct bluetooth_application *a,struct bluetooth_segment_status *out)
 {
     if(!segment_live(a)||!out||!bt_range_disjoint(out,sizeof(*out),&voice,sizeof(voice))||
@@ -526,7 +714,9 @@ int bluetooth_headset_segment_request(struct bluetooth_application *a,unsigned r
     unsigned word=atomic_load_explicit(&voice.segment_request,memory_order_acquire);
     if(word==request)return 1;
     if(word>request||atomic_load_explicit(&voice.segment_head,memory_order_acquire)!=published)return 0;
-    return atomic_compare_exchange_strong_explicit(&voice.segment_request,&word,request,memory_order_acq_rel,memory_order_acquire);
+    int changed=atomic_compare_exchange_strong_explicit(&voice.segment_request,&word,request,memory_order_acq_rel,memory_order_acquire);
+    if(changed)owner_wake(a);
+    return changed;
 }
 int bluetooth_headset_segment_take(struct bluetooth_application *a,const uint8_t **pcm,struct bluetooth_segment_snapshot *snapshot)
 {
@@ -551,7 +741,7 @@ int bluetooth_headset_segment_ack(struct bluetooth_application *a,uint64_t ticke
     uint64_t tail=atomic_load_explicit(&voice.segment_tail,memory_order_relaxed);
     uint64_t head=atomic_load_explicit(&voice.segment_head,memory_order_acquire);
     if(!ticket||tail==UINT64_MAX||ticket!=tail+1||head<=tail||head-tail>BLUETOOTH_SEGMENT_SLOTS)return -1;
-    atomic_store_explicit(&voice.segment_tail,tail+1,memory_order_release);return 1;
+    atomic_store_explicit(&voice.segment_tail,tail+1,memory_order_release);owner_wake(a);return 1;
 }
 /* The first stop sets the close bound; later stop reasons only add flags. */
 static __attribute__((noinline)) void segment_stopping(unsigned flag,uint64_t now)

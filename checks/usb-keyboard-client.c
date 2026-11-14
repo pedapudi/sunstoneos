@@ -20,7 +20,9 @@
 #include <stdio.h>
 #include <string.h>
 static const struct ss_grant grant={.devices=SS_DEVICE_USB_KEYBOARD|SS_DEVICE_USB_STORAGE};
-static struct {void *handles[8];struct a733_usb2_native host;struct a733_typec_native typec;uint8_t sector[512];atomic_uint result;} board;
+/* The session deadline bounds the owner's precise waits (apps/os/client.c usb_return_wait). */
+static struct {void *handles[8];struct a733_usb2_native host;struct a733_typec_native typec;uint8_t sector[512];atomic_uint result;
+    struct {uint64_t deadline_us;} session;} board;
 static atomic_uint owner_notifications,application_notifications;
 static unsigned storage_submissions,storage_complete;
 /* The owner task: every wake the client sends it is a notification given to it. */

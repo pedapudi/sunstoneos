@@ -100,6 +100,9 @@ static int post(struct pvr_compute_queue *q,uint32_t sequence,unsigned result,un
     if (xQueueSend(v.completions,&r,0)!=pdTRUE) {
         q->owed=1; return fault(q,GPU_QUEUE_SERVICE);
     }
+#ifdef SUNSTONE_A733_OS
+    pvr_gpu_service_notify_clients(q->service);
+#endif
     return 1;
 }
 static int cache_range(const struct gpu_queue_lease_info *l,uint64_t off,uint64_t bytes,int output)

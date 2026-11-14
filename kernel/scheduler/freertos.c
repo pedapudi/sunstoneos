@@ -9,6 +9,7 @@
 #include "freertos.h"
 #include "freertos_registry.h"
 #include "freertos_control.h"
+#include "perturb.h"
 #include "notification.h"
 #include "deadline.h"
 #include "latency_trace.h"
@@ -35,6 +36,16 @@ _Static_assert(configMAX_PRIORITIES == SS_OWNER_PRIORITIES,
 
 #ifndef SS_PULL_MOVES_PER_PASS
 #define SS_PULL_MOVES_PER_PASS 0u /* transfers one idle-pull pass may start; 0 is unlimited */
+#endif
+#ifdef SS_KERNEL_TEST_PERTURB
+void ss_kernel_perturb(enum ss_kernel_perturb_site site)
+{
+    const volatile uint32_t *table = (const volatile uint32_t *)(uintptr_t)SS_KERNEL_TEST_PERTURB;
+    uint32_t cores = table[0], turns = table[1 + site];
+    if (!turns) return;
+    if (cores && !(cores & (UINT32_C(1) << portGET_CORE_ID()))) return;
+    for (volatile uint32_t turn = 0; turn < turns; ++turn) {}
+}
 #endif
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
 static struct { _Alignas(SS_CACHE_LINE) struct ss_sched_trace_lock value; } ssSchedTraceLocks[SS_OBJECT_SLOTS + 1];
@@ -483,6 +494,7 @@ static void ssKernelRetirement(void *context, unsigned slot, unsigned coordinato
 
 static void ssKernelInitialize(void)
 {
+    SS_KERNEL_PERTURB(SS_PERTURB_API_ENTRY);
     if (ssKernelInitialized) return; /* Boot CPU only, before scheduler start. */
     ss_kernel_registry_init_retirement(&ssKernelRegistry, &ssKernelBackend,
                                        ssKernelRetirement, NULL, 0);
@@ -1455,6 +1467,10 @@ static void ssKernelService(void)
      * long span when the memory system is busy, so it is the last resort. */
     bool more = ssKernelServiceOnce(c, cpu);
     for (unsigned pass = 1; more && pass < SS_SERVICE_PASSES; ++pass) more = ssKernelServiceOnce(c, cpu);
+    /* A pass that commits no dispatch must still clear sgi_pending (see
+     * ss_owner_settle for the barrier pairing with ss_owner_publish). A
+     * selecting pass, or one that leaves a reschedule, commits in selection. */
+    if (!more && !cpu->selecting && !cpu->reschedule) more = ss_owner_settle(&cpu->run);
     if (more) {
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
         ++ssKernelContinuations;
@@ -2237,6 +2253,7 @@ static void ssKernelControlDrain(void)
         if (exception) portCLEAR_INTERRUPT_MASK_FROM_ISR(open);
         else portCLEAR_INTERRUPT_MASK(open);
     }
+    SS_KERNEL_PERTURB(SS_PERTURB_CONTROL_OPEN);
     (void)ss_control_drain_excluding(&ssKernelControl, c, cpu->control_seen);
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
     for (unsigned w = 0; w < 2; ++w) {
@@ -2329,6 +2346,12 @@ static bool ssKernelApplyMasked(void *context, unsigned slot, void *task,
         atomic_store_explicit(&s->execution, state->dead ? SS_K_DEAD : SS_K_SUSPENDED,
                                memory_order_release);
         if (!s->off_cpu) {
+#ifdef SUNSTONE_SCHED_LATENCY_TRACE
+            /* An exit that parks the interrupted task completes its own
+             * published self-suspension; the task never returns to record it. */
+            if ((suspension & SS_CONTROL_SELF) && cpu->run.current == &s->ready)
+                ss_sched_trace_self_suspend_parked(c, slot);
+#endif
             s->offcpu_wait = true;
             ss_control_park_on(&ssKernelControl, c, slot, &s->off_cpu);
             cpu->reschedule = true;
@@ -3046,12 +3069,15 @@ static bool ssKernelSuspendCurrent(TCB_t *current)
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     trace.slot = slot;
     trace.stamp[1] = ss_sched_trace_now();
+    /* An exception exit may complete this suspension from here until the
+     * mask below; the open record lets that exit's selection record it. */
+    ss_sched_trace_self_suspend_open(ssKernelCPUId(), &trace);
 #endif
     bool changed = ss_control_suspend_current(&ssKernelControl, slot, ssKernelCPUId());
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
     trace.stamp[2] = ss_sched_trace_now();
 #endif
-#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+#if defined(SS_KERNEL_TEST_ADMIN_ENTER) || defined(SS_SCHED_TRACE_TEST_EXIT_SUSPEND)
     extern void ss_kernel_test_self_suspend_published(void) __attribute__((weak));
     if (ss_kernel_test_self_suspend_published) ss_kernel_test_self_suspend_published();
 #endif

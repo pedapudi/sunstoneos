@@ -233,6 +233,9 @@ runtime_mutations = [
     ('restart-pending-fatal', 'drivers/storage/a733_mmc_platform.c', 'return masked_pending(p,p->core.restart!=0);', 'return masked_pending(p,0);'),
     ('restart-forgets-1v8', 'drivers/storage/sunxi_mmc.c', 'fresh.reenter = h->card.signal_1v8;', 'fresh.reenter = 0;'),
     ('restart-keeps-mode-ceiling', 'drivers/storage/sunxi_mmc.c', 'fresh.ceil1 = (uint8_t)(ceiling + 1);', 'fresh.ceil1 = 0;'),
+    ('pf-field-left-fixed', 'drivers/storage/a733_mmc_platform.c', 'if(initial&&p->config.kind==SUNXI_MMC_SD&&p->config.pf_switchable&&', 'if(0&&'),
+    ('pf-field-not-restored', 'drivers/storage/a733_mmc_platform.c', 'if(p->pf_found&4){', 'if(0){'),
+    ('pf-declaration-ignored', 'drivers/storage/a733_mmc_platform.c', 'p->config.kind==SUNXI_MMC_SD&&p->config.pf_switchable&&', 'p->config.kind==SUNXI_MMC_SD&&'),
 ]
 for name, relative, old_text, new_text in runtime_mutations:
     original = (ROOT / relative).read_text()

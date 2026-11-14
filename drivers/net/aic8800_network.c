@@ -12,6 +12,8 @@
 #include "task.h"
 #include <string.h>
 static struct aic8800_network *stack_owner;
+extern void sunstone_net_event(void) __attribute__((weak));
+static void owner_event(void){if(sunstone_net_event)sunstone_net_event();}
 static _Alignas(16) uint8_t network_buffers[ipconfigNUM_NETWORK_BUFFER_DESCRIPTORS][1536];
 _Static_assert(ipBUFFER_PADDING+ipconfigNETWORK_MTU+ipSIZE_OF_ETH_HEADER<=1536,"network pool capacity");
 int aic8800_network_storage_valid(const void *p,size_t bytes,const struct aic8800_network_config *c)
@@ -66,7 +68,7 @@ int aic8800_network_status(const struct aic8800_network *n,uint32_t values[4])
     return first==atomic_load(&n->address_sequence)&&aic8800_network_address(n,NULL);
 }
 static void address_revoke(struct aic8800_network *n)
-{atomic_store(&n->address_ready,0);atomic_store(&n->address_failed,1);}
+{atomic_store(&n->address_ready,0);if(!atomic_exchange(&n->address_failed,1))owner_event();}
 void aic8800_network_ip_step(void)
 {
     struct aic8800_network *n=stack_owner;if(!n||!n->config.dhcp)return;
@@ -87,7 +89,7 @@ eDHCPCallbackAnswer_t xApplicationDHCPHook_Multi(eDHCPCallbackPhase_t phase,Netw
 void vApplicationIPNetworkEventHook_Multi(eIPCallbackEvent_t event,NetworkEndPoint_t *endpoint)
 {
     struct aic8800_network *n=stack_owner;if(!n||endpoint!=&n->endpoint)return;
-    if(event!=eNetworkUp){atomic_store(&n->address_ready,0);return;}
+    if(event!=eNetworkUp){atomic_store(&n->address_ready,0);owner_event();return;}
     if(address_expired(n)==1)address_revoke(n);
     if(atomic_load(&n->offline)||atomic_load(&n->failed)||atomic_load(&n->address_failed))return;
     uint32_t ip=endpoint->ipv4_settings.ulIPAddress;
@@ -106,6 +108,7 @@ void vApplicationIPNetworkEventHook_Multi(eIPCallbackEvent_t event,NetworkEndPoi
     atomic_store(&n->gateway_value,endpoint->ipv4_settings.ulGatewayAddress);
     atomic_store(&n->dns_value,endpoint->ipv4_settings.ulDNSServerAddresses[0]);
     atomic_fetch_add(&n->address_sequence,1);atomic_store(&n->address_ready,ip!=0);
+    owner_event();
 }
 static int dhcp_packet(const uint8_t *p,size_t bytes)
 {
@@ -113,7 +116,7 @@ static int dhcp_packet(const uint8_t *p,size_t bytes)
     return p[34]==0&&p[35]==68&&p[36]==0&&p[37]==67;
 }
 void aic8800_network_fault(struct aic8800_network *n)
-{if(n&&n->initialized){atomic_store(&n->ready,0);atomic_store(&n->failed,1);}}
+{if(n&&n->initialized){atomic_store(&n->ready,0);if(!atomic_exchange(&n->failed,1))owner_event();}}
 static BaseType_t link_status(NetworkInterface_t *interface)
 {return aic8800_network_ready(interface->pvArgument)?pdTRUE:pdFALSE;}
 static BaseType_t output(NetworkInterface_t *interface,NetworkBufferDescriptor_t *const descriptor,BaseType_t release)
@@ -125,6 +128,7 @@ static BaseType_t output(NetworkInterface_t *interface,NetworkBufferDescriptor_t
             (n->config.dhcp&&!atomic_load(&n->address_failed)&&address_expired(n)==0&&dhcp_packet(p,descriptor->xDataLength)))) {
             struct aic8800_network_packet packet={.generation=n->generation,.queued=xTaskGetTickCount(),.bytes=(uint16_t)descriptor->xDataLength};
             memcpy(packet.ethernet,p,packet.bytes);result=xQueueSend(n->tx,&packet,0);
+            if(result==pdPASS)owner_event();
         }
     }
     if(descriptor&&release!=pdFALSE)vReleaseNetworkBufferAndDescriptor(descriptor);
@@ -201,7 +205,7 @@ static int collect(struct aic8800_network *n,struct aic8800_sdio_transport *t)
     struct aic8800_data_result result;
     if(!n->active||t->data->state!=AIC8800_DATA_DONE||!aic8800_transport_take_data_result(t,&result))return 1;
     if(result.eapol||!result.bus_transferred)return 0;
-    n->active=0;n->owns_current=0;++n->tx_bus_completions;return 1;
+    n->active=0;n->owns_current=0;++n->tx_bus_completions;owner_event();return 1;
 }
 /* The firmware dropped the station and no transfer, command, CFM deadline or
  * security operation is outstanding, so no completion remains uncertain. */
@@ -246,15 +250,16 @@ void aic8800_network_poll(struct aic8800_network *n)
             else{vReleaseNetworkBufferAndDescriptor(buffer);++n->rx_dropped;}
         }else ++n->rx_dropped;
         if(!aic8800_dispatch_consume_data(n->receive))aic8800_network_fault(n);
+        else owner_event(); /* Another queued TX or buffered RX may now proceed. */
         return;
     }
     if(!n->owns_current&&xQueueReceive(n->tx,&n->current,0)==pdPASS)n->owns_current=1;
     if(n->owns_current&&!n->active){
         if(n->current.generation!=n->generation){aic8800_network_fault(n);return;}
-        if((TickType_t)(xTaskGetTickCount()-n->current.queued)>=n->config.queue_timeout){++n->tx_dropped;n->owns_current=0;return;}
+        if((TickType_t)(xTaskGetTickCount()-n->current.queued)>=n->config.queue_timeout){++n->tx_dropped;n->owns_current=0;owner_event();return;}
         if(!aic8800_network_ready(n))return;
         if(!aic8800_network_address(n,NULL)&&!(n->config.dhcp&&!atomic_load(&n->address_failed)&&address_expired(n)==0&&dhcp_packet(n->current.ethernet,n->current.bytes))){
-            ++n->tx_dropped;n->owns_current=0;return;
+            ++n->tx_dropped;n->owns_current=0;owner_event();return;
         }
         uint64_t now=t->card->host->last_now;
         uint64_t deadline;
@@ -288,11 +293,11 @@ void aic8800_network_ip_event(unsigned event,void *data)
         atomic_store(&n->ready,1);atomic_store_explicit(&n->offline,0,memory_order_release);
         /* The normal stack event performs vDHCPProcess(pdTRUE), including
          * fresh transaction ID, socket creation and offer/server reset. */
-        FreeRTOS_NetworkDown(&n->interface);return;
+        FreeRTOS_NetworkDown(&n->interface);owner_event();return;
     }
     if(n->offline_queued==epoch&&event==eNoEvent&&data==&n->offline_marker){
         atomic_store(&n->address_ready,0);
-        atomic_store_explicit(&n->offline_ack,epoch,memory_order_release);return;
+        atomic_store_explicit(&n->offline_ack,epoch,memory_order_release);owner_event();return;
     }
     if(n->offline_queued==epoch)return;
     n->interface.bits.bInterfaceUp=pdFALSE;

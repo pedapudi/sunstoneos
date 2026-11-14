@@ -88,7 +88,8 @@ function(sunstone_latency_partitioned_model target metric)
   endif()
   if(SUNSTONE_LATENCY_CAUSE AND NOT metric)
     target_sources(${target} PRIVATE "${latency_root}/apps/latency/cause-ping.c")
-    target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_CAUSE=1)
+    target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_CAUSE=1
+      SUNSTONE_LATENCY_STREAM_MASK=${SUNSTONE_LATENCY_STREAM_MASK}u)
   endif()
   target_compile_options(${target} PRIVATE ${SUNSTONE_KERNEL_FLAGS}
     "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")
@@ -106,6 +107,12 @@ function(sunstone_latency_partitioned_model target metric)
   endif()
   if(NOT metric)
     sunstone_enable_scheduler_latency_trace(${target})
+  endif()
+  if(control AND SUNSTONE_SCHED_LATENCY_TRACE)
+    # CPU1's memory task is parked at an SGI exit to test the trace of that
+    # path. The control models take the SGI before the task masks in every
+    # run; the cause model takes it only after, so it cannot force the path.
+    target_compile_definitions(${target} PRIVATE SS_SCHED_TRACE_TEST_EXIT_SUSPEND=1)
   endif()
   sunstone_enable_latency_port(${target})
   if(control AND SUNSTONE_TICKLESS_IDLE)
