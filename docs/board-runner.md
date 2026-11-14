@@ -330,6 +330,29 @@ and for every worker. [host_priority.py](../tools/host_priority.py) sets the pri
 The gate's image-copying checks write sparse copies (`harness.copy_image`, `cp --sparse=always --reflink=auto`): the `fat32-rw` sweep wrote
 271 GiB in 5,339 copies of a 52 MiB image of which 55 of 13,312 blocks hold data, and writes about 1.4 GiB now.
 
+Three more rules keep a run's FEL work off the load of the gates (measured 2026-11-13; the host stages of run `1794607200843702122-d2ed7876` took
+launch 10.7 s, DRAM 3.0 s and a total of 27.2 s with four gates running, against about 6.7, 2.2 and 21 s):
+
+- **The journal syncs only where recovery needs it.** The runner saved and synced `session.json` before and after every FEL transaction
+  (182 saves of two syncs each in a 91-transaction run, 364 syncs, and 42 more for the readback files); one `fsync` takes 1.3 ms on an idle host
+  and 66 ms at the median, 980 ms at the 99th percentile beside three writers, even in the idle I/O class, because the ext4 journal is shared.
+  `tools/board.py` now classifies each transaction (`fel_effects`) and syncs the write-ahead entry only before one that recovery must know:
+  a register write (rail, clock, watchdog and power state), an execute (`exe`, `reset64`, `spl`; each starts a new DRAM epoch) and the first DRAM
+  write of an epoch (the DRAM ownership). A read, an SRAM staging write (the helpers an `exe` starts, and every `exe` syncs) and the later DRAM
+  writes of an epoch are saved without sync: the atomic replacement survives the death of the runner, and the next synced entry, which holds the
+  whole record, carries them to disk. The readback files and the journal are synced once at the end of the run. A host crash in the middle of a
+  run can therefore lose the unsynced reads and staging writes of the last stretch; it cannot lose the record of anything that changed the board.
+  The queue's own recovery (`Queue.recover`) reads no journal, only `result.json` and the runner's process record; a person or
+  `tools/finish-fel-read.py` reads `session.json` to learn what the board may hold.
+- **A gate holds its next step during the FEL work.** The runner holds a shared lock on `~/.cache/sunstoneos/board-fel.lock` from the start of the run,
+  releases it while the board runs the application, and takes it again for the restore. A gate (`gate_slots.wait_for_board`) asks for the
+  lock without waiting before it starts each step and waits while a runner holds it; the steps already running continue. The kernel frees the
+  lock when a runner dies, and a runner that hangs holds a gate for no longer than the 60 s deadline it wrote into the lock file.
+- **Gates stay off CPU 23.** The xhci interrupt of the board's USB port is handled almost entirely on CPU 23 (1.19 million of its interrupts
+  there, `/proc/interrupts`), and the runner's FEL transfers wait on it. The gate and everything it starts run with CPU 23 removed from their
+  affinity (`reserved_cpus` in `tools/gate-slots.json`). A nice +10 process does not delay a normal-priority thread's wake-up (99th percentile
+  0.14 ms with 48 busy processes), so this is protection for the interrupt, not for the runner's threads.
+
 Every result carries `host_pressure.start` and `host_pressure.end`: the kernel's `/proc/pressure/io`, `cpu` and `memory` figures
 (`some` and `full`, `avg10`, `avg60`, `avg300` and `total`) read when the run began and when it finished. The totals are microseconds of
 stall, so their difference is the stall time of the run itself, which attributes a slow host stage to the host.
