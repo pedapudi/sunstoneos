@@ -61,10 +61,14 @@ IMAGES = {
     'storage-read-p1': {'configure': [
         '-DSUNSTONE_A733_STORAGE_READ=ON',
     ], 'target': 'sunstone-a733-storage-read', 'elf': 'sunstone-a733-storage-read.elf'},
-    # the cold-entry monitor with the stage-2 slot loader (boot/a733/stage2) and its diagnostic armed-stop build; the stage-2 and standalone-boot checks load their ELF and binary from the build directory
+    # the cold-entry monitor with the stage-2 slot loader (boot/a733/stage2); the stage-2 and standalone-boot checks load its ELF and binary from the build directory
     'stage2': {'configure': [
         '-DSUNSTONE_A733_STAGE2=ON',
-    ], 'target': ['a733-stage2', 'a733-stage2-armed-stop'], 'elf': 'a733-stage2.elf'},
+    ], 'target': 'a733-stage2', 'elf': 'a733-stage2.elf'},
+    # the diagnostic stage 2 that parks after its WDT0 0x41 arming (docs/designs/card-boot-chain.md, "Measuring the OS row")
+    'stage2-armed-stop': {'configure': [
+        '-DSUNSTONE_A733_STAGE2=ON',
+    ], 'target': 'a733-stage2-armed-stop', 'elf': 'a733-stage2-armed-stop.elf'},
     # the emulator models of the FreeRTOS SMP port (cmake/smp.cmake) that checks/smp-ticket-lock.py runs under QEMU
     'smp-models': {'configure': [
         '-DSUNSTONE_PARTITIONED_SCHEDULER=ON',

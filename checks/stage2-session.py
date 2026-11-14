@@ -19,7 +19,7 @@ import stage2_marks
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--build', '{build:stage2}', '--output', '{output}'],
-             ['--build', '{build:stage2}', '--variant', 'armed-stop', '--output', '{output}']]
+             ['--build', '{build:stage2-armed-stop}', '--variant', 'armed-stop', '--output', '{output}']]
 SESSION, CONTRACT, RESULT, SLOT = 0x41f00000, 0x42004000, 0x42000000, 0x43000000
 ENTRY, GENERATION = 0x41000000, 37
 
