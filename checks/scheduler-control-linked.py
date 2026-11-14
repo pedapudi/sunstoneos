@@ -35,7 +35,7 @@ YIELD_MODELS = ('scheduler-yield-qemu', 'scheduler-yield-storm-qemu')
 # Extra work on the wake path for the regression case: the word after the sites of kernel/scheduler/perturb.h in the table, which the
 # yield models read (checks/scheduler-yield-qemu.c), as this many loop turns (about 5 instructions each) before every served mark.
 # The models' own end-of-run accounting fails above about 3,000 turns, so the case does not need the critical path to be the only
-# detector: it needs the critical path to cross the bound, which it does at 6,000 turns (276,127 instructions measured).
+# detector: it needs the critical path to cross the bound, which it does at 6,000 turns (217,260 instructions measured, 8.6 percent above the bound; the run is deterministic).
 WAKE_PATH_REGRESSION_TURNS = 6000      # in the table word after the last site (WAKE_PATH_WORD, below)
 PLUGIN_HEADER = CACHE / 'host/qemu-plugin-10.2.1/qemu-plugin.h'
 PLUGIN_HEADER_SHA256 = 'aebc639d01685893a9d71b9ef3afa7ea67e0be6a8959781c4057bd4974d05d4d'
@@ -139,9 +139,13 @@ def main():
             fields = text.split()
             if fields[0] != 'M':
                 continue
-            offset, vcpu = int(fields[1], 16), int(fields[2])
+            offset, executing = int(fields[1], 16), int(fields[2])
             total, spin = [int(v) for v in fields[3:11]], [int(v) for v in fields[11:19]]
             core = offset // 16
+            # Each marker is called on the core it names. The plugin reads the executing core from the guest (TPIDR_EL1), because the
+            # vcpu argument of QEMU 10.2.1's block callback names the vCPU that translated the block; a marker credited to another core
+            # means the attribution is wrong and every count after it is too.
+            assert executing == core, ('marker of core', core, 'ran on core', executing)
             if offset % 16 == 0:
                 wake[core] = (total, spin)
             elif core in wake:

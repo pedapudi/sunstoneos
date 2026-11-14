@@ -4,20 +4,24 @@
 Every case runs real processes on a temporary home directory, so the file locks and the tickets are the ones a gate uses:
   derivation   the slot count and the jobs per slot follow from the measured numbers of tools/gate-slots.json: the stated host gives
                three slots, a host with less memory or fewer cores gives fewer, and a different measurement gives a different count;
+  image-builds the images a gate builds at once and the -j of each follow from the same JSON: the measured count, never more
+               builds than fit in the gate's measured peak, the slot's build cores divided across them, one at a time without an entry;
   two-gates    three worker gates start: two run at once in slots 1 and 2, never in slot 0, and the third waits until one ends;
   timing-lock  two gates enter the timing lock: the second waits until the first leaves, and a gate that holds a slot is not
-               blocked by it; the scheduler perturbation sweep, the soak and the SERIAL_CHECKS of the index are timing steps;
+               blocked by it; the soak and the SERIAL_CHECKS of the index are timing steps, the scheduler perturbation sweep is not;
   timing-landing-first  a worker holds the timing lock, another worker waits, then a landing waits: the landing enters when the
                holder leaves, the worker after the landing, and no ticket stays;
   landing-jump slots held by a landing and two workers; an older worker and a newer landing wait: the slot a worker frees goes to
                the landing, then the next free slot to the worker, and a landing takes slot 0 when it frees;
   perturb-limit the kill limit of the perturbation sweep is a multiple of its slowest measured point in the same JSON;
+  board-hold   a gate holds its step while a runner is in its FEL work, a dead runner holds nothing, and gates keep off the reserved CPUs;
   stale-ticket a waiting gate that is killed leaves no ticket behind that holds the queue.
 Usage: gate-slots.py --output DIR
 """
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import select
 import subprocess
@@ -121,6 +125,19 @@ def case_derivation():
     assert gate_slots.reserved_slots(CONFIG, n) == 1 and gate_slots.reserved_slots(CONFIG, 1) == 0
 
 
+def case_image_builds():
+    measured = CONFIG['image_builds']
+    count, jobs, peak = gate_slots.image_builds(CONFIG, 7)
+    assert count == measured['concurrency'] and peak == measured['peak_rss_gb'], (count, peak)
+    assert count * peak <= CONFIG['gate']['peak_rss_gb'], 'the builds at once exceed the measured gate peak'
+    assert jobs * count >= 7 and (jobs - 1) * count < 7, 'the -j of each build should divide the slot\'s 7 build cores: %d' % jobs
+    heavier = json.loads(json.dumps(CONFIG))
+    heavier['image_builds']['peak_rss_gb'] = CONFIG['gate']['peak_rss_gb'] / 2
+    assert gate_slots.image_builds(heavier, 7)[0] == min(2, measured['concurrency']), 'a heavier build must lower the count'
+    del heavier['image_builds']
+    assert gate_slots.image_builds(heavier, 7) == (1, 7, 0.0), 'no entry builds one at a time with all the slot\'s cores'
+
+
 def case_two_gates(home):
     first = second = third = None
     try:
@@ -188,17 +205,13 @@ def case_timing_lock(home):
             if process:
                 process.end()
     serial = set(('cpu-pmu-smp.py', 'smp-port-cost.py', 'pcie-qemu.py', 'npu-runtime-bounds.py'))
-    for name, script in (('image-scheduler-control-linked', 'scheduler-control-linked.py'), ('check-soak8', None),
+    for name, script in (('check-soak8', None),
                          ('indexed-smp-ticket-lock', 'smp-ticket-lock.py'), ('indexed-pcie-qemu', 'pcie-qemu.py')):
         assert gate_slots.is_timing_step(CONFIG, name, script, serial), name + ' is a wall-time step'
     assert not gate_slots.is_timing_step(CONFIG, 'indexed-memory-layout', 'memory-layout.py', serial)
-    # The models that fail first under host load run inside scheduler-control-linked.py (3 of 24 runs of scheduler-yield-qemu failed
-    # beside other gates' work, 0 of 5 alone: a vCPU that QEMU's round-robin leaves waiting makes its wakes late on the shared counter),
-    # so the timing lock covers them through that script; the case names them so a move out of it is noticed.
-    linked = (ROOT / 'checks/scheduler-control-linked.py').read_text()
-    for model in ('scheduler-yield-qemu', 'scheduler-yield-storm-qemu', 'scheduler-partitioned-qemu', 'scheduler-objects-qemu'):
-        assert "'" + model + "'" in linked, model + ' no longer runs inside scheduler-control-linked.py, a timing step'
-    assert 'scheduler-control-linked.py' in CONFIG['timing_checks']
+    # The yield models' wake bound is a critical path in instructions (tools/qemu-critical-path.c), the same in every run whatever the
+    # host load, so the sweep and the linked models run beside other work: they hold no timing lock.
+    assert not gate_slots.is_timing_step(CONFIG, 'image-scheduler-control-linked', 'scheduler-control-linked.py', serial)
     for script in CONFIG['timing_checks']:
         assert (ROOT / 'checks' / script).is_file(), script + ' is listed as a timing check but is not in checks/'
     spec = importlib.util.spec_from_file_location('check_index', ROOT / 'checks/check-index.py')
@@ -276,6 +289,41 @@ def case_perturb_limit():
     assert "['perturb']" in text and 'gate-slots.json' in text
 
 
+def case_board_hold(home):
+    """A gate holds its next step while a runner is in its FEL work, a dead runner holds nothing, a hung one holds until its deadline,
+    and a gate stays off the CPUs that config reserves."""
+    assert gate_slots.wait_for_board(home, announce=None) == 0.0
+    code = ("import sys,time; sys.path.insert(0,%r); import gate_slots; h=gate_slots.BoardFel(%r, %d); h.acquire(); "
+            "print('HELD', flush=True); sys.stdin.readline(); h.release(); print('FREE', flush=True); time.sleep(30)")
+    runner = Process(code % (str(ROOT / 'tools'), str(home), 60))
+    try:
+        assert runner.line(WAIT) == 'HELD'
+        waiter = Process("import sys,time; sys.path.insert(0,%r); import gate_slots; t=time.time(); "
+                         "gate_slots.wait_for_board(%r, announce=None); print('WAITED %%.2f' %% (time.time()-t), flush=True)"
+                         % (str(ROOT / 'tools'), str(home)))
+        assert waiter.line(1.0) is None, 'a step started beside a runner in its FEL work'
+        runner.release()
+        assert runner.line(WAIT) == 'FREE'
+        line = waiter.line(WAIT)
+        assert line and line.startswith('WAITED') and float(line.split()[1]) >= 0.9, line     # held until the runner released it
+        waiter.end()
+    finally:
+        runner.end()
+    crashed = Process(code % (str(ROOT / 'tools'), str(home), 60))
+    try:
+        assert crashed.line(WAIT) == 'HELD'
+        crashed.end()                                                                     # killed: the kernel frees its lock
+        assert gate_slots.wait_for_board(home, announce=None) < 5.0, 'a dead runner held a gate'
+    finally:
+        crashed.end()
+    keep = Process("import sys,os; sys.path.insert(0,%r); import gate_slots; "
+                   "print(sorted(gate_slots.reserve_cpus({'reserved_cpus': [%d]})) == sorted(os.sched_getaffinity(0)), %d in os.sched_getaffinity(0), flush=True)"
+                   % (str(ROOT / 'tools'), min(os.sched_getaffinity(0)), min(os.sched_getaffinity(0))))
+    assert keep.line(WAIT) == 'True False', 'reserve_cpus left the reserved CPU in the gate'
+    keep.end()
+    assert gate_slots.load_config()['reserved_cpus'], 'no CPU is reserved for the USB interrupt'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -283,10 +331,12 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     case_derivation()
     print('PASS derivation')
+    case_image_builds()
+    print('PASS image-builds')
     case_perturb_limit()
     print('PASS perturb-limit')
-    for name, case in (('two-gates', case_two_gates), ('timing-lock', case_timing_lock), ('timing-landing-first', case_timing_landing_first), ('landing-jump', case_landing_jump),
-                       ('stale-ticket', case_stale_ticket)):
+    for name, case in (('two-gates', case_two_gates), ('timing-lock', case_timing_lock), ('timing-landing-first', case_timing_landing_first),
+                       ('landing-jump', case_landing_jump), ('stale-ticket', case_stale_ticket), ('board-hold', case_board_hold)):
         home = args.output / name
         home.mkdir()
         case(home)

@@ -151,6 +151,23 @@ a733_cold_exception:
     mrs x1, spsr_el3
     stp x0, x1, [x23, #144]
     str x18, [x23, #160]
+#ifdef A733_COLD_STAGE2
+    // The RTC words keep the exception across the WDT0 reset that ends the
+    // park (boot/a733/stage2/marks.h): FAULT 0x0c0e0000 with the vector, then
+    // the low halves of ESR, ELR and FAR. GP2 and the marker are not written.
+    mov x2, #0x0100
+    movk x2, #0x0709, lsl #16
+    ldr w0, [x23, #128]
+    str w0, [x2, #0x14]
+    ldr w0, [x23, #144]
+    str w0, [x2, #0x18]
+    ldr w0, [x23, #136]
+    str w0, [x2, #0x1c]
+    mov w0, #0x0c0e0000
+    orr w0, w0, w18
+    str w0, [x2, #0x10]
+    dsb sy
+#endif
     mov x0, #3
     b .Lpublish
 
