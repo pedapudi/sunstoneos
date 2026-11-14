@@ -852,6 +852,13 @@ static void delete_self_verify(void)
 }
 static void control_races_verify(void)
 {
+    /* The freeze steps hold CPU0's gate until CPU0's background task releases it. A mover may start on any core at a
+     * priority above the background; one that enters the kernel on CPU0 during a freeze waits at admission and starves
+     * the release. Each mover blocks on its first notification before any freeze. */
+    for (unsigned id = 0; id < 2; ++id) {
+        for (unsigned wait = 0; wait < 200 && eTaskGetState(movers[id]) != eBlocked; ++wait) vTaskDelay(1);
+        configASSERT(eTaskGetState(movers[id]) == eBlocked);
+    }
     /* The peer outranks the controller. At equal priority the voluntary yield
      * can select it just before a tick, and the slice ending at that tick
      * returns the core to the controller before the peer leaves its wait. */
@@ -1016,7 +1023,8 @@ static void control(void *unused)
     uint64_t busy_start = __atomic_load_n(&busy[1], __ATOMIC_RELAXED);
     xTaskNotifyGive(local_sender);
     control_phase = 0x514;
-    configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000)) == 1);
+    /* The local phase may take limit(1000) ticks (checked below), so its wait scales the same way. */
+    configASSERT(ulTaskNotifyTake(pdTRUE, limit(pdMS_TO_TICKS(2000))) == 1);
     uint64_t busy_delta = __atomic_load_n(&busy[1], __ATOMIC_RELAXED) - busy_start;
     platform_puts("local-wake attempts="); platform_hex(local_wakes);
     platform_puts(" completions="); platform_hex(local_completed);
