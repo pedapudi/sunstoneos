@@ -37,6 +37,9 @@ def record():
             # linker memory regions CODE and RAM of platform/a733-smp-cached/link.ld
             'code': (0x41000000, 0x41200000),
             'ram': (0x41200000, 0x42000000),
+            # The OS image (apps/os/sealed-link.patch) moves read-only data, the manifest and the sealed session out of CODE
+            # into this block, which EL1 and EL0 map read-only and execute-never, and starts its RAM after it.
+            'os_rodata': (0x41200000, 0x41400000),
             # image RAM as the board runner backs it up and the CPU-return host reports it
             'image_ram': (0x41000000, 0x42200000),
             # the first byte after the cached writable range (ASSERT(__bss_end <= ...))

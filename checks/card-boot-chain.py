@@ -50,14 +50,34 @@ def main():
             if line.strip():
                 ids.add(json.loads(line).get('id'))
     for key, records in chain.MEASURED.items():
-        assert key[2] == chain.FEL and records and all(r.split(':')[0] in ids for r in records), key
+        assert key[2] in (chain.FEL, chain.AFTER_BOOT0) and records and all(r.split(':')[0] in ids for r in records), key
+    assert chain.REARM_MEASURED and all(r.split(':')[0] in ids for r in chain.REARM_MEASURED)
     cases.append('measured-armings-cite-board-records')
 
-    # Today's chain: every stage after the gate expires after boot0's PMIC writes, which no board run has shown.
+    # Today's chain: the port 3-3 replug (1794643114289036712-ab8b9952) measured the gate's 0xb1 from mode 0 expiring
+    # after boot0, which covers boot0 and stage 2. The OS row, stage 2's 0x41 from mode 0, has expired only in FEL.
     problems = chain.unproven()
-    assert [p.split(' ')[0] for p in problems] == [s['name'] for s in chain.STAGES] and all('expire after boot0 trained DRAM' in p for p in problems), problems
+    assert [p.split(' ')[0] for p in problems] == ['os'] and 'expire after boot0 trained DRAM' in problems[0], problems
+    assert chain.recovery(chain.STAGES[0]) == chain.recovery(chain.STAGES[1]) == \
+        chain.MEASURED[(chain.FROM_ZERO, 0xb1, chain.AFTER_BOOT0)]
+    without = {k: v for k, v in chain.MEASURED.items() if k[2] == chain.FEL}
+    assert [p.split(' ')[0] for p in chain.unproven(measured=without)] == [s['name'] for s in chain.STAGES]
     assert chain.ACCEPTED == {}, 'An accepted risk is a coordinator decision with its reference, never a default'
-    cases.append('boot0-risk-leaves-every-stage-unproven')
+    cases.append('replug-record-grants-boot0-and-stage2-only')
+
+    # A measuring run (--boot-once-measure) is allowed only for the last stage while it is the one stage without a
+    # recovery and its arming has expired in a FEL session.
+    assert chain.measurable('os') is None
+    for name in ('boot0', 'stage2', 'gate'):
+        assert 'only the last stage' in chain.measurable(name), name
+    assert 'one stage without a recovery' in chain.measurable('os', measured=without)
+    done = {**chain.MEASURED, (chain.FROM_ZERO, 0x41, chain.AFTER_BOOT0): ('fixture',)}
+    assert 'open: none' in chain.measurable('os', measured=done)
+    rearmed_os = chain.STAGES[:2] + (dict(chain.STAGES[2], arming=chain.REARM),)
+    assert 'without a disarm' in chain.measurable('os', stages=rearmed_os)
+    fel_os = {k: v for k, v in chain.MEASURED.items() if k != (chain.FROM_ZERO, 0x41, chain.FEL)}
+    assert 'has not shown expire in a FEL session' in chain.measurable('os', measured=fel_os)
+    cases.append('measuring-run-only-for-the-last-unproven-stage')
 
     # An acceptance of that risk grants only armings that the board has shown to expire in a FEL session.
     accepted = {chain.AFTER_BOOT0: {'by': 'model fixture', 'date': '2026-11-13', 'reference': 'none'}}
@@ -73,6 +93,9 @@ def main():
     # The pre-fix chain (re-arms in the gate and stage 2) is what ran on 2026-11-13; with the current table it is refused
     # for both reasons.
     assert all('re-armed without a disarm' in p for p in chain.unproven(rearmed))
+    # The re-arm conditions the board has not measured stay named in every refusal of a re-arm.
+    assert chain.REARM_OPEN and all(c in p for p in chain.unproven(rearmed) for c in chain.REARM_OPEN)
+    assert not any(c in p for p in problems for c in chain.REARM_OPEN)
     cases.append('pre-fix-chain-refused')
 
     # The runner refuses a boot-once run before it reads the slot manifest.
@@ -80,14 +103,15 @@ def main():
     try:
         images.boot_once_slot(SimpleNamespace(image=args.output / 'absent.elf', boot_once_slot=args.output / 'absent.json'))
     except ValueError as error:
-        assert 'no measured watchdog recovery' in str(error) and all(s['name'] in str(error) for s in chain.STAGES), error
+        assert 'no measured watchdog recovery' in str(error) and str(error).split('. ', 1)[1].startswith('os ('), error
     else:
         raise AssertionError('A boot-once run was admitted while a chain stage has no measured recovery')
     cases.append('runner-refuses-boot-once')
 
     (args.output / 'result.json').write_text(json.dumps({'passed': True, 'physical_access': False, 'cases': cases,
                                                          'unproven': problems}, indent=2) + '\n')
-    print('PASS card boot chain: %d cases; %d stages without a measured recovery' % (len(cases), len(problems)))
+    print('PASS card boot chain: %d cases; without a measured recovery: %s' % (
+        len(cases), ', '.join(p.split(' ')[0] for p in problems) or 'none'))
 
 
 if __name__ == '__main__':
