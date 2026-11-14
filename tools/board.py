@@ -20,7 +20,9 @@ import uuid
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import board_image_store as image_store
 import board_images as images
+import gate_slots
 import host_priority
 import host_space
 from host_evidence import evidence_directory
@@ -76,8 +78,10 @@ def check_wifi_stage(args):
             '--radio-stage-limit %d joins the stored network: name it with --wifi NAME (tools/wifi-credential.py add NAME).' % prepare.ASSOCIATE_STAGE)
 
 
-def save(path, value):
-    """Durable replacement; keep the previous bytes until replacement succeeds."""
+def save(path, value, durable=True):
+    """Atomic replacement; keep the previous bytes until replacement succeeds. With durable, the file and its directory are synced
+    to disk before this returns; without, the replacement is atomic against a crash of this process (the page cache keeps it) but a
+    host crash may lose it. Only the journal's entries for reads and staging use that (Live.journal, FEL_READS)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
@@ -85,17 +89,77 @@ def save(path, value):
         json.dump(value, stream, indent=2, sort_keys=True)
         stream.write('\n')
         stream.flush()
-        os.fsync(stream.fileno())
+        if durable:
+            os.fsync(stream.fileno())
     temporary.replace(path)
-    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    if durable:
+        fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 class TransportFailure(RuntimeError):
     pass
+
+
+# The write-ahead entry of the session journal (Live.tx) is synced to disk before a FEL transaction only when recovery after a host
+# crash must know that the transaction may have taken effect. tools/board.py's recovery (Queue.recover) reads no journal; the person
+# or tool that inspects an interrupted run (tools/finish-fel-read.py, tools/read-returned-result.py) reads session.json to learn what
+# the board may be doing and what it holds. What each class protects:
+#   reads (version, read, readl, hexdump, dump, sid)  nothing: no effect on the board; their entries are evidence, saved without sync
+#   SRAM staging writes (the whole range in FEL_SRAM)   nothing alone: SRAM holds only the helpers that an exe starts, and every exe syncs
+#   DRAM writes (address at or above DRAM_BASE)         the DRAM ownership: the first write of an epoch syncs, so recovery knows the DRAM
+#                                                       may hold the image; later writes of the epoch add nothing to know
+#   register writes (writel and any unknown command)    rail, clock, watchdog and power state: always synced
+#   execution (exe, reset64, spl)                       the launch and every code run: always synced, and they start a new DRAM epoch
+# The longest a gate holds a step for one run's FEL work: the returning lifetime of a session (tools/session.py, 60 s).
+FEL_HOLD_SECONDS = 60
+FEL_READS = frozenset({'version', 'ver', 'hexdump', 'dump', 'read', 'readl', 'sid'})
+FEL_COMMANDS = FEL_READS | {'write', 'writel', 'exe', 'reset64', 'spl', 'fill', 'clear'}
+FEL_EXECUTES = frozenset({'exe', 'reset64', 'spl'})
+DRAM_BASE = 0x40000000
+# The SRAM that the runner stages into, each range from the constant or the document that fixes it. MMIO (the WDT, RTC and PMIC bus
+# registers, from 0x02000000) lies below DRAM_BASE too, so an address below DRAM_BASE is not enough: a write is SRAM staging only when
+# its whole range [address, address + size) lies inside one of these.
+FEL_SRAM = (images.LAUNCHER_SRAM,      # the launcher's reservation 0x52000..0x52d80 (docs/board-runner.md)
+            (0x71000, 0x71200),        # the ROM scratch that readl uses and the runner preserves (Live.sanity)
+            (0x74000, 0xf4000))        # shared SRAM, CPU addresses 0x00074000-0x000f3fff (the manual; docs/npu-platform.md)
+
+
+def fel_effects(arguments, size_of=lambda path: os.stat(path).st_size):
+    """The write-ahead class of one FEL transaction (a sequence of commands, each followed by its operands, which are addresses, sizes
+    and paths and never a command name): the set of {'execute', 'register', 'dram', 'sram'} that it may change; empty for reads. A
+    command that is not known, a write whose address or size does not parse, and a write whose range is not wholly inside FEL_SRAM or
+    wholly at or above DRAM_BASE (MMIO, or a range straddling a boundary) are register effects, so such a request is always journaled
+    synchronously. size_of(path) is the size of the file a write sends."""
+    effects, words, i = set(), list(arguments), 0
+    if not words or words[0] not in FEL_COMMANDS:
+        return {'register'}
+    while i < len(words):
+        command, j = words[i], i + 1
+        while j < len(words) and words[j] not in FEL_COMMANDS:
+            j += 1
+        operands = words[i + 1:j]
+        if command in FEL_EXECUTES:
+            effects.add('execute')
+        elif command == 'write':
+            try:
+                address = int(operands[0], 0)
+                end = address + size_of(operands[1])
+                if address >= DRAM_BASE:
+                    effects.add('dram')
+                elif any(low <= address and end <= high for low, high in FEL_SRAM):
+                    effects.add('sram')
+                else:
+                    effects.add('register')              # MMIO or a range that straddles a boundary
+            except (IndexError, ValueError, OSError):
+                effects.add('register')
+        elif command not in FEL_READS:
+            effects.add('register')
+        i = j
+    return effects
 
 
 class NoReturn(RuntimeError):
@@ -220,6 +284,10 @@ class Live:
         self.armed = False
         self.deadline = None
         self.journal_error = None
+        self.fel = None               # gate_slots.BoardFel: held while this runner does FEL work, released while the board runs
+        self.epoch = 0                # execution epochs: exe, reset64 and spl start one; a DRAM write syncs the journal once per epoch
+        self.dram_synced_epoch = -1
+        self.unsynced_readbacks = []  # evidence files whose sync is deferred to sync_evidence()
         self.recovery_deadline = None
         self.recovering = False
         self.dma_binding = None
@@ -251,11 +319,22 @@ class Live:
             return None
         return seconds+nanoseconds/1e9
 
-    def journal(self):
+    def journal(self, durable=True):
         try:
-            save(self.evidence/'session.json', self.record)
+            save(self.evidence/'session.json', self.record, durable)
         except OSError as error:
             self.journal_error = error
+
+    def sync_evidence(self):
+        """Sync what was saved without sync: the journal (one durable write covers every earlier entry) and the readback files."""
+        self.journal()
+        for path in self.unsynced_readbacks:
+            try:
+                with Path(path).open('rb') as stream:
+                    os.fsync(stream.fileno())
+            except OSError as error:
+                self.journal_error = self.journal_error or error
+        self.unsynced_readbacks = []
 
     @contextlib.contextmanager
     def locked(self):
@@ -309,6 +388,7 @@ class Live:
         self.access.require_rom(node)
         require(self.access.target(node).name == self.args.port, 'Physical target changed.')
         self.node, self.identity = node, self.access.identity(node)
+        self.epoch += 1               # a fresh FEL instance: its DRAM is a new ownership epoch
         self.record.setdefault('instances', []).append({'node': str(node), 'identity': self.identity})
         self.journal()
 
@@ -329,7 +409,17 @@ class Live:
                 'Only the armed SRAM recovery gate permits a launch disconnect.')
         entry = {'arguments': arguments, 'start': self.now()}
         self.record.setdefault('transactions', []).append(entry)
-        self.journal()  # A file failure here precedes device communication.
+        # The write-ahead entry is synced only before a transaction whose effect recovery must know (fel_effects); a read or an SRAM staging
+        # write is saved without sync, and the next synced entry (or sync_evidence at the end) carries it to disk.
+        effects = fel_effects(arguments)
+        if 'dram' in effects and self.dram_synced_epoch == self.epoch:
+            effects.discard('dram')                  # the DRAM ownership of this epoch is already on disk
+        durable = bool(effects - {'sram'})
+        if 'dram' in effects:
+            self.dram_synced_epoch = self.epoch
+        if 'execute' in effects:
+            self.epoch += 1
+        self.journal(durable)  # A file failure here precedes device communication.
         try:
             if self.access.identity(self.node) != self.identity or self.access.target(self.node).name != self.args.port:
                 raise TransportFailure('USB identity changed before FEL request.')
@@ -358,7 +448,7 @@ class Live:
             raise TransportFailure('FEL transaction failed: ' + result.stderr.strip())
         entry.update(exit_code=0, stdout=result.stdout, stderr=result.stderr, seconds=self.now()-entry['start'])
         try:
-            self.journal()
+            self.journal(False)
         except OSError as error:
             # Hardware has already completed the request. Let the caller
             # classify/disarm it before reporting this host filesystem error.
@@ -369,8 +459,7 @@ class Live:
         self.tx('read', hex(address), size, path, timeout=max(30, size/100000+10))
         data = Path(path).read_bytes()
         require(len(data) == size, 'Incomplete FEL readback.')
-        with Path(path).open('rb') as stream:
-            os.fsync(stream.fileno())
+        self.unsynced_readbacks.append(path)
         return data
 
     def upload(self, address, source, *, expected_sha256=None, readback=True):
@@ -393,8 +482,7 @@ class Live:
         returned = path.read_bytes()
         if returned != data:
             raise upload_fault('readback', address, data, source, observed=returned)
-        with path.open('rb') as stream:
-            os.fsync(stream.fileno())
+        self.unsynced_readbacks.append(path)
         return data
 
     def verify_digests(self, pending):
@@ -589,9 +677,13 @@ class Live:
         A card first stage boots the card only while the marker reads zero, which means the RTC supply was lost
         (docs/designs/card-fel-recovery.md). A board that powers up in FEL never runs the gate, so the runner sets
         the marker at every contact; without it the first watchdog return would boot the card."""
-        values = dict(zip(crumbs.RESET_WORDS, (int(x, 16) for x in self.tx(*crumbs.reset_arguments()).split())))
-        require(len(values) == len(crumbs.RESET_WORDS), 'Reset word readback differs.')
-        entry = {'sequence': self.sequence, 'words': values, 'gate': crumbs.gate_record(values['flag'])}
+        try:
+            values, contact = crumbs.parse_contact(self.tx(*crumbs.contact_arguments()))
+        except ValueError as error:
+            raise ValueError('Reset word readback differs.') from error
+        # The RTC words and WDT0 status, read before this contact writes anything: after a run that never returned they
+        # are the only record of where it stopped.
+        entry = {'sequence': self.sequence, 'words': values, 'contact': contact, 'gate': crumbs.gate_record(values['flag'])}
         commands = []
         # A boot-once value left in GP2 would boot the card at the session's reset; clear it with any gate record.
         if entry['gate'] or values['flag'] == crumbs.BOOT_ONCE:
@@ -733,16 +825,20 @@ class Live:
         self.sanity()
         self.record['fresh_fel'] = True
 
-    def boot_once(self, session_seconds):
+    def boot_once(self, session_seconds, measure=None):
         """Boot the card once under test control: write the boot-once value to GP2, reset through WDT0 and launch nothing.
 
         The first-stage gate on the card replaces the value with its cold record and boots boot0, DRAM training, the stage-2
         monitor and the slot's resident test image, which ends in a WDT0 reset through the gate's warm path. No FEL session
         exists while the board is away; the wait is the worked deadline of boot_once_deadline(). The words at the next
-        contact are read in one transaction before the gate record is cleared, and are recorded as boot_once."""
+        contact are read in one transaction before the gate record is cleared, and are recorded as boot_once.
+
+        With `measure` (the OS row), the card's diagnostic stage 2 parks after arming WDT0 0x41 and never enters the image;
+        the pass is then its stop at step 0x0f, and the wait has no session term."""
         flag, marker = crumbs.RESET_WORDS['flag'], crumbs.MARKER
-        terms = boot_once_deadline(session_seconds)
-        record = self.record['boot_once'] = {'gp2_written': crumbs.BOOT_ONCE, 'deadline': terms, 'passed': False}
+        terms = boot_once_deadline(0 if measure else session_seconds)
+        record = self.record['boot_once'] = {'gp2_written': crumbs.BOOT_ONCE, 'deadline': terms, 'passed': False,
+                                             'measure': measure}
         values = [int(x, 16) for x in self.tx('writel', hex(flag), hex(crumbs.BOOT_ONCE), 'readl', hex(flag), 'readl', hex(marker)).split()]
         require(len(values) == 2, 'Boot-once readback differs.')
         record.update(gp2_readback=values[0], marker_before=values[1])
@@ -769,10 +865,53 @@ class Live:
         record.update(wdt_mode_before=back['before'], wdt_mode_after=back['after'], reset_words=reset, gate=back['gate'],
                       breadcrumbs=words, decoded=decoded, last=words['last'], stop_value=words['last'] & 0xffff)
         expected = {'gp2': BOOT_ONCE_RETURN_RECORD, 'marker': crumbs.MARKER_KEYED, 'last': BOOT_ONCE_STOP, 'fault': 0}
+        if measure:
+            expected.update(tag=crumbs.STAGE2_TAG, last=BOOT_ONCE_MEASURE_STOP)
         observed = {'gp2': reset['flag'], 'marker': reset['marker'], 'last': words['last'], 'fault': words['fault']}
+        if measure:
+            observed['tag'] = words['tag']
         record['expected'], record['observed'] = expected, observed
-        record['passed'] = bool(observed == expected and decoded['session'] and not decoded.get('board_failure'))
+        record['passed'] = bool(observed == expected and (measure or decoded['session']) and not decoded.get('board_failure'))
         self.journal()
+
+    def watch_expiry(self, armed_at, variant):
+        """Leave WDT0 armed after a re-arm without a disarm and wait for its reset (docs/board-runner.md, "WDT0 re-arm expiry test").
+
+        The board has shown expiry only after an arming from mode 0; this measures whether a re-arm over an enabled WDT0
+        resets the board, and when. WDT0 is read without a disarm. If no new instance appears by the interval plus 10 s,
+        the board is still in FEL on the current instance, so the runner disarms WDT0 there and records that no reset came."""
+        mode = int(self.tx('readl', hex(crumbs.WDT_MODE)), 16) & 0xffff
+        interval = crumbs.interval(mode)
+        record = self.record['rearm_expiry'] = {'variant': variant, 'mode': mode, 'interval_s': interval,
+                                                'deadline_s': interval+10, 'reset': None}
+        self.recovery_deadline = armed_at+interval+10
+        self.journal()
+        try:
+            self.wait(max(0, armed_at+interval+10-self.now()))
+        except NoReturn:
+            self.record.pop('no_return', None)
+            self.disarm()
+            record.update(reset=False, seconds_waited=round(self.now()-armed_at, 3))
+            self.journal()
+            return False
+        record.update(reset=True, seconds_after_arm=round(self.now()-armed_at, 3))
+        self.journal()
+        return True
+
+    def rearm_runner(self):
+        """Arm WDT0 at 0x41 from mode 0, then write mode 0xb1 and restart it with no disarm between, and time the reset."""
+        mode = int(self.tx('readl', hex(crumbs.WDT_MODE)), 16) & 0xffff
+        require(not mode & 1, 'The re-arm test starts from a disarmed WDT0; it read mode 0x%x.' % mode)
+        self.arm(0x41)
+        values = [int(x, 16) & 0xffff for x in self.tx('writel', hex(crumbs.WDT_MODE), hex(crumbs.KEY|0xb1),
+                                                        'writel', hex(crumbs.WDT_RESTART), '0x14af',
+                                                        'readl', hex(crumbs.WDT_MODE), 'readl', hex(crumbs.WDT_CONFIG),
+                                                        'readl', hex(crumbs.WDT_OUTPUT)).split()]
+        armed_at = self.now()
+        self.record['rearm_writes'] = {'mode_before': mode, 'readback': values}
+        self.journal()
+        require(values == [0xb1, 1, 2], 'The re-arm readback differs: %s.' % values)
+        return self.watch_expiry(armed_at, 'runner')
 
     def finish_pending(self):
         """A host error cannot release an armed run before its reset deadline."""
@@ -1113,9 +1252,16 @@ class Live:
             self.tx(*plan['launch'], recovery_launch=True, timeout=plan['launch_seconds'])
         else:
             self.tx(*plan['launch'])
+        if self.fel:
+            self.fel.release()          # the board runs the application: no host-timed work until it returns
         self.wait(plan['watchdog']['session_seconds'] + crumbs.interval(plan['watchdog']['mode']) + 10)
+        if self.fel:
+            self.fel.acquire()
         if recovery:
             recovery.receipt(self, launched)
+            if getattr(self.args, 'rearm_expiry', None) == 'gate':
+                # The proof re-armed WDT0 to 0xb1 over the runner's 0x41 and re-entered FEL; wait for that arming's reset.
+                return rearm_outcome(self, self.watch_expiry(launched, 'gate'))
         before, after, words = self.returned()
         elf = self.args.image if plan.get('format') == 'npu' or self.args.image.suffix == '.elf' else None
         decoded = crumbs.decode(words, plan['epoch'], elf)
@@ -1178,9 +1324,35 @@ class Live:
 # WDT0 mode at entry (0x41), and the stop is the resident test's EL3 stop, stage 0x0111 with value 0x5000 (the stop-on-finish profile).
 BOOT_ONCE_RETURN_RECORD = crumbs.GATE_STAGE << 16 | crumbs.GATE_FLAGS['warm'] | 0x41
 BOOT_ONCE_STOP = crumbs.EL3_STOP << 16 | 0x5000
+# With --boot-once-measure the diagnostic stage 2 (a733-stage2-armed-stop) parks after its 0x41 arming: LAST is step 0x0f.
+BOOT_ONCE_MEASURE_STOP = 0x0c030f00
 BOOT_ONCE_SLOT_LOAD_S = 30      # the stage-2 loader's bound for the whole slot load (docs/boot-slots.md)
 BOOT_ONCE_GATE_COLD_MODE = 0xb1  # the gate arms WDT0 with this mode on its cold path; it covers boot0, DRAM training (about 5.1 s) and the package load
 BOOT_ONCE_MARGIN_S = 10         # the FEL re-enumeration margin every runner wait uses
+
+
+REARM_WINDOW_S = 5  # a reset counts as the 16 s interval when it appears within this many seconds after it
+
+
+def rearm_outcome(owner, reset):
+    """Classify a re-arm expiry test. A reset in [interval, interval+5] s matches the prediction; an earlier reset means the
+    re-arm was not applied (the 4 s arming fired); no reset means the re-armed WDT0 never expired."""
+    record = owner.record['rearm_expiry']
+    if not reset:
+        record['matched'] = False
+        owner.record['rearm_failure'] = 'No reset within %d s of the re-arm; WDT0 read 0x%x and was disarmed on the same instance.' % (
+            record['deadline_s'], record['mode'])
+        owner.journal()
+        return 'failure-return'
+    before, after, words = owner.returned()
+    owner.record['dram_lost'] = True
+    seconds = record['seconds_after_arm']
+    record.update(mode_at_return=before, matched=record['interval_s'] <= seconds <= record['interval_s']+REARM_WINDOW_S)
+    if not record['matched']:
+        owner.record['rearm_failure'] = 'The reset came %.3f s after the re-arm, outside %d..%d s.' % (
+            seconds, record['interval_s'], record['interval_s']+REARM_WINDOW_S)
+    owner.journal()
+    return 'watchdog-reset'
 
 
 def boot_once_deadline(session_seconds):
@@ -1322,6 +1494,9 @@ def run_image(args, backend=Live):
                 args.fel = fel
         owner = backend(args, evidence, result)
         owner.credential = credential
+        # Gates hold their next step while this runner is in its FEL work (gate_slots.BoardFel); the hold ends with the run's own lifetime.
+        owner.fel = gate_slots.BoardFel(CACHE, FEL_HOLD_SECONDS)
+        owner.fel.acquire()
         with owner.locked():
             try:
                 timed('identity', owner.sanity)
@@ -1331,13 +1506,19 @@ def run_image(args, backend=Live):
                 if boot_slot is not None:
                     # The card boots instead of an upload: nothing is launched, no DRAM is brought up, the board is away.
                     result['dram_mode'] = 'sram-only'
-                    timed('boot-once', lambda: owner.boot_once(info['watchdog']['session_seconds']))
+                    timed('boot-once', lambda: owner.boot_once(info['watchdog']['session_seconds'],
+                                                               getattr(args, 'boot_once_measure', None)))
                     boot = result['boot_once'] = owner.record['boot_once']
                     result.update(outcome='watchdog-reset', dram_lost=True, rom_returned=True, expected_reset=boot['passed'])
                     if not boot['passed']:
                         result['first_failure'] = {'site': 'boot-once', 'detail': 'The card boot did not end as expected: expected %s, observed %s.' % (
                             {k: '0x%08x' % v for k, v in boot['expected'].items()}, {k: '0x%08x' % v for k, v in boot['observed'].items()})}
                     return finish_result(result, evidence, started, stage, owner)
+                if getattr(args, 'rearm_expiry', None) == 'runner':
+                    # FEL register writes only: nothing is uploaded or launched.
+                    result['dram_mode'] = 'sram-only'
+                    outcome = timed('rearm-expiry', lambda: rearm_outcome(owner, owner.rearm_runner()))
+                    return rearm_result(result, owner, outcome, evidence, started, stage)
                 timed('reset', owner.reset)
                 if info.get('card_fel_recovery'):
                     result['dram_mode'] = 'sram-only'
@@ -1352,6 +1533,8 @@ def run_image(args, backend=Live):
                     return finish_result(result, evidence, started, stage, owner)
                 plan = timed('prepare', lambda: owner.prepare(info))
                 outcome = timed('launch', lambda: owner.launch(plan))
+                if getattr(args, 'rearm_expiry', None) == 'gate':
+                    return rearm_result(result, owner, outcome, evidence, started, stage)
                 result['outcome'] = outcome
                 if outcome == 'returned':
                     captured = timed('capture', lambda: owner.capture(plan))
@@ -1463,6 +1646,17 @@ def run_image(args, backend=Live):
     return finish_result(result, evidence, started, stage)
 
 
+def rearm_result(result, owner, outcome, evidence, started, stage):
+    test = result['rearm_expiry'] = owner.record['rearm_expiry']
+    result.update(outcome=outcome, rom_returned=True, dram_lost=bool(owner.record.get('dram_lost')),
+                  expected_reset=bool(test.get('reset') and test.get('matched')))
+    if owner.record.get('rearm_writes'):
+        result['rearm_writes'] = owner.record['rearm_writes']
+    if owner.record.get('rearm_failure'):
+        result['first_failure'] = {'site': 'rearm-expiry', 'detail': owner.record['rearm_failure']}
+    return finish_result(result, evidence, started, stage, owner)
+
+
 def finish_result(result, evidence, started, stage, owner=None):
     if owner is not None:
         owner.finish_credential(result)  # before the summary is saved; a no-op once done or when nothing was uploaded
@@ -1473,6 +1667,10 @@ def finish_result(result, evidence, started, stage, owner=None):
     result.setdefault('host_pressure', {})['end'] = host_priority.pressure()
     # Raw transaction evidence has its own record; result.json stays compact.
     summary = {k:v for k,v in result.items() if k != 'transactions'}
+    if owner is not None:
+        owner.sync_evidence()     # the journal entries and readback files saved without sync during the run
+        if owner.fel:
+            owner.fel.release()
     save(evidence/'result.json', summary)
     print(f"{summary['port']} {summary['kind']} {summary.get('image_sha256','unreadable')[:12]} {summary['outcome']} {evidence/'result.json'}", flush=True)
     return summary
@@ -2197,6 +2395,7 @@ class Queue:
                                 result = {'outcome':'host-error', 'first_failure':{'site':'runner-process','detail':f'exit {process.returncode}'},
                                           'image_sha256':job['image_sha256'], 'port':port, 'durations':{}, 'evidence_path':job['directory']}
                             self.complete(job['id'],result)
+                            self.fold_images(job)
                             del active[port]
                         job = self.claim(port)
                         if job is not None:
@@ -2221,12 +2420,22 @@ class Queue:
                     path = Path(job['directory'])/'run/result.json'
                     if path.exists():
                         self.complete(job['id'],json.loads(path.read_text()))
+                        self.fold_images(job)
+
+    def fold_images(self, job):
+        """After a run has finished, hold the entry's image copies as hard links to the queue's image store
+        (tools/board_image_store.py). The bytes at every path stay the same; a failure leaves the copies and is recorded."""
+        try:
+            folded, freed = image_store.fold_entry(Path(job['directory']), self.root/image_store.STORE)
+            self.event('images-folded', job=job['id'], copies=folded, freed_bytes=freed)
+        except (OSError, image_store.StoreMismatch) as error:
+            self.event('images-fold-failed', job=job['id'], error=str(error))
 
 
 # The caller-controlled launch options a submission freezes in its queue entry.
 # Frozen options whose False differs from leaving them out: --no-restore-rails opts out of the automatic restoration.
 NEGATABLE_OPTIONS = ('restore_rails',)
-FROZEN_OPTIONS = ('kind','lifetime','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit','marker_clear_test','verify','boot_once_slot')
+FROZEN_OPTIONS = ('kind','lifetime','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit','marker_clear_test','verify','boot_once_slot','rearm_expiry','boot_once_measure')
 
 
 def radio_stage_limit(text):
@@ -2260,11 +2469,21 @@ def run_options(parser, submit=False):
     parser.add_argument('--marker-clear-test', action='store_true',
                         help='At first contact, write 0x16aa0000 to the cold-boot marker, read it, set it again and record both '
                         'readbacks (docs/designs/card-fel-recovery.md); requires --approved-by coordinator.')
+    parser.add_argument('--rearm-expiry', choices=('runner', 'gate'),
+                        help='Measure whether a WDT0 re-arm with no disarm resets the board (docs/board-runner.md, "WDT0 re-arm expiry test"): '
+                             '"runner" arms 0x41, then writes 0xb1 and restarts it over FEL and launches nothing; "gate" runs the '
+                             'warm-entry SRAM proof, which re-arms 0xb1 over the runner\'s 0x41, and leaves WDT0 armed. '
+                             'Requires --approved-by coordinator and the warm-entry proof image.')
     parser.add_argument('--boot-once-slot', type=Path, metavar='MANIFEST.json',
                         help='Boot the card once instead of launching over FEL: write the boot-once value to GP2, reset through WDT0 and wait, '
                         'with no FEL session, for the slot image to run and end in its watchdog reset. IMAGE is the slot\'s runtime ELF, '
                         'checked against the slot manifest (the plan of tools/boot-slots.py); requires --lifetime resident and --approved-by '
                         'coordinator (docs/board-runner.md).')
+    parser.add_argument('--boot-once-measure', metavar='STAGE',
+                        help='With --boot-once-slot, measure the expiry of the arming that covers STAGE: the card\'s diagnostic stage 2 '
+                        'stops at that arming and leaves the reset to it. Allowed only for the last stage of tools/boot_chain.py when it '
+                        'is the one stage without a recovery and its arming has expired in a FEL session; requires --approved-by '
+                        'coordinator (docs/designs/card-boot-chain.md, "Measuring the OS row").')
     parser.add_argument('--no-preflight', metavar='REASON',
                         help='Queue or check an image whose host pre-flight cannot run; REASON is recorded in the entry and the result.')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')

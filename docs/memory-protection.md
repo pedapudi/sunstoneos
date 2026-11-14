@@ -24,8 +24,9 @@ the table, lie inside EL0 read-write data blocks.
 | --- | --- | --- | --- |
 | `0x0`–`0x4000_0000` | MMIO | 1 GiB block, Device-nGnRnE, XN | none |
 | `0x4000_0000`–`0x4100_0000` | boot0 and launcher | 2 MiB blocks, WB, XN | read-write |
-| `0x4100_0000`–`0x4120_0000` | text and read-only data | one 2 MiB block, WB, read-only | read-only, executable |
-| `0x4120_0000`–`0x4200_0000` | data, BSS, stacks, heap | WB, XN | read-write |
+| `0x4100_0000`–`0x4120_0000` | text | one 2 MiB block, WB, read-only | read-only, executable |
+| `0x4120_0000`–`0x4140_0000` | OS images: read-only data, the application manifest and the sealed session | one 2 MiB block, WB, read-only, XN | read-only |
+| `0x4140_0000`–`0x4200_0000` | data, BSS, stacks, heap | WB, XN | read-write |
 | `0x4200_0000`–`0x4220_0000` | secure monitor and tables | invalid | none |
 | `0x4220_0000`–`0x4800_0000` | boot assets; recognizer models, input and arena | WB, XN | read-write |
 | `0x4800_0000`–`0x7800_0000` | extended: pool `dma32`; local: no owner | 384 blocks, WB, XN | none |
@@ -35,7 +36,11 @@ the table, lie inside EL0 read-write data blocks.
 
 WB means Normal write-back write-allocate, inner shareable. XN means
 execute-never at both EL0 and EL1 (UXN and PXN set). Every writable entry is
-execute-never, so no entry is both writable and executable. The two invalid
+execute-never, so no entry is both writable and executable. Images other than
+the OS keep read-only data in the text block and their data from `0x4120_0000`
+(`platform/a733-smp-cached/link.ld`); the OS link script
+(`apps/os/sealed-link.patch`) gives read-only data its own block, described in
+the next section. The two invalid
 ranges inside the first 1 GiB of DRAM cover 114 MiB, so EL1 maps 910 MiB below
 `0x8000_0000` and 12,174 MiB in all. The tables use five 4 KiB pages and one
 64-byte checksum line, 20,544 bytes: one level-1 and one level-2 table for
@@ -58,6 +63,63 @@ inside the write-back data blocks. When the image links an uncached pool, the
 level-2 entry for `0x41c0_0000`–`0x41e0_0000` is Normal non-cacheable and
 keeps the access-permission and execute-never bits of the data block it
 replaces, so EL0 can read and write both local pools.
+
+## Read-only data has its own execute-never block in the OS image
+
+The OS link script places `.rodata`, the exception tables, the application
+manifest and the other read-only sections, and last the sealed session, in a
+`RODATA` region of one 2 MiB block at `0x4120_0000`, between the text block and
+RAM, which now starts at `0x4140_0000` (12 MiB). The table builder sets that
+block's level-2 entry to AP[2:1] = 0b11 and sets UXN and PXN
+(`platform/a733-smp-cached/memory.c`, from the linker symbol
+`__os_rodata_block`): read-only at EL1 and EL0 and executable at neither. The
+text block keeps its entry, read-only and executable at EL1 and EL0. Text, read-only data and
+data therefore each remain level-2 block entries: the first 128 MiB of DRAM is
+still 63 valid blocks and no level-3 table, so the TLB reach does not change.
+EL3 keeps its read-write entry for the block, because it writes the sealed
+session with translation off. Application spaces copy these entries below
+`0x4800_0000` unchanged, so an application sees the same permissions.
+
+The build identity is read-only data, so in the OS image it lies in this
+block. The EL3 launcher (`platform/a733-smp-supervised/launch.c`), the
+runner's launch request (`apps/board/prepare.py`) and the image check
+(`tools/check-a733-smp.py`) admit it from `0x4100_0000` to `0x413f_ffe0`, and
+only in a load segment that is not writable.
+
+Moving RAM by 2 MiB takes 2 MiB from every OS image's room for BSS, heap and
+device pool. With the uncached block linked, the device pool must end at or
+below `0x41c0_0000` (`ASSERT(... __device_pool_end <= 0x41c00000 ...)` in
+`platform/a733-smp-cached/link.ld`); without it, at or below the storage
+session at `0x41f0_0000` (`platform/a733-storage-maintenance/link.patch`).
+An image that no longer fits fails at link time on those assertions. The room
+left on 2026-11-13, from the end of each image's device pool to its limit:
+
+| Image | Device pool ends | Limit | Room left |
+| --- | --- | --- | --- |
+| `ret-latency` (gate) | `0x41b3_d000` | `0x41c0_0000` | 780 KiB |
+| mimus recognition, 8 workers | `0x41ab_6000` | `0x41c0_0000` | 1.3 MiB |
+| `ret-npu-load` (gate) | `0x4190_e000` | `0x41c0_0000` | 2.9 MiB |
+| `sup`, `headset`, `resident-stop`, `card-profile`, `ret-gpu`, `ret-radio-scan`, `ret-walks-*` (gate) | `0x418e_1000` to `0x418f_6000` | `0x41c0_0000` | 3.0 to 3.1 MiB |
+| `os-usb-ledger` (gate, no uncached block) | `0x4193_e000` | `0x41f0_0000` | 5.8 MiB |
+
+The latency and recognition images are the close ones: a larger heap (the
+manifest's `heap_bytes` up to `heap_link_max`, 4 MiB), more worker stacks or a
+larger write-back pool reaches the assertion first there. Such a heap belongs in
+the application memory ledger instead
+([application-memory-layout.md](designs/application-memory-layout.md)).
+
+[checks/kernel-xn.py](../checks/kernel-xn.py) runs each OS image's own table
+builder under Unicorn and walks the EL1 tables with their hierarchical bits.
+It fails on any page that EL1 or EL0 can write and either level can execute,
+on a physical page that is writable through one address and executable through
+another, on any page of a read-only section or of the sealed session that is
+writable or executable, on executable data, on code that EL1 cannot execute,
+and on any level-3 table or block count other than 63 in the first 128 MiB.
+Six mutations of the walked tables each trip one rule: text made writable,
+text made execute-never, read-only data made executable at EL1 and at EL0, the
+sealed session placed in the text block, and the read-only data block split
+into 4 KiB pages with unchanged permissions. The gate runs it on every OS
+image.
 
 ## The DRAM decode check gates every entry above the boot image
 
@@ -158,10 +220,10 @@ are deleted, the golden entry changes with it.
 
 - Kernel data, kernel stacks and FreeRTOS lock words are writable at EL0. An
   EL0 task can corrupt a pool ledger or hang every core through them.
-  Separating them needs an EL1-only data region.
-- Read-only data shares the executable text block. Making it execute-never,
-  adding guard pages, or isolating kernel structures needs level-3 tables or
-  a privileged data block.
+  Separating them needs an EL1-only data region (the last section).
+- Read-only data of images other than the OS shares the executable text
+  block. Guard pages and isolated kernel structures need level-3 tables or a
+  privileged data block (next section).
 - Admitted NPU models stay writable. A read-only model mapping would change
   the tables after preparation, which needs a mapping generation counter.
 - `SCTLR_EL1.WXN` is not set. The golden comparison already refuses any
@@ -178,3 +240,35 @@ protection: it copies the blob once and re-hashes it on every use, which detects
 microseconds between the check and the use (docs/sd-card.md). Closing the gap is wider than the storage work:
 kernel and driver data, stacks of privileged tasks and controller state must be mapped EL1-only, with the shared exceptions
 (the `ss_*` call tables, application regions) mapped explicitly, so that no EL0 application can reach another owner's state.
+
+## Next isolation step: EL1-only owner data (deferred until it measures as free)
+
+EL0 tasks call kernel functions directly ([app ABI](designs/app-abi.md)): the
+FreeRTOS API runs at EL0, with only the interrupt mask taken by a supervisor
+call, and updates task control blocks and lists in kernel BSS; the `ss_*` calls
+in `apps/os` store into kernel records; the C library runs at EL0. Kernel
+data cannot therefore be EL1-only as a whole, and kernel text cannot be
+execute-never at EL0, without a trap on every call. A trap per call is a call
+gate, which the performance rule excludes.
+
+The step that fits the direct-call model splits the image by ownership instead
+of by section kind:
+
+| Class | Mapping | Contents, from the recognition image (bytes of text and of BSS) |
+| --- | --- | --- |
+| Shared surface | text read-only and executable at EL0 and EL1; data read-write at EL0 | the application (mimus and its recognizer: 139,000 of text, 814,000 of BSS), FreeRTOS (46,000 and 35,000), the `ss_*` calls and session records of `apps/os` (part of 114,000 and 279,000, including `ss_result_record`), newlib, libgcc and libstdc++ (66,000), the run-time support (20,000 and 7,000), the stacks of EL0 tasks, the task control blocks of every task an EL0 task can wake, the NPU and host rings |
+| EL1 owners | text executable at EL1 only (UXN); data, BSS and stacks with no EL0 access | drivers (531,000 of text, 37,000 of BSS), the platform code (43,000), the radio stacks (214,000 of text; the 262,000-byte network buffers), the USB stack (60,000 and 9,000), the memory ledger and table code in `kernel` (35,000), the owner tasks' stacks and state (`a733_cpu_el1_stacks`, the owner, thermal and terminal stacks), pool ledgers, the Wi-Fi credential and the storage-write bounds |
+
+Objects would be placed by compilation unit, with section attributes for the
+exceptions (an owner's task control block that an EL0 task wakes stays shared).
+A misplaced object faults at EL0 with its address; the QEMU OS boot catches
+most of those before a board run.
+
+The cost is the measurement that decides the step. The split needs level-3
+pages, or 64 KiB contiguous-hint runs, over `0x4100_0000`–`0x4200_0000`
+instead of eight level-2 blocks, so the measurement is the TLB entries the
+recognition workload uses and its recognition time with 4 KiB pages and with
+contiguous runs, against the blocks. The step goes ahead only if both show no
+measurable change. Trapping the interrupt-mask supervisor call into an EL1
+critical section is rejected: it is a call gate and still leaves EL0 touching
+kernel data outside the critical section.

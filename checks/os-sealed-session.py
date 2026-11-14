@@ -621,7 +621,11 @@ def page_tables(image):
     found, tables = leaves(m.read, root)
     assert not writable_over(found, low, high), writable_over(found, low, high)
     cover = covering(found, low, high)
-    assert len(cover) == 1 and cover[0][:2] == (2, (1, 8)), cover
+    # One 2 MiB block covers the section: the OS image's read-only data block (apps/os/sealed-link.patch), execute-never.
+    block = image.address('__os_rodata_block')
+    assert low >> 21 == (high - 1) >> 21 == block >> 21, (hex(low), hex(high), hex(block))
+    assert len(cover) == 1 and cover[0][:2] == (2, (1, (block - 0x40000000) >> 21)), cover
+    assert int(cover[0][2], 16) >> 53 & 3 == 3, cover
     metrics['el1_tables'] = tables
     metrics['el1_leaves'] = len(found)
     metrics['el1_covering'] = cover
@@ -644,11 +648,12 @@ def page_tables(image):
         assert covering(found_space, low, high), (label, 'the application space does not map the image text')
         metrics[f'space_{label}_tables'] = tables_space
         cases[f'application-space-{label}-leaves-the-section-read-only'] = True
-    result, space = build_space(m, [(0x41000000, 1 << 21)], 0)
-    if result == 0:
-        found_space, _ = leaves(m.read, space)
-        assert not writable_over(found_space, low, high), writable_over(found_space, low, high)
-    metrics['space_code_claim_result'] = result
+    for name, claimed in (('code', 0x41000000), ('rodata', block)):
+        result, space = build_space(m, [(claimed, 1 << 21)], 0)
+        if result == 0:
+            found_space, _ = leaves(m.read, space)
+            assert not writable_over(found_space, low, high), writable_over(found_space, low, high)
+        metrics[f'space_{name}_claim_result'] = result
     cases['application-space-claiming-code-is-refused-or-read-only'] = True
 
     # Mutations.

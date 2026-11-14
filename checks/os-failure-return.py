@@ -70,7 +70,20 @@ from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_L
 from harness import Image as Layouts, save
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['{elf:ret-npu-load}', '--out', '{output}']]
+# The case groups. The gate runs them as five steps side by side, balanced by their measured host time on 2026-11-13 (one run of
+# every group took 342 s: el0 91 s, negative 68 s, registered 35 s, startup 31 s, the rest 2 to 22 s each); the five runs cover
+# every group exactly once, which the assertion below enforces.
+CASE_GROUPS = ('npu-report', 'startup', 'running', 'registered', 'repeat-device', 'escalation', 'device-first', 'panic',
+               'unexpected-interrupt', 'el0', 'el0-second', 'negative', 'baseline')
+GATE_RUNS = [['{elf:ret-npu-load}', '--out', '{output}', '--case', 'el0'],
+             ['{elf:ret-npu-load}', '--out', '{output}', '--case', 'negative'],
+             ['{elf:ret-npu-load}', '--out', '{output}', '--case', 'registered', '--case', 'startup'],
+             ['{elf:ret-npu-load}', '--out', '{output}', '--case', 'npu-report', '--case', 'panic', '--case', 'running',
+              '--case', 'baseline'],
+             ['{elf:ret-npu-load}', '--out', '{output}', '--case', 'repeat-device', '--case', 'escalation', '--case', 'device-first',
+              '--case', 'unexpected-interrupt', '--case', 'el0-second']]
+_GATE_GROUPS = [run[i + 1] for run in GATE_RUNS for i, word in enumerate(run) if word == '--case']
+assert sorted(_GATE_GROUPS) == sorted(CASE_GROUPS), 'the gate runs must cover every case group exactly once'
 sys.path.insert(0, str(ROOT / 'tools'))
 import board_images
 
@@ -582,8 +595,7 @@ def main():
     parser.add_argument('elf', type=Path)
     parser.add_argument('--baseline-elf', type=Path, help='an image without the failure return, for the negative control')
     parser.add_argument('--out', type=Path, required=True)
-    parser.add_argument('--case', action='append', choices=('npu-report', 'startup', 'running', 'registered', 'repeat-device',
-                        'escalation', 'device-first', 'panic', 'unexpected-interrupt', 'el0', 'el0-second', 'negative', 'baseline'),
+    parser.add_argument('--case', action='append', choices=CASE_GROUPS,
                         help='run only this group; repeat to resume affected or unexecuted groups')
     args = parser.parse_args()
     selected = lambda name: not args.case or name in args.case

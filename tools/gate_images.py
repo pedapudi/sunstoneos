@@ -65,6 +65,10 @@ IMAGES = {
     'stage2': {'configure': [
         '-DSUNSTONE_A733_STAGE2=ON',
     ], 'target': 'a733-stage2', 'elf': 'a733-stage2.elf'},
+    # the diagnostic stage 2 that parks after its WDT0 0x41 arming (docs/designs/card-boot-chain.md, "Measuring the OS row")
+    'stage2-armed-stop': {'configure': [
+        '-DSUNSTONE_A733_STAGE2=ON',
+    ], 'target': 'a733-stage2-armed-stop', 'elf': 'a733-stage2-armed-stop.elf'},
     # the emulator models of the FreeRTOS SMP port (cmake/smp.cmake) that checks/smp-ticket-lock.py runs under QEMU
     'smp-models': {'configure': [
         '-DSUNSTONE_PARTITIONED_SCHEDULER=ON',

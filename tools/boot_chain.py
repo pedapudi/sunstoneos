@@ -21,19 +21,41 @@ FEL, AFTER_BOOT0 = 'fel', 'after-boot0'
 
 # (arming, mode, where it expires) -> board records of an expiry that reset the board into FEL.
 MEASURED = {
+    (FROM_ZERO, 0xb1, AFTER_BOOT0): ('1794643114289036712-ab8b9952: after the 2026-11-13 23:48 replug of port 3-3, WDT0 '
+                                     'reset at power-up, the gate cold path armed 0xb1 from mode 0, boot0 trained DRAM '
+                                     'and wrote the PMIC, stage 2 cleared the cold record without arming 0x41, and the '
+                                     'expiry returned the board to FEL; the first contact read the warm record '
+                                     '0x0c0240b1',),
     (FROM_ZERO, 0x41, FEL): ('1794503842447280399-ba6865c9: the runner armed 0x41 from mode 0 and the reset came back '
                              'through the card gate (warm record 0x0c024041); every later session reset repeats it',),
     (FROM_ZERO, 0xb1, FEL): ('1794503769456522126-00c48b8a: the rail-restore helper armed 0xb1 from mode 0 and its '
                              'reset came back through the card gate (warm record 0x0c0240b1)',),
 }
 
-# Expiry states with no board measurement and no FEL-only test. Each stays open until a board record is added to
-# MEASURED or the coordinator records an acceptance in ACCEPTED; neither happens by default.
+# Expiry states that no FEL-only test can reach. An arming stays open in such a state until a board record of that
+# arming, mode and state is added to MEASURED or the coordinator records an acceptance in ACCEPTED; neither happens by
+# default.
 OPEN_RISKS = {
-    AFTER_BOOT0: 'no board run has let WDT0 expire after boot0 trained DRAM and wrote the PMIC. Vendor U-Boot reboots '
-                 'through WDT0 after the same boot0, which is a reference, not a measurement, and no FEL-only test can '
-                 'reach that state.',
+    AFTER_BOOT0: 'no board run has let this arming expire after boot0 trained DRAM and wrote the PMIC; only the gate\'s '
+                 '0xb1 from mode 0 has (1794643114289036712-ab8b9952), and no FEL-only test can reach that state.',
 }
+
+# Re-arms over an enabled WDT0 that the board has shown to expire. Both ran from FEL, over a 0x41 that the runner had
+# armed from mode 0 in the same power epoch; the mode write restarted the counter at the new interval.
+REARM_MEASURED = (
+    '1794643227744371298-6101ee0d: the runner wrote 0xb1 over its running 0x41 with no disarm, and the reset came '
+    '18.137 s later',
+    '1794643284421551583-789b13b5: the gate warm path, executed from SRAM, wrote 0xb1 over the runner\'s running 0x41 '
+    'with no disarm, and the reset came 18.169 s after the execute request',
+)
+
+# The re-arm conditions of the 2026-11-13 boot-once run that REARM_MEASURED does not cover. The gate and stage 2 now
+# disarm before every arming, so no stage depends on them; a re-arm stays unproven while any is listed.
+REARM_OPEN = (
+    'a re-arm over a mode that survived its own expiry reset (WDT0 still reads the mode armed before a watchdog reset, '
+    'card-fel-recovery step E)',
+    'output and configuration writes over a running counter, which the gate cold path made before its mode write',
+)
 
 # where -> {'by': ..., 'date': ..., 'reference': ...}. An accepted risk grants recovery for an arming that the board
 # has shown to expire in a FEL session. Only the coordinator adds an entry, with its written reference.
@@ -81,6 +103,27 @@ def recovery(stage, measured=None, accepted=None):
     return None
 
 
+def measurable(name, stages=STAGES, measured=None, accepted=None):
+    """The reason a boot-once run that measures stage `name` is refused, or None when it may run.
+
+    A run measures a stage when its image stops at the arming that covers the stage and leaves the reset to that arming
+    (docs/designs/card-boot-chain.md, "Measuring the OS row"). It may run only when the stage is the last of the chain,
+    is the only stage without a recovery, and its arming has expired on the board in a FEL session. Every earlier stage
+    is then covered, and the stage itself is the measurement."""
+    names = [s['name'] for s in stages]
+    if not names or name != names[-1]:
+        return 'only the last stage of the chain (%s) can be measured, not %r' % (names[-1] if names else 'none', name)
+    stage = stages[-1]
+    open_stages = [p.split(' ')[0] for p in unproven(stages, measured, accepted)]
+    if open_stages != [name]:
+        return 'stage %s can be measured only when it is the one stage without a recovery; open: %s' % (
+            name, ', '.join(open_stages) or 'none')
+    if stage['arming'] != FROM_ZERO or (FROM_ZERO, stage['mode'], FEL) not in (MEASURED if measured is None else measured):
+        return 'stage %s arms 0x%x %s, which the board has not shown expire in a FEL session' % (
+            name, stage['mode'], 'from mode 0' if stage['arming'] == FROM_ZERO else 'without a disarm')
+    return None
+
+
 def unproven(stages=STAGES, measured=None, accepted=None):
     """One sentence for each stage without a measured or accepted recovery; empty when every stage has one."""
     problems = []
@@ -88,6 +131,8 @@ def unproven(stages=STAGES, measured=None, accepted=None):
         if recovery(stage, measured, accepted) is not None:
             continue
         why = OPEN_RISKS.get(stage['expires'], 'no board record shows this arming expire')
+        if stage['arming'] == REARM and REARM_OPEN:
+            why += '; a re-arm is unmeasured for ' + ' and for '.join(REARM_OPEN)
         problems.append('%s (%s): WDT0 %s to 0x%x, expiring %s, has no measured recovery; %s' % (
             stage['name'], stage['covers'], 'armed from mode 0' if stage['arming'] == FROM_ZERO else 're-armed without a disarm',
             stage['mode'], stage['expires'], why))

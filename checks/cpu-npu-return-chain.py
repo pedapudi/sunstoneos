@@ -422,7 +422,11 @@ def producer(args):
     subprocess.run(command, check=True, env=environment(), capture_output=True)
     payload = directory/'payload.bin'
     subprocess.run([str(executable), 'actual', str(payload)], check=True, env=environment(), timeout=20)
-    save(directory/'commands.json', [command, [str(executable), 'actual', str(payload)]])
+    # The producer runs on virtual time (checks/cpu-npu-concurrency/producer.c): a second run writes the same bytes.
+    again = directory/'payload-again.bin'
+    subprocess.run([str(executable), 'actual', str(again)], check=True, env=environment(), timeout=20)
+    assert again.read_bytes() == payload.read_bytes(), 'two runs of the producer wrote different receipts'
+    save(directory/'commands.json', [command, [str(executable), 'actual', str(payload)], [str(executable), 'actual', str(again)]])
     return payload.read_bytes()
 
 

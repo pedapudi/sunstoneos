@@ -13,9 +13,12 @@ points, manifest compatibility and physical authority remain OS admission
 requirements.
 
 The check runs once per boot over at most 4096 session bytes. It allocates no
-memory and adds no device access. The native monitor occupies 32,168 bytes and
-leaves 600 bytes before the fixed cold report; the card-gate entry below added
-280 of them. These are static sizes; boot latency is unmeasured.
+memory and adds no device access. The monitor's code may occupy 32,768 bytes
+before the fixed cold report. The build that enters the OS occupies 32,664
+bytes and leaves 104; the diagnostic build `a733-stage2-armed-stop` occupies
+32,360. To fit the RTC progress words, `loader.c` and `cpu.c` build with
+`-Oz`; the SD driver keeps `-Os` and the SHA-256 code keeps `-O2`. These are
+static sizes; boot latency is unmeasured.
 
 ## Entry from the card first stage
 
@@ -76,8 +79,11 @@ inputs and interruption recovery remain prerequisites.
 On stale or malformed typed records, the stage-2 report at `0x47008200`
 has status 7 and detail 2 before WDT0 arming. A session-size mismatch has
 detail 1. Valid entry has status 6 and publishes the resident contract at
-`0x42004000`. These DRAM reports are not RTC breadcrumbs and do not survive
-power loss. Early SD failures precede resident watchdog arming; recovery from
-those failures needs separate qualification.
+`0x42004000`. These DRAM reports do not survive a reset. Stage 2 also writes
+its progress, its SD admission snapshot and its finish or exception record to
+the RTC general-purpose words `0x07090100..0x0709011c`, which a WDT0 reset
+keeps ([card-boot-chain.md](../../../docs/designs/card-boot-chain.md),
+"Stage-2 progress words"). Early SD failures precede resident watchdog
+arming; recovery from those failures needs separate qualification.
 
 The complete acceptance requirements remain in [the goal](../../../docs/goal.md).
