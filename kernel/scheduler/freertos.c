@@ -1448,7 +1448,7 @@ static bool ssKernelServiceOnce(unsigned c, struct ssKernelCPU *cpu)
 static unsigned long ssKernelContinuations;
 unsigned long ss_kernel_test_continuations(void) { return ssKernelContinuations; }
 #endif
-static void ssKernelService(void)
+static void SS_SERVICE_DEFINITION(void)
 {
     const bool disabled = ssKernelIrqsDisabled();
     UBaseType_t irq = portSET_INTERRUPT_MASK();
@@ -2243,11 +2243,11 @@ static void ssKernelControlDrainTestAfter(unsigned c)
  * not parked on a CPU signals that CPU with an SGI after the bit is visible (hint, ss_control_wake_mask), or is made by
  * the CPU's own current task as it enters the owner (ss_control_suspend_current). The SGI enters the owner at the
  * next point where the mask opens, and that entry's service drains the request. */
-static void ssKernelControlDrain(void)
+static void SS_CONTROL_DRAIN_DEFINITION(void)
 {
     if (xSchedulerRunning) {
         const unsigned c = ssKernelCPUId();
-        if (!ssKernelControlDue(c)) {
+        if (SS_CONTROL_EMPTY(c)) {
             SS_KERNEL_PERTURB(SS_PERTURB_CONTROL_OPEN);
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
             ssKernelControlDrainTestAfter(c);
@@ -3680,5 +3680,22 @@ static configRUN_TIME_COUNTER_TYPE ssKernelRuntime(TaskHandle_t handle)
     }
     (void)ssKernelResumeAll();
     return result;
+}
+#endif
+#ifdef SUNSTONE_LATENCY_SERVICE_CYCLES
+/* Measurement build only: time the bodies above (see service_cycles.h). */
+static void ssKernelService(void)
+{
+    struct ss_service_cycles_span span;
+    ss_service_cycles_begin(&span, SS_SERVICE_CYCLES_SERVICE, ssKernelCPUId());
+    ssKernelServiceBody();
+    ss_service_cycles_end(&span, ssKernelCPUId());
+}
+static void ssKernelControlDrain(void)
+{
+    struct ss_service_cycles_span span;
+    ss_service_cycles_begin(&span, SS_SERVICE_CYCLES_DRAIN, ssKernelCPUId());
+    ssKernelControlDrainBody();
+    ss_service_cycles_end(&span, ssKernelCPUId());
 }
 #endif

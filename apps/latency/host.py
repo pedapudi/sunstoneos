@@ -30,6 +30,14 @@ CAUSE_PING_BYTES = 3392
 CAUSE_CASES = ('blank', 'isb', 'dsb_ish', 'dsb_sy', 'store', 'store_dsb_ish',
                'store_dsb_sy', 'sgi', 'sgi_dsb_ish', 'sgi_dsb_sy', 'pmr_same',
                'sgi_isb', 'sgi_isb_dsb_ish', 'sgi_isb_dsb_sy', 'pmr_same_dsb_sy')
+SERVICE_MAGIC = 0x5353535643594331
+SERVICE_FOOTER_MAGIC = 0x5353535643594631
+SERVICE_CELL = 464
+SERVICE_BINS = 105
+SERVICE_BYTES = 128 + 2 * 8 * 2 * 2 * SERVICE_CELL
+SERVICE_PHASES = ('idle', 'busy')
+SERVICE_KINDS = ('service', 'drain')
+SERVICE_STATES = ('empty_return_off', 'empty_return_on')
 CONTROL_BINS = 192
 CONTROL_BIN_TICKS = 4
 CONTROL_MINIMUM = 10000
@@ -964,6 +972,74 @@ def decode_latency_cause_ping(payload, frequency, core_mhz):
             'topology_scope': 'CPU-L and CPU-B are clock/type groups sharing the documented DSU; no separate DSU hop is asserted'}
 
 
+def service_bin_bounds(index):
+    """Cycles [low, high] held by a service cycle bin (kernel/scheduler/service_cycles.h)."""
+    if index < 8:
+        return index * 8, index * 8 + 7
+    if index == SERVICE_BINS - 1:
+        return 1 << 18, None
+    exponent, part = 6 + (index - 8) // 8, (index - 8) % 8
+    step = 1 << (exponent - 3)
+    low = (1 << exponent) + part * step
+    return low, low + step - 1
+
+
+def service_quantile(bins, count, fraction):
+    """Upper bound of the bin holding the given quantile; None for an empty cell or the open last bin."""
+    if not count:
+        return None
+    target, seen = max(1, -(-count * fraction // 1)), 0
+    for index, value in enumerate(bins):
+        seen += value
+        if seen >= target:
+            return service_bin_bounds(index)[1]
+    raise ValueError('service cycle bins hold fewer spans than the count')
+
+
+def peel_service_cycles(payload):
+    """Split the service cycle section, which follows the cause footer, from the result."""
+    if len(payload) < 64 or struct.unpack_from('<Q', payload, len(payload) - 64)[0] != SERVICE_FOOTER_MAGIC:
+        return payload, b''
+    _, version, size, at, length, *rest = struct.unpack_from('<8Q', payload, len(payload) - 64)
+    if (version != 1 or size != len(payload) or length != SERVICE_BYTES or at % 64 or
+            at + length > len(payload) - 64 or any(rest) or any(payload[at + length:-64])):
+        raise ValueError('service cycle footer offsets, padding or report size are invalid')
+    return payload[:at], payload[at:at + length]
+
+
+def decode_service_cycles(payload):
+    header = struct.unpack_from('<16Q', payload, 0)
+    magic, version, size, cores, phases, kinds, states, bins, shift, complete = header[:10]
+    if (magic, version, size, cores, phases, kinds, states, bins) != (
+            SERVICE_MAGIC, 1, SERVICE_BYTES, 8, 2, 2, 2, SERVICE_BINS) or complete != 1 or any(header[10:]):
+        raise ValueError('service cycle report header is invalid or incomplete')
+    result = {'switch_shift': shift,
+              'scope': ('cycles from the CPU cycle counter around each service pass and control drain, both '
+                        'settings interleaved by counter bit; spans that took an interrupt are counted apart'),
+              'phases': {}}
+    offset = 128
+    for phase in SERVICE_PHASES:
+        cores_out = []
+        for core in range(8):
+            row = {'core': core}
+            for kind in SERVICE_KINDS:
+                for state in SERVICE_STATES:
+                    count, total, maximum, interrupted, interrupted_sum = struct.unpack_from('<5Q', payload, offset)
+                    values = struct.unpack_from(f'<{SERVICE_BINS}I', payload, offset + 40)
+                    if sum(values) != count or (count and maximum * count < total) or (not count and (total or maximum)):
+                        raise ValueError('service cycle cell is inconsistent')
+                    row.setdefault(kind, {})[state] = {
+                        'count': count, 'mean_cycles': total / count if count else None, 'max_cycles': maximum,
+                        'p50_upper_cycles': service_quantile(values, count, 0.5),
+                        'p99_upper_cycles': service_quantile(values, count, 0.99),
+                        'interrupted': interrupted, 'interrupted_sum_cycles': interrupted_sum,
+                        'bins': list(values)}
+                    offset += SERVICE_CELL
+            cores_out.append(row)
+        result['phases'][phase] = cores_out
+    return result
+
+
 def peel_latency_cause(payload):
     """Split the cause and ping reports from the result. Footer version 1
     streams on every core; version 2 names the streaming cores in its last word."""
@@ -990,6 +1066,7 @@ def peel_latency_cause(payload):
 def decode(payload, dma=False):
     if len(payload) < RESULT_BYTES:
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
+    payload, service_tail = peel_service_cycles(payload)
     payload, cause_tail, ping_tail, stream_mask = peel_latency_cause(payload)
     tail = payload[RESULT_BYTES:]
     scheduler_pmu_tail = b''
@@ -1199,4 +1276,8 @@ def decode(payload, dma=False):
         result['latency_cause'] = decode_latency_cause(cause_tail, frequency)
         result['latency_cause_ping'] = decode_latency_cause_ping(ping_tail, frequency,
             result['latency_cause']['tick']['effective_mhz'])
+    if service_tail:
+        if not cause_tail:
+            raise ValueError('service cycle report requires the cause profile')
+        result['service_cycles'] = decode_service_cycles(service_tail)
     return result
