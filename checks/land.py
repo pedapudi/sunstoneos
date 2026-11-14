@@ -95,7 +95,10 @@ class Fixture:
         (root / 'unregistered.py').write_text('import sys\nprint("checks with no registry answer: new-check.py")\nsys.exit(1)\n')
         (root / 'gate.py').write_text(GATE)
         (root / 'affected.py').write_text(AFFECTED)
-        (root / 'full.py').write_text('import sys\nfrom pathlib import Path\nPath(sys.argv[sys.argv.index("--cache") + 1], "full-started").write_text(" ".join(sys.argv[1:]))\n')
+        # The marker is written to a temporary name and renamed, so a reader that sees it also sees its whole content.
+        (root / 'full.py').write_text('import os, sys\nfrom pathlib import Path\ncache = Path(sys.argv[sys.argv.index("--cache") + 1])\n'
+                                      '(cache / "full-started.tmp").write_text(" ".join(sys.argv[1:]))\n'
+                                      'os.replace(cache / "full-started.tmp", cache / "full-started")\n')
         self.origin = root / 'origin.git'
         git(root, 'init', '-q', '--bare', str(self.origin))
         self.bringup = root / 'bringup'

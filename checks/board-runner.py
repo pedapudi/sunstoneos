@@ -7,6 +7,7 @@ Optional --hello prepares a real generic CPU-return ELF without a board; the gen
 """
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -32,6 +33,10 @@ CARD_GATE = bytes.fromhex('00f020e3') * 6 + bytes(8)
 def passed(name):
     rows.append({'name':name,'passed':True})
     print('PASS',name)
+
+
+def arguments_for(root):
+    return arguments(root)
 
 
 def arguments(root, *extra, submit=False, development=False):
@@ -1118,6 +1123,84 @@ def transport_cases(out):
     passed('transport-error-quarantines-unknown-instance')
 
 
+def journal_cases(out):
+    """The write-ahead journal syncs only before a transaction whose effect recovery must know (board.fel_effects), and a gate holds its
+    next step while a runner is in its FEL work.
+
+    Classification: reads, SRAM staging and the later DRAM writes of an epoch are saved without sync; the first DRAM write of an epoch,
+    every register write and every execute are synced before they reach the board. The counts: the same transactions with the old
+    behaviour (every journal entry before and after each transaction synced, and a sync per readback) and with the new."""
+    import gate_slots
+    root=out/'journal';root.mkdir()
+    file=root/'payload.bin';file.write_bytes(bytes(range(64)))
+    table=[(['version'],[]),(['read','0x71000','64',str(root/'r0.bin')],[]),(['readl','0x20'],[]),
+           (['write','0x71000',str(file)],['sram']),(['write','0x41000000',str(file)],['dram']),(['write','0x41000100',str(file)],['dram']),
+           (['read','0x41000000','64',str(root/'r1.bin')],[]),(['writel','0x2050018','0x16aa0002'],['register']),
+           (['write','0x41000200',str(file)],['dram']),(['readl','0x2050014'],[]),(['exe','0x71000'],['execute']),
+           (['reset64','0x41000000'],['execute'])]
+    for arguments,expected in table:
+        assert sorted(board.fel_effects(arguments))==sorted(expected),(arguments,board.fel_effects(arguments))
+    big=root/'big.bin';big.write_bytes(bytes(128))
+    assert board.fel_effects(['write','0x02050000',str(file)])=={'register'}              # an MMIO bulk write (the WDT block) is journaled
+    assert board.fel_effects(['write','0x07090100',str(file)])=={'register'}              # RTC
+    assert board.fel_effects(['write','0xf3fc0',str(big)])=={'register'}                  # straddles the end of shared SRAM at 0xf4000
+    assert board.fel_effects(['write','0x52d40',str(big)])=={'register'}                  # straddles the end of the launcher at 0x52d80
+    assert board.fel_effects(['write','0x73fc0',str(big)])=={'register'}                  # straddles the start of shared SRAM
+    assert board.fel_effects(['write','0xf3f80',str(big)])=={'sram'}                      # ends exactly at 0xf4000
+    assert board.fel_effects(['write','0x52c00',str(file)])=={'sram'}
+    assert board.fel_effects(['write','0x71000',str(root/'missing.bin')])=={'register'}  # a size that cannot be read is journaled
+    assert board.fel_effects(['frob','1'])=={'register'}                  # an unknown request is always journaled synchronously
+    assert board.fel_effects(['write','0x41000000',str(file),'read','0x41000000','64','x','writel','0x1','0x2'])=={'dram','register'}
+    def sequence(label,old):
+        base=root/label;base.mkdir();args=arguments_for(base)
+        model=Model('normal');owner=board.Live(args,base,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+        calls=[];real=board.os.fsync
+        original_journal=board.Live.journal
+        def counting(descriptor):
+            calls.append(descriptor);return real(descriptor)
+        def forced(self,durable=True):return original_journal(self,True)
+        patches=[patch.object(board.os,'fsync',counting),patch.object(board.os,'access',return_value=True)]
+        if old:patches+=[patch.object(board,'fel_effects',lambda a:{'register'}),patch.object(board.Live,'journal',forced)]
+        with contextlib.ExitStack() as stack:
+            for item in patches:stack.enter_context(item)
+            with owner.locked():
+                for arguments,_ in table[:-2]:
+                    if arguments[0] in ('read',):owner.read(int(arguments[1],0),int(arguments[2]),arguments[3])
+                    else:owner.tx(*arguments)
+                if old:calls.extend([None]*2)                              # the readback syncs of the old code: two reads above
+                owner.sync_evidence()
+        return len(calls),owner
+    before,_=sequence('before',True)
+    after,owner=sequence('after',False)
+    print(f'journal fsyncs for {len(table)-2} transactions: before {before}, after {after}')
+    assert after*3<=before,(before,after)
+    # The synced entries are the ones that matter: with the DRAM epoch bumped by an execute, the next DRAM write syncs again.
+    base=root/'epoch';base.mkdir();args=arguments_for(base);model=Model('normal')
+    owner=board.Live(args,base,{},access=model,process=model.process,now=model.now,sleep=model.sleep);flags=[]
+    original=board.Live.journal
+    def watch(self,durable=True):
+        flags.append(durable);return original(self,durable)
+    with patch.object(board.Live,'journal',watch),patch.object(board.os,'access',return_value=True),owner.locked():
+        owner.tx('write','0x41000000',str(file));owner.tx('write','0x41000100',str(file))
+        owner.epoch+=1;owner.tx('write','0x41000200',str(file))
+    assert flags[1:]==[True,False,False,False,True,False],flags   # flags[0] is adopt()                 # pre/post for each: only the first of an epoch is synced before
+    # A gate holds its step while a runner holds the lock, is released when the runner dies, and is bounded by the runner's deadline.
+    cache=root/'cache';cache.mkdir()
+    waited=gate_slots.wait_for_board(cache,announce=None)
+    assert waited==0.0
+    hold=gate_slots.BoardFel(cache,60);hold.acquire()
+    clock=[0.0]
+    def now():
+        return clock[0]
+    def tick(_):clock[0]+=1.0
+    with patch.object(gate_slots.time,'sleep',tick):
+        waited=gate_slots.wait_for_board(cache,announce=None,now=lambda:__import__('time').time()+clock[0])
+    assert waited>=59,waited                                              # nothing released it: the wait ended at the written deadline
+    hold.release()
+    assert gate_slots.wait_for_board(cache,announce=None)==0.0
+    passed('journal-sync-classes-and-gate-hold')
+
+
 def upload_verify_cases(out):
     """Uploads verified by reading back and by the on-board digest helper: a flipped byte and a short write are upload
     faults in both modes, no image runs, and the instance stays usable. The digest path reads no uploaded DRAM byte back."""
@@ -1575,9 +1658,24 @@ def daemon_cases(out):
         if n==0:Path(job['image']).write_bytes(b'mutated queued image')
     # Real runner child processes refuse these non-image fixtures in preflight.
     # Even an attempted discovery is a defect; these have no watchdog marker.
+    held={j:Path(j).read_bytes() for j in (json.loads(p.read_text())['image'] for p in (q.root/'entries').glob('*/entry.json'))}
     q.serve(once=True)
     state=json.loads((q.root/'state.json').read_text())
     assert not state['jobs'] and state['history'],state
+    # After each run the daemon holds the entry's image as a hard link to QUEUE/images/SHA256 (tools/board_image_store.py). The
+    # entry refused at claim (its queued bytes changed) never ran; the queue-wide fold holds it too. Every path keeps its bytes.
+    folded=[json.loads(line) for line in (q.root/'ledger.jsonl').read_text().splitlines() if '"images-folded"' in line]
+    assert len(folded)==2 and all(e['copies']>=1 for e in folded),folded
+    ran={e['job'] for e in folded}
+    store=images.load('board_image_store',ROOT/'tools/board_image_store.py')
+    for path,data in held.items():
+        stored=q.root/'images'/(hashlib.sha256(data).hexdigest()+Path(path).suffix)
+        assert Path(path).read_bytes()==data and os.path.exists(stored)==(Path(path).parent.name in ran),path
+    assert not store.fold_queue(q.root,apply=True)['mismatches']
+    for path,data in held.items():
+        stored=q.root/'images'/(hashlib.sha256(data).hexdigest()+Path(path).suffix)
+        assert Path(path).read_bytes()==data and os.path.samefile(path,stored),path
+    passed('daemon-folds-finished-entry-images-into-the-store-with-bytes-unchanged')
     finished=[json.loads((Path(j['directory'])/'entry.json').read_text()) for j in state['history']]
     assert all(j['state']=='done' and j['result']['outcome']=='refused-before-launch' for j in finished)
     assert all(not j['result'].get('launch_attempted') for j in finished)
@@ -2279,7 +2377,7 @@ def main():
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):reset_release_cases(args.out)
-    if 'transport' in groups:development_dram_cases(args.out);reference_cases(args.out);upload_verify_cases(args.out)
+    if 'transport' in groups:development_dram_cases(args.out);reference_cases(args.out);upload_verify_cases(args.out);journal_cases(args.out)
     if 'queue-integrity' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)
