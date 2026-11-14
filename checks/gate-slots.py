@@ -299,7 +299,7 @@ def case_footprint_run():
     text = (ROOT / 'checks/tick-footprint-budget.py').read_text()
     assert "'tcg,thread=single', '-icount', 'shift=0,sleep=off'" in text and 'thread=multi' not in text, \
         'the footprint model runs with guest time taken from the host'
-    assert 'timeout=QEMU_KILL_SECONDS' in text and 'timeout=600' not in text, 'the footprint run is killed on a literal limit'
+    assert '> QEMU_KILL_SECONDS' in text and 'timeout=600' not in text and 'process.kill()' in text, 'the footprint run is killed on a literal limit'
     assert "['tick_footprint']" in text and 'gate-slots.json' in text
 
 

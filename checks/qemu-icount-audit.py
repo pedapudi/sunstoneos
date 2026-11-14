@@ -24,6 +24,7 @@ import harness
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED = {
     'checks/smp-ticket-lock.py': 'multi-threaded TCG on purpose: the cores must run in parallel to exercise the ticket lock\'s atomics; the guests assert no time and the host timeout is a hang bound',
+    'checks/latency-cause-model.py': 'multi-threaded TCG on purpose: the cause ping is a handshake between cores that run in parallel on hardware, and on one TCG thread each exchange waits for the peer\'s turn and the ping\'s 250 ms guest-time deadline runs out after about 27 of 256 exchanges (docs/validation.md, "The cause ping"); the verdict reads the model\'s PASS line and a broken ping\'s failed assertion, and the host timeout is a hang bound',
     'tools/check-smp.py': 'multi-threaded TCG on purpose (the same atomics, the eight-core soak); the guests assert no time and the host timeout is a hang bound',
 }
 
