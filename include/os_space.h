@@ -35,8 +35,11 @@ static inline void os_space_switch_in(const void *tag)
 
 /* The space of a new task is an explicit argument of the OS-side creation call (apps/os/os-task.h): os_task_create_static_affinity_set
  * and os_task_create_static take the space's tag, the kernel's callers pass null (the kernel's table), and the kit's
- * ss_task_create_static_affinity_set (include/sunstone_app.h) passes the calling application's. The creation call sets the tag
- * before the task can run, inside a kernel critical section.
+ * ss_task_create_static_affinity_set (include/sunstone_app.h) passes the calling application's. The creation call names the space
+ * in os_space_explicit_space for its core, and traceTASK_CREATE, which runs inside the creation before the scheduler publishes the
+ * task to the core that owns it, gives the task exactly that space. A tag set after the creation call returns would leave a window
+ * in which the partitioned scheduler's owner core can switch the task in with its creator's tag: an OS task created by an
+ * application's task would then start in that application's table.
  *
  * traceTASK_CREATE: a task that a running task creates directly, with a FreeRTOS call, takes its creator's tag, so a task that
  * an application's task creates runs in the application's space with no call of its own. Before the scheduler starts there is no
@@ -48,10 +51,13 @@ static inline void os_space_switch_in(const void *tag)
 #define OS_SPACE_REFUSED 0x7a1u
 extern volatile uint8_t os_space_app_init_active;
 extern volatile uint8_t os_space_explicit[]; /* one byte per core, sized by configNUMBER_OF_CORES in apps/os/large.c */
+extern const void *volatile os_space_explicit_space[]; /* the space that core's creation call names (null: the kernel's table) */
 void os_space_refuse_create(void);
 #define os_space_inherit(creator, created) \
-    do { if ((creator)) { \
+    do { if (os_space_explicit[portGET_CORE_ID()]) \
+             (created)->pxTaskTag = (__typeof__((created)->pxTaskTag))os_space_explicit_space[portGET_CORE_ID()]; \
+         else if ((creator)) { \
              if (!(created)->pxTaskTag) (created)->pxTaskTag = (creator)->pxTaskTag; \
-         } else if (os_space_app_init_active && !os_space_explicit[portGET_CORE_ID()]) \
+         } else if (os_space_app_init_active) \
              os_space_refuse_create(); } while (0)
 #endif

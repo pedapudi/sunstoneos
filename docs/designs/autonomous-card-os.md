@@ -54,6 +54,22 @@ the four SID identity words and `sid_authority` names the reviewed cold policy;
 headset and radio profiles keep their field meanings. Stage 2 checks the SID
 before any OS entry or CPU authority publication.
 
+For the first autonomous boot on port 3-3 (coordinator decision 2026-11-13,
+for that test only), the cold session takes these values:
+
+- `sid_evidence` (session bytes 320..351) is the SHA-256 of the four SID words
+  packed as little-endian 32-bit words in order. The words are the port 3-3
+  board's 851464448, 1275087104, 1487077908 and 1082729491, from
+  `~/.cache/sunstoneos/board-words.json`.
+- `sid_authority` (the little-endian 64-bit word at bytes 312..319) is the
+  first 8 bytes of that digest read as a little-endian integer, with bit 0 set,
+  so it is never zero.
+
+Stage 2 reads the SID words from `0x03006200`, hashes them the same way and
+refuses entry (status 7, detail 4) when the digest differs or `sid_authority`
+is zero. A host run of the linked `enter()` on the slot A session shows a
+different SID refused before any WDT0 write.
+
 Stage 2 validates typed-session framing and rejects persisted nonzero board or
 CPU-grant epochs before clearing retained results or arming WDT0. An active
 grant names the selected slot generation; an inactive grant keeps generation
