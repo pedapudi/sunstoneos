@@ -454,10 +454,17 @@ static void wr(uintptr_t address, uint32_t value)
  * configuration, then mode enable and one restart. Refuses a watchdog,
  * redirect or flag that another owner already set, except the card first
  * stage's 16 s watchdog (mode 0xb1, configuration 1, output 2), which it
- * switches to the four-second mode. */
+ * disarms and then arms in the four-second mode. */
 static int arm(uint64_t *armed)
 {
     if (!a733_stage2_watchdog_state(gated)) return 0;
+    /* The gate's WDT0 is disarmed before the four-second arming: every
+     * arming that the board has shown to expire started from mode 0
+     * (docs/designs/card-boot-chain.md). The gap is a few register writes. */
+    if (gated) {
+        wr(0x02050014, 0x16aa0000);
+        if (rd(0x02050014) & 1) return 0;
+    }
     wr(0x02050018, 0x16aa0002);
     wr(0x02050010, 0x16aa0001);
     if ((rd(0x02050018) & 0xffff) != 2 || (rd(0x02050010) & 0xffff) != 1 ||

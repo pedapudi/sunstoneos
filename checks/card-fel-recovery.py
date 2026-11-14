@@ -31,6 +31,7 @@ def module(name,path):
 
 card=module('direct_card_recovery','tools/card_recovery.py')
 crumbs=module('direct_gate_crumbs','tools/a733-crumbs.py')
+chain=module('direct_gate_chain','tools/boot_chain.py')
 FAULT_WORDS={name:crumbs.RTC+crumbs.WORDS[name]for name in ('esr','elr','far')}
 SENTINELS=dict(zip(FAULT_WORDS,(0x11111111,0x22222222,0x33333333)))
 # Measured FEL caller: docs/boot.md; the patched MMIO helper clears I before exe.
@@ -155,7 +156,10 @@ def request_cases(name,raw,policy,code,cases):
             assert progress==[STAGE|n for n in range(1,6)]
             assert all(e[1]in (card.RTC_LAST,card.RTC_FLAG,WDT_MODE,WDT_RESTART)for e in writes)
             order=[e[1] for e in writes if e[1] in (WDT_MODE,WDT_RESTART,card.RTC_FLAG)]
-            assert order==[WDT_MODE,*([WDT_RESTART] if policy else []),card.RTC_FLAG]
+            assert order==[*([WDT_MODE] if policy else []),WDT_MODE,*([WDT_RESTART] if policy else []),card.RTC_FLAG]
+            # A re-arm starts from mode 0; a disarm is a single write.
+            modes=[value for kind,address,value in writes if address==WDT_MODE]
+            assert modes==([0x16aa0000,0x16aa0000|policy] if policy else [0x16aa0000]),modes
             mode=next(i for i,e in enumerate(m.events)if e[0]=='write'and e[1]==WDT_MODE)
             assert any(e[0]=='cache'for e in m.events[:mode])
             for i,e in enumerate(m.events):
@@ -258,7 +262,8 @@ def cold_cases(name,raw,cases):
         assert m.regs[card.RTC_FLAG]==STAGE|COLD|mode and m.regs[card.RTC_LAST]==IMAGE_CRUMB and m.untouched()
         assert (m.regs[WDT_OUTPUT],m.regs[WDT_CONFIG],m.regs[WDT_MODE],m.restarts)==(2,1,0xb1,1)
         order=[e[1] for e in m.writes()]
-        assert order==[MARKER,card.RTC_FLAG,WDT_OUTPUT,WDT_CONFIG,WDT_MODE,WDT_RESTART]
+        assert order==[MARKER,card.RTC_FLAG,WDT_MODE,WDT_OUTPUT,WDT_CONFIG,WDT_MODE,WDT_RESTART]
+        assert [e[2] for e in m.writes() if e[1]==WDT_MODE]==[0x16aa0000,0x16aa0000|card.GATE_WATCHDOG]
         assert m.sctlr==FEL_SCTLR & ~0x1000  # boot0's reset stub sets its own SCTLR
         cases.append('%s-cold-marks-arms-16s-and-enters-boot0-from-mode-%x'%(name,mode))
     # A marker that does not read back cannot record the epoch: FEL.
@@ -281,7 +286,12 @@ def boot_once_cases(name,raw,cases):
         assert m.regs[card.RTC_FLAG]==STAGE|COLD|ONCE|mode and m.regs[card.RTC_LAST]==IMAGE_CRUMB
         assert (m.regs[WDT_OUTPUT],m.regs[WDT_CONFIG],m.regs[WDT_MODE],m.restarts)==(2,1,0xb1,1)
         writes=[e[1] for e in m.writes()]
-        assert writes==[MARKER,card.RTC_FLAG,WDT_OUTPUT,WDT_CONFIG,WDT_MODE,WDT_RESTART]
+        assert writes==[MARKER,card.RTC_FLAG,WDT_MODE,WDT_OUTPUT,WDT_CONFIG,WDT_MODE,WDT_RESTART]
+        # WDT0 still reads the mode armed before the reset; the gate disarms it before the arming.
+        assert [e[2] for e in m.writes() if e[1]==WDT_MODE]==[0x16aa0000,0x16aa0000|card.GATE_WATCHDOG]
+        # The arming the chain table records for boot0 and stage 2 (tools/boot_chain.py) is the one this code makes.
+        for stage in (s for s in chain.STAGES if s['name'] in ('boot0','stage2')):
+            assert chain.armings([e[1:] for e in m.writes()],mode)==[(stage['arming'],stage['mode'])],(stage['name'],mode)
         # The record is read back after its write and before WDT0 is armed and boot0 entered.
         flag=next(i for i,e in enumerate(m.events) if e[0]=='write' and e[1]==card.RTC_FLAG)
         assert any(e[0]=='read' and e[1]==card.RTC_FLAG for e in m.events[flag:])
