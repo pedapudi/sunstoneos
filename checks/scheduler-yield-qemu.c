@@ -17,7 +17,8 @@
  * eight cores happen to interleave and exceeded half a wake period in about one run in twenty under host load. The empty functions
  * ymark_isr_N and ymark_srv_N mark the interrupt and the served task of core N; a QEMU plugin (tools/qemu-critical-path.c) reads
  * the instructions each core executes between the two marks, and checks/scheduler-control-linked.py bounds the critical path (the
- * owner's instructions plus the victim's own instructions outside busy_task) by half a wake period. */
+ * owner's instructions plus the victim's own instructions outside busy_task) by half a wake period. ymark_drop_N marks a served task
+ * whose wake carried an injected interrupt exit (SS_KERNEL_TEST_IRQ_EXIT): it ends the wake without a measured path. */
 #define CORES configNUMBER_OF_CORES
 #define WAKE_PERIODS 300U
 _Static_assert(CORES == 8, "the check needs the eight-core configuration");
@@ -59,10 +60,22 @@ __attribute__((noinline, section(".text.ymark"))) void ymark_isr_6(void) { __asm
 __attribute__((noinline, section(".text.ymark"))) void ymark_srv_6(void) { __asm__ volatile("nop"); }
 __attribute__((noinline, section(".text.ymark"))) void ymark_isr_7(void) { __asm__ volatile("nop"); }
 __attribute__((noinline, section(".text.ymark"))) void ymark_srv_7(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_drop_0(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_drop_1(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_drop_2(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_drop_3(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_drop_4(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_drop_5(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_drop_6(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_drop_7(void) { __asm__ volatile("nop"); }
 static void mark_isr(unsigned core)
 { static void (*const mark[CORES])(void) = {ymark_isr_0, ymark_isr_1, ymark_isr_2, ymark_isr_3, ymark_isr_4, ymark_isr_5, ymark_isr_6, ymark_isr_7}; mark[core % CORES](); }
 static void mark_srv(unsigned core)
 { static void (*const mark[CORES])(void) = {ymark_srv_0, ymark_srv_1, ymark_srv_2, ymark_srv_3, ymark_srv_4, ymark_srv_5, ymark_srv_6, ymark_srv_7}; mark[core % CORES](); }
+#ifdef SS_KERNEL_TEST_IRQ_EXIT
+static void mark_drop(unsigned core)
+{ static void (*const mark[CORES])(void) = {ymark_drop_0, ymark_drop_1, ymark_drop_2, ymark_drop_3, ymark_drop_4, ymark_drop_5, ymark_drop_6, ymark_drop_7}; mark[core % CORES](); }
+#endif
 void ss_wake_isr(unsigned core) {
     BaseType_t woken = pdFALSE;
     stat[core].started = counter();
@@ -94,14 +107,15 @@ static void high_task(void *argument) {
             ++injected[core][kind].samples;
             if (latency > injected[core][kind].max) injected[core][kind].max = latency;
             if (latency > ss_wake_period / 2) ++injected[core][kind].late;
+            mark_drop(core);
             continue;
         }
 #endif
 #ifdef SS_KERNEL_TEST_PERTURB
         /* The regression case of checks/scheduler-control-linked.py: the word after the perturbation sites holds extra loop turns of
          * work on the wake path after the switch, before the served mark, for every wake of the cores that word 0 of the table selects
-         * (zero: all). The model tolerates little: beyond about 2,700 turns its end-of-run accounting (every raised wake served five
-         * ticks after the stop) fails, so the regression case sits just inside that and just above the bound. */
+         * (zero: all). Beyond about 2,700 turns the model's end-of-run accounting (every raised wake served five ticks after the stop)
+         * fails; the regression case slows one core past that and asserts only the critical path of the wakes served. */
         {
             const volatile uint32_t *table = (const volatile uint32_t *)(uintptr_t)SS_KERNEL_TEST_PERTURB;
             const uint32_t cores = table[0], turns = table[1 + SS_PERTURB_SITES];

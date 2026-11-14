@@ -7,6 +7,7 @@ Optional --hello prepares a real generic CPU-return ELF without a board; the gen
 """
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -32,6 +33,10 @@ CARD_GATE = bytes.fromhex('00f020e3') * 6 + bytes(8)
 def passed(name):
     rows.append({'name':name,'passed':True})
     print('PASS',name)
+
+
+def arguments_for(root):
+    return arguments(root)
 
 
 def arguments(root, *extra, submit=False, development=False):
@@ -73,6 +78,10 @@ class Model:
             # records them before it writes anything.
             self.registers.update({0x07090100:0x5c0dc5f9,0x07090104:0x0c030007,0x0709010c:0x19cf2,0x07090110:0xfa030001,
                                    0x07090114:0x96000010,0x07090118:0x41019db8,0x0709011c:0x47008000,0x02050004:1})
+        if variant=='card-cold-record':
+            # The RTC clock source after boot0's unkeyed gain write, and the ROM redirect words, which must read clear.
+            self.registers.update({0x07090000:0x401c})
+        self.replay_writes = []  # (address, value) of each register store the arming replay made
         self.calls = []
         self.writes = []    # (address, bytes) of every write, in order: the sealed source is gone after the call
         self.programs = []
@@ -94,6 +103,15 @@ class Model:
             # the board through the warm path (card-once-other: boot0 found no package and entered FEL with the cold record).
             if self.variant=='card-once-other':
                 self.registers[flag]=0x0c029041
+            elif self.variant.startswith('card-once-measure'):
+                # The diagnostic stage 2 parked after its 0x41 arming (step 0x0f), or, in -early, at the card open (step 5)
+                # under the gate's 0xb1 after a finish that parked with the CPU policy retained.
+                early=self.variant=='card-once-measure-early'
+                self.registers[flag]=0x0c0240b1 if early else 0x0c024041
+                self.registers[board.crumbs.RTC+0x100]=board.crumbs.STAGE2_TAG
+                self.registers[board.crumbs.RTC+0x104]=0x0c030500 if early else 0x0c030f00
+                if early:
+                    self.registers[board.crumbs.RTC+0x110]=0x0c040c02
             else:
                 self.registers[flag]=0x0c024041
                 self.registers[board.crumbs.RTC+0x100]=0x5c0d0001
@@ -224,6 +242,9 @@ class Model:
                     data=bytes([data[0]^1])+data[1:]
                 Path(args[i+3]).write_bytes(data)
                 i+=4
+            elif op=='exe' and self.variant.startswith('card-stage2-rearm'):
+                self.rearm_replay(int(args[i+1],0))
+                i+=2
             elif op=='exe' and self.digest_helper_loaded(int(args[i+1],0)):
                 self.digest_helper()
                 i+=2
@@ -305,6 +326,33 @@ class Model:
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
+    def rearm_replay(self,entry):
+        """--rearm-expiry stage2: run the uploaded replay's own bytes (boot/a733/rearm-stage2.S) under Unicorn against the
+        modeled registers, with the keyed WDT0 words holding their low half. A 0xb1 arming resets 16 s after it; the 0x41
+        arming resets 4 s after it (card-stage2-rearm-expires) or never (-stops). -refused sets the alternate redirect
+        flag first, so the replayed arm() refuses before any WDT0 write."""
+        from unicorn import Uc,UC_ARCH_ARM,UC_MODE_ARM
+        from unicorn.arm_const import UC_CPU_ARM_MAX,UC_ARM_REG_SP,UC_ARM_REG_LR
+        assert entry in (images.REARM_GATE,images.REARM_STAGE2),hex(entry)
+        if self.variant=='card-stage2-rearm-refused' and entry==images.REARM_STAGE2:self.registers[0x070501d4]=1
+        keyed=(board.crumbs.WDT_MODE,board.crumbs.WDT_CONFIG,board.crumbs.WDT_OUTPUT)
+        uc=Uc(UC_ARCH_ARM,UC_MODE_ARM);uc.ctl_set_cpu_model(UC_CPU_ARM_MAX)
+        low,high=images.LAUNCHER_SRAM
+        uc.mem_map(0x50000,0x10000);uc.mem_map(0x40000000,0x100000)
+        uc.mem_write(low,bytes(self.memory.get(a,0) for a in range(low,high)))
+        def read(uc,offset,size,base):return self.registers.get(base+offset,0)
+        def write(uc,offset,size,value,base):
+            self.replay_writes.append((base+offset,value))
+            self.registers[base+offset]=value&0xffff if base+offset in keyed else value
+        for base in (0x02050000,0x07050000,0x07090000):uc.mmio_map(base,0x1000,read,base,write,base)
+        uc.reg_write(UC_ARM_REG_SP,0x40080000);uc.reg_write(UC_ARM_REG_LR,0x40000000)
+        uc.emu_start(entry,0x40000000,count=100000)
+        for a in range(low,high):self.memory[a]=uc.mem_read(a,1)[0]
+        mode=self.registers.get(board.crumbs.WDT_MODE,0)
+        if mode==0xb1:self.pending,self.reset_at=True,self.clock+16
+        elif mode==0x41 and self.variant=='card-stage2-rearm-expires':self.pending,self.reset_at=True,self.clock+4
+        elif mode==0x41:self.pending=False
+
     # The digest helper's contract (boot/a733/upload-digest.S), which checks/upload-digest.py tests on the helper's own
     # bytes against hashlib: SHA-256 of each requested range, the status word and ID_ISAR5 written into the request block.
     helper = None
@@ -335,7 +383,7 @@ class Model:
 
 
 def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=False,recovery=False,entry=1,configure=None,
-              verify=None,uploads=None):
+              verify=None,uploads=None,setup=None):
     root.mkdir()
     args=arguments(root, development=resident or recovery)
     if configure:configure(args)
@@ -344,6 +392,7 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
     args.restore_rails=restore
     if verify:args.verify=verify
     model=Model(variant)
+    if setup:setup(model)
     owners=[]
     class Backend(board.Live):
         def __init__(self,*values):
@@ -849,6 +898,7 @@ def rearm_expiry_cases(out):
             assert 'No reset within 26 s' in result['first_failure']['detail'] and not owner.armed and model.registers[board.crumbs.WDT_MODE]==0
             assert not board.result_passed(result,decoded=False)
         passed('rearm-expiry-'+variant)
+    rearm_stage2_cases(out)
     # Admission: coordinator approval and the warm-entry proof image; frozen in the queue entry.
     args=arguments(out,'--kind','probe',development=True);args.rearm_expiry='runner'
     info={'card_fel_recovery':{'profile':{'entry':2}},'descriptor':{}}
@@ -861,6 +911,59 @@ def rearm_expiry_cases(out):
     command=board.Queue.runner_command(job,'3-1')
     assert 'rearm_expiry' in board.FROZEN_OPTIONS and command[command.index('--rearm-expiry')+1]=='gate',command
     passed('rearm-expiry-requires-approval-and-the-warm-proof')
+
+
+def rearm_stage2_cases(out):
+    """--rearm-expiry stage2: the runner's 0x41 resets the board through the card gate; on the new instance the replay's own
+    bytes run the gate's cold-path arming and, REARM_STAGE2_GAP_S later, stage 2's arm(); the runner times the 0x41 reset,
+    or disarms a 0x41 that never fires on the same instance. A refused replay is the result, whatever reset follows."""
+    def configure(args):args.rearm_expiry='stage2'
+    key=board.crumbs.KEY
+    mode,cfg,ocfg,restart=board.crumbs.WDT_MODE,board.crumbs.WDT_CONFIG,board.crumbs.WDT_OUTPUT,board.crumbs.WDT_RESTART
+    gate=[(mode,key),(ocfg,key|2),(cfg,key|1),(mode,key|0xb1),(restart,0x14af)]
+    stage2=[(mode,key),(ocfg,key|2),(cfg,key|1),(mode,key|0x41),(restart,0x14af),(board.crumbs.RTC+0x104,0x0c030e00)]
+    for variant,register,value in (('card-stage2-rearm-crystal',0x07090000,0x4011),('card-stage2-rearm-redirect',0x070501c4,0x20)):
+        # A first contact that shows the crystal selected or a redirect word set refuses the run before any WDT0 write.
+        result,model,owner=lifecycle(out/variant,variant,recovery=True,entry=2,configure=configure,
+                                     setup=lambda m,r=register,v=value:m.registers.__setitem__(r,v))
+        assert result['outcome']=='refused-before-launch' and not model.quarantined,(variant,result)
+        assert 'first contact' in result['first_failure']['detail'] and not owner.armed,result['first_failure']
+        assert not any(c[0]=='exe' or hex(key|0x41) in c for c in model.calls),model.calls
+        passed('rearm-expiry-'+variant+'-refused-at-contact')
+    for variant in ('card-stage2-rearm-expires','card-stage2-rearm-stops','card-stage2-rearm-refused'):
+        result,model,owner=lifecycle(out/variant,variant,recovery=True,entry=2,configure=configure)
+        test,writes=result['rearm_expiry'],result['rearm_writes']
+        assert not model.quarantined and result['dram_mode']=='sram-only',(variant,result)
+        # The session reset went through the gate's warm path: its record at the second contact holds mode 0x41.
+        second=result['power_epoch'][1]
+        assert second['gate']['warm'] and second['gate']['mode']==0x41 and writes['power_epoch']==2,(variant,second)
+        # One replay upload, then the gate entry, the gap and the stage-2 entry, each once and in that order.
+        exes=[c for c in model.calls if c[0]=='exe']
+        assert exes==[['exe',hex(images.REARM_GATE)],['exe',hex(images.REARM_STAGE2)]],exes
+        assert board.REARM_STAGE2_GAP_S<=writes['gap_s']<board.REARM_STAGE2_GAP_S+1,writes
+        assert writes['gate']=={'mode_at_entry':0,'mode':0xb1,'configuration':1,'output':2,'done':True},writes
+        if variant=='card-stage2-rearm-refused':
+            assert model.replay_writes==gate,model.replay_writes
+            assert writes['stage2']['status']==0x11 and writes['stage2']['redirect']==[0,0,1]
+            assert test['mode']==0xb1 and test['reset'] and not test['matched'] and not result['expected_reset']
+            assert 'status 0x11' in result['first_failure']['detail'] and not board.result_passed(result,decoded=False)
+            passed('rearm-expiry-'+variant);continue
+        assert model.replay_writes==gate+stage2,model.replay_writes
+        s2=writes['stage2']
+        assert s2['status']==1 and s2['state']==[0xb1,1,2] and s2['mode_after_disarm']==0 and s2['final']==[0x41,1,2],s2
+        assert test['variant']=='stage2' and test['mode']==0x41 and test['interval_s']==4 and test['deadline_s']==14,test
+        if variant.endswith('expires'):
+            assert result['outcome']=='watchdog-reset' and result['expected_reset'] and test['matched'],(variant,result)
+            assert 4<=test['seconds_after_arm']<=9 and not result.get('first_failure') and board.result_passed(result,decoded=False)
+        else:
+            assert result['outcome']=='failure-return' and not test['reset'] and not result['expected_reset'],(variant,result)
+            assert 'No reset within 14 s' in result['first_failure']['detail'] and not owner.armed and model.registers[mode]==0
+            assert not board.result_passed(result,decoded=False)
+        passed('rearm-expiry-'+variant)
+    job={'image':'/image.elf','directory':str(out),'options':{'rearm_expiry':'stage2','approved_by':'coordinator'}}
+    command=board.Queue.runner_command(job,'3-1')
+    assert command[command.index('--rearm-expiry')+1]=='stage2',command
+    passed('rearm-expiry-stage2-is-frozen-into-the-runner-command')
 
 
 def boot_once_cases(out):
@@ -931,6 +1034,29 @@ def boot_once_cases(out):
     command=board.Queue.runner_command(job,'3-1')
     assert 'boot_once_slot' in board.FROZEN_OPTIONS and command[command.index('--boot-once-slot')+1]=='/slot.json',command
     passed('boot-once-requires-coordinator-approval-and-is-frozen')
+    # --boot-once-measure os: the diagnostic stage 2 parks after its 0x41 arming; the pass is step 0x0f with the stage-2 tag
+    # and the warm record of a 0x41 expiry, and the wait has no session term.
+    def measure(variant):
+        def configure(args):
+            args.boot_once_slot=out/'slot.json';args.approved_by='coordinator';args.boot_once_measure='os'
+        with patch.object(images,'boot_once_slot',return_value=slot):
+            return lifecycle(out/variant,variant,resident=True,configure=configure)
+    result,model,owner=measure('card-once-measure')
+    boot=result['boot_once']
+    assert boot['passed'] and result['expected_reset'] and boot['measure']=='os',boot
+    assert boot['deadline']['resident_session_s']==0 and boot['deadline']['total_s']==64,boot['deadline']
+    assert boot['expected']=={'gp2':0x0c024041,'marker':board.crumbs.MARKER_KEYED,'last':0x0c030f00,'fault':0,
+                              'tag':board.crumbs.STAGE2_TAG},boot['expected']
+    assert boot['decoded']['stage2']['last']['step']==0x0f,boot['decoded']
+    assert_no_launch(model)
+    passed('boot-once-measure-os-pass-is-step-0f')
+    result,model,owner=measure('card-once-measure-early')
+    boot=result['boot_once']
+    assert not boot['passed'] and result['first_failure']['site']=='boot-once',result
+    stage2=boot['decoded']['stage2']
+    assert stage2['last']['step']==5 and stage2['finish']=={'status':2,'parked':'CPU policy retained','detail':'0x0',
+                                                            'mmc_error':'0x0','mmc_interrupts':'0x0'},stage2
+    passed('boot-once-measure-earlier-stop-is-named-by-the-words')
 
 
 def boot_once_slot_cases(out):
@@ -946,6 +1072,24 @@ def boot_once_slot_cases(out):
     try:images.boot_once_slot(args)
     except ValueError as error:assert 'no measured watchdog recovery' in str(error) and 'after boot0' in str(error),error
     else:raise AssertionError('A boot-once run was admitted while a chain stage has no measured recovery')
+    # A measuring run of the OS row needs the coordinator and is otherwise judged by tools/boot_chain.py measurable().
+    args.boot_once_measure='os'
+    try:images.boot_once_slot(args)
+    except ValueError as error:assert '--approved-by coordinator' in str(error),error
+    else:raise AssertionError('A measuring boot-once run was admitted without the coordinator')
+    args.approved_by='coordinator'
+    for stage,word in (('stage2','only the last stage'),('boot0','only the last stage')):
+        args.boot_once_measure=stage
+        try:images.boot_once_slot(args)
+        except ValueError as error:assert word in str(error),error
+        else:raise AssertionError(('measuring admitted for',stage))
+    args.boot_once_measure='os'
+    real_load=images.load
+    with patch.object(images,'load',lambda name,path:types.SimpleNamespace(flat_runtime=lambda image:runtime)
+                      if name=='boot_once_runtime' else real_load(name,path)):
+        assert images.boot_once_slot(args)['slot']=='A'
+    args.boot_once_measure=args.approved_by=None
+    passed('boot-once-measure-only-the-last-unproven-stage')
     card=types.SimpleNamespace(flat_runtime=lambda image:runtime,unproven=lambda:[])
     with patch.object(images,'load',return_value=card):
         write(images.hashlib.sha256(runtime).hexdigest())
@@ -1014,10 +1158,13 @@ def transport_cases(out):
             assert result['power_epoch'][0]['gate']=={'cold':True,'warm':False,'unmarked':False,'once':False,'refused_step':0,'mode':0}
             contact=result['power_epoch'][0]['contact']
             assert contact=={'rtc_100':0x5c0dc5f9,'rtc_104':0x0c030007,'rtc_108':0x0c028000,'rtc_10c':0x19cf2,'rtc_110':0xfa030001,
-                             'rtc_114':0x96000010,'rtc_118':0x41019db8,'rtc_11c':0x47008000,'wdt_status':1},contact
+                             'rtc_114':0x96000010,'rtc_118':0x41019db8,'rtc_11c':0x47008000,'wdt_status':1,
+                             'losc_ctrl':0x401c,'losc_auto_swt_sta':0,'redirect_flag':0,'redirect_entry':0,'alternate_flag':0},contact
             # One read-only transaction, and the first register access after the ROM checks.
             read=next(i for i,c in enumerate(model.calls) if hex(0x0709011c) in c)
             assert 'writel' not in model.calls[read] and not any(c[0]=='writel' for c in model.calls[:read]),model.calls[:read+1]
+            # The clock-source and redirect words are read in that same transaction.
+            assert all(hex(a) in model.calls[read] for a in (0x07090000,0x07090004,0x070501c0,0x070501c4,0x070501d4)),model.calls[read]
             assert result['power_epoch'][0]['flag_after']==0 and 'marker_after' in result['power_epoch'][0]
         if variant=='marker-stuck':
             assert 'cold-boot marker' in result['first_failure']['detail']
@@ -1066,6 +1213,84 @@ def transport_cases(out):
     else:raise AssertionError('transport error accepted')
     assert model.quarantined and len(model.calls)==0
     passed('transport-error-quarantines-unknown-instance')
+
+
+def journal_cases(out):
+    """The write-ahead journal syncs only before a transaction whose effect recovery must know (board.fel_effects), and a gate holds its
+    next step while a runner is in its FEL work.
+
+    Classification: reads, SRAM staging and the later DRAM writes of an epoch are saved without sync; the first DRAM write of an epoch,
+    every register write and every execute are synced before they reach the board. The counts: the same transactions with the old
+    behaviour (every journal entry before and after each transaction synced, and a sync per readback) and with the new."""
+    import gate_slots
+    root=out/'journal';root.mkdir()
+    file=root/'payload.bin';file.write_bytes(bytes(range(64)))
+    table=[(['version'],[]),(['read','0x71000','64',str(root/'r0.bin')],[]),(['readl','0x20'],[]),
+           (['write','0x71000',str(file)],['sram']),(['write','0x41000000',str(file)],['dram']),(['write','0x41000100',str(file)],['dram']),
+           (['read','0x41000000','64',str(root/'r1.bin')],[]),(['writel','0x2050018','0x16aa0002'],['register']),
+           (['write','0x41000200',str(file)],['dram']),(['readl','0x2050014'],[]),(['exe','0x71000'],['execute']),
+           (['reset64','0x41000000'],['execute'])]
+    for arguments,expected in table:
+        assert sorted(board.fel_effects(arguments))==sorted(expected),(arguments,board.fel_effects(arguments))
+    big=root/'big.bin';big.write_bytes(bytes(128))
+    assert board.fel_effects(['write','0x02050000',str(file)])=={'register'}              # an MMIO bulk write (the WDT block) is journaled
+    assert board.fel_effects(['write','0x07090100',str(file)])=={'register'}              # RTC
+    assert board.fel_effects(['write','0xf3fc0',str(big)])=={'register'}                  # straddles the end of shared SRAM at 0xf4000
+    assert board.fel_effects(['write','0x52d40',str(big)])=={'register'}                  # straddles the end of the launcher at 0x52d80
+    assert board.fel_effects(['write','0x73fc0',str(big)])=={'register'}                  # straddles the start of shared SRAM
+    assert board.fel_effects(['write','0xf3f80',str(big)])=={'sram'}                      # ends exactly at 0xf4000
+    assert board.fel_effects(['write','0x52c00',str(file)])=={'sram'}
+    assert board.fel_effects(['write','0x71000',str(root/'missing.bin')])=={'register'}  # a size that cannot be read is journaled
+    assert board.fel_effects(['frob','1'])=={'register'}                  # an unknown request is always journaled synchronously
+    assert board.fel_effects(['write','0x41000000',str(file),'read','0x41000000','64','x','writel','0x1','0x2'])=={'dram','register'}
+    def sequence(label,old):
+        base=root/label;base.mkdir();args=arguments_for(base)
+        model=Model('normal');owner=board.Live(args,base,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+        calls=[];real=board.os.fsync
+        original_journal=board.Live.journal
+        def counting(descriptor):
+            calls.append(descriptor);return real(descriptor)
+        def forced(self,durable=True):return original_journal(self,True)
+        patches=[patch.object(board.os,'fsync',counting),patch.object(board.os,'access',return_value=True)]
+        if old:patches+=[patch.object(board,'fel_effects',lambda a:{'register'}),patch.object(board.Live,'journal',forced)]
+        with contextlib.ExitStack() as stack:
+            for item in patches:stack.enter_context(item)
+            with owner.locked():
+                for arguments,_ in table[:-2]:
+                    if arguments[0] in ('read',):owner.read(int(arguments[1],0),int(arguments[2]),arguments[3])
+                    else:owner.tx(*arguments)
+                if old:calls.extend([None]*2)                              # the readback syncs of the old code: two reads above
+                owner.sync_evidence()
+        return len(calls),owner
+    before,_=sequence('before',True)
+    after,owner=sequence('after',False)
+    print(f'journal fsyncs for {len(table)-2} transactions: before {before}, after {after}')
+    assert after*3<=before,(before,after)
+    # The synced entries are the ones that matter: with the DRAM epoch bumped by an execute, the next DRAM write syncs again.
+    base=root/'epoch';base.mkdir();args=arguments_for(base);model=Model('normal')
+    owner=board.Live(args,base,{},access=model,process=model.process,now=model.now,sleep=model.sleep);flags=[]
+    original=board.Live.journal
+    def watch(self,durable=True):
+        flags.append(durable);return original(self,durable)
+    with patch.object(board.Live,'journal',watch),patch.object(board.os,'access',return_value=True),owner.locked():
+        owner.tx('write','0x41000000',str(file));owner.tx('write','0x41000100',str(file))
+        owner.epoch+=1;owner.tx('write','0x41000200',str(file))
+    assert flags[1:]==[True,False,False,False,True,False],flags   # flags[0] is adopt()                 # pre/post for each: only the first of an epoch is synced before
+    # A gate holds its step while a runner holds the lock, is released when the runner dies, and is bounded by the runner's deadline.
+    cache=root/'cache';cache.mkdir()
+    waited=gate_slots.wait_for_board(cache,announce=None)
+    assert waited==0.0
+    hold=gate_slots.BoardFel(cache,60);hold.acquire()
+    clock=[0.0]
+    def now():
+        return clock[0]
+    def tick(_):clock[0]+=1.0
+    with patch.object(gate_slots.time,'sleep',tick):
+        waited=gate_slots.wait_for_board(cache,announce=None,now=lambda:__import__('time').time()+clock[0])
+    assert waited>=59,waited                                              # nothing released it: the wait ended at the written deadline
+    hold.release()
+    assert gate_slots.wait_for_board(cache,announce=None)==0.0
+    passed('journal-sync-classes-and-gate-hold')
 
 
 def upload_verify_cases(out):
@@ -1525,9 +1750,24 @@ def daemon_cases(out):
         if n==0:Path(job['image']).write_bytes(b'mutated queued image')
     # Real runner child processes refuse these non-image fixtures in preflight.
     # Even an attempted discovery is a defect; these have no watchdog marker.
+    held={j:Path(j).read_bytes() for j in (json.loads(p.read_text())['image'] for p in (q.root/'entries').glob('*/entry.json'))}
     q.serve(once=True)
     state=json.loads((q.root/'state.json').read_text())
     assert not state['jobs'] and state['history'],state
+    # After each run the daemon holds the entry's image as a hard link to QUEUE/images/SHA256 (tools/board_image_store.py). The
+    # entry refused at claim (its queued bytes changed) never ran; the queue-wide fold holds it too. Every path keeps its bytes.
+    folded=[json.loads(line) for line in (q.root/'ledger.jsonl').read_text().splitlines() if '"images-folded"' in line]
+    assert len(folded)==2 and all(e['copies']>=1 for e in folded),folded
+    ran={e['job'] for e in folded}
+    store=images.load('board_image_store',ROOT/'tools/board_image_store.py')
+    for path,data in held.items():
+        stored=q.root/'images'/(hashlib.sha256(data).hexdigest()+Path(path).suffix)
+        assert Path(path).read_bytes()==data and os.path.exists(stored)==(Path(path).parent.name in ran),path
+    assert not store.fold_queue(q.root,apply=True)['mismatches']
+    for path,data in held.items():
+        stored=q.root/'images'/(hashlib.sha256(data).hexdigest()+Path(path).suffix)
+        assert Path(path).read_bytes()==data and os.path.samefile(path,stored),path
+    passed('daemon-folds-finished-entry-images-into-the-store-with-bytes-unchanged')
     finished=[json.loads((Path(j['directory'])/'entry.json').read_text()) for j in state['history']]
     assert all(j['state']=='done' and j['result']['outcome']=='refused-before-launch' for j in finished)
     assert all(not j['result'].get('launch_attempted') for j in finished)
@@ -2229,7 +2469,7 @@ def main():
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):reset_release_cases(args.out)
-    if 'transport' in groups:development_dram_cases(args.out);reference_cases(args.out);upload_verify_cases(args.out)
+    if 'transport' in groups:development_dram_cases(args.out);reference_cases(args.out);upload_verify_cases(args.out);journal_cases(args.out)
     if 'queue-integrity' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)

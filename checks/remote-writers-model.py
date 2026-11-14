@@ -23,6 +23,7 @@ from unicorn import arm64_const as a64
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness  # noqa: E402  (assertion policy and host tools)
+import stage2_marks as marks_rule  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 KERNEL_FLAGS = ['-march=armv8-a', '-mstrict-align', '-ffreestanding', '-fno-builtin', '-fno-stack-protector',
@@ -145,7 +146,7 @@ def stage2_checks(build, output, ce_only=False):
     cases = []
 
     def case(name, entry, expected, controls=None, changes=None, grant_remote=False, mask=None,
-             watchdog=(), stuck_gp2=False, record=0, consumed=0):
+             watchdog=(), stuck_gp2=False, record=0, consumed=0, last=None, snapshot=None):
         if ce_only and not name.startswith("cold-CE-"): return
         uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         uc.mem_map(0x47000000, 0x400000); uc.mem_map(SENTINEL, 0x1000)
@@ -164,7 +165,7 @@ def stage2_checks(build, output, ce_only=False):
         values = dict(currentel=12, mpidr_el1=0x81000000, midr_el1=0x412fd050,
                       sctlr_el3=0x30c50832, daif=0x3c0, cntfrq_el0=0, cntpct_el0=24000123)
         values.update(controls or {})
-        reads, writes, reset, watched = [], [], [], []
+        reads, writes, reset, watched, marks = [], [], [], [], []
 
         def instruction(u, address, size, unused):
             mnemonic, operands = system[address]
@@ -188,6 +189,9 @@ def stage2_checks(build, output, ce_only=False):
         def write(u, access, address, size, value, unused):
             if address in (0x0205000c, 0x07090108) and entry in ('a733_stage2_gate_entry', 'a733_stage2_main'):
                 watched.append((address, value))
+            elif address >> 12 == 0x07090:  # Progress words: never GP2 (above) or the marker.
+                assert marks_rule.allowed(address, size), (name, hex(address), size)
+                marks.append((address, value))
             elif not 0x47008000 <= address < 0x47400000:
                 writes.append(address)
                 assert address in (0x08001004, 0x08001008), hex(address)
@@ -218,9 +222,16 @@ def stage2_checks(build, output, ce_only=False):
             assert reset and report[3:] == [10 if grant_remote else 9, expected], report
             assert int.from_bytes(uc.mem_read(symbols['a733_stage2_report'] + 368, 8), 'little') == record, name
             assert not any(0x04020000 <= a < 0x04021000 for a in reads), reads
+            # The progress words name the refusal: the last step and the finish status and detail.
+            words, steps = dict(marks), [marks_rule.step(v) for a, v in marks if a == marks_rule.LAST]
+            assert words[marks_rule.TAG] == marks_rule.TAG_VALUE and steps[-1] == last, (name, steps)
+            assert words[marks_rule.FAULT] == marks_rule.FINISH | report[3] and words[marks_rule.ESR] == expected, name
+            if snapshot is not None: assert words.get(marks_rule.SNAPSHOT) == snapshot, (name, words)
         else:
             assert uc.reg_read(a64.UC_ARM64_REG_PC) == SENTINEL and uc.reg_read(a64.UC_ARM64_REG_X0) == expected, name
             assert not writes
+            if snapshot is not None: assert dict(marks).get(marks_rule.SNAPSHOT) == snapshot, (name, marks)
+            elif entry != 'a733_stage2_cpu_cache_owned': assert not marks, (name, marks)
         if entry == "a733_stage2_reset_policy":
             assert 0x03000024 not in reads  # Reset policy itself does not sample BOOT.
         if mask is not None:
@@ -277,13 +288,15 @@ def stage2_checks(build, output, ce_only=False):
     # Main consumes the gate state before the first refusal and keeps the record.
     case('gate-main-consumes-record', 'a733_stage2_main', BIT['E902'],
          changes={**armed, 0x07090108: gate(0x10b1), RISCV_BGR: 1},
-         watchdog=[(0x0205000c, 0x14af), (0x07090108, 0)], record=gate(0x10b1))
+         watchdog=[(0x0205000c, 0x14af), (0x07090108, 0)], record=gate(0x10b1), last=(3, 0))
     case('gate-main-rejected-state-no-write', 'a733_stage2_main', BIT['E902'],
-         changes={**armed, 0x07090108: gate(0x4000 | 0xb1), RISCV_BGR: 1})
-    case('CPU-cache-refuses-unavailable-bus', 'a733_stage2_cpu_cache_owned', 0)
-    case('CPU-cache-refused-before-SD', 'a733_stage2_main', 0, grant_remote=True)
-    case('E902-refused-before-SD', 'a733_stage2_main', BIT['E902'], changes={RISCV_BGR: 1})
-    case('CE-out-of-reset-refused-before-SD', 'a733_stage2_main', BIT['CE'], changes={CCU + 0xac4: 0x30003})
+         changes={**armed, 0x07090108: gate(0x4000 | 0xb1), RISCV_BGR: 1}, last=(3, 0))
+    # The CPU owner refuses at its first read (the unsupported bus) and names it: attempted 0, where 0.
+    case('CPU-cache-refuses-unavailable-bus', 'a733_stage2_cpu_cache_owned', 0, snapshot=marks_rule.CPU)
+    case('CPU-cache-refused-before-SD', 'a733_stage2_main', 0, grant_remote=True, last=(4, 0), snapshot=marks_rule.CPU)
+    case('E902-refused-before-SD', 'a733_stage2_main', BIT['E902'], changes={RISCV_BGR: 1}, last=(3, 0))
+    case('CE-out-of-reset-refused-before-SD', 'a733_stage2_main', BIT['CE'], changes={CCU + 0xac4: 0x30003},
+         last=(3, 0))
     cold = {CCU + 0xac4: 0x30003, 0x030060a0: 0, 0x03000024: 0x100,
             0x47004: 0x4e4f4765, 0x47008: 0x3054422e, 0x47028: 0}
     remote = 'a733_stage2_remote_writers_excluded'
@@ -297,7 +310,9 @@ def stage2_checks(build, output, ce_only=False):
                           ('SMHC0', {CCU + 0xd0c: 0x10001, SMHC['SMHC0']+0x80: 0x80})]:
         case('cold-CE-preserves-' + label, remote, 0, changes={**cold, **change}, mask=BIT[label])
     case('cold-CE-main-other-writer', 'a733_stage2_main', BIT['E902'],
-         changes={**cold, RISCV_BGR: 1})
+         changes={**cold, RISCV_BGR: 1}, last=(3, 0))
+    for rule in marks_rule.negative_cases():  # The rule the routing above applies: never GP2 or the marker.
+        cases.append(dict(case=rule, expected=False, reads=[], writes=[]))
     (output / 'stage2-admission.json').write_text(json.dumps(dict(passed=True, physical_access=False, cases=cases,
         scope='Local system registers and hardware reads modeled; no ownership, cache publication or reset qualification.'), indent=1) + '\n')
     print('PASS stage-2 admission:', len(cases), 'focused instruction cases')
@@ -326,9 +341,9 @@ def stage2_cpu_checks(build, output, selected=()):
         uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         uc.mem_map(0x47000000, 0x400000); uc.mem_map(SENTINEL, 0x1000)
         for address, data in segments: uc.mem_write(address, data)
-        for address, size in ((0x07010000, 0x1000), (0x07050000, 0x10000), (0x08001000, 0x1000)):
+        for address, size in ((0x07010000, 0x1000), (0x07050000, 0x10000), (0x07090000, 0x1000), (0x08001000, 0x1000)):
             uc.mem_map(address, size)
-        regs = {0x0701022c: 0x10001, 0x08001004: 0, 0x08001008: 0}
+        regs = {0x0701022c: 0x10001, 0x08001004: 0, 0x08001008: 0, 0x07090108: 0}  # GP2: no gate record.
         for core in range(1,8):
             regs.update({ppu(core): 0x100, ppu(core)+4: 0, ppu(core)+8: 0x100,
                          ppu(core)+0xfb0: 0x10110100, ppu(core)+0xfc8: 0x0b61043b,
@@ -340,7 +355,7 @@ def stage2_cpu_checks(build, output, selected=()):
                       clidr_el1=0xc3000123, csselr_el1=0)
         geometries = [0x700fe01a, 0x703fe01a, 0x707fe07a]
         if fault=='geometry': geometries[2] ^= 8
-        writes, maintenance, reads = [], [], []
+        writes, maintenance, reads, marks = [], [], [], []
         cache_operands=set()
         held, polls = set(), {}
         parks, resets, barriers = [], [], []
@@ -401,6 +416,9 @@ def stage2_cpu_checks(build, output, selected=()):
 
         def write(u,access,address,size,value,unused):
             if not 0x07000000<=address<0x09000000:return
+            if address>>12==0x07090:  # Progress words only: never GP2 or the marker.
+                assert marks_rule.allowed(address,size),(name,hex(address),size)
+                marks.append((address,value));return
             assert size==4 and address in regs,hex(address)
             writes.append((address,value));regs[address]=value
             for core in range(1,8):
@@ -423,9 +441,15 @@ def stage2_cpu_checks(build, output, selected=()):
         uc.hook_add(UC_HOOK_MEM_READ,read);uc.hook_add(UC_HOOK_MEM_READ,denial);uc.hook_add(UC_HOOK_MEM_WRITE,write)
         uc.reg_write(a64.UC_ARM64_REG_SP,0x473fff00);uc.reg_write(a64.UC_ARM64_REG_X30,SENTINEL)
         uc.emu_start(symbols['a733_stage2_main' if main else 'a733_stage2_cpu_cache_owned'],SENTINEL,count=12000000)
+        words=dict(marks)
+        # A refusal names its step in the snapshot word (0x0c05, attempted cores, where); a grant writes nothing there.
+        snapshot=words.get(marks_rule.SNAPSHOT)
+        if expected or fault=='card': assert snapshot is None,(name,marks)
+        else: assert snapshot is not None and snapshot>>16==marks_rule.CPU>>16,(name,marks)
         if main:
             report=list(struct.unpack('<5Q',uc.mem_read(symbols['a733_stage2_report'],40)))
             assert parks and not resets and report[3]==12,report
+            assert words[marks_rule.FAULT]==marks_rule.FINISH|12<<8|report[4],(name,report,marks)  # Parked retained (12).
         else:
             assert uc.reg_read(a64.UC_ARM64_REG_PC)==SENTINEL,name
             assert uc.reg_read(a64.UC_ARM64_REG_X0)==expected,name
@@ -437,6 +461,7 @@ def stage2_cpu_checks(build, output, selected=()):
         elif fault=='cache-deadline': assert 0<len(maintenance)<18944
         else: assert not maintenance
         results.append(dict(case=name,passed=True,retained=retained,maintenance=len(maintenance),
+                            snapshot=None if snapshot is None else hex(snapshot),
                             policy_writes=len(policy_writes),status_polls=sum(polls.values()),parked=bool(parks)))
 
     case('normal',expected=1,retained=True)

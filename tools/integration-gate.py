@@ -283,6 +283,7 @@ def main(argv=None):
     # (a landing goes ahead of workers). The full suite takes its own lock so that it blocks no landing. The slot is held until
     # the process exits.
     slot_config = gate_slots.load_config()
+    gate_slots.reserve_cpus(slot_config)       # the gate and everything it starts stay off the CPU of the USB interrupt
     if args.full:
         gate_lock = take_gate_lock(cache, 'gate-full.lock')        # the full suite blocks no landing and uses no slot
         slots, build_jobs = 1, 12
@@ -446,6 +447,8 @@ def main(argv=None):
 
     fail_fast = args.fail_fast
     jobs = 1 if fail_fast else args.jobs
+    # Side-by-side image builds (tools/gate_slots.py image_builds): how many at once, the -j of each and the measured peak of one.
+    image_builds, image_jobs, image_peak_gb = (1, build_jobs, 0) if fail_fast else gate_slots.image_builds(slot_config, build_jobs)
     # Every check, build and configure step runs with this environment; it is
     # recorded in environment.txt. Only the configure steps use cfg.sh.
     results, timings = {}, []
@@ -476,6 +479,7 @@ def main(argv=None):
         with guard:
             with (output / 'commands.txt').open('a') as stream:
                 stream.write(name + ': ' + shlex.join(command) + '\n')
+        gate_slots.wait_for_board(cache, note)       # a board run in its FEL work is host-timed: do not start a step beside it
         started, detail = time.monotonic(), ''
         with (output / (name + '.log')).open('w') as log:
             try:
@@ -666,36 +670,59 @@ def main(argv=None):
                     run('central-build', ['cmake', '--build', build_dir, '--target', *targets_to_build, '-j', str(build_jobs)])
             else:
                 skip('central-build', 'central-configure did not pass')
-        for variant in variants:
+        def build_variant(variant):
             directory = build_root / ('gate-os-' + variant + '-' + tree)
             options = [value.replace('{cache}', str(cache)) for value in VARIANTS[variant]]
             if built_for_tree(directory, directory / 'sunstone-a733-os.elf'):
                 results['os-' + variant + '-configure'] = results['os-' + variant + '-build'] = 'PASS'
                 note('CACHED os-' + variant + ': built for this tree state (' + tree_key + ')')
-                continue
+                return
             if run('os-' + variant + '-configure', [cfg, source, directory,
                    *core_options, '-DSUNSTONE_APPLICATION=', '-DSUNSTONE_A733_OS=ON',
                    '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *options]):    # the image checks read each build's compile flags
-                if run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', str(build_jobs)]):
+                if run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', str(image_jobs)]):
                     mark_built(directory)
             else:
                 skip('os-' + variant + '-build', 'os-' + variant + '-configure did not pass')
-        for image, recipe in recipes.items():
+
+        def build_image(image, recipe):
             directory = image_directory(image)
             if built_for_tree(directory, image_file(image)):
                 results['img-' + image + '-configure'] = results['img-' + image + '-build'] = 'PASS'
                 note('CACHED img-' + image + ': built for this tree state (' + tree_key + ')')
-                continue
+                return
             flags = [value.replace('{source}', str(source)).replace('{cache}', str(cache)) for value in recipe['configure']]
             configure_command = ([cfg, source, directory, *core_options, '-DSUNSTONE_A733_OS=ON',
                                   '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', *flags] if 'project' not in recipe else
                                  build_graph.configure_command(source, recipe, directory, cache))
             if run('img-' + image + '-configure', configure_command):
                 if run('img-' + image + '-build', ['cmake', '--build', directory, '--target',
-                                                  *([recipe['target']] if isinstance(recipe['target'], str) else recipe['target']), '-j', str(build_jobs)]):
+                                                  *([recipe['target']] if isinstance(recipe['target'], str) else recipe['target']), '-j', str(image_jobs)]):
                     mark_built(directory)
             else:
                 skip('img-' + image + '-build', 'img-' + image + '-configure did not pass')
+
+        # The images build side by side, image_builds at a time with -j image_jobs each (tools/gate-slots.json, image_builds); a
+        # fail-fast gate builds them one at a time in their fixed order. Each build starts only while MemAvailable stays above the
+        # memory guard plus the measured peak of one image build.
+        image_tasks = [(build_variant, (variant,)) for variant in variants] + [(build_image, item) for item in recipes.items()]
+
+        def start_image(task):
+            function, arguments = task
+            deadline = time.monotonic() + args.memory_wait
+            while True:
+                free = available_gib()
+                if free is None or free >= args.min_available_gb + image_peak_gb or time.monotonic() >= deadline:
+                    break
+                time.sleep(1)
+            function(*arguments)
+        if image_builds == 1:
+            for task in image_tasks:
+                start_image(task)
+        else:
+            with ThreadPoolExecutor(image_builds) as pool:
+                for future in [pool.submit(start_image, task) for task in image_tasks]:
+                    future.result()
         for name, bundle_args in bundles.items():
             output_dir = bundle_file(name).parents[1]
             if bundle_file(name).is_file():
