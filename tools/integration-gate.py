@@ -283,6 +283,7 @@ def main(argv=None):
     # (a landing goes ahead of workers). The full suite takes its own lock so that it blocks no landing. The slot is held until
     # the process exits.
     slot_config = gate_slots.load_config()
+    gate_slots.reserve_cpus(slot_config)       # the gate and everything it starts stay off the CPU of the USB interrupt
     if args.full:
         gate_lock = take_gate_lock(cache, 'gate-full.lock')        # the full suite blocks no landing and uses no slot
         slots, build_jobs = 1, 12
@@ -476,6 +477,7 @@ def main(argv=None):
         with guard:
             with (output / 'commands.txt').open('a') as stream:
                 stream.write(name + ': ' + shlex.join(command) + '\n')
+        gate_slots.wait_for_board(cache, note)       # a board run in its FEL work is host-timed: do not start a step beside it
         started, detail = time.monotonic(), ''
         with (output / (name + '.log')).open('w') as log:
             try:

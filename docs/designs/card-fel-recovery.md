@@ -522,3 +522,40 @@ warm path and the cold path before FEL. The board then presents no USB device
 until the card is removed. Step B executes the revised gate's code bytes on
 the board from SRAM, and the host checks execute the packaged sector at
 `0x83000`, before step D runs.
+
+### The port 3-3 card stays installed (decision of 2026-11-14)
+
+The first boot-once run (`1794619098327285673-8466a823`) did not return to
+FEL. After the user's replug the board came back by itself. A read-only
+capture (`1794643114289036712-ab8b9952`) then found the card exactly as the
+eight autonomous-boot writes left it:
+
+| Sectors | Contents |
+| --- | --- |
+| 0 | MBR `16134954`, FAT32 at sector 139,264 |
+| 16..497 | First stage `2e33cfa1` |
+| 8192 | Slot A header `a6e2ca91` |
+| 16384 | Zero (no slot B) |
+| 32800 | TOC1 `aa35e632` |
+| 40960 | Slot A payload `07b0d8a5` |
+
+The coordinator decided to keep the card as it is and not run the restore
+writes:
+
+- The first-contact words show that a cold power-up comes back to FEL by
+  itself, through the gate's 16-second WDT0 arming
+  ([card-boot-chain.md](card-boot-chain.md#records-for-the-next-miss)).
+- A warm reset never boots the card while the runner sets the marker at
+  every first contact.
+- Diagnosing stage 2 needs a valid slot A.
+
+The two restore writes stay prepared but unsubmitted under
+`~/.cache/sunstoneos/build/card-boot-1111/restore-1113/`:
+
+| Write | Extent | Candidate | Direction |
+| --- | --- | --- | --- |
+| R1 | 16..497 | The step C bytes (all zero), SHA-256 `27b88599` | `restore` |
+| R2 | 8192 | One zero sector | `layout` |
+
+R1 alone makes the card unbootable. Each write needs a fresh read-only
+capture first, because its backup hash names the card state it expects.

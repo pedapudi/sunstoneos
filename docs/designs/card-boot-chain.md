@@ -38,6 +38,24 @@ run returns only through an expiry.
   that the board has shown followed an arming from mode 0: the runner's
   `0x41` at each session reset and the rail-restore helper's `0xb1`. The gate
   and stage 2 now write mode 0 first; the gap is a few register writes.
+
+  Two FEL-only runs on port 3-1 then wrote `0xb1` over a running `0x41`
+  with no disarm, and both reset the board 16 seconds later plus the reset
+  time: the runner's own writes (`1794643227744371298-6101ee0d`, 18.137 s)
+  and the gate's warm path executed from SRAM
+  (`1794643284421551583-789b13b5`, 18.169 s). A mode write over a counter
+  that was armed from mode 0 in the same power epoch restarts it at the new
+  interval. `REARM_MEASURED` in `tools/boot_chain.py` cites both runs. Two
+  conditions of the 2026-11-13 run stay unmeasured and are listed in
+  `REARM_OPEN`:
+
+  | Condition | Where the old code met it |
+  | --- | --- |
+  | A re-arm over a mode that survived its own expiry reset | The gate's cold path after the runner's `0x41` reset |
+  | Output and configuration writes over a running counter | The gate's cold path, before its mode write |
+
+  The disarm-first code meets neither, so no stage depends on them. A stage
+  that re-arms stays unproven, and its refusal names both conditions.
 - **Expiry after boot0's PMIC writes.** boot0 trains DRAM and writes the
   AXP8191 rails DCDC2, DCDC4, DCDC6, DCDC7 and ELDO1 before any of these
   armings can expire. No board run has let WDT0 expire in that state, and no
@@ -80,3 +98,23 @@ After a replug that keeps VDD_RTC above 0.7 V, GP2 then shows whether stage 2
 consumed the gate's cold record, and the LAST word shows whether the OS ran.
 Stage 2 keeps its progress in DRAM, which a power loss erases; a stage-2
 progress word in the RTC domain needs a new package on the card.
+
+The user's replug of 2026-11-13 23:48 did not keep VDD_RTC. Port 3-1's
+first contact afterwards read the marker as 0 and WDT0 output at its reset
+value `0x1f`. Port 3-3's first contact
+(`1794643114289036712-ab8b9952`) read:
+
+- GP2 `0x0c0240b1`: a warm record, with WDT0 mode `0xb1` at gate entry and no
+  cold flag;
+- the marker `0x16aa16aa` and the other seven RTC words 0;
+- WDT0 status 1, configuration 1 and output 2.
+
+WDT0 resets at power-up, so the gate armed `0xb1` after the replug. Only
+its cold path does that, so the marker read 0 and the card cold-booted.
+Stage 2 then cleared the cold record. It never armed `0x41`, because the
+reset found mode `0xb1`. The gate's 16-second arming, made from mode 0,
+expired after boot0's PMIC writes and returned the board to FEL. The kernel
+log shows one enumeration of port 3-3, at 23:48:47, 27 seconds after port
+3-1's. This is the first board record of an expiry after boot0. It is not in
+`MEASURED` yet: the coordinator decides whether it grants the boot0 and
+stage-2 rows.

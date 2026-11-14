@@ -21,6 +21,7 @@ import uuid
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import board_images as images
+import gate_slots
 import host_priority
 import host_space
 from host_evidence import evidence_directory
@@ -76,8 +77,10 @@ def check_wifi_stage(args):
             '--radio-stage-limit %d joins the stored network: name it with --wifi NAME (tools/wifi-credential.py add NAME).' % prepare.ASSOCIATE_STAGE)
 
 
-def save(path, value):
-    """Durable replacement; keep the previous bytes until replacement succeeds."""
+def save(path, value, durable=True):
+    """Atomic replacement; keep the previous bytes until replacement succeeds. With durable, the file and its directory are synced
+    to disk before this returns; without, the replacement is atomic against a crash of this process (the page cache keeps it) but a
+    host crash may lose it. Only the journal's entries for reads and staging use that (Live.journal, FEL_READS)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
@@ -85,17 +88,77 @@ def save(path, value):
         json.dump(value, stream, indent=2, sort_keys=True)
         stream.write('\n')
         stream.flush()
-        os.fsync(stream.fileno())
+        if durable:
+            os.fsync(stream.fileno())
     temporary.replace(path)
-    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    if durable:
+        fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 class TransportFailure(RuntimeError):
     pass
+
+
+# The write-ahead entry of the session journal (Live.tx) is synced to disk before a FEL transaction only when recovery after a host
+# crash must know that the transaction may have taken effect. tools/board.py's recovery (Queue.recover) reads no journal; the person
+# or tool that inspects an interrupted run (tools/finish-fel-read.py, tools/read-returned-result.py) reads session.json to learn what
+# the board may be doing and what it holds. What each class protects:
+#   reads (version, read, readl, hexdump, dump, sid)  nothing: no effect on the board; their entries are evidence, saved without sync
+#   SRAM staging writes (the whole range in FEL_SRAM)   nothing alone: SRAM holds only the helpers that an exe starts, and every exe syncs
+#   DRAM writes (address at or above DRAM_BASE)         the DRAM ownership: the first write of an epoch syncs, so recovery knows the DRAM
+#                                                       may hold the image; later writes of the epoch add nothing to know
+#   register writes (writel and any unknown command)    rail, clock, watchdog and power state: always synced
+#   execution (exe, reset64, spl)                       the launch and every code run: always synced, and they start a new DRAM epoch
+# The longest a gate holds a step for one run's FEL work: the returning lifetime of a session (tools/session.py, 60 s).
+FEL_HOLD_SECONDS = 60
+FEL_READS = frozenset({'version', 'ver', 'hexdump', 'dump', 'read', 'readl', 'sid'})
+FEL_COMMANDS = FEL_READS | {'write', 'writel', 'exe', 'reset64', 'spl', 'fill', 'clear'}
+FEL_EXECUTES = frozenset({'exe', 'reset64', 'spl'})
+DRAM_BASE = 0x40000000
+# The SRAM that the runner stages into, each range from the constant or the document that fixes it. MMIO (the WDT, RTC and PMIC bus
+# registers, from 0x02000000) lies below DRAM_BASE too, so an address below DRAM_BASE is not enough: a write is SRAM staging only when
+# its whole range [address, address + size) lies inside one of these.
+FEL_SRAM = (images.LAUNCHER_SRAM,      # the launcher's reservation 0x52000..0x52d80 (docs/board-runner.md)
+            (0x71000, 0x71200),        # the ROM scratch that readl uses and the runner preserves (Live.sanity)
+            (0x74000, 0xf4000))        # shared SRAM, CPU addresses 0x00074000-0x000f3fff (the manual; docs/npu-platform.md)
+
+
+def fel_effects(arguments, size_of=lambda path: os.stat(path).st_size):
+    """The write-ahead class of one FEL transaction (a sequence of commands, each followed by its operands, which are addresses, sizes
+    and paths and never a command name): the set of {'execute', 'register', 'dram', 'sram'} that it may change; empty for reads. A
+    command that is not known, a write whose address or size does not parse, and a write whose range is not wholly inside FEL_SRAM or
+    wholly at or above DRAM_BASE (MMIO, or a range straddling a boundary) are register effects, so such a request is always journaled
+    synchronously. size_of(path) is the size of the file a write sends."""
+    effects, words, i = set(), list(arguments), 0
+    if not words or words[0] not in FEL_COMMANDS:
+        return {'register'}
+    while i < len(words):
+        command, j = words[i], i + 1
+        while j < len(words) and words[j] not in FEL_COMMANDS:
+            j += 1
+        operands = words[i + 1:j]
+        if command in FEL_EXECUTES:
+            effects.add('execute')
+        elif command == 'write':
+            try:
+                address = int(operands[0], 0)
+                end = address + size_of(operands[1])
+                if address >= DRAM_BASE:
+                    effects.add('dram')
+                elif any(low <= address and end <= high for low, high in FEL_SRAM):
+                    effects.add('sram')
+                else:
+                    effects.add('register')              # MMIO or a range that straddles a boundary
+            except (IndexError, ValueError, OSError):
+                effects.add('register')
+        elif command not in FEL_READS:
+            effects.add('register')
+        i = j
+    return effects
 
 
 class NoReturn(RuntimeError):
@@ -220,6 +283,10 @@ class Live:
         self.armed = False
         self.deadline = None
         self.journal_error = None
+        self.fel = None               # gate_slots.BoardFel: held while this runner does FEL work, released while the board runs
+        self.epoch = 0                # execution epochs: exe, reset64 and spl start one; a DRAM write syncs the journal once per epoch
+        self.dram_synced_epoch = -1
+        self.unsynced_readbacks = []  # evidence files whose sync is deferred to sync_evidence()
         self.recovery_deadline = None
         self.recovering = False
         self.dma_binding = None
@@ -251,11 +318,22 @@ class Live:
             return None
         return seconds+nanoseconds/1e9
 
-    def journal(self):
+    def journal(self, durable=True):
         try:
-            save(self.evidence/'session.json', self.record)
+            save(self.evidence/'session.json', self.record, durable)
         except OSError as error:
             self.journal_error = error
+
+    def sync_evidence(self):
+        """Sync what was saved without sync: the journal (one durable write covers every earlier entry) and the readback files."""
+        self.journal()
+        for path in self.unsynced_readbacks:
+            try:
+                with Path(path).open('rb') as stream:
+                    os.fsync(stream.fileno())
+            except OSError as error:
+                self.journal_error = self.journal_error or error
+        self.unsynced_readbacks = []
 
     @contextlib.contextmanager
     def locked(self):
@@ -309,6 +387,7 @@ class Live:
         self.access.require_rom(node)
         require(self.access.target(node).name == self.args.port, 'Physical target changed.')
         self.node, self.identity = node, self.access.identity(node)
+        self.epoch += 1               # a fresh FEL instance: its DRAM is a new ownership epoch
         self.record.setdefault('instances', []).append({'node': str(node), 'identity': self.identity})
         self.journal()
 
@@ -329,7 +408,17 @@ class Live:
                 'Only the armed SRAM recovery gate permits a launch disconnect.')
         entry = {'arguments': arguments, 'start': self.now()}
         self.record.setdefault('transactions', []).append(entry)
-        self.journal()  # A file failure here precedes device communication.
+        # The write-ahead entry is synced only before a transaction whose effect recovery must know (fel_effects); a read or an SRAM staging
+        # write is saved without sync, and the next synced entry (or sync_evidence at the end) carries it to disk.
+        effects = fel_effects(arguments)
+        if 'dram' in effects and self.dram_synced_epoch == self.epoch:
+            effects.discard('dram')                  # the DRAM ownership of this epoch is already on disk
+        durable = bool(effects - {'sram'})
+        if 'dram' in effects:
+            self.dram_synced_epoch = self.epoch
+        if 'execute' in effects:
+            self.epoch += 1
+        self.journal(durable)  # A file failure here precedes device communication.
         try:
             if self.access.identity(self.node) != self.identity or self.access.target(self.node).name != self.args.port:
                 raise TransportFailure('USB identity changed before FEL request.')
@@ -358,7 +447,7 @@ class Live:
             raise TransportFailure('FEL transaction failed: ' + result.stderr.strip())
         entry.update(exit_code=0, stdout=result.stdout, stderr=result.stderr, seconds=self.now()-entry['start'])
         try:
-            self.journal()
+            self.journal(False)
         except OSError as error:
             # Hardware has already completed the request. Let the caller
             # classify/disarm it before reporting this host filesystem error.
@@ -369,8 +458,7 @@ class Live:
         self.tx('read', hex(address), size, path, timeout=max(30, size/100000+10))
         data = Path(path).read_bytes()
         require(len(data) == size, 'Incomplete FEL readback.')
-        with Path(path).open('rb') as stream:
-            os.fsync(stream.fileno())
+        self.unsynced_readbacks.append(path)
         return data
 
     def upload(self, address, source, *, expected_sha256=None, readback=True):
@@ -393,8 +481,7 @@ class Live:
         returned = path.read_bytes()
         if returned != data:
             raise upload_fault('readback', address, data, source, observed=returned)
-        with path.open('rb') as stream:
-            os.fsync(stream.fileno())
+        self.unsynced_readbacks.append(path)
         return data
 
     def verify_digests(self, pending):
@@ -1156,7 +1243,11 @@ class Live:
             self.tx(*plan['launch'], recovery_launch=True, timeout=plan['launch_seconds'])
         else:
             self.tx(*plan['launch'])
+        if self.fel:
+            self.fel.release()          # the board runs the application: no host-timed work until it returns
         self.wait(plan['watchdog']['session_seconds'] + crumbs.interval(plan['watchdog']['mode']) + 10)
+        if self.fel:
+            self.fel.acquire()
         if recovery:
             recovery.receipt(self, launched)
             if getattr(self.args, 'rearm_expiry', None) == 'gate':
@@ -1392,6 +1483,9 @@ def run_image(args, backend=Live):
                 args.fel = fel
         owner = backend(args, evidence, result)
         owner.credential = credential
+        # Gates hold their next step while this runner is in its FEL work (gate_slots.BoardFel); the hold ends with the run's own lifetime.
+        owner.fel = gate_slots.BoardFel(CACHE, FEL_HOLD_SECONDS)
+        owner.fel.acquire()
         with owner.locked():
             try:
                 timed('identity', owner.sanity)
@@ -1561,6 +1655,10 @@ def finish_result(result, evidence, started, stage, owner=None):
     result.setdefault('host_pressure', {})['end'] = host_priority.pressure()
     # Raw transaction evidence has its own record; result.json stays compact.
     summary = {k:v for k,v in result.items() if k != 'transactions'}
+    if owner is not None:
+        owner.sync_evidence()     # the journal entries and readback files saved without sync during the run
+        if owner.fel:
+            owner.fel.release()
     save(evidence/'result.json', summary)
     print(f"{summary['port']} {summary['kind']} {summary.get('image_sha256','unreadable')[:12]} {summary['outcome']} {evidence/'result.json'}", flush=True)
     return summary
