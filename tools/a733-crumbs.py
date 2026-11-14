@@ -112,6 +112,28 @@ GATE_FLAGS = {'cold': 0x8000, 'warm': 0x4000, 'unmarked': 0x2000, 'once': 0x1000
 BOOT_ONCE = 0xb0070c02
 
 
+# Read at every first contact, in the same transaction as RESET_WORDS and before any write: all eight RTC
+# general-purpose words (tag, LAST, GP2, time, fault, ESR, ELR, FAR) and WDT0's interrupt status. RTC words survive
+# watchdog resets and short power losses, so after a run that never returned they show where it stopped.
+CONTACT_WORDS = {'rtc_%03x' % offset: RTC + offset for offset in range(0x100, 0x120, 4)}
+CONTACT_WORDS['wdt_status'] = 0x02050004
+
+
+def contact_arguments():
+    """FEL reads of RESET_WORDS then CONTACT_WORDS; no write."""
+    args = reset_arguments()
+    for address in CONTACT_WORDS.values():
+        args += ['readl', hex(address)]
+    return args
+
+
+def parse_contact(stdout):
+    values = [int(x, 16) for x in stdout.split()]
+    if len(values) != len(RESET_WORDS) + len(CONTACT_WORDS):
+        raise ValueError('Unexpected first-contact readback.')
+    return dict(zip(RESET_WORDS, values)), dict(zip(CONTACT_WORDS, values[len(RESET_WORDS):]))
+
+
 def reset_arguments():
     args = []
     for address in RESET_WORDS.values():
