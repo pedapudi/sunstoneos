@@ -1016,7 +1016,12 @@ static void control(void *unused)
     uint64_t busy_start = __atomic_load_n(&busy[1], __ATOMIC_RELAXED);
     xTaskNotifyGive(local_sender);
     control_phase = 0x514;
-    configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000)) == 1);
+    /* A liveness bound, not a latency assertion: the 64 local-wake rounds must all complete (the assertions after the print below),
+     * and this wait only ends a run that hangs. Under QEMU's round-robin icount the elapsed ticks include the instructions of every
+     * core that spins while it waits, so the phase takes 905 ticks in nearly every run, 1,600 in about one run in fifty under host
+     * load, and 1,891 with the 3,000-turn owner-drain perturbation of checks/scheduler-control-linked.py (the old 2,000 ms bound failed
+     * a gate once). The bound is 4 times the slowest value measured, 1,891 ticks at configTICK_RATE_HZ 1,000: 7,600 ms. */
+    configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(7600)) == 1);
     uint64_t busy_delta = __atomic_load_n(&busy[1], __ATOMIC_RELAXED) - busy_start;
     platform_puts("local-wake attempts="); platform_hex(local_wakes);
     platform_puts(" completions="); platform_hex(local_completed);
