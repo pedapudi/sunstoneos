@@ -7,6 +7,7 @@ Optional --hello prepares a real generic CPU-return ELF without a board; the gen
 """
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -1447,9 +1448,24 @@ def daemon_cases(out):
         if n==0:Path(job['image']).write_bytes(b'mutated queued image')
     # Real runner child processes refuse these non-image fixtures in preflight.
     # Even an attempted discovery is a defect; these have no watchdog marker.
+    held={j:Path(j).read_bytes() for j in (json.loads(p.read_text())['image'] for p in (q.root/'entries').glob('*/entry.json'))}
     q.serve(once=True)
     state=json.loads((q.root/'state.json').read_text())
     assert not state['jobs'] and state['history'],state
+    # After each run the daemon holds the entry's image as a hard link to QUEUE/images/SHA256 (tools/board_image_store.py). The
+    # entry refused at claim (its queued bytes changed) never ran; the queue-wide fold holds it too. Every path keeps its bytes.
+    folded=[json.loads(line) for line in (q.root/'ledger.jsonl').read_text().splitlines() if '"images-folded"' in line]
+    assert len(folded)==2 and all(e['copies']>=1 for e in folded),folded
+    ran={e['job'] for e in folded}
+    store=images.load('board_image_store',ROOT/'tools/board_image_store.py')
+    for path,data in held.items():
+        stored=q.root/'images'/(hashlib.sha256(data).hexdigest()+Path(path).suffix)
+        assert Path(path).read_bytes()==data and os.path.exists(stored)==(Path(path).parent.name in ran),path
+    assert not store.fold_queue(q.root,apply=True)['mismatches']
+    for path,data in held.items():
+        stored=q.root/'images'/(hashlib.sha256(data).hexdigest()+Path(path).suffix)
+        assert Path(path).read_bytes()==data and os.path.samefile(path,stored),path
+    passed('daemon-folds-finished-entry-images-into-the-store-with-bytes-unchanged')
     finished=[json.loads((Path(j['directory'])/'entry.json').read_text()) for j in state['history']]
     assert all(j['state']=='done' and j['result']['outcome']=='refused-before-launch' for j in finished)
     assert all(not j['result'].get('launch_attempted') for j in finished)

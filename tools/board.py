@@ -20,6 +20,7 @@ import uuid
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import board_image_store as image_store
 import board_images as images
 import host_priority
 import host_space
@@ -2197,6 +2198,7 @@ class Queue:
                                 result = {'outcome':'host-error', 'first_failure':{'site':'runner-process','detail':f'exit {process.returncode}'},
                                           'image_sha256':job['image_sha256'], 'port':port, 'durations':{}, 'evidence_path':job['directory']}
                             self.complete(job['id'],result)
+                            self.fold_images(job)
                             del active[port]
                         job = self.claim(port)
                         if job is not None:
@@ -2221,6 +2223,16 @@ class Queue:
                     path = Path(job['directory'])/'run/result.json'
                     if path.exists():
                         self.complete(job['id'],json.loads(path.read_text()))
+                        self.fold_images(job)
+
+    def fold_images(self, job):
+        """After a run has finished, hold the entry's image copies as hard links to the queue's image store
+        (tools/board_image_store.py). The bytes at every path stay the same; a failure leaves the copies and is recorded."""
+        try:
+            folded, freed = image_store.fold_entry(Path(job['directory']), self.root/image_store.STORE)
+            self.event('images-folded', job=job['id'], copies=folded, freed_bytes=freed)
+        except (OSError, image_store.StoreMismatch) as error:
+            self.event('images-fold-failed', job=job['id'], error=str(error))
 
 
 # The caller-controlled launch options a submission freezes in its queue entry.

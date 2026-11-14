@@ -192,6 +192,19 @@ launch. Status includes running entries, eligible queued entries and the last
 start, result, withdrawal, pause and resume. Entry files and earlier evidence are retained.
 `--queue DIR`, before the subcommand, selects an isolated queue.
 
+The queue keeps each image once. An entry holds its image in up to four places: the submitted copy (`image.elf`), the
+runner's frozen copy (`run/image.elf`), the prepared bundle's copy (`run/bundle/image.elf`) and a template copy
+(`template/board/image.elf`). After a run has finished, the daemon replaces each copy with a hard link to
+`images/SHA256.elf` (or `.bin`) in the queue directory, and records an `images-folded` ledger event. Each path keeps its
+bytes, so nothing that the runner uploads or admits changes and no reader needs to resolve a hash. A copy is replaced
+only after its SHA-256 and size match the stored file, whose own SHA-256 is checked against its name first, and the
+replacement is an atomic rename. A stored file is read-only, so a write through one link cannot change another entry. The
+daemon folds nothing before a run, because a queued image is still an input. `tools/board_image_store.py fold --apply`
+folds every entry whose `entry.json` says it is done (an entry refused at claim never reaches the daemon's fold), and
+`verify` checks every stored file against its name; a stored file with a link count of 1 belongs to no entry. On
+2026-11-13 the fold held 2,711 copies (17.7 GB) as 678 stored images (4.2 GB). `checks/board-image-store.py` and the
+daemon cases of `checks/board-runner.py` check this.
+
 ## Resident completion test
 
 `--lifetime resident` selects the linked resident contract and requires
