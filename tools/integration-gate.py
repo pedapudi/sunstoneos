@@ -782,7 +782,7 @@ def main(argv=None):
             if missing:
                 skip(task['name'], ', '.join(missing) + ' did not pass')
             elif timing(task['name'], task['script']):
-                with gate_slots.timing_lock(cache, args.label, note):
+                with gate_slots.timing_lock(cache, args.label, note, priority=args.priority):
                     run(task['name'], task['command'], task['script'], args.check_timeout)
             else:
                 run(task['name'], task['command'], task['script'], args.check_timeout)
