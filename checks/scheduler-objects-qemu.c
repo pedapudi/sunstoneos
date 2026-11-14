@@ -18,6 +18,7 @@
 #include "event_groups.h"
 #include "stream_buffer.h"
 #include "platform.h"
+#include "perturb.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -30,6 +31,19 @@ volatile unsigned ss_wake_stop;
 void ss_kernel_test_admin_enter(unsigned cpu) { (void)cpu; }
 static uint64_t frequency(void) { uint64_t v; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(v)); return v; }
 static void field(const char *name, uint64_t value) { platform_puts(name); platform_hex(value); }
+/* A tick budget that scales with a delay injected at a kernel site (perturb.h), so a delay alone cannot exhaust it; a lost
+ * wake still exceeds any scaled budget. One loaded turn costs a few instructions; a kernel call costs hundreds. */
+static TickType_t budget(unsigned ms)
+{
+#ifdef SS_KERNEL_TEST_PERTURB
+    const volatile uint32_t *table = (const volatile uint32_t *)(uintptr_t)SS_KERNEL_TEST_PERTURB;
+    unsigned turns = 0;
+    for (unsigned site = 0; site < SS_PERTURB_SITES; ++site) turns += table[1 + site];
+    return pdMS_TO_TICKS(ms) * (1 + turns / 100);
+#else
+    return pdMS_TO_TICKS(ms);
+#endif
+}
 
 /* ---- Phase 1 ------------------------------------------------------------------------------------------------- */
 #define CANDIDATES 48U
@@ -118,7 +132,8 @@ static volatile uint32_t isr_gives, task_takes;
 void ss_wake_isr(unsigned core)
 {
     BaseType_t woken = pdFALSE;
-    if (shared && !isr_stop) {
+    /* A delayed run takes more interrupts before the producers finish; a source sends at most PER_SOURCE messages. */
+    if (shared && !isr_stop && isr_sequence[core] < PER_SOURCE) {
         struct message m = { SOURCES / 2 + core, isr_sequence[core] };
         if (xQueueSendFromISR(shared, &m, &woken) == pdPASS) {
             __atomic_fetch_add(&produced_ok[m.source], 1, __ATOMIC_RELAXED);
@@ -252,7 +267,7 @@ static void wait_for(volatile unsigned *value, unsigned target)
 {
     const TickType_t start = xTaskGetTickCount();
     while (__atomic_load_n(value, __ATOMIC_ACQUIRE) < target) {
-        configASSERT(xTaskGetTickCount() - start < pdMS_TO_TICKS(4000));
+        configASSERT(xTaskGetTickCount() - start < budget(4000));
         vTaskDelay(1);
     }
 }
@@ -286,7 +301,7 @@ static void phase1(void)
     for (unsigned core = 2; core < CORES; ++core) {
         const TickType_t start = xTaskGetTickCount();
         while (__atomic_load_n(&progress[core], __ATOMIC_ACQUIRE) < 2) {
-            configASSERT(xTaskGetTickCount() - start < pdMS_TO_TICKS(4000));
+            configASSERT(xTaskGetTickCount() - start < budget(4000));
             vTaskDelay(1);
         }
     }

@@ -2,6 +2,7 @@
 #include "task.h"
 #include "platform.h"
 #include <stdbool.h>
+#include "perturb.h"
 
 /* No switch request may be lost. On cores 1 to 7 an API-level timer interrupt wakes a priority 6 task from the
  * interrupt (xTaskNotifyGiveFromISR and portYIELD_FROM_ISR) over a busy priority 1 task, while, in the storm build,
@@ -9,8 +10,14 @@
  * A lost request shows as a wake that waits for the next interrupt exit, 200 us later or more. The check counts,
  * per core, the wakes raised in the interrupt (woken true) and the task runs that served them, the latency from the
  * interrupt to the task in counter ticks, and ordinary wakes later than half a wake period; at the end no switch
- * request may be pending. Forced maintenance cases report separate timing; the clean fast-path case retains the
- * ordinary latency bound. */
+ * request may be pending. Forced maintenance cases report separate timing.
+ *
+ * The latency bound is not asserted here. QEMU's round-robin icount counts the instructions of a core that spins while it waits
+ * (the priority-1 busy task) as elapsed time for every other core, so the interrupt-to-task time in counter ticks depends on how the
+ * eight cores happen to interleave and exceeded half a wake period in about one run in twenty under host load. The empty functions
+ * ymark_isr_N and ymark_srv_N mark the interrupt and the served task of core N; a QEMU plugin (tools/qemu-critical-path.c) reads
+ * the instructions each core executes between the two marks, and checks/scheduler-control-linked.py bounds the critical path (the
+ * owner's instructions plus the victim's own instructions outside busy_task) by half a wake period. */
 #define CORES configNUMBER_OF_CORES
 #define WAKE_PERIODS 300U
 _Static_assert(CORES == 8, "the check needs the eight-core configuration");
@@ -35,9 +42,31 @@ void ss_kernel_test_irq_result(unsigned kind, bool fast, uint64_t services) {
 #endif
 static uint64_t counter(void) { uint64_t v; __asm__ volatile("isb\n mrs %0, cntvct_el0" : "=r"(v) :: "memory"); return v; }
 
+/* Marker functions of the plugin; consecutive, 8 bytes each, wake before served, in core order. */
+__attribute__((noinline, section(".text.ymark"))) void ymark_isr_0(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_srv_0(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_isr_1(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_srv_1(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_isr_2(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_srv_2(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_isr_3(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_srv_3(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_isr_4(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_srv_4(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_isr_5(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_srv_5(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_isr_6(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_srv_6(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_isr_7(void) { __asm__ volatile("nop"); }
+__attribute__((noinline, section(".text.ymark"))) void ymark_srv_7(void) { __asm__ volatile("nop"); }
+static void mark_isr(unsigned core)
+{ static void (*const mark[CORES])(void) = {ymark_isr_0, ymark_isr_1, ymark_isr_2, ymark_isr_3, ymark_isr_4, ymark_isr_5, ymark_isr_6, ymark_isr_7}; mark[core % CORES](); }
+static void mark_srv(unsigned core)
+{ static void (*const mark[CORES])(void) = {ymark_srv_0, ymark_srv_1, ymark_srv_2, ymark_srv_3, ymark_srv_4, ymark_srv_5, ymark_srv_6, ymark_srv_7}; mark[core % CORES](); }
 void ss_wake_isr(unsigned core) {
     BaseType_t woken = pdFALSE;
     stat[core].started = counter();
+    mark_isr(core);
     stat[core].injected_kind = 0;
     if (high[core]) vTaskNotifyGiveFromISR(high[core], &woken);
     if (woken) {
@@ -68,6 +97,19 @@ static void high_task(void *argument) {
             continue;
         }
 #endif
+#ifdef SS_KERNEL_TEST_PERTURB
+        /* The regression case of checks/scheduler-control-linked.py: the word after the perturbation sites holds extra loop turns of
+         * work on the wake path after the switch, before the served mark, for every wake of the cores that word 0 of the table selects
+         * (zero: all). The model tolerates little: beyond about 2,700 turns its end-of-run accounting (every raised wake served five
+         * ticks after the stop) fails, so the regression case sits just inside that and just above the bound. */
+        {
+            const volatile uint32_t *table = (const volatile uint32_t *)(uintptr_t)SS_KERNEL_TEST_PERTURB;
+            const uint32_t cores = table[0], turns = table[1 + SS_PERTURB_SITES];
+            if (!cores || (cores & (UINT32_C(1) << core)))
+                for (volatile uint32_t turn = 0; turn < turns; ++turn) {}
+        }
+#endif
+        mark_srv(core);
         ++stat[core].samples;
         stat[core].sum += latency;
         if (latency > stat[core].max) stat[core].max = latency;
@@ -124,8 +166,7 @@ static void control(void *argument) {
     }
 #endif
     configASSERT(raised > WAKE_PERIODS && raised == served);
-    configASSERT(late == 0);
-    platform_puts("PASS yield: ordinary wakes meet half a wake period, injected maintenance runs its pre-switch service, no wake is lost\n");
+    platform_puts("PASS yield: no wake is lost, injected maintenance runs its pre-switch service; the wake latency bound is the critical path of checks/scheduler-control-linked.py\n");
     platform_exit(0);
 }
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name) {
