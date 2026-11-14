@@ -138,6 +138,9 @@ struct ssKernelCPU {
     UBaseType_t o_mask;
     UBaseType_t control_open_mask;
     unsigned service_depth;
+    /* The inbox's control count when this CPU last found no control request
+     * due; any CPU may store it, since each stored value was checked. */
+    _Atomic uint32_t control_checked;
     uint64_t control_seen[2];
     bool command_no_wait[SS_OWNER_SLOTS], command_delete[SS_OWNER_SLOTS];
     /* The tick's flush reads both words; keep them on one line. */
@@ -160,9 +163,9 @@ _Static_assert(offsetof(struct ssKernelCPU, yield_tail) / SS_CACHE_LINE ==
 static _Atomic uint64_t ssKernelIdleMask;
 _Static_assert(sizeof(struct ssKernelCPU) % SS_CACHE_LINE == 0 && _Alignof(struct ssKernelCPU) == SS_CACHE_LINE,
                "owners do not share cache lines");
-_Static_assert(offsetof(struct ss_owner, incoming) % SS_CACHE_LINE == 0 &&
+_Static_assert(offsetof(struct ss_owner, inbox) % SS_CACHE_LINE == 0 &&
                offsetof(struct ss_owner, detached) % SS_CACHE_LINE == 0 &&
-               offsetof(struct ss_owner, incoming) / SS_CACHE_LINE != offsetof(struct ss_owner, current) / SS_CACHE_LINE,
+               offsetof(struct ss_owner, inbox) / SS_CACHE_LINE != offsetof(struct ss_owner, current) / SS_CACHE_LINE,
                "remote wake words have their own lines");
 /* Critical-section commands belong to their caller across migration. Keep
  * these bounded slow-path cookies separate from hot owner/task metadata. No
@@ -185,6 +188,28 @@ static inline bool ssKernelHolds(const struct ssKernelCPU *cpu)
 }
 static struct ss_kernel_registry ssKernelRegistry;
 static struct ss_control ssKernelControl;
+/* ss_control_has_pending for CPU c, reading only c's inbox line while the control path's request count equals the one
+ * last checked. A changed count reads the pending and parked words; if none is due the count is recorded. Every
+ * request counted at or before that load is visible to the words read after it, so a request that the record covers
+ * was not due then, and a later one changes the count. A task that migrates between reading c and storing records a
+ * value that was checked. */
+static inline bool ssKernelControlPending(unsigned c)
+{
+    uint32_t requests = atomic_load_explicit(&ssKernelCPUs[c].run.inbox.control, memory_order_acquire);
+    if (requests == atomic_load_explicit(&ssKernelCPUs[c].control_checked, memory_order_relaxed)) return false;
+    if (ss_control_has_pending(&ssKernelControl, c)) return true;
+    atomic_store_explicit(&ssKernelCPUs[c].control_checked, requests, memory_order_relaxed);
+    return false;
+}
+/* Object repair parked on a resource waits for its release; the parked words are read only when repair is recorded. */
+static inline bool ssKernelRepairDue(const struct ssKernelCPU *cpu, unsigned c)
+{
+    for (unsigned w = 0; w < 2; ++w)
+        if (cpu->object_repair[w] &&
+            (cpu->object_repair[w] & ~atomic_load_explicit(&ssKernelControl.parked[c].word[w], memory_order_acquire)))
+            return true;
+    return false;
+}
 static _Atomic uint64_t ssKernelTime;
 static _Atomic uint64_t ssKernelAdminNext, ssKernelAdminServing;
 static struct ssKernelWaitSet ssKernelAdminWait;
@@ -509,6 +534,7 @@ static void ssKernelInitialize(void)
                     &ssKernelBackend, &ops);
     for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
         ss_owner_init(&ssKernelCPUs[c].run, c, &ssKernelBackend);
+        ss_control_attach_inbox(&ssKernelControl, c, &ssKernelCPUs[c].run.inbox);
         ss_deadline_init(&ssKernelCPUs[c].deadlines);
         atomic_init(&ssKernelCPUs[c].slice_deadline, UINT64_MAX);
     }
@@ -661,25 +687,28 @@ static void ssKernelCommandsFinish(bool);
 static void ssKernelWait(unsigned, uint64_t, uint64_t);
 static void ssKernelCommandsDetach(void);
 /* Object publications retain waiter references until the outer metadata lock
- * is released. No producer writes a foreign owner node or timeout entry. */
+ * is released. No producer writes a foreign owner node or timeout entry. Every
+ * caller holds the local API mask, which ss_owner_publish requires: one
+ * writer per source outbox. */
 static void ssKernelPublishReference(struct ss_kernel_pin pin)
 {
     SS_PMU_ENTER;
     struct ssKernelTask *s = &ssKernelTasks[pin.slot];
     unsigned priority = atomic_load_explicit(&s->effective, memory_order_acquire);
     struct ss_control_route route;
+    const unsigned self = ssKernelCPUId();
     if (ss_control_route_pin(&ssKernelControl, pin.slot, &route)) {
         unsigned gate = atomic_load_explicit(&ssKernelControl.gate_phase, memory_order_acquire);
-        if (route.owner == ssKernelCPUId() && !ssKernelCPUs[route.owner].control_draining &&
+        if (route.owner == self && !ssKernelCPUs[route.owner].control_draining &&
             gate != SS_GATE_ACQUIRING && gate != SS_GATE_HELD)
             ssKernelInspect(NULL, pin.slot, priority);
-        else ss_owner_publish(&ssKernelCPUs[route.owner].run, pin.slot, priority);
+        else ss_owner_publish(&ssKernelCPUs[route.owner].run, self, pin.slot, priority);
         ss_control_route_put(&route);
     } else {
         /* One failed admission never waits for a moving route. Ordinary hints
          * let each owner inspect authoritative completion after adoption. */
         for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu)
-            ss_owner_publish(&ssKernelCPUs[cpu].run, pin.slot, priority);
+            ss_owner_publish(&ssKernelCPUs[cpu].run, self, pin.slot, priority);
     }
     ss_kernel_handle_put(&pin);
     SS_PMU_LEAVE(0);
@@ -1440,15 +1469,13 @@ static bool ssKernelServiceOnce(unsigned c, struct ssKernelCPU *cpu)
     }
     uint64_t next;
     return (ss_deadline_next(&cpu->deadlines, &next) && next <= ssKernelNow()) ||
-        ss_owner_has_pending(&cpu->run) || ss_control_has_pending(&ssKernelControl, c) ||
-        (cpu->object_repair[0] & ~atomic_load_explicit(&ssKernelControl.parked[c].word[0], memory_order_acquire)) ||
-        (cpu->object_repair[1] & ~atomic_load_explicit(&ssKernelControl.parked[c].word[1], memory_order_acquire));
+        ss_owner_has_pending(&cpu->run) || ssKernelControlPending(c) || ssKernelRepairDue(cpu, c);
 }
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
 static unsigned long ssKernelContinuations;
 unsigned long ss_kernel_test_continuations(void) { return ssKernelContinuations; }
 #endif
-static void ssKernelService(void)
+static void SS_SERVICE_DEFINITION(void)
 {
     const bool disabled = ssKernelIrqsDisabled();
     UBaseType_t irq = portSET_INTERRUPT_MASK();
@@ -1467,10 +1494,6 @@ static void ssKernelService(void)
      * long span when the memory system is busy, so it is the last resort. */
     bool more = ssKernelServiceOnce(c, cpu);
     for (unsigned pass = 1; more && pass < SS_SERVICE_PASSES; ++pass) more = ssKernelServiceOnce(c, cpu);
-    /* A pass that commits no dispatch must still clear sgi_pending (see
-     * ss_owner_settle for the barrier pairing with ss_owner_publish). A
-     * selecting pass, or one that leaves a reschedule, commits in selection. */
-    if (!more && !cpu->selecting && !cpu->reschedule) more = ss_owner_settle(&cpu->run);
     if (more) {
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
         ++ssKernelContinuations;
@@ -1621,8 +1644,9 @@ static void ssKernelSwitch(unsigned c)
     configSET_TLS_BLOCK(portCURRENT_TCB(c)->xTLSBlock);
 #endif
     cpu->reschedule = false;
-    bool idle = (portCURRENT_TCB(c)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0;
-    if (ss_owner_commit_dispatch(&cpu->run, selected->priority, idle)) {
+    /* A publication always sends its own SGI; this check only spares the
+     * exception round trip for hints that arrived during selection. */
+    if (ss_owner_has_pending(&cpu->run)) {
         cpu->reschedule = true;
         ssKernelForce(c);
     }
@@ -1633,7 +1657,7 @@ static void ssKernelSwitch(unsigned c)
         (void)ss_control_checkpoint(&ssKernelControl, c);
     }
     if (direct) {
-        if (ss_control_has_pending(&ssKernelControl, c) || cpu->idle_pull_deferred)
+        if (ssKernelControlPending(c) || cpu->idle_pull_deferred)
             ssKernelForce(c);
     }
 #ifdef SUNSTONE_SCHED_PMU
@@ -1759,7 +1783,7 @@ static BaseType_t ssKernelOwnerIRQExitWork(void)
 /* A local wake has already inserted its ready task. With PSTATE.I set, a
  * required switch can proceed directly to saving the outgoing frame when no
  * object, control or timer maintenance must precede selection. The selecting
- * service pass still drains incoming work and closes the dispatch handshake. */
+ * service pass still drains incoming work. */
 static bool ssKernelIRQSwitchReady(unsigned c, struct ssKernelCPU *cpu)
 {
     struct ss_owner_task *current = cpu->run.current;
@@ -1775,9 +1799,7 @@ static bool ssKernelIRQSwitchReady(unsigned c, struct ssKernelCPU *cpu)
         configASSERT(ss_owner_ready(&cpu->run, priority)->head);
         if (priority <= current->priority) return false;
     }
-    if (ss_control_has_pending(&ssKernelControl, c) ||
-        (cpu->object_repair[0] & ~atomic_load_explicit(&ssKernelControl.parked[c].word[0], memory_order_acquire)) ||
-        (cpu->object_repair[1] & ~atomic_load_explicit(&ssKernelControl.parked[c].word[1], memory_order_acquire))) return false;
+    if (ssKernelControlPending(c) || ssKernelRepairDue(cpu, c)) return false;
     uint64_t now = ssKernelNow(), deadline;
     if ((ss_deadline_next(&cpu->deadlines, &deadline) && deadline <= now) ||
         atomic_load_explicit(&cpu->slice_deadline, memory_order_relaxed) <= now)
@@ -2219,11 +2241,12 @@ static bool ssKernelControlPause(void *context, unsigned c)
     return ssKernelCPUs[c].reschedule || ss_owner_has_pending(&ssKernelCPUs[c].run);
 }
 /* Whether a drain on this CPU has work: an admitted control request (pending and not parked), or a gate that is being
- * acquired or is held, which the drain answers with a checkpoint. Acquire loads only; the mask is not changed. */
+ * acquired or is held, which the drain answers with a checkpoint. Acquire loads only; the mask is not changed. The
+ * common case reads only the CPU's inbox line: the gate copy and the request count. */
 static inline bool ssKernelControlDue(unsigned c)
 {
-    unsigned gate = atomic_load_explicit(&ssKernelControl.gate_phase, memory_order_acquire);
-    return gate == SS_GATE_ACQUIRING || gate == SS_GATE_HELD || ss_control_has_pending(&ssKernelControl, c);
+    unsigned gate = atomic_load_explicit(&ssKernelCPUs[c].run.inbox.gate, memory_order_acquire);
+    return gate == SS_GATE_ACQUIRING || gate == SS_GATE_HELD || ssKernelControlPending(c);
 }
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
 static void ssKernelControlDrainTestAfter(unsigned c)
@@ -2243,11 +2266,11 @@ static void ssKernelControlDrainTestAfter(unsigned c)
  * not parked on a CPU signals that CPU with an SGI after the bit is visible (hint, ss_control_wake_mask), or is made by
  * the CPU's own current task as it enters the owner (ss_control_suspend_current). The SGI enters the owner at the
  * next point where the mask opens, and that entry's service drains the request. */
-static void ssKernelControlDrain(void)
+static void SS_CONTROL_DRAIN_DEFINITION(void)
 {
     if (xSchedulerRunning) {
         const unsigned c = ssKernelCPUId();
-        if (!ssKernelControlDue(c)) {
+        if (SS_CONTROL_EMPTY(c)) {
             SS_KERNEL_PERTURB(SS_PERTURB_CONTROL_OPEN);
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
             ssKernelControlDrainTestAfter(c);
@@ -2563,12 +2586,7 @@ static bool ssKernelDrained(void *context, unsigned cpu, unsigned slot)
 {
     (void)context;
     configASSERT(cpu == ssKernelCPUId());
-    struct ss_owner *run = &ssKernelCPUs[cpu].run;
-    uint64_t bit = UINT64_C(1) << (slot % 64);
-    for (unsigned p = 0; p < SS_OWNER_PRIORITIES; ++p)
-        if ((run->detached[p][slot / 64] & bit) ||
-            (atomic_load_explicit(&run->incoming[p][slot / 64], memory_order_acquire) & bit))
-            return false;
+    if (ss_owner_slot_pending(&ssKernelCPUs[cpu].run, slot)) return false;
     return !ssKernelCPUs[cpu].reference[slot].descriptor;
 }
 static void ssKernelRetired(void *context, unsigned slot, uint64_t incarnation)
@@ -2768,7 +2786,7 @@ void ss_kernel_test_freeze_mark(unsigned c)
     configASSERT(ssKernelNeedsFrame(&ssKernelCPUs[c]) && !ssKernelCPUs[c].preempt &&
         atomic_load_explicit(&ssKernelControl.gate_phase, memory_order_acquire) == SS_GATE_OPEN);
     atomic_store_explicit(&ssKernelControl.gate_ack, ssKernelControl.active_mask & ~(UINT64_C(1) << c), memory_order_relaxed);
-    atomic_store_explicit(&ssKernelControl.gate_phase, SS_GATE_ACQUIRING, memory_order_release);
+    ss_control_set_gate(&ssKernelControl, SS_GATE_ACQUIRING);
 }
 bool ss_kernel_test_current_running(void)
 { return atomic_load_explicit(&ssKernelCurrent()->execution, memory_order_acquire) == SS_K_RUNNING; }
@@ -2807,7 +2825,7 @@ unsigned ss_kernel_test_drain_held(TaskHandle_t task)
     unsigned slot = pin.slot, priority = ssKernelTasks[slot].ready.priority;
     configASSERT(atomic_load_explicit(&ssKernelTasks[slot].owner, memory_order_acquire) == ssKernelCPUId() &&
         atomic_load_explicit(&ssKernelControl.gate_phase, memory_order_acquire) == SS_GATE_OPEN);
-    atomic_store_explicit(&ssKernelControl.gate_phase, SS_GATE_HELD, memory_order_release);
+    ss_control_set_gate(&ssKernelControl, SS_GATE_HELD);
     struct ssKernelMutation mutation = { SS_K_PRIORITY, priority + 1, slot, false };
     ss_control_publish(&ssKernelControl, slot, ssKernelMutate, &mutation);
     configASSERT(mutation.changed);
@@ -2816,7 +2834,7 @@ unsigned ss_kernel_test_drain_held(TaskHandle_t task)
     ssKernelControlDrain();
     irq = portSET_INTERRUPT_MASK();
     configASSERT(ssKernelTasks[slot].ready.priority == priority);
-    atomic_store_explicit(&ssKernelControl.gate_phase, SS_GATE_OPEN, memory_order_release);
+    ss_control_set_gate(&ssKernelControl, SS_GATE_OPEN);
     ssKernelForce(ssKernelCPUId());
     ss_owner_event(&ssKernelBackend);
     portCLEAR_INTERRUPT_MASK(irq);
@@ -2828,7 +2846,7 @@ void ss_kernel_test_freeze_release(TaskHandle_t outgoing)
     configASSERT(ssKernelSelf() != outgoing &&
         atomic_load_explicit(&ssKernelControl.gate_phase, memory_order_acquire) == SS_GATE_ACQUIRING &&
         atomic_load_explicit(&ssKernelControl.gate_ack, memory_order_acquire) == ssKernelControl.active_mask);
-    atomic_store_explicit(&ssKernelControl.gate_phase, SS_GATE_OPEN, memory_order_release);
+    ss_control_set_gate(&ssKernelControl, SS_GATE_OPEN);
     ss_owner_event(&ssKernelBackend);
     for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) ssKernelForce(c);
     portCLEAR_INTERRUPT_MASK(irq);
@@ -3680,5 +3698,22 @@ static configRUN_TIME_COUNTER_TYPE ssKernelRuntime(TaskHandle_t handle)
     }
     (void)ssKernelResumeAll();
     return result;
+}
+#endif
+#ifdef SUNSTONE_LATENCY_SERVICE_CYCLES
+/* Measurement build only: time the bodies above (see service_cycles.h). */
+static void ssKernelService(void)
+{
+    struct ss_service_cycles_span span;
+    ss_service_cycles_begin(&span, SS_SERVICE_CYCLES_SERVICE, ssKernelCPUId());
+    ssKernelServiceBody();
+    ss_service_cycles_end(&span, ssKernelCPUId());
+}
+static void ssKernelControlDrain(void)
+{
+    struct ss_service_cycles_span span;
+    ss_service_cycles_begin(&span, SS_SERVICE_CYCLES_DRAIN, ssKernelCPUId());
+    ssKernelControlDrainBody();
+    ss_service_cycles_end(&span, ssKernelCPUId());
 }
 #endif

@@ -9,7 +9,7 @@ import sys
 import harness
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECK_INPUTS = ['apps/latency/host.py', 'kernel/scheduler/latency_cause.h',
+CHECK_INPUTS = ['apps/latency/host.py', 'kernel/scheduler/latency_cause.h', 'kernel/scheduler/service_cycles.h',
                 'apps/latency/cause-ping.h', 'apps/latency/workload.h']
 GATE_RUNS = [['{output}']]
 
@@ -195,6 +195,49 @@ def main():
         struct.pack_into('<Q', bad, len(bad) - 64 + 8, version)
         struct.pack_into('<Q', bad, len(bad) - 64 + index * 8, value)
         harness.refused(lambda: host.peel_latency_cause(bad), 'footer', ValueError)
+        cases.append(name)
+    # The service cycle section follows the cause footer with its own footer.
+    assert host.peel_service_cycles(combined) == (combined, b'')
+    header = [host.SERVICE_MAGIC, 1, host.SERVICE_BYTES, 8, 2, 2, 2, host.SERVICE_BINS, 14, 1] + [0] * 6
+    cells = b''
+    for phase in range(2):
+        for core in range(8):
+            for kind in range(2):
+                for state in range(2):
+                    bins = [0] * host.SERVICE_BINS
+                    # 3 spans of 600-631 cycles (bin 33: 576-639) and one of 70 (bin 8: 64-71).
+                    bins[33], bins[8] = 3, 1
+                    cells += struct.pack('<5Q', 4, 3 * 610 + 70, 631, kind, kind * 9000)
+                    cells += struct.pack(f'<{host.SERVICE_BINS}I', *bins) + bytes(4)
+    service = struct.pack('<16Q', *header) + cells
+    assert len(service) == host.SERVICE_BYTES
+    assert [host.service_bin_bounds(i) for i in (0, 7, 8, 33, 103, 104)] == \
+        [(0, 7), (56, 63), (64, 71), (576, 639), (245760, 262143), (262144, None)]
+    # As in the image, the cause footer records the size of the whole result, service section included
+    # (board entry 1794644716545175948-2ce0b5a1 was refused by a decoder that compared it with the peeled payload).
+    whole = len(combined) + len(service) + 64
+    cause_whole = bytearray(combined)
+    struct.pack_into('<Q', cause_whole, len(cause_whole) - 64 + 16, whole)
+    cause_whole = bytes(cause_whole)
+    with_service = cause_whole + service + struct.pack('<8Q', host.SERVICE_FOOTER_MAGIC, 1,
+        whole, len(cause_whole), len(service), 0, 0, 0)
+    assert host.peel_service_cycles(with_service) == (cause_whole, service)
+    assert host.peel_latency_cause(cause_whole, whole) == (prefix, original, ping, 0xff)
+    harness.refused(lambda: host.peel_latency_cause(cause_whole), 'footer', ValueError)
+    decoded = host.decode_service_cycles(service)
+    drain = decoded['phases']['busy'][5]['drain']['empty_return_on']
+    assert (drain['count'], drain['p50_upper_cycles'], drain['max_cycles'], drain['interrupted']) == (4, 639, 631, 1)
+    cases.append('service cycle section follows the cause footer and decodes its cells')
+    for name, index, value in [('service footer version', 1, 2), ('service report size', 4, 128),
+                               ('service footer reserved word', 7, 1)]:
+        bad = bytearray(with_service)
+        struct.pack_into('<Q', bad, len(bad) - 64 + index * 8, value)
+        harness.refused(lambda: host.peel_service_cycles(bytes(bad)), 'service cycle footer', ValueError)
+        cases.append(name)
+    for name, at, value in [('service report incomplete', 9 * 8, 0), ('service bins disagree with count', 128, 5)]:
+        bad = bytearray(service)
+        struct.pack_into('<Q', bad, at, value)
+        harness.refused(lambda: host.decode_service_cycles(bytes(bad)), 'service cycle', ValueError)
         cases.append(name)
     (out / 'cause-synthetic.bin').write_bytes(original)
     (out / 'ping-synthetic.bin').write_bytes(ping)

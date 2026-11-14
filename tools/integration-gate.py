@@ -212,6 +212,30 @@ def gate_environment(source, cache, build_root):
     return env
 
 
+TIMING_HISTORY = 20
+
+
+def earlier_timings(build_root, output):
+    """{step: host seconds} from the timing.txt of the latest earlier gates under build_root (the latest TIMING_HISTORY by
+    modification time), the most recent record of each step winning. Unreadable records are skipped."""
+    records = []
+    for path in Path(build_root).glob('gate-*/timing.txt'):
+        if path.parent != output:
+            try:
+                records.append((path.stat().st_mtime, path))
+            except OSError:
+                pass
+    known = {}
+    for _, path in sorted(records)[-TIMING_HISTORY:]:          # oldest first, so a later record replaces an earlier one
+        try:
+            for line in path.read_text().splitlines():
+                seconds, _, name = line.strip().partition(' ')
+                known[name.strip()] = float(seconds)
+        except (OSError, ValueError):
+            continue
+    return known
+
+
 def take_gate_lock(cache, name):
     """Block until this process holds CACHE/NAME; the returned file keeps the lock while it is referenced."""
     cache.mkdir(parents=True, exist_ok=True)
@@ -852,7 +876,11 @@ def main(argv=None):
             for task in tasks:
                 start(task)
         else:
-            run_group([t for t in tasks if not t['serial']], jobs)
+            # The parallel checks start longest first, by the host seconds that the latest earlier gates recorded (earlier_timings);
+            # a check with no recorded time starts first. The order changes no check's inputs or verdict.
+            known = earlier_timings(build_root, output)
+            parallel = sorted((t for t in tasks if not t['serial']), key=lambda t: -known.get(t['name'], float('inf')))
+            run_group(parallel, jobs)
             run_group([t for t in tasks if t['serial']], 1)
         return time.monotonic() - started
 

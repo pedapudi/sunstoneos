@@ -417,4 +417,11 @@ void latency_workload_run(struct latency_result *out)
 #ifdef SUNSTONE_LATENCY_MODEL
     out->model = 1;
 #endif
+#ifdef SUNSTONE_LATENCY_SERVICE_CYCLES
+    /* Last in the file, so the production image's assertion lines are unchanged. */
+    configASSERT(ss_service_cycles_snapshot(&out->service));
+    const uint64_t service_footer[8] = {SS_SERVICE_CYCLES_FOOTER_MAGIC, 1, sizeof(*out),
+        offsetof(struct latency_result, service), sizeof(out->service), 0, 0, 0};
+    for (unsigned word = 0; word < 8; ++word) out->service_footer[word] = service_footer[word];
+#endif
 }
