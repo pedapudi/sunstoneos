@@ -211,13 +211,18 @@ check subtracts the two snapshots. The bound stays 200 microseconds: at the mode
 microsecond, 16 per tick of the 62.5 MHz counter) it is 200,000 instructions, the value of the old 12,500 ticks. The models no longer
 assert the tick latency; they still count raised and served wakes, the pending switch requests and the fast-path exits.
 
-Over 48 runs under 24 busy host processes, with 24 runs at once, the worst critical path was 36,855 instructions in 23 of 24 runs of the
-yield model and 47,279 in the other, and 61,467 to 84,814 in the storm model (a quarter to two fifths of the bound). It still varies with the
-interleaving because the owner and the victim also run kernel service loops that poll while they wait, and how often they run in the gap
-depends on how many turns the round-robin gives them. The measure removes the spinner, which is five to seven times larger, not the polling.
-The case `yield-wake-path-regression` runs the model with 6,000 extra loop turns of work on the wake path (about 5 instructions each) and
-requires the critical path to cross the bound (276,127 measured); the models' own end-of-run accounting fails above about 3,000 turns, so
-the critical path is not the only detector there.
+Over 132 runs under 24 and 48 busy host processes the worst critical path was 41,924 instructions in every run of the yield model (21
+percent of the bound) and 17,022 in every run of the storm model (8.5 percent); it did not vary with the interleaving. An earlier version of
+the plugin counted 36,855 to 84,814 because it took the executing core from the callback's `vcpu` argument, which in QEMU 10.2.1
+(`accel/tcg/plugin-gen.c`, `gen_cpu_index`) is the index of the vCPU that translated the block, baked in as a constant when the run is not
+`CF_PARALLEL`, as `-accel tcg,thread=single` is; translated blocks are shared by all vCPUs, so vCPU 0 was credited with the instructions
+of every core (118 million of the blocks of one run), and the inline per-vCPU counters share the defect. The plugin now reads TPIDR_EL1,
+which `platform/qemu-smp/start.S` sets to the core index before any C, in every block (MPIDR_EL1 reads 0 through the plugin interface), and
+the check requires every marker to have run on the core that its name gives (4,242 of 4,242 do). The case `yield-wake-path-regression`
+runs the model with 6,000 extra loop turns of work on the wake path (about 10 instructions each) and requires the critical path to cross the
+bound (217,260 measured, 8.6 percent above it, the same in every run). The bound is not the only detector there, and cannot be: the
+models' own end-of-run accounting fails above about 3,000 turns, where the critical path is 65,000 instructions, and a run that fails
+ends early, so the path of the larger delays does not rise monotonically (8,000 turns: 119,619).
 
 ### Gate slots and the timing lock
 
