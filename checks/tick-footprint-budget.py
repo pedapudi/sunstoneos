@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 from elftools.elf.elffile import ELFFile
 
@@ -141,10 +142,27 @@ def main():
                '-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off', '-cpu', 'cortex-a55', '-smp', '8', '-m', '128M',
                '-nographic', '-monitor', 'none', '-semihosting-config', 'enable=on,target=native',
                '-device', f'loader,file={elf},cpu-num=0', '-plugin', ','.join([str(plugin)] + plugin_args)]
-    run = subprocess.run(command, capture_output=True, text=True, timeout=QEMU_KILL_SECONDS)
-    (out / 'qemu.log').write_text(run.stdout + run.stderr)
-    # The footprint needs only the traced busy ticks; the model's later functional
-    # assertions are covered by its own checks and may see the plugin's slowdown.
+    # The footprint needs only the traced busy ticks, so the guest is stopped once the plugin holds the last window: the model's later
+    # phases (the cause ping among them) run to their own verdicts in checks/latency-cause-model.py, and ran here to a FAIL line that this
+    # step ignored. The plugin writes the trace on exit, which QEMU's orderly shutdown on SIGTERM runs.
+    log = (out / 'qemu.log').open('w')
+    process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, text=True)
+    started = time.monotonic()
+    stopped = False
+    try:
+        while process.poll() is None:
+            if time.monotonic() - started > QEMU_KILL_SECONDS:
+                process.kill()
+                raise SystemExit(f'QEMU ran past {QEMU_KILL_SECONDS:.0f} s without holding {WINDOWS} busy windows; see qemu.log')
+            if not stopped and trace.is_file() and sum(1 for line in trace.read_text().splitlines() if line.startswith('W ') and len(line.split()) == 2) >= WINDOWS:
+                process.terminate()
+                stopped = True
+            time.sleep(0.2)
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        log.close()
     kept = [int(line.split()[2]) for line in trace.read_text().splitlines() if line.startswith('# kept ')]
     if not kept or kept[-1] < MINIMUM:
         raise SystemExit(f'the trace holds fewer than {MINIMUM} busy ticks; see qemu.log')

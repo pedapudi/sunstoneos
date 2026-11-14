@@ -270,6 +270,33 @@ exercise the ticket lock's atomics on cores that run in parallel, and their gues
 `os-npu-service` and `os-npu-fault` run on `checks/host/host_rtos.c`, whose clock is virtual and whose tasks switch only at their own
 calls, and `session-lifetime` and `a733-radio-platform` start no guest; none reads host time.
 
+### The cause ping
+
+The latency cause model (`latency-partitioned-pmu-model`) ends its QEMU run with `FAIL src/apps/latency/model.c:0x34` since the
+tick-footprint step moved to one TCG thread with a fixed icount: the cacheline ping of `apps/latency/cause-ping.c` between CPU0 and CPU1
+timed out after 27 of 256 exchanges (status 4 of the pair 0 row; the local reference completed 256, and the CPU0-CPU6 pair was aborted
+before it began). The step passed anyway, because it judges only the busy-tick trace.
+
+It is an artefact of the round-robin icount, not a defect of the ping or the scheduler. The ping is a handshake between two cores: each
+exchange waits for the peer's turn, and on one TCG thread a turn comes after the other seven vCPUs have had theirs, so an exchange costs
+about 9 ms of guest time against the ping's 250 ms deadline (a quarter of the application's one-second progress window; a longer deadline
+runs into the controller's own progress check, `workload.c:0x117`). Run on QEMU's multi-threaded TCG, where the cores run in parallel as on
+the board, the same image completes every exchange: 64 of 64 runs passed, 10 alone and 54 beside 24 busy processes with up to eight
+copies at once, the slowest in 5.8 s. The images at `caa8d7c67` (before the step moved), `f7eb88ad1` (the move) and `97d2317c3` (the ping's
+kit task creation) all pass multi-threaded and fail on one thread, so no landing since 09:30 (tcb-lines, fastpath-cycles, outbox)
+changed it. The failing single-thread run is also not repeatable: alone it ended at `model.c:0x34`, and six copies beside busy processes
+ended at `workload.c:0x117`.
+
+Nothing required the model's `PASS latency cause model` line: `checks/tick-footprint-budget.py` ran the image to trace it and its comment
+left the model's functional assertions to "its own checks", of which there were none. Two changes:
+
+- `checks/tick-footprint-budget.py` stops the guest (SIGTERM, which lets the plugin write the trace) once the plugin holds the last of its
+  240 windows, so it runs what the step needs and shows no verdict it ignores.
+- `checks/latency-cause-model.py` runs the image on the multi-threaded guest and requires the PASS line, then rebuilds the image with the
+  peer reporting a sequence error after the fourth exchange (the changed copy of `cause-ping.c` compiled with the image's own flags and
+  linked with its own link command) and requires the model to fail at its ping assertion. It runs on real threads, so it holds the timing
+  lock (`timing_checks` in `tools/gate-slots.json`), and its kill limit is 4 times the slowest loaded run, 23.2 s.
+
 ### Gate slots and the timing lock
 
 The host runs N gates at once, not one. `tools/gate_slots.py` holds the slots as the files `~/.cache/sunstoneos/gate.lock.0` to

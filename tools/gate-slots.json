@@ -26,7 +26,8 @@
     "tick-footprint-budget.py",
     "gpu-conformance.py",
     "land.py",
-    "submit-wait.py"
+    "submit-wait.py",
+    "latency-cause-model.py"
   ],
   "perturb": {
     "_comment": "checks/scheduler-control-linked.py: the slowest point, perturb-scheduler-partitioned-qemu-control-open-3000, took 85.1 s serial and 85.7 s eight at once (30 runs, 427 s in all). The check is not a timing step, so it runs beside other gates' work: on 2026-11-13 its slowest QEMU run took 113 s on a host at a load of about 20 and 192 s beside 24 busy processes. The kill limit is a hang backstop, kill_multiplier times the slowest measured point (686 s), so the loaded run stays under a third of it.",
@@ -48,7 +49,7 @@
   ],
   "reserved_cpus_comment": "CPUs that gates and the processes they start never use: the xhci interrupt of the board's USB port is handled almost entirely on CPU 23 (/proc/interrupts, 1.19 million of its interrupts there; 2026-11-13), and the runner's FEL transfers wait on it.",
   "qemu_checks": {
-    "_comment": "Hang backstops for the QEMU runs of the radio checks, which run on one TCG thread with a fixed icount (harness.QEMU_DETERMINISTIC): kill_multiplier times the slowest run of any of the check's cases with 24 copies at once beside 24 busy host processes (48 runs per case, 2026-11-14; a733-radio-session 3.8 s, aic8800-dispatch 1.4 s, radio-network 1.8 s, radio-network-dhcp-dns 7.0 s).",
+    "_comment": "Hang backstops for the QEMU runs of the radio checks, which run on one TCG thread with a fixed icount (harness.QEMU_DETERMINISTIC): kill_multiplier times the slowest run of any of the check's cases with 24 copies at once beside 24 busy host processes (48 runs per case, 2026-11-14; a733-radio-session 3.8 s, aic8800-dispatch 1.4 s, radio-network 1.8 s, radio-network-dhcp-dns 7.0 s). latency-cause-model runs on multi-threaded TCG, so it also holds the timing lock (timing_checks): its slowest run was 5.8 s with 8 copies at once beside 24 busy processes (64 of 64 runs passed).",
     "a733-radio-session": {
       "slowest_loaded_run_seconds": 3.8,
       "kill_multiplier": 4
@@ -63,6 +64,10 @@
     },
     "radio-network-dhcp-dns": {
       "slowest_loaded_run_seconds": 7.0,
+      "kill_multiplier": 4
+    },
+    "latency-cause-model": {
+      "slowest_loaded_run_seconds": 5.8,
       "kill_multiplier": 4
     }
   }
