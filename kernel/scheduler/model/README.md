@@ -6,48 +6,17 @@ They establish properties of finite abstractions. They do not establish Arm
 instruction correctness, hardware interrupt completion, latency or starvation
 bounds under unlimited arrivals.
 
-Run the suite with the project Python environment and a cached TLC jar:
+Run the suite with the project Python environment:
 
 ```sh
 /home/sunil/.cache/sunstoneos/venv/bin/python checks/scheduler-wake-model.py \
-  --tlc-jar /path/to/tla2tools.jar --build-dir /path/to/external/evidence
+  --build-dir /path/to/external/evidence
 ```
 
-The evidence directory receives configurations, complete TLC counterexamples
-and a JSON result with state counts, elapsed times and peak resident memory.
-Python negative cases print shortest action traces. Every negative case must
-violate its designated invariant; unexpected passes fail the suite. TLC runs
-with one worker and a 1 GiB Java heap. The runner sets Java's temporary directory
-to the evidence directory. No board access occurs.
-
-## Publication buffers expose the store-to-load race
-
-`Wake.tla` has two producers and one owner. Producers release-publish distinct
-fixed-slot hints into private buffers. Independent propagation actions commit
-those hints to coherent inbox storage. The owner independently buffers its
-release dispatch publication and pending-SGI clear. Acquire observations read
-committed coherent state. A DMB blocks the following load until preceding local
-stores have propagated. Releases alone do not drain those buffers.
-
-The owner begins inside an active SGI with the coalescing flag set. Claiming
-that flag, sending a hardware interrupt, hardware pending state, active state,
-final inbox inspection and exception exit are separate transitions. An eligible
-pending interrupt prevents indefinite WFI sleep. Idle entry and lowering to a
-priority outranked by both producers share the same Boolean dispatch state.
-A lost wake means both publishers finish while the owner commits sleep without
-observed work or a pending interrupt.
-
-The correct configuration exhausts all reachable states. Removing either DMB
-admits the store-buffering lost wake. Moving the pending clear after inspection
-admits a coalescing race. Active interrupt state alone cannot satisfy the
-pending-interrupt condition after exception exit.
-
-This is a multi-copy-atomic, per-location coherent operational abstraction.
-It enumerates buffer propagation and instruction interleavings. It does not
-encode the complete Arm axiomatic memory model, speculative execution or every
-possible acquire read-from relation. The separate buffers model the required
-store-to-load ordering explicitly; stronger hardware guarantees need an
-instruction-level model and linked-code review.
+The evidence directory receives a JSON result with state counts, elapsed times
+and peak resident memory. Negative cases print shortest action traces. Every
+negative case must violate its designated invariant; unexpected passes fail the
+suite. No board access occurs.
 
 ## Gate, lifetime and transfer checks use separate finite state spaces
 
@@ -101,25 +70,23 @@ properties to keep exploration small. Their conjunction does not prove that a
 future implementation composes those protocols correctly. Source review,
 linked-kernel stress and physical qualification remain required.
 
-## The logical wake-list head gives nonurgent work its first interrupt
+## Every published hint reaches an owner inspection
 
-The owner helper has sixteen slot buckets and one atomic summary word as its
-logical list head. A producer release-publishes a slot bit, then release-ORs its
-bucket bit into the head. The returned old head identifies empty-to-nonempty
-publication. The owner acquire-detaches the head before inspecting buckets.
-A slot can reach an older inspection before its delayed head publication;
-the resulting later empty-bucket inspection is harmless. The bucket hint alone
-never authorizes task activation.
-
-`incoming_head` exhausts sequentially consistent instruction interleavings of
-two publishers, head detachment, bucket detachment, inspection, coalescing-flag
-clearing and final all-work inspection. The owner keeps running priority six.
-Positive cases cover two nonurgent wakes and either ordering of an urgent wake.
-The negative removes the empty-head SGI condition. Two nonurgent publications
-then remain uninspected without a pending interrupt or another scheduling event.
-This checks the first-publication interrupt contract; it does not promise that
-a lower-priority ready task can execute while higher-priority work runs.
-Buffered weak-memory ordering remains the separate `Wake.tla` check.
+`mailbox` exhausts sequentially consistent interleavings of two sources and one
+owner. Each source publishes two or three distinct slots through a one-entry
+outbox, so every later hint either refreshes its copy of the owner's consumed
+count or spills into the bitmap; each publication then sends an SGI. The owner
+takes the SGI, reads each source's count and entries, releases its consumed
+count, exchanges the spill bitmap when the spill count moved, inspects, and
+takes another pass when counts moved during the pass. The invariant forbids a
+quiescent state, both sources done and no SGI pending, with a published slot
+never inspected. Three negatives fail it: a source that sends no SGI, an owner
+that releases its consumed count before reading the entries (the source
+overwrites an unread entry), and a source that increments the spill count
+before setting the bit. The model does not encode weak memory; the
+implementation relies on release and acquire message passing only, with no
+store-to-load ordering. `checks/scheduler-owner.py` runs the same protocol in
+the owner code with concurrent threads.
 
 `last_put_close` buffers the final reference decrement and admission close
 independently. Both sides execute a store-to-load barrier before checking the

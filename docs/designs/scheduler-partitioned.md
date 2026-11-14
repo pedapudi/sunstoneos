@@ -115,17 +115,17 @@ placement (see Open work); the application kit exposes it.
 Each cache-line-aligned `ss_sched_cpu` (`struct ssKernelCPU`) contains:
 
 - Eight FIFO ready lists, an eight-bit ready bitmap and the current task.
-- Local interrupt exclusion and preemption depth, pending-reschedule state and
-  the published dispatch word.
-- A fixed incoming-wake set, a separate remote-control mailbox and lifetime
+- Local interrupt exclusion and preemption depth and pending-reschedule state.
+- A wake mailbox (an inbox line, one outbox line per source CPU, a spill bitmap
+  and a consumed-count line), a separate remote-control mailbox and lifetime
   acknowledgments.
 - A fixed-capacity deadline heap, its next compare, a slice deadline and local
   accounting timestamps.
 
 The structure is laid out in cache lines by writer. Owner-only state (ready
 lists, current task, detached batches, cursors) shares no line with state other
-CPUs write (incoming wake words, dispatch word, control mailbox, and the slice
-and next-deadline snapshots that CPU0's tick reads). Compile-time assertions
+CPUs write (the wake mailbox, control mailbox, and the slice and next-deadline
+snapshots that CPU0's tick reads). Compile-time assertions
 enforce the grouping. A masked scheduler entry then misses only on lines its own
 work needs; with the A733's caches cold after a 1 MiB sweep, each avoidable miss
 adds about a DRAM access to a span that the 25 µs bound limits.
@@ -143,29 +143,51 @@ slice. An idle task has no slice deadline and executes WFI. The first implementa
 calls fixed-priority selection directly; a policy interface is added when EDF/CBS
 has a consumer and an admission test.
 
-## A fixed-slot remote wake list avoids unbounded producer retry loops
+## Each source CPU writes its own outbox, so a remote wake reads no owner-written line
 
-The logical multi-producer wake list uses one pending bit per task slot, per
-target CPU and priority: 128 bytes per CPU at 128 slots and eight priorities, plus
-an atomic summary word that forms the list head. A publisher release-ORs its task
-bit, then release-ORs its bucket bit into the head. The old head identifies
-empty-to-nonempty publication. The owner acquire-detaches the head, then detaches
-slot words and visits bits with CLZ. The bit is a level-triggered hint to inspect
-authoritative state; it carries no generation and cannot authorize activation.
+A remote wake reads and writes only lines that the owner never writes. Each
+owner has these mailbox lines:
 
-An intrusive Treiber stack would let a producer retry indefinitely under
-continuous competition, so the fixed-slot representation is a constraint: producer
-instructions stay bounded without allocation, node reclamation or head-pointer
-retry. A slot may reach an older inspection before its delayed head publication;
-the later empty-bucket inspection is harmless. Repeated notifications coalesce
-activation; their values and counts remain in the notification object.
+- An inbox line written only by other parties: for each of the eight source
+  CPUs a 16-bit count of the hints it has published and its copy of the
+  owner's consumed count; a spill count; and the control path's request count
+  and gate copy (see the control mailbox below).
+- One outbox line per source CPU, written only by that source: a ring of 32
+  16-bit entries, each holding a task slot and its priority.
+- A spill bitmap with one bit per task slot and priority, for hints that find
+  their outbox full.
+- A consumed-count line written only by the owner.
+
+A publisher, with local API interrupts masked so that each source has one
+writer, writes the entry at its count modulo 32 and release-stores the count
+plus one. It reads the owner's consumed count only when its own copy says the
+outbox is full; the owner releases that count after reading the entries below
+it, so the publisher overwrites only entries the owner has read. When the
+outbox is still full the publisher release-ORs the slot bit into the spill
+bitmap and then release-increments the spill count. Every publication then
+sends an SGI.
+
+On each entry the owner acquire-loads the inbox counts, reads the new entries
+of each source whose count moved and ORs them into its local detached set, and
+exchanges the spill bitmap only when the spill count moved. The bit precedes
+the count, so an owner that sees the count sees the bit. A hint is a
+level-triggered request to inspect authoritative state; it carries no
+generation and cannot authorize activation. Repeated notifications coalesce in
+the detached set; their values and counts remain in the notification object.
+
+Under streaming load on other cores the owner's private lines leave the
+caches, and a publication that read them would wait for DRAM. The inbox and
+outbox lines are written by the publisher, so the copy that serves the owner's
+read stays in the publisher's cache. Producer instructions are bounded: no
+retry loop, allocation or node reclamation.
 
 Priority FIFO order is the owner's enqueue order; publications from different
 remote CPUs have no total order among themselves. Within a detached word the
 owner uses a rotating slot cursor so no slot number has permanent preference.
 
-Native AArch64 publication requires LSE atomics (`ID_AA64ISAR0_EL1.Atomic`;
-the build uses `-march=armv8.1-a+lse` and rejects LL/SC retry loops). Host
+Native AArch64 publication requires LSE atomics for the spill path
+(`ID_AA64ISAR0_EL1.Atomic`; the build uses `-march=armv8.1-a+lse` and rejects
+LL/SC retry loops). Host
 fixtures use native lock-free atomics. An architecture without bounded native
 word read-modify-write needs a separately reviewed publication primitive.
 
@@ -175,8 +197,8 @@ without resetting it, so a continuously replenished first word cannot overtake a
 unvisited second word. A priority change republishes a hint at the new priority and
 forces an owner command and SGI, including for detached work.
 
-One entry activates at most sixteen tasks (`SS_OWNER_BATCH`), checking for
-higher-priority incoming work between activations. On batch completion it
+One entry activates at most sixteen tasks (`SS_OWNER_BATCH`), merging new
+hints between activations so higher-priority work goes first. On batch completion it
 dispatches the highest ready task and posts one local continuation SGI if
 unprocessed hints remain. It completes IRQ exit and restores interrupts between
 batches. It never runs lower-priority application work while known
@@ -186,73 +208,42 @@ higher-priority admitted work; an urgent slot has a finite activation bound only
 with a stated higher-priority arrival bound. Ready-to-running time starts at
 publication, including inbox processing. A self-SGI storm fails admission.
 
-## Conditional SGIs use a publication handshake as well as status words
-
-Each CPU publishes a naturally aligned 64-bit atomic dispatch word holding a
-sequence, running priority and idle flag. Remote readers use it as one coherent
-observation without a seqlock retry loop. The sequence identifies changes and
-authorizes no owner-state modification.
+## Every publication sends an SGI, so no handshake reads owner state
 
 1. The waker updates the notification or wins the blocked-wait transition.
-2. The waker release-publishes the incoming slot bit and bucket-head bit, executes
-   `DMB ISH`, then acquire-loads the target's dispatch word.
-3. If the old head was empty, the task outranks the published current task, or the
-   target is idle, the waker requests a reschedule SGI. Equal or lower-priority
-   publications into a nonempty head coalesce.
-4. The owner acquire-detaches the head at entry and inspects a bounded batch.
-   Before committing dispatch it release-publishes its status, clears the SGI
-   pending flag, executes `DMB ISH`, then acquire-checks all incoming and detached
-   work. Remaining work requests a bounded continuation even when its priority is
-   lower than the selected task.
-5. An owner pass that drains hints but commits no dispatch (it selects no task and
-   leaves no reschedule) still closes the handshake: it clears the SGI pending
-   flag, executes `DMB ISH`, then acquire-checks the incoming and detached work,
-   and takes another pass if any remains. Without this step the flag stays set
-   after the pass. The next publisher finds it set and sends no SGI, so its wake
-   waits for the owner's next timer deadline. A flag already clear needs no
-   barrier, because a publisher that finds it clear sends its own SGI.
-
-The two store-to-load barriers forbid both CPUs observing the old state and
-omitting the wakeup. In steps 4 and 5 the owner's flag clear, `DMB ISH` and
-incoming check pair with the waker's incoming OR, `DMB ISH` and flag exchange:
-either the owner's check sees the publication, or the waker's exchange sees the
-cleared flag and sends the SGI; acquire and release alone allow that store-buffering outcome
-on AArch64. Negative model variants that remove essential ordering must produce a
-lost-wakeup trace.
+2. The waker publishes the hint to its outbox (or the spill bitmap), then
+   completes `DSB ISHST` and writes the target's SGI.
+3. The owner's exception entry takes the SGI after the hint is visible, merges
+   it and inspects a bounded batch. An SGI already pending at the GIC is taken
+   after the hint is visible as well, so coalesced SGIs lose no hint.
+4. Before committing dispatch the owner checks the inbox counts and its
+   detached set. Remaining work forces another entry; this check spares the
+   exception round trip and does not carry the wake guarantee.
 
 ```text
-waker: release OR slot hint
-       old_head = release_OR(incoming_head[target], bucket_bit)
-       DMB ISH
-       status = acquire_load(dispatch[target])
-       if old_head == 0 or urgent(status) or idle(status):
-           if exchange_acq_rel(sgi_pending[target], 1) == 0:
-               DSB ISHST; send target SGI
+waker: n = published[self] (own count)
+       if n - limit[self] >= 32: limit[self] = acquire_load(consumed[self])
+       if n - limit[self] < 32:
+           outbox[self][n % 32] = slot | priority << 7
+           release_store(published[self], n + 1)
+       else:
+           release_OR(spill[priority], slot_bit); release_add(spilled, 1)
+       DSB ISHST; send target SGI
 
-owner: acquire exchange incoming_head[self] with zero
-       merge already detached work and process bounded control/activation
-       release_store(dispatch[self], next_priority_or_idle_with_sequence)
-       release_store(sgi_pending[self], 0)
-       DMB ISH
-       acquire_check live incoming words, local detached words and control hints
-       if any work remains: request bounded selection/continuation
-       else: commit selected task or final masked WFI sequence
-
-owner pass that drained hints and commits no dispatch:
-       if relaxed_load(sgi_pending[self]) != 0:
-           release_store(sgi_pending[self], 0)
-           DMB ISH
-           if acquire_check(incoming and detached work): take another pass
+owner: for each source s: n = acquire_load(published[s])
+           detach entries taken[s] .. n - 1; taken[s] = n
+           release_store(consumed[s], n)
+       if acquire_load(spilled) changed: exchange spill words with zero
+       inspect a bounded batch, merging again before each inspection
 ```
 
-The final incoming check and WFI occur with `DAIF.I` masking IRQ entry and the GIC
+A waker that found the target already signalled could skip the SGI, but
+learning that requires reading a line the owner writes, which under streaming
+load costs a DRAM access on every remote wake. An extra SGI costs the owner an
+exception entry only when several publications reach it between two entries.
+The final check and WFI occur with `DAIF.I` masking IRQ entry and the GIC
 priority mask admitting the reschedule interrupt, so a pending eligible IRQ
-prevents indefinite sleep. An idle flag stays published until the owner resumes
-selection. A publisher delayed after claiming the SGI flag holds a reference and
-runs a bounded non-preemptive publication sequence; its redundant SGI is
-harmless. A pending or active hardware SGI does not replace the final
-authoritative check. The model treats flag clearing, interrupt request,
-delivery and WFI wakeup as separate events.
+prevents indefinite sleep.
 
 GIC SGI target-list bits address Aff0 within a common higher-affinity tuple. A733
 CPUs differ in Aff1, so delivery to several CPUs takes several SGI writes.
@@ -382,7 +373,7 @@ an object lock while invoking a synchronous owner wait.
 
 ## Permanent descriptors and references make stale hints harmless
 
-Task descriptors and incoming bitmap storage never move or disappear. A
+Task descriptors and wake mailbox storage never move or disappear. A
 descriptor has a task-incarnation number, TCB pointer, admission state and an
 atomic reference count, all on one 64-byte line. The descriptor table is also
 the handle table: a multiplicative hash of the handle selects its home slot,
@@ -642,13 +633,19 @@ nonblocking attempt. A busy record parks until its resource release signals
 it. A visited bitmap spans the maintenance entry and limits it to sixteen
 distinct attempts (`SS_OWNER_BATCH`); a reissued hint waits for the next entry.
 Selection skips control preparation and object timeout work. Incoming-wake
-drain and dispatch publication still close the saved-frame selection handshake.
+drain and the dispatch check still run before the saved frame is selected.
 
 Most maintenance entries find no control request: unperturbed, 97.6% of the
 openings in the objects model and 75% in the partitioned model admitted no
-work. Before it raises the mask, the entry tests the CPU's pending words (less
-the parked bits) and the gate phase with acquire loads, and it returns at once
-when neither shows work. A request published after that test is still taken.
+work. Before it raises the mask, the entry reads the CPU's inbox line: a copy
+of the gate phase, which every gate transition stores into each inbox before its
+SGIs, and a count of the requests made pending and not parked on that CPU, which
+each such publication increments after setting its bit. When the gate is open and
+the count equals the one the CPU last checked, the entry returns at once without
+reading the pending and parked words. A changed count reads them; if no request
+is due the count is recorded, since every request counted at that load is
+visible to the words read after it. The service pass's own pending test uses
+the same count. A request published after the test is still taken.
 Every publication that makes a request pending and not parked on a CPU sends
 that CPU an SGI after the bit is visible (a hint, or a parked waiter's
 release), except a current task's own suspension, which enters the owner
@@ -657,8 +654,10 @@ and that entry drains the request. The perturbation sweep's `control-open`
 site delays both the empty return and the open batch. On QEMU, counted per
 guest core, the median service entry falls from 1,081 to 656 instructions in
 the objects model and from 1,271 to 770 in the partitioned model, and the
-median control drain from 504 to 79 and from 549 to 92. Board cycles are not
-yet measured.
+median control drain from 504 to 79 and from 549 to 92. On the board, under
+streaming load, the empty return took 895 to
+1,791 cycles on CPUs 4, 5 and 7 when it read the pending, parked and gate lines,
+against 127 to 143 on CPUs 0 to 3 (evidence entry for run 2ce0b5a1).
 
 Nested interrupt exits leave pending work intact while preparation is active.
 The outer exit sets `PSTATE.I` before restoring PMR so an ordinary interrupt
@@ -856,7 +855,8 @@ non-preemptive blocking.
 Instruction budgets for the owner paths are provisional until linked-code counts and
 board samples replace them: ready enqueue or remove at most 64 retired instructions,
 pick or yield 96, untimed local notification-give 160 before an optional switch.
-Remote wake, incoming scan (at most 256 slot-word loads), timed block, timeout,
+Remote wake, mailbox merge (nine inbox loads, plus at most 32 entries per source and
+16 spill words), timed block, timeout,
 migration and context switch are counted on the linked path. no host check
 reports every interrupt-masked span of the CPU latency workload on eight emulated
 cores as scheduler atomic stores, read-modify-writes and atomic loads; the counts

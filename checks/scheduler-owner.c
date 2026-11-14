@@ -4,10 +4,13 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 
-static unsigned scan_loads, scan_exchanges;
-void ss_owner_test_scan(bool exchange)
-{ if (exchange) ++scan_exchanges; else ++scan_loads; }
+static unsigned inbox_loads, entry_loads, spill_exchanges;
+void ss_owner_test_scan(unsigned kind)
+{ if (kind == 0) ++inbox_loads; else if (kind == 1) ++entry_loads; else ++spill_exchanges; }
+static void reset_scan(void) { inbox_loads = entry_loads = spill_exchanges = 0; }
 static unsigned trace_slots[16], trace_priorities[16], trace_count;
 static bool inject_urgent;
 static void record(void *ctx, unsigned slot, unsigned priority)
@@ -16,32 +19,71 @@ static void record(void *ctx, unsigned slot, unsigned priority)
     assert(trace_count < 16);
     trace_slots[trace_count] = slot;
     trace_priorities[trace_count++] = priority;
-    if (inject_urgent && trace_count == 1) ss_owner_publish(o, 127, 7);
+    if (inject_urgent && trace_count == 1) ss_owner_publish(o, 1, 127, 7);
 }
+/* An empty merge reads the inbox line only: eight counts and the spill count. */
 static void scan_costs(void)
 {
     struct ss_owner o;
     ss_owner_init(&o, 0, NULL);
-    scan_loads = scan_exchanges = 0;
+    reset_scan();
     assert(ss_owner_drain(&o, record, &o) == 0);
-    assert(scan_loads == 16 && scan_exchanges == 0);
+    assert(inbox_loads == 9 && entry_loads == 0 && spill_exchanges == 0);
     for (unsigned i = 0; i < 8; ++i) {
-        ss_owner_publish(&o, i, 7);
-        ss_owner_publish(&o, 64 + i, 7);
+        ss_owner_publish(&o, 2, i, 7);
+        ss_owner_publish(&o, 2, 64 + i, 7);
     }
-    scan_loads = scan_exchanges = trace_count = 0;
+    reset_scan(); trace_count = 0;
     assert(ss_owner_drain(&o, record, &o) == 16);
-    assert(scan_loads == 16 && scan_exchanges == 2);
+    /* Sixteen merges; only the first reads the sixteen entries. */
+    assert(inbox_loads == 16 * 9 && entry_loads == 16 && spill_exchanges == 0);
     assert(!ss_owner_has_pending(&o));
-    ss_owner_publish(&o, 0, 3); ss_owner_publish(&o, 1, 3);
-    scan_loads = scan_exchanges = trace_count = 0;
+    ss_owner_publish(&o, 0, 0, 3); ss_owner_publish(&o, 0, 1, 3);
+    reset_scan(); trace_count = 0;
     inject_urgent = true;
     assert(ss_owner_drain(&o, record, &o) == 3);
     inject_urgent = false;
     assert(trace_slots[0] == 0 && trace_priorities[0] == 3);
     assert(trace_slots[1] == 127 && trace_priorities[1] == 7);
     assert(trace_slots[2] == 1 && trace_priorities[2] == 3);
-    assert(scan_loads == 48 && scan_exchanges == 2);
+    assert(entry_loads == 3 && spill_exchanges == 0);
+}
+/* A source that runs SS_OWNER_RING hints ahead of the owner spills into the
+ * bitmap, reads consumed only when its copy says the outbox is full, and
+ * returns to its outbox once the owner has taken the entries. */
+static unsigned seen_slots[128];
+static void count_any(void *ctx, unsigned slot, unsigned priority)
+{ (void)ctx; (void)priority; assert(slot < 128); ++seen_slots[slot]; }
+static void ring_spill(void)
+{
+    struct ss_owner o;
+    ss_owner_init(&o, 0, NULL);
+    for (unsigned i = 0; i < 40; ++i) ss_owner_publish(&o, 3, i, 4);
+    assert(atomic_load(&o.inbox.published[3]) == SS_OWNER_RING);
+    assert(atomic_load(&o.inbox.spilled) == 40 - SS_OWNER_RING);
+    for (unsigned i = 0; i < 40; ++i) assert(ss_owner_slot_pending(&o, i));
+    assert(!ss_owner_slot_pending(&o, 40));
+    reset_scan();
+    for (unsigned i = 0; i < 3; ++i) (void)ss_owner_drain(&o, count_any, NULL);
+    assert(!ss_owner_has_pending(&o));
+    assert(spill_exchanges == 1);
+    for (unsigned i = 0; i < 128; ++i) assert(seen_slots[i] == (i < 40));
+    assert(atomic_load(&o.consumed[3]) == SS_OWNER_RING);
+    /* The next publication refreshes the limit and uses the outbox again. */
+    ss_owner_publish(&o, 3, 50, 4);
+    assert(atomic_load(&o.inbox.limit[3]) == SS_OWNER_RING);
+    assert(atomic_load(&o.inbox.published[3]) == SS_OWNER_RING + 1);
+    assert(atomic_load(&o.inbox.spilled) == 40 - SS_OWNER_RING);
+    assert(ss_owner_slot_pending(&o, 50) && ss_owner_has_pending(&o));
+    assert(ss_owner_drain(&o, count_any, NULL) == 1 && seen_slots[50] == 1);
+    /* Counts wrap at 16 bits without losing a hint. */
+    for (unsigned round = 0; round < 3000; ++round) {
+        for (unsigned i = 0; i < 30; ++i) ss_owner_publish(&o, 3, 60 + i, 1);
+        while (ss_owner_drain(&o, count_any, NULL)) {}
+    }
+    assert(atomic_load(&o.inbox.spilled) == 40 - SS_OWNER_RING);
+    for (unsigned i = 60; i < 90; ++i) assert(seen_slots[i] == 3000);
+    for (unsigned i = 0; i < 128; ++i) seen_slots[i] = 0;
 }
 static unsigned retirement_events;
 static void retirement_event(void *context, unsigned slot, unsigned cpu)
@@ -87,67 +129,74 @@ static void retirement_progress(void)
     assert(!ss_owner_pin(&d, 4, NULL)); /* Open incarnation mismatch is silent. */
     assert(retirement_events == 4);
 }
-static unsigned sgis;
+static _Atomic unsigned sgis;
 static void sgi(void *ctx, unsigned cpu) { (void)ctx; assert(cpu == 3); ++sgis; }
 static const struct ss_owner_backend backend = { .sgi = sgi };
-static bool publish_at_exit;
-static void exit_barrier(void *ctx)
+/* Concurrent sources against a draining owner. Each source publishes a round
+ * of its own slots, more than one outbox holds, writing the round into want[]
+ * before each publication; the owner copies want[] into got[] when it
+ * inspects a slot. A source starts its next round only after the owner has
+ * seen this one, so a hint lost to a lapped entry, a missed spill or a stale
+ * count stops that source, and the deadline fails the check. */
+#define RACE_SOURCES 3u
+#define RACE_SLOTS 40u
+#define RACE_ROUNDS 3000u
+static _Atomic unsigned want[128], got[128];
+static _Atomic bool race_done;
+static struct ss_owner race;
+static void race_inspect(void *ctx, unsigned slot, unsigned priority)
 {
-    atomic_thread_fence(memory_order_seq_cst);
-    if (publish_at_exit) {
-        publish_at_exit = false;
-        ss_owner_publish(ctx, 31, 2);
+    (void)ctx; (void)priority;
+    assert(slot < RACE_SOURCES * RACE_SLOTS);
+    atomic_store(&got[slot], atomic_load(&want[slot]));
+}
+static void *race_source(void *argument)
+{
+    unsigned source = (unsigned)(uintptr_t)argument;
+    for (unsigned round = 1; round <= RACE_ROUNDS; ++round) {
+        for (unsigned i = 0; i < RACE_SLOTS; ++i) {
+            unsigned slot = source * RACE_SLOTS + i;
+            atomic_store(&want[slot], round);
+            ss_owner_publish(&race, source, slot, (slot + round) % 8);
+        }
+        struct timespec start, now;
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        for (unsigned i = 0; i < RACE_SLOTS; ++i)
+            while (atomic_load(&got[source * RACE_SLOTS + i]) < round) {
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                if (now.tv_sec - start.tv_sec > 10) {
+                    fprintf(stderr, "source %u round %u: slot %u never inspected\n",
+                            source, round, source * RACE_SLOTS + i);
+                    abort();
+                }
+                sched_yield();
+            }
     }
-}
-static void count_hint(void *ctx, unsigned slot, unsigned priority)
-{
-    unsigned *counts = ctx;
-    assert(slot < 128 && priority == 2);
-    ++counts[slot];
-}
-static void *many_publishers(void *argument)
-{
-    struct ss_owner *o = ((void **)argument)[0];
-    unsigned start = (unsigned)(uintptr_t)((void **)argument)[1];
-    for (unsigned i = start; i < start + 32; ++i) ss_owner_publish(o, i, 2);
     return NULL;
 }
-static void incoming_head(void)
+static void *race_owner(void *unused)
 {
-    struct ss_owner o;
-    const struct ss_owner_backend b = { .barrier=exit_barrier, .sgi=sgi, .context=&o };
-    ss_owner_init(&o, 3, &b);
-    unsigned counts[128] = {0};
+    (void)unused;
+    while (!atomic_load(&race_done))
+        if (!ss_owner_drain(&race, race_inspect, NULL)) sched_yield();
+    return NULL;
+}
+static void concurrent_sources(void)
+{
+    ss_owner_init(&race, 3, &backend);
     unsigned before = sgis;
-    assert(!ss_owner_commit_dispatch(&o, 6, false));
-    ss_owner_publish(&o, 1, 2); assert(sgis == before + 1);
-    ss_owner_publish(&o, 2, 2); assert(sgis == before + 1);
-    assert(ss_owner_drain(&o, count_hint, counts) == 2);
-    assert(!ss_owner_commit_dispatch(&o, 6, false));
-    /* A first nonurgent publication after the final pending clear must leave
-     * a continuation/SGI, even when the owner is returning to priority six. */
-    publish_at_exit = true;
-    assert(ss_owner_commit_dispatch(&o, 6, false));
-    assert(sgis == before + 2);
-    assert(ss_owner_drain(&o, count_hint, counts) == 1);
-    assert(counts[1] == 1 && counts[2] == 1 && counts[31] == 1);
-    assert(!ss_owner_commit_dispatch(&o, 6, false));
-
-    ss_owner_init(&o, 3, &backend);
-    assert(!ss_owner_commit_dispatch(&o, 6, false));
-    pthread_t producers[4];
-    void *arguments[4][2];
-    before = sgis;
-    for (unsigned i = 0; i < 4; ++i) {
-        arguments[i][0] = &o; arguments[i][1] = (void *)(uintptr_t)(i * 32);
-        assert(!pthread_create(&producers[i], NULL, many_publishers, arguments[i]));
-    }
-    for (unsigned i = 0; i < 4; ++i) assert(!pthread_join(producers[i], NULL));
-    assert(sgis == before + 1);
-    unsigned seen[128] = {0};
-    for (unsigned i = 0; i < 8; ++i) assert(ss_owner_drain(&o, count_hint, seen) == 16);
-    for (unsigned i = 0; i < 128; ++i) assert(seen[i] == 1);
-    assert(!ss_owner_has_pending(&o));
+    pthread_t sources[RACE_SOURCES], consumer;
+    assert(!pthread_create(&consumer, NULL, race_owner, NULL));
+    for (unsigned s = 0; s < RACE_SOURCES; ++s)
+        assert(!pthread_create(&sources[s], NULL, race_source, (void *)(uintptr_t)s));
+    for (unsigned s = 0; s < RACE_SOURCES; ++s) assert(!pthread_join(sources[s], NULL));
+    atomic_store(&race_done, true);
+    assert(!pthread_join(consumer, NULL));
+    assert(!ss_owner_has_pending(&race));
+    /* Every publication signals. */
+    assert(sgis - before == RACE_SOURCES * RACE_SLOTS * RACE_ROUNDS);
+    printf("scheduler owner: %u concurrent hints, %u spilled, none lost\n",
+           RACE_SOURCES * RACE_SLOTS * RACE_ROUNDS, (unsigned)atomic_load(&race.inbox.spilled));
     sgis = 0;
 }
 static struct ss_owner owner;
@@ -157,7 +206,7 @@ static void inspect(void *ctx, unsigned slot, unsigned priority)
     struct ss_owner *o = ctx;
     assert(priority == 5); ++visited[slot]; ++visits;
     /* Replenishing the first word must not starve the detached second word. */
-    ss_owner_publish(o, 0, 5);
+    ss_owner_publish(o, 0, 0, 5);
 }
 static struct ss_owner_descriptor descriptor;
 static _Atomic unsigned phase;
@@ -168,14 +217,15 @@ static void *publisher(void *unused)
     atomic_store(&phase, 1);
     while (atomic_load(&phase) != 2) sched_yield();
     assert(descriptor.task == &owner);
-    ss_owner_publish(&owner, 127, 7);
+    ss_owner_publish(&owner, 1, 127, 7);
     ss_owner_put(&descriptor);
     return NULL;
 }
 int main(void)
 {
     scan_costs();
-    incoming_head();
+    ring_spill();
+    concurrent_sources();
     retirement_progress();
     ss_owner_init(&owner, 3, &backend);
     struct ss_owner_task a = {.slot=1,.priority=2}, b = {.slot=2,.priority=2};
@@ -193,13 +243,13 @@ int main(void)
     assert(ss_owner_remove(&owner,&a));
     owner.current=NULL;
     assert(!ss_owner_select(&owner) && !owner.ready_bitmap);
-    assert(!ss_owner_commit_dispatch(&owner, 6, false));
-    ss_owner_publish(&owner, 9, 5); assert(sgis==1);
-    assert(ss_owner_commit_dispatch(&owner, 4, false));
-    ss_owner_publish(&owner, 10, 5); assert(sgis==2);
-    ss_owner_publish(&owner, 11, 5); assert(sgis==2);
-    assert(ss_owner_commit_dispatch(&owner, 0, true));
-    ss_owner_publish(&owner, 127, 5); assert(sgis==3);
+    assert(!ss_owner_has_pending(&owner));
+    ss_owner_publish(&owner, 0, 9, 5); assert(sgis==1);
+    assert(ss_owner_has_pending(&owner) && ss_owner_slot_pending(&owner, 9));
+    ss_owner_publish(&owner, 1, 10, 5); assert(sgis==2);
+    ss_owner_publish(&owner, 0, 11, 5); assert(sgis==3);
+    ss_owner_publish(&owner, 2, 127, 5); assert(sgis==4);
+    ss_owner_continue(&owner); assert(sgis==5);
     for (unsigned i=0; i<8 && !visited[127]; ++i)
         assert(ss_owner_drain(&owner,inspect,&owner)<=16);
     assert(visited[127] && visits<=128);
@@ -217,5 +267,5 @@ int main(void)
     assert(ss_owner_reopen(&descriptor,&descriptor,12,true));
     assert(!ss_owner_pin(&descriptor,11,NULL));
     assert(ss_owner_pin(&descriptor,12,NULL)); ss_owner_put(&descriptor);
-    puts("scheduler owner: FIFO, bounded fairness, dispatch and retirement pass");
+    puts("scheduler owner: FIFO, bounded fairness, mailbox and retirement pass");
 }

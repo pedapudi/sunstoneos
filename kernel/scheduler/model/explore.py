@@ -25,71 +25,110 @@ def explore(initial, successors, invariant):
 
 
 @dataclass(frozen=True)
-class IncomingHead:
+class Mailbox:
+    # Per source: next hint index, program counter, published count, limit copy.
+    hint: tuple = (0, 0)
     pc: tuple = (0, 0)
-    empty: tuple = (False, False)
-    inbox: int = 0
-    head: bool = False
+    published: tuple = (0, 0)
+    limit: tuple = (0, 0)
+    consumed: tuple = (0, 0)
+    ring: tuple = ((None,), (None,))
+    spill: int = 0
+    spilled: int = 0
+    sgi: bool = False
+    # Owner: program counter, source being merged, count read, taken counts.
+    owner: int = 0
+    source: int = 0
+    seen: int = 0
+    taken: tuple = (0, 0)
+    spilled_seen: int = 0
     detached: int = 0
     observed: int = 0
-    flag: bool = False
-    pending: bool = False
-    owner: int = 0
 
 
-def incoming_head(priorities=(2, 2), signal_empty=True):
-    """SC interleavings of bucket/head publication and the nonurgent doorbell.
+def mailbox(hints=2, ring=1, signal=True, release_after_read=True, bit_before_count=True):
+    """SC interleavings of two sources publishing through one-entry outboxes.
 
-    Existing Wake.tla separately checks buffered writes and required DMBs.
-    The owner runs priority six throughout: nonurgent work still needs the
-    first-publication interrupt to reach its owner queue, without a tick.
+    Each source publishes `hints` distinct slots; a one-entry ring makes every
+    second hint either refresh the limit or spill. The owner merges both
+    outboxes and the spill bitmap on each SGI and checks for remaining work
+    before it waits again. A lost hint is a quiescent state, both sources done
+    and no SGI pending, with a published slot never observed.
     """
+    def bit(p, h):
+        return 1 << (p * hints + h)
+
     def successors(s):
         def out(name, **kw):
             return name, replace(s, **kw)
+
+        def at(t, i, v):
+            return tuple(v if k == i else x for k, x in enumerate(t))
         for p in range(2):
-            def advance(n):
-                return tuple(n if i == p else s.pc[i] for i in range(2))
-            if s.pc[p] == 0:
-                yield out(f'p{p} release slot bit', pc=advance(1), inbox=s.inbox | (1 << p))
-            elif s.pc[p] == 1:
-                empty = tuple(not s.head if i == p else s.empty[i] for i in range(2))
-                yield out(f'p{p} release head OR returns empty={not s.head}',
-                          pc=advance(2), head=True, empty=empty)
-            elif s.pc[p] == 2:
-                needs = (signal_empty and s.empty[p]) or priorities[p] > 6
-                yield out(f'p{p} DMB and dispatch decision needs-SGI={needs}',
-                          pc=advance(3 if needs else 5))
-            elif s.pc[p] == 3:
-                yield out(f'p{p} claim coalescing flag old={s.flag}', flag=True,
-                          pc=advance(5 if s.flag else 4))
-            elif s.pc[p] == 4:
-                yield out(f'p{p} DSB and send SGI', pending=True, pc=advance(5))
-        if s.owner == 0 and s.pending:
-            yield out('owner enter SGI', owner=1, pending=False)
-        elif s.owner == 1:
-            yield out('owner acquire detach head', owner=2, head=False)
-        elif s.owner == 2:
-            yield out('owner acquire detach bucket', owner=3,
-                      detached=s.inbox, inbox=0)
-        elif s.owner == 3:
-            yield out('owner inspect detached slots', owner=4, detached=0,
-                      observed=s.observed | s.detached)
-        elif s.owner == 4:
-            yield out('owner release pending clear', owner=5, flag=False)
-        elif s.owner == 5:
-            remaining = s.head or bool(s.inbox)
-            yield out(f'owner DMB and final all-work check remaining={remaining}',
-                      owner=6 if remaining else 0)
-        elif s.owner == 6:
-            yield out('owner request bounded continuation', owner=0,
-                      pending=s.pending or not s.flag, flag=True)
+            pc, n = s.pc[p], s.published[p]
+            if s.hint[p] == hints:
+                continue
+            if pc == 0:
+                if n - s.limit[p] >= ring:
+                    yield out(f's{p} outbox looks full: acquire consumed', pc=at(s.pc, p, 1),
+                              limit=at(s.limit, p, s.consumed[p]))
+                else:
+                    yield out(f's{p} has room', pc=at(s.pc, p, 1))
+            elif pc == 1:
+                if n - s.limit[p] < ring:
+                    yield out(f's{p} write entry {n}', pc=at(s.pc, p, 2),
+                              ring=at(s.ring, p, at(s.ring[p], n % ring, bit(p, s.hint[p]))))
+                elif bit_before_count:
+                    yield out(f's{p} release spill bit', pc=at(s.pc, p, 3), spill=s.spill | bit(p, s.hint[p]))
+                else:
+                    yield out(f's{p} release spill count first', pc=at(s.pc, p, 3), spilled=s.spilled + 1)
+            elif pc == 2:
+                yield out(f's{p} release count {n + 1}', pc=at(s.pc, p, 4), published=at(s.published, p, n + 1))
+            elif pc == 3:
+                if bit_before_count:
+                    yield out(f's{p} release spill count', pc=at(s.pc, p, 4), spilled=s.spilled + 1)
+                else:
+                    yield out(f's{p} release spill bit', pc=at(s.pc, p, 4), spill=s.spill | bit(p, s.hint[p]))
+            elif pc == 4:
+                yield out(f's{p} DSB and SGI' if signal else f's{p} no SGI', pc=at(s.pc, p, 0),
+                          hint=at(s.hint, p, s.hint[p] + 1), sgi=s.sgi or signal)
+        o = s.owner
+        if o == 0 and s.sgi:
+            yield out('owner takes SGI', owner=1, source=0, sgi=False)
+        elif o == 1:
+            q = s.source
+            n = s.published[q]
+            kw = dict(owner=2, seen=n)
+            if not release_after_read:
+                kw['consumed'] = at(s.consumed, q, n)
+            yield out(f'owner acquire count of s{q} = {n}', **kw)
+        elif o == 2:
+            q, t = s.source, s.taken[s.source]
+            if t != s.seen:
+                yield out(f'owner reads s{q} entry {t}', taken=at(s.taken, q, t + 1),
+                          detached=s.detached | s.ring[q][t % ring])
+            else:
+                kw = dict(owner=1 if q == 0 else 3, source=q + 1)
+                if release_after_read:
+                    kw['consumed'] = at(s.consumed, q, t)
+                yield out(f'owner releases consumed of s{q} = {t}', **kw)
+        elif o == 3:
+            if s.spilled != s.spilled_seen:
+                yield out('owner sees spill count, exchanges bitmap', owner=4, spilled_seen=s.spilled,
+                          detached=s.detached | s.spill, spill=0)
+            else:
+                yield out('owner sees no spill', owner=4)
+        elif o == 4:
+            yield out('owner inspects detached slots', owner=5, detached=0, observed=s.observed | s.detached)
+        elif o == 5:
+            remaining = s.published != s.taken or s.spilled != s.spilled_seen
+            yield out(f'owner final check remaining={remaining}', owner=1 if remaining else 0, source=0)
+
     def invariant(s):
-        finished = all(pc == 5 for pc in s.pc)
-        quiescent = s.owner == 0 and not s.pending
-        return not (finished and quiescent and
-                    (s.inbox or s.head or s.detached or s.observed != 3))
-    return IncomingHead(), successors, invariant
+        done = all(h == hints for h in s.hint)
+        quiescent = s.owner == 0 and not s.sgi
+        return not (done and quiescent and s.observed != (1 << (2 * hints)) - 1)
+    return Mailbox(), successors, invariant
 
 
 @dataclass(frozen=True)

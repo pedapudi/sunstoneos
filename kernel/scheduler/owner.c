@@ -41,11 +41,6 @@ void ss_owner_init(struct ss_owner *o, unsigned cpu,
                    const struct ss_owner_backend *backend)
 {
     *o = (struct ss_owner){0};
-    for (unsigned p = 0; p < SS_OWNER_PRIORITIES; ++p)
-        for (unsigned w = 0; w < 2; ++w) atomic_init(&o->incoming[p][w], 0);
-    atomic_init(&o->dispatch, UINT64_C(1) << 3);
-    atomic_init(&o->incoming_words, 0);
-    atomic_init(&o->sgi_pending, 0);
     o->cpu = cpu; o->backend = backend;
 }
 bool ss_owner_enqueue(struct ss_owner *o, struct ss_owner_task *t, bool front)
@@ -92,59 +87,92 @@ static void requeue(struct ss_owner *o, bool front)
 void ss_owner_preempt(struct ss_owner *o) { requeue(o, true); }
 struct ss_owner_task *ss_owner_yield(struct ss_owner *o)
 { requeue(o, false); return ss_owner_select(o); }
-static void request_sgi(struct ss_owner *o)
+static void signal(struct ss_owner *o)
 {
-    if (!atomic_exchange_explicit(&o->sgi_pending, 1, memory_order_acq_rel)) {
 #ifdef SUNSTONE_LATENCY_CAUSE
-        ss_latency_cause_sgi_begin(o->cpu);
+    ss_latency_cause_sgi_begin(o->cpu);
 #endif
 #if defined(__aarch64__)
-        __asm__ volatile("dsb ishst" ::: "memory");
+    __asm__ volatile("dsb ishst" ::: "memory");
 #endif
-        if (o->backend && o->backend->sgi)
-            o->backend->sgi(o->backend->context, o->cpu);
+    if (o->backend && o->backend->sgi)
+        o->backend->sgi(o->backend->context, o->cpu);
 #ifdef SUNSTONE_LATENCY_CAUSE
-        ss_latency_cause_sgi_end(o->cpu);
+    ss_latency_cause_sgi_end(o->cpu);
 #endif
-    }
 }
-void ss_owner_publish(struct ss_owner *o, unsigned slot, unsigned priority)
+void ss_owner_publish(struct ss_owner *o, unsigned source, unsigned slot, unsigned priority)
 {
-    if (slot >= 128 || priority >= 8) return;
-    atomic_fetch_or_explicit(&o->incoming[priority][slot / 64],
-                             UINT64_C(1) << (slot % 64), memory_order_release);
-    /* The head RMW linearizes empty-to-nonempty publication. A slot can be
-     * consumed by an earlier batch before this head reaches it; the resulting
-     * empty bucket inspection is harmless and never authorizes activation. */
-    uint64_t previous = atomic_fetch_or_explicit(&o->incoming_words,
-        UINT64_C(1) << (2 * priority + slot / 64), memory_order_release);
+    if (source >= SS_OWNER_SOURCES || slot >= SS_OWNER_SLOTS || priority >= SS_OWNER_PRIORITIES)
+        return;
+    struct ss_owner_inbox *in = &o->inbox;
+    /* This source is the only writer of published[source] and limit[source]. */
+    uint16_t n = atomic_load_explicit(&in->published[source], memory_order_relaxed);
+    uint16_t limit = atomic_load_explicit(&in->limit[source], memory_order_relaxed);
+    if ((uint16_t)(n - limit) >= SS_OWNER_RING) {
+        /* Pairs with the owner's release of consumed[source], which follows
+         * its reads of the entries below it, so entry n % SS_OWNER_RING is
+         * free once n - consumed[source] < SS_OWNER_RING. */
+        limit = atomic_load_explicit(&o->consumed[source], memory_order_acquire);
+        atomic_store_explicit(&in->limit[source], limit, memory_order_relaxed);
+    }
+    if ((uint16_t)(n - limit) < SS_OWNER_RING) {
+        atomic_store_explicit(&o->outbox[source].entry[n % SS_OWNER_RING],
+                              (uint16_t)(slot | priority << 7), memory_order_relaxed);
+        atomic_store_explicit(&in->published[source], (uint16_t)(n + 1), memory_order_release);
+    } else {
+        /* The owner has not taken the last SS_OWNER_RING hints. The bit
+         * precedes the count, so an owner that sees the count sees the bit. */
+        atomic_fetch_or_explicit(&o->spill[priority][slot / 64],
+                                 UINT64_C(1) << (slot % 64), memory_order_release);
+        atomic_fetch_add_explicit(&in->spilled, 1, memory_order_release);
+    }
     SS_KERNEL_PERTURB(SS_PERTURB_OWNER_PUBLISH);
-    /* Pairs with the owner's barrier between clearing sgi_pending and its
-     * incoming check (ss_owner_commit_dispatch, ss_owner_settle): either that
-     * check sees this hint, or request_sgi below sees the cleared flag and
-     * sends the SGI. Release and acquire alone allow both to miss. */
-    ss_owner_barrier(o->backend);
-    uint64_t status = atomic_load_explicit(&o->dispatch, memory_order_acquire);
-    if (!previous || (status & 8) || priority > (status & 7)) request_sgi(o);
+    /* The backend completes DSB ISHST before the SGI write, so the owner's
+     * exception entry, which takes the SGI, finds the hint. An SGI that is
+     * already pending at the GIC is taken after this hint is visible too. */
+    signal(o);
 }
 #ifdef SS_OWNER_TEST_STATS
-/* Host fixtures count actual incoming operations; production emits no hook. */
-extern void ss_owner_test_scan(bool exchange);
-#define SCAN_STAT(exchange) ss_owner_test_scan(exchange)
+/* Host fixtures count inbox loads, outbox entry loads and spill exchanges;
+ * production emits no hook. */
+extern void ss_owner_test_scan(unsigned kind);
+#define SCAN_STAT(kind) ss_owner_test_scan(kind)
 #else
-#define SCAN_STAT(exchange) ((void)0)
+#define SCAN_STAT(kind) ((void)0)
 #endif
-static void merge_from(struct ss_owner *o, unsigned first_priority)
+static void detach(struct ss_owner *o, uint16_t entry)
 {
-    for (unsigned p = first_priority; p < 8; ++p)
-        for (unsigned w = 0; w < 2; ++w) {
-            SCAN_STAT(false);
-            if (!atomic_load_explicit(&o->incoming[p][w], memory_order_acquire))
-                continue;
-            SCAN_STAT(true);
-            o->detached[p][w] |= atomic_exchange_explicit(&o->incoming[p][w],
-                                                          0, memory_order_acquire);
+    unsigned slot = entry & 127u, priority = (entry >> 7) & 7u;
+    o->detached[priority][slot / 64] |= UINT64_C(1) << (slot % 64);
+}
+static void merge(struct ss_owner *o)
+{
+    struct ss_owner_inbox *in = &o->inbox;
+    for (unsigned s = 0; s < SS_OWNER_SOURCES; ++s) {
+        SCAN_STAT(0);
+        uint16_t n = atomic_load_explicit(&in->published[s], memory_order_acquire);
+        uint16_t t = o->taken[s];
+        if (n == t) continue;
+        for (; t != n; ++t) {
+            SCAN_STAT(1);
+            detach(o, atomic_load_explicit(&o->outbox[s].entry[t % SS_OWNER_RING],
+                                           memory_order_relaxed));
         }
+        o->taken[s] = n;
+        atomic_store_explicit(&o->consumed[s], n, memory_order_release);
+    }
+    SCAN_STAT(0);
+    uint32_t spilled = atomic_load_explicit(&in->spilled, memory_order_acquire);
+    if (spilled == o->spilled_seen) return;
+    o->spilled_seen = spilled;
+    for (unsigned p = 0; p < SS_OWNER_PRIORITIES; ++p)
+        for (unsigned w = 0; w < 2; ++w)
+            if (atomic_load_explicit(&o->spill[p][w], memory_order_relaxed)) {
+                SCAN_STAT(2);
+                o->detached[p][w] |= atomic_exchange_explicit(&o->spill[p][w], 0,
+                                                              memory_order_acquire);
+            }
 }
 static uint32_t detached_priorities(const struct ss_owner *o)
 {
@@ -171,65 +199,51 @@ static unsigned next_slot(struct ss_owner *o, unsigned p)
 unsigned ss_owner_drain(struct ss_owner *o, ss_owner_inspect inspect, void *ctx)
 {
     unsigned count = 0;
-    /* Detach the logical list before reading its buckets. A later first
-     * publication gets its own doorbell even while this batch is active. */
-    (void)atomic_exchange_explicit(&o->incoming_words, 0, memory_order_acquire);
+    merge(o);
     SS_KERNEL_PERTURB(SS_PERTURB_OWNER_DRAIN);
-    merge_from(o, 0);
     for (; count < SS_OWNER_BATCH; ++count) {
+        /* The cursor keeps a priority's sweep fair: a slot published again
+         * behind it waits for the sweep to wrap. */
+        if (count) merge(o);
         uint32_t priorities = detached_priorities(o);
-        if (count) {
-            /* Keep a priority's detached sweep intact. Refresh only bands that
-             * can outrank its next hint; an empty local set starts a new sweep. */
-            unsigned first = priorities ?
-                32u - (unsigned)__builtin_clz(priorities) : 0;
-            merge_from(o, first);
-            priorities = detached_priorities(o);
-        }
         if (!priorities) break;
         unsigned p = 31u - (unsigned)__builtin_clz(priorities);
-        unsigned slot = next_slot(o, p);
-        inspect(ctx, slot, p);
+        inspect(ctx, next_slot(o, p), p);
     }
     return count;
 }
+static bool unmerged(const struct ss_owner *o)
+{
+    for (unsigned s = 0; s < SS_OWNER_SOURCES; ++s)
+        if (atomic_load_explicit(&o->inbox.published[s], memory_order_acquire) != o->taken[s])
+            return true;
+    return atomic_load_explicit(&o->inbox.spilled, memory_order_acquire) != o->spilled_seen;
+}
 bool ss_owner_has_pending(const struct ss_owner *o)
 {
-    if (atomic_load_explicit(&o->incoming_words, memory_order_acquire)) return true;
+    if (unmerged(o)) return true;
     for (unsigned p = 0; p < 8; ++p)
-        for (unsigned w = 0; w < 2; ++w)
-            if (o->detached[p][w] || atomic_load_explicit(&o->incoming[p][w],
-                                                       memory_order_acquire)) return true;
+        if (o->detached[p][0] | o->detached[p][1]) return true;
     return false;
 }
-bool ss_owner_commit_dispatch(struct ss_owner *o, unsigned priority, bool idle)
+bool ss_owner_slot_pending(const struct ss_owner *o, unsigned slot)
 {
-    uint64_t status = (++o->sequence << 4) | (priority & 7u) | (idle ? 8u : 0u);
-    atomic_store_explicit(&o->dispatch, status, memory_order_release);
-    /* Clear, DMB ISH, then check: pairs with the publisher's barrier between
-     * its incoming OR and its sgi_pending exchange (ss_owner_publish). */
-    atomic_store_explicit(&o->sgi_pending, 0, memory_order_release);
-    ss_owner_barrier(o->backend);
-    return ss_owner_has_pending(o);
-}
-/* An owner pass that took hints but selects no task closes the SGI handshake
- * as a dispatch commit does. Without it sgi_pending stays set after the
- * pass, and the next publisher, seeing it set, sends no SGI: its wake waits
- * for the owner's next timer deadline. The clear, DMB ISH and incoming check
- * pair with the publisher's incoming OR, DMB ISH and sgi_pending exchange:
- * either this check sees the publication (true: the caller takes another
- * pass) or the publisher sees the cleared flag and sends an SGI. A flag
- * already clear needs no barrier, because a publisher that finds it clear
- * sends its own SGI. */
-bool ss_owner_settle(struct ss_owner *o)
-{
-    if (!atomic_load_explicit(&o->sgi_pending, memory_order_relaxed)) return false;
-    atomic_store_explicit(&o->sgi_pending, 0, memory_order_release);
-    ss_owner_barrier(o->backend);
-    return ss_owner_has_pending(o);
+    if (slot >= SS_OWNER_SLOTS) return false;
+    uint64_t bit = UINT64_C(1) << (slot % 64);
+    for (unsigned p = 0; p < SS_OWNER_PRIORITIES; ++p)
+        if ((o->detached[p][slot / 64] & bit) ||
+            (atomic_load_explicit(&o->spill[p][slot / 64], memory_order_acquire) & bit))
+            return true;
+    for (unsigned s = 0; s < SS_OWNER_SOURCES; ++s) {
+        uint16_t n = atomic_load_explicit(&o->inbox.published[s], memory_order_acquire);
+        for (uint16_t t = o->taken[s]; t != n; ++t)
+            if ((atomic_load_explicit(&o->outbox[s].entry[t % SS_OWNER_RING],
+                                      memory_order_relaxed) & 127u) == slot) return true;
+    }
+    return false;
 }
 void ss_owner_continue(struct ss_owner *o)
-{ if (ss_owner_has_pending(o)) request_sgi(o); }
+{ if (ss_owner_has_pending(o)) signal(o); }
 static void descriptor_init(struct ss_owner_descriptor *d, void *task,
                             uint64_t i, bool admitted,
                             const struct ss_owner_retirement *retirement)
