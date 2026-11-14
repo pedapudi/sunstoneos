@@ -21,14 +21,26 @@
 
 #define LATENCY_CORES 8U
 /* The manifest's output_limit (apps/latency/cmake/application.cmake): traced
- * and control profiles declare 131072 bytes, the cause profile 147456 and
- * the cause profile with service cycles 180224. */
-#if defined(SUNSTONE_LATENCY_BAND_SWITCH)
-#define LATENCY_RESULT_LIMIT 184320U
-#elif defined(SUNSTONE_LATENCY_SERVICE_CYCLES)
-#define LATENCY_RESULT_LIMIT 180224U
-#elif defined(SUNSTONE_LATENCY_CAUSE)
-#define LATENCY_RESULT_LIMIT 147456U
+ * and control profiles declare 131072 bytes and the cause profile 147456.
+ * Each cause section adds its own allowance: service cycles 32768, band
+ * probes 4096 and wake segments 32768. */
+#ifdef SUNSTONE_LATENCY_CAUSE
+#ifdef SUNSTONE_LATENCY_SERVICE_CYCLES
+#define LATENCY_SERVICE_LIMIT 32768U
+#else
+#define LATENCY_SERVICE_LIMIT 0U
+#endif
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+#define LATENCY_BAND_LIMIT 4096U
+#else
+#define LATENCY_BAND_LIMIT 0U
+#endif
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+#define LATENCY_WAKE_LIMIT 32768U
+#else
+#define LATENCY_WAKE_LIMIT 0U
+#endif
+#define LATENCY_RESULT_LIMIT (147456U + LATENCY_SERVICE_LIMIT + LATENCY_BAND_LIMIT + LATENCY_WAKE_LIMIT)
 #else
 #define LATENCY_RESULT_LIMIT 131072U
 #endif
@@ -134,6 +146,11 @@ struct latency_result {
     struct latency_band_report bands __attribute__((aligned(64)));
     uint64_t band_footer[8] __attribute__((aligned(64)));
 #endif
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+    /* Last, with its own footer, for the same reason. */
+    struct ss_wake_seg_report wake_segments __attribute__((aligned(64)));
+    uint64_t wake_footer[8] __attribute__((aligned(64)));
+#endif
 };
 _Static_assert(offsetof(struct latency_result, core) == 320 &&
     offsetof(struct latency_result, phases) == 5440 &&
@@ -173,21 +190,29 @@ _Static_assert(offsetof(struct latency_result, pmu_windows) % 64 == 0 &&
     sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT, "scheduler PMU report tail layout");
 #endif
 
-#if defined(SUNSTONE_LATENCY_BAND_SWITCH)
-_Static_assert(sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT &&
-    offsetof(struct latency_result, service) == offsetof(struct latency_result, cause_footer) + 64 &&
-    offsetof(struct latency_result, bands) == offsetof(struct latency_result, service_footer) + 64 &&
-    offsetof(struct latency_result, band_footer) + 64 == sizeof(struct latency_result),
-    "band section follows the service footer and fits the declared result region");
-#elif defined(SUNSTONE_LATENCY_SERVICE_CYCLES)
-_Static_assert(sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT &&
-    offsetof(struct latency_result, service) == offsetof(struct latency_result, cause_footer) + 64 &&
-    offsetof(struct latency_result, service_footer) + 64 == sizeof(struct latency_result),
-    "service cycle section follows the cause footer and fits the declared result region");
-#elif defined(SUNSTONE_LATENCY_CAUSE)
-_Static_assert(sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT &&
-    offsetof(struct latency_result, cause_footer) + 64 == sizeof(struct latency_result),
-    "cause diagnostic and footer fit the declared result region");
+#ifdef SUNSTONE_LATENCY_CAUSE
+/* Each cause section follows the footer before it, and the last footer ends the result. */
+#define LATENCY_CAUSE_END (offsetof(struct latency_result, cause_footer) + 64)
+#ifdef SUNSTONE_LATENCY_SERVICE_CYCLES
+_Static_assert(offsetof(struct latency_result, service) == LATENCY_CAUSE_END, "service cycle section follows the cause footer");
+#define LATENCY_SERVICE_END (offsetof(struct latency_result, service_footer) + 64)
+#else
+#define LATENCY_SERVICE_END LATENCY_CAUSE_END
+#endif
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+_Static_assert(offsetof(struct latency_result, bands) == LATENCY_SERVICE_END, "band section follows the footer before it");
+#define LATENCY_BAND_END (offsetof(struct latency_result, band_footer) + 64)
+#else
+#define LATENCY_BAND_END LATENCY_SERVICE_END
+#endif
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+_Static_assert(offsetof(struct latency_result, wake_segments) == LATENCY_BAND_END, "wake segment section follows the footer before it");
+#define LATENCY_WAKE_END (offsetof(struct latency_result, wake_footer) + 64)
+#else
+#define LATENCY_WAKE_END LATENCY_BAND_END
+#endif
+_Static_assert(LATENCY_WAKE_END == sizeof(struct latency_result) && sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT,
+    "the cause sections end the result and fit the declared result region");
 #endif
 
 /* Prepare before scheduling. Run from a controller allowed on one core; all

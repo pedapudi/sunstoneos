@@ -117,6 +117,75 @@ struct ss_latency_cause_report {
 _Static_assert(sizeof(struct ss_latency_cause_events) == 2528u, "cause event section layout");
 _Static_assert(sizeof(struct ss_latency_cause_report) == 17328u, "cause report wire layout");
 
+/* Wake segments (measurement build only, SUNSTONE_LATENCY_WAKE_SEGMENTS): the
+ * cycles and the five cause events of each segment of a busy wake on the
+ * woken core, from the C entry of the interrupt that leads to the selection to
+ * the point where the woken task reads its running time. Points, in order:
+ * 0 interrupt C entry (latency wrapper), 1 wrapper return, 2 owner exit start,
+ * 3 owner work start, 4 work done, 5 mask restored, 6 selection begin,
+ * 7 selection end, 8 running. Segment s runs from point s to point s + 1. The
+ * service parts (control drain, incoming, pull, expiry, slice) are summed over
+ * the passes inside segment 3. Time from the wake's ready stamp to point 0 is
+ * kept in generic counter ticks only, since ready is stamped on the releasing
+ * core. A wake is linked when one outermost interrupt passed every point in
+ * order and switched after the ready stamp; on CPUs 1-7 that interrupt must
+ * start after the ready stamp, and on CPU0, which releases its own task inside
+ * its tick, the ready stamp must fall inside the chain (its time before point
+ * 0 is then recorded as zero). An interrupt that arrives after the switch and
+ * before running starts a new chain but keeps the completed one, which then
+ * links with the interrupt's time in its last segment. Any other wake is
+ * counted unlinked. Cells are
+ * filed by the band setting at running (1 when the build has no band switch).
+ * CPU0's busy complete ticks are filed by the band setting at the tick's start,
+ * and the first and second busy complete ticks are kept whole. */
+#define SS_WAKE_SEG_MAGIC UINT64_C(0x5353574b53454731)
+#define SS_WAKE_SEG_FOOTER_MAGIC UINT64_C(0x5353574b53454631)
+#define SS_WAKE_SEG_VERSION 1u
+#define SS_WAKE_POINTS 9u
+#define SS_WAKE_SEGMENTS (SS_WAKE_POINTS - 1u)
+#define SS_WAKE_PARTS 5u
+struct ss_wake_seg_values {
+    uint64_t cycles, events[SS_LATENCY_CAUSE_EVENTS];
+};
+/* index: the busy sample number in bits 0-31, bit 32 when an interrupt came
+ * between the switch and running (its time is in the last segment), bit 33
+ * when the chain's interrupt nested another. */
+struct ss_wake_seg_sample {
+    uint64_t ready, entry_tick, running, index;
+    struct ss_wake_seg_values segment[SS_WAKE_SEGMENTS], part[SS_WAKE_PARTS];
+};
+struct ss_wake_seg_cell {
+    uint64_t count, pre_ticks, whole_ticks;
+    struct ss_wake_seg_values segment[SS_WAKE_SEGMENTS], part[SS_WAKE_PARTS];
+};
+/* first: busy sample #0; maximum[setting]: the largest whole wake after #0. */
+struct ss_wake_seg_core {
+    /* linked counts every linked wake, #0 included; interrupted and nested
+     * count linked wakes with those flags. */
+    uint64_t linked, unlinked, nested, interrupted;
+    /* The first busy wake's chain at running: bit 16 seen, bit 8 linked, bit 9
+     * linked through the held chain, bits 0-7 the next point the current chain
+     * expected. */
+    uint64_t first_state, reserved[3];
+    struct ss_wake_seg_cell cell[2];
+    struct ss_wake_seg_sample first, maximum[2];
+};
+struct ss_wake_seg_tick {
+    uint64_t count, cycles, outside_cycles, crossed;
+    uint64_t events[SS_LATENCY_CAUSE_EVENTS], outside_events[SS_LATENCY_CAUSE_EVENTS];
+    uint64_t release_cycles[SS_LATENCY_CAUSE_CORES];
+    uint64_t release_events[SS_LATENCY_CAUSE_CORES][SS_LATENCY_CAUSE_EVENTS];
+};
+struct ss_wake_seg_report {
+    uint64_t magic, version, bytes, cores, points, parts, switch_shift, complete;
+    uint64_t reserved[8];
+    struct ss_wake_seg_core core[SS_LATENCY_CAUSE_CORES];
+    /* tick[setting]: busy complete ticks; first, second: busy complete ticks 1 and 2. */
+    struct ss_wake_seg_tick tick[2], first, second;
+};
+_Static_assert(sizeof(struct ss_wake_seg_core) == 416u * 8u, "wake segment core layout");
+_Static_assert(sizeof(struct ss_wake_seg_report) == 128u + 8u * 416u * 8u + 4u * 62u * 8u, "wake segment report layout");
+
 #ifdef SUNSTONE_LATENCY_CAUSE
 #if !defined(SUNSTONE_LATENCY) || !defined(SUNSTONE_SCHED_LATENCY_TRACE)
 #error "Latency cause capture requires the latency trace"
@@ -156,6 +225,18 @@ void ss_latency_cause_mask_tail_end(void);
 void ss_latency_cause_sgi_begin(unsigned target);
 void ss_latency_cause_sgi_end(unsigned target);
 void ss_latency_cause_sgi_sent(unsigned target);
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+/* Points 2-7 at EL1 on the named core (point 0 and 1 come from the IRQ hooks
+ * above). A part brackets one service part inside the owner work. Running is
+ * called by the woken task itself, at EL0 or EL1, with its ready and running
+ * stamps, its busy sample index and the band setting it applied. */
+void ss_wake_seg_point(unsigned core, unsigned point);
+void ss_wake_seg_fast(unsigned core);
+void ss_wake_seg_part_begin(unsigned core);
+void ss_wake_seg_part_end(unsigned core, unsigned part);
+void ss_wake_seg_running(unsigned core, uint64_t ready, uint64_t running, uint64_t index, unsigned setting);
+bool ss_wake_seg_snapshot(struct ss_wake_seg_report *out);
+#endif
 #endif
 #include "service_cycles.h"
 #endif

@@ -75,6 +75,25 @@ static void controller(void *argument)
             }
     platform_puts("PASS service cycle model: both drain settings timed in both phases; functional evidence only\n");
 #endif
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+    configASSERT(result.wake_segments.magic == SS_WAKE_SEG_MAGIC && result.wake_segments.complete);
+    configASSERT(result.wake_footer[0] == SS_WAKE_SEG_FOOTER_MAGIC);
+    /* Every core linked busy wakes from interrupt entry to its running task, and CPU0 filed busy ticks. */
+    for (unsigned core = 0; core < LATENCY_CORES; ++core) {
+        const struct ss_wake_seg_core *w = &result.wake_segments.core[core];
+        const uint64_t filed = w->cell[0].count + w->cell[1].count;
+        number("wake_segments core=", core);
+        number(" linked=", w->linked);
+        number(" unlinked=", w->unlinked);
+        number(" filed=", filed);
+        number(" first_state=", w->first_state);
+        platform_puts("\n");
+        configASSERT(filed && w->first.running && filed + 1 <= w->linked);
+    }
+    configASSERT(result.wake_segments.tick[0].count + result.wake_segments.tick[1].count &&
+                 result.wake_segments.first.count == 1 && result.wake_segments.second.count == 1);
+    platform_puts("PASS wake segment model: linked busy wake chains on every core and filed busy ticks; functional evidence only\n");
+#endif
 #ifdef SUNSTONE_SCHED_PMU
     configASSERT(result.pmu_windows.magic == SS_SCHED_PMU_MAGIC);
     configASSERT(!(result.pmu_windows.flags & 8));

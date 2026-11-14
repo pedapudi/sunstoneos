@@ -239,6 +239,77 @@ def main():
         struct.pack_into('<Q', bad, at, value)
         harness.refused(lambda: host.decode_service_cycles(bytes(bad)), 'service cycle', ValueError)
         cases.append(name)
+    # The wake segment section comes last, with its own footer (kernel/scheduler/latency_cause.h).
+    def wake_values(cycles):
+        return [cycles, 1, 2, 3, 4, cycles // 2]
+
+    def wake_sample(ready, index, core):
+        # CPU0 releases its own task inside the interrupt that starts its chain; other cores' chains start after the release.
+        w = [ready, ready - 24 if core == 0 else ready + 24, ready + 240, index]
+        for k in range(8 + 5):
+            w += wake_values(100 * (k + 1))
+        return w
+    wake = [host.WAKE_MAGIC, 1, host.WAKE_BYTES, 8, 9, 5, 20, 1] + [0] * 8
+    for core in range(8):
+        wake += [5, 1, 0, 1, (1 << 16) | (1 << 8) | 8, 0, 0, 0]
+        for setting in range(2):
+            wake += [2, 2 * 24, 2 * 240]
+            for k in range(8 + 5):
+                wake += [2 * v for v in wake_values(100 * (k + 1))]
+        wake += wake_sample(1000, 0, core) + wake_sample(2000, 3, core) + wake_sample(3000, 7 | 1 << 32, core)
+    for n in range(4):
+        count = (40, 41, 1, 1)[n]
+        wake += [count, count * 50000, count * 10000, n == 1] + [count * 3] * 5 + [count] * 5
+        wake += [count * 2000] * 8 + [count] * 40
+    assert len(wake) * 8 == host.WAKE_BYTES
+    wake = struct.pack(f'<{len(wake)}Q', *wake)
+    # Bands absent: the wake section follows the service footer, which records the whole result's size.
+    whole_wake = len(with_service) + len(wake) + 64
+    service_whole = bytearray(with_service)
+    struct.pack_into('<Q', service_whole, len(service_whole) - 64 + 16, whole_wake)
+    struct.pack_into('<Q', service_whole, len(cause_whole) - 64 + 16, whole_wake)
+    service_whole = bytes(service_whole)
+    with_wake = service_whole + wake + struct.pack('<8Q', host.WAKE_FOOTER_MAGIC, 1,
+        whole_wake, len(service_whole), len(wake), 0, 0, 0)
+    assert host.peel_wake_segments(with_wake) == (service_whole, wake)
+    assert host.peel_service_cycles(service_whole, whole_wake)[1] == service
+    harness.refused(lambda: host.peel_service_cycles(service_whole), 'service cycle footer', ValueError)
+    decoded = host.decode_wake_segments(wake, 24000000)
+    core = decoded['cores'][4]
+    assert core['on']['count'] == 2 and core['on']['mean_wake_us'] == 10.0
+    assert core['on']['mean_segments']['exit_start_to_work_start']['cycles'] == 300
+    assert core['on']['mean_parts']['drain']['l3d_refill'] == 4
+    assert decoded['cores'][0]['first']['before_entry_us'] == 0.0 and core['first']['before_entry_us'] == 1.0
+    assert core['first']['index'] == 0 and core['first']['chain_cycles'] == sum(100 * (k + 1) for k in range(8))
+    assert core['maximum']['on']['index'] == 7 and core['maximum']['on']['wake_us'] == 10.0
+    assert core['maximum']['on']['interrupted'] and not core['maximum']['off']['interrupted']
+    assert core['interrupted'] == 1 and core['first_state']['linked'] and core['first_state']['current_chain_stage'] == 8
+    ticks = decoded['ticks']
+    assert ticks['on']['crossed'] == 1 and ticks['first']['mean_cycles'] == 50000
+    assert ticks['on']['mean_release'][5]['cycles'] == 2000 and ticks['on']['mean_release'][5]['l3d_refill'] == 1
+    cases.append('wake segment section follows the service footer and decodes chains, parts and filed ticks')
+    for name, index, value in [('wake footer version', 1, 2), ('wake report size', 4, 128),
+                               ('wake footer reserved word', 7, 1)]:
+        bad = bytearray(with_wake)
+        struct.pack_into('<Q', bad, len(bad) - 64 + index * 8, value)
+        harness.refused(lambda: host.peel_wake_segments(bytes(bad)), 'wake segment footer', ValueError)
+        cases.append(name)
+    first_sample = 16 + 8 + 2 * (3 + 13 * 6)
+    for name, word, value in [('wake report incomplete', 7, 0), ('wake points differ', 4, 8),
+                              ('wake sample out of order', first_sample + 1, 10 ** 9),
+                              ('wake cells exceed linked count', 16, 1)]:
+        bad = bytearray(wake)
+        struct.pack_into('<Q', bad, word * 8, value)
+        harness.refused(lambda: host.decode_wake_segments(bytes(bad), 24000000), 'wake segment', ValueError)
+        cases.append(name)
+    # The wake build grants EL0 event counter reads, so its cause rows carry PMUSERENR 12, and only it may.
+    harness.refused(lambda: host.decode_latency_cause(original, 24000000, 12), 'cause core', ValueError)
+    granted = bytearray(original)
+    for core in range(8):
+        struct.pack_into('<Q', granted, (8 + core * 18 + 4) * 8, 12)
+    assert host.decode_latency_cause(bytes(granted), 24000000, 12)['cores'][0]['userenr'] == 12
+    harness.refused(lambda: decode(granted), 'cause core', ValueError)
+    cases.append('PMUSERENR 12 is accepted only from the wake segment build')
     (out / 'cause-synthetic.bin').write_bytes(original)
     (out / 'ping-synthetic.bin').write_bytes(ping)
     (out / 'result.json').write_text(json.dumps({'passed': True, 'cases': cases,

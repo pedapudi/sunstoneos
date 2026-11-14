@@ -93,6 +93,13 @@ IMAGES = {
         '-DSUNSTONE_PARTITIONED_SCHEDULER=ON', '-DSUNSTONE_LATENCY=ON',
         '-DSUNSTONE_SCHED_LATENCY_TRACE=ON', '-DSUNSTONE_LATENCY_CAUSE=ON',
     ], 'target': 'latency-partitioned-pmu-model', 'elf': 'latency-partitioned-pmu-model.elf'},
+    # the same model with the stage-3 board image's measurement sections (band switch, wake segments) and its stream mask; without
+    # the band probe's end at CPU3's last sample (apps/latency/workload.c, band_window) its CPUs 1 and 2 stalled in the busy phase
+    'latency-wake-model': {'configure': [
+        '-DSUNSTONE_PARTITIONED_SCHEDULER=ON', '-DSUNSTONE_LATENCY=ON',
+        '-DSUNSTONE_SCHED_LATENCY_TRACE=ON', '-DSUNSTONE_LATENCY_CAUSE=ON',
+        '-DSUNSTONE_LATENCY_BAND_SWITCH=ON', '-DSUNSTONE_LATENCY_WAKE_SEGMENTS=ON', '-DSUNSTONE_LATENCY_STREAM_MASK=0xf0',
+    ], 'target': 'latency-partitioned-pmu-model', 'elf': 'latency-partitioned-pmu-model.elf'},
     # the other host model images that link the latency workloads (cmake/latency.cmake); one configure builds them all, so the
     # images that checks/latency-control-integration.py runs and these are built by the same recipe options
     'latency-models': {'configure': [

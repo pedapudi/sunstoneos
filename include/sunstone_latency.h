@@ -196,6 +196,14 @@ unsigned ss_band_switch_on(unsigned core);
 unsigned ss_band_switch_shift(void);
 bool ss_band_pmr_snapshot(uint64_t count[2], uint64_t cycles[2][64]);
 #endif
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+/* Measurement build only (kernel/scheduler/latency_cause.h): the woken task
+ * closes its wake chain with the release and running times and the band
+ * setting at the wake; the workload copies the report after every CPU froze. */
+struct ss_wake_seg_report;
+void ss_wake_seg_running(unsigned core, uint64_t ready, uint64_t running, uint64_t index, unsigned setting);
+bool ss_wake_seg_snapshot(struct ss_wake_seg_report *out);
+#endif
 #ifdef __cplusplus
 }
 #endif

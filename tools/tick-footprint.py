@@ -229,7 +229,19 @@ def segment(window, marks):
 
     The marker's first argument register names the target. Without it (an older
     trace) segments are numbered in order, which names targets only in a tick
-    that releases all eight."""
+    that releases all eight.
+
+    Without release marks (a wake window traced on another core), each named
+    mark starts a segment of its name, and records before the first are entry."""
+    if 'release_begin' not in marks:
+        names = {address: name for name, address in marks.items()}
+        labels, label = [], 'entry'
+        for rec in window:
+            if rec[0] == 'M':
+                label = names.get(rec[1], label)
+                continue
+            labels.append((label, rec))
+        return labels, 0, 0
     labels, label = [], 'outside'
     releases = scans = 0
     for rec in window:
@@ -386,10 +398,12 @@ def main():
     p.add_argument('trace', type=Path)
     p.add_argument('--mark', action='append', default=[], help='name=hexaddr')
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--all-windows', action='store_true',
+                   help='keep every window, not only ticks with eight releases and eight scans')
     a = p.parse_args()
     marks = {k: int(v, 16) for k, v in (m.split('=') for m in a.mark)}
     try:
-        per_window = analyze(a.elf, a.trace, marks)
+        per_window = analyze(a.elf, a.trace, marks, complete=not a.all_windows)
     except ValueError as error:
         sys.exit(str(error))
     full = per_window

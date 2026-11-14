@@ -37,6 +37,18 @@ BAND_FOOTER_MAGIC = 0x535342414e444631
 BAND_BYTES = 1872
 BAND_PROBES = 2
 BAND_BINS = 8
+WAKE_MAGIC = 0x5353574b53454731
+WAKE_FOOTER_MAGIC = 0x5353574b53454631
+WAKE_POINTS = ('irq_entry', 'wrapper_return', 'exit_start', 'work_start', 'work_done', 'mask_restored',
+               'switch_begin', 'switch_end', 'running')
+WAKE_SEGMENTS = tuple(f'{a}_to_{b}' for a, b in zip(WAKE_POINTS, WAKE_POINTS[1:]))
+WAKE_PARTS = ('drain', 'incoming', 'pull', 'expiry', 'slice')
+WAKE_VALUES = 1 + len(CAUSE_EVENTS)
+WAKE_SAMPLE_WORDS = 4 + (len(WAKE_SEGMENTS) + len(WAKE_PARTS)) * WAKE_VALUES
+WAKE_CELL_WORDS = 3 + (len(WAKE_SEGMENTS) + len(WAKE_PARTS)) * WAKE_VALUES
+WAKE_CORE_WORDS = 8 + 2 * WAKE_CELL_WORDS + 3 * WAKE_SAMPLE_WORDS
+WAKE_TICK_WORDS = 4 + 2 * len(CAUSE_EVENTS) + 8 + 8 * len(CAUSE_EVENTS)
+WAKE_BYTES = 128 + 8 * 8 * WAKE_CORE_WORDS + 4 * 8 * WAKE_TICK_WORDS
 BAND_CELL_FIELDS = ('windows', 'cycles', 'foreign', 'foreign_irq', 'foreign_max', 'foreign_sum', 'own', 'own_max')
 SERVICE_CELL = 464
 SERVICE_BINS = 105
@@ -742,7 +754,7 @@ def cycle_distribution(values):
             'maximum': ordered[-1], 'raw_cycles': list(values)}
 
 
-def decode_latency_cause(payload, frequency):
+def decode_latency_cause(payload, frequency, userenr=4):
     if len(payload) != CAUSE_BYTES:
         raise ValueError('latency cause report has the wrong size')
     words = struct.unpack('<' + 'Q' * (CAUSE_BYTES // 8), payload)
@@ -763,7 +775,7 @@ def decode_latency_cause(payload, frequency):
         row = take('status midr mpidr pmcr userenr filter enabled overflow irq_count ready frozen '
                    'icc_ctlr pmr sgi_irq_count cycle_begin tick_begin cycle_end tick_end')
         if (row['status'] or row['ready'] != 1 or row['frozen'] != 1 or row['overflow'] or
-                row['pmcr'] & 0x4f != 0x41 or row['userenr'] != 4 or row['filter'] or
+                row['pmcr'] & 0x4f != 0x41 or row['userenr'] != userenr or row['filter'] or
                 row['enabled'] != (1 << 31) | 0x1f or row['cycle_end'] <= row['cycle_begin'] or
                 row['tick_end'] <= row['tick_begin']):
             raise ValueError(f'cause core {core} configuration or clock interval is invalid')
@@ -1002,12 +1014,122 @@ def service_quantile(bins, count, fraction):
     raise ValueError('service cycle bins hold fewer spans than the count')
 
 
-def peel_bands(payload):
-    """Split the band probe section, which follows the service footer, from the result."""
+def peel_wake_segments(payload):
+    """Split the wake segment section, which comes last, from the result."""
+    if len(payload) < 64 or struct.unpack_from('<Q', payload, len(payload) - 64)[0] != WAKE_FOOTER_MAGIC:
+        return payload, b''
+    _, version, size, at, length, *rest = struct.unpack_from('<8Q', payload, len(payload) - 64)
+    if (version != 1 or size != len(payload) or length != WAKE_BYTES or at % 64 or
+            at + length > len(payload) - 64 or any(rest) or any(payload[at + length:-64])):
+        raise ValueError('wake segment footer offsets, padding or report size are invalid')
+    return payload[:at], payload[at:at + length]
+
+
+def decode_wake_segments(payload, frequency):
+    """Each busy wake's cycles and cache events by segment of its chain, from
+    the interrupt that started it to the woken task's first instruction, and
+    CPU0's busy complete ticks by band setting (kernel/scheduler/latency_cause.h)."""
+    words = struct.unpack('<' + 'Q' * (WAKE_BYTES // 8), payload)
+    header = words[:16]
+    magic, version, size, cores, points, parts, shift, complete = header[:8]
+    if ((magic, version, size, cores, points, parts, complete) !=
+            (WAKE_MAGIC, 1, WAKE_BYTES, 8, len(WAKE_POINTS), len(WAKE_PARTS), 1) or any(header[8:])):
+        raise ValueError('wake segment header is invalid or incomplete')
+    offset = 16
+
+    def take(count):
+        nonlocal offset
+        values = words[offset:offset + count]
+        offset += count
+        return values
+
+    def values(names):
+        out = {}
+        for name in names:
+            v = take(WAKE_VALUES)
+            out[name] = {'cycles': v[0], **dict(zip(CAUSE_EVENTS, v[1:]))}
+        return out
+
+    def scaled(table, count):
+        return {name: {key: value / count for key, value in row.items()} for name, row in table.items()}
+
+    def sample(core):
+        ready, entry, running, index = take(4)
+        segments, part = values(WAKE_SEGMENTS), values(WAKE_PARTS)
+        if not running:
+            if ready or entry or index or any(v for row in (*segments.values(), *part.values()) for v in row.values()):
+                raise ValueError('empty wake segment sample holds values')
+            return None
+        # CPU0 releases its own task inside the interrupt that starts its chain.
+        if not (entry <= ready <= running if core == 0 else ready <= entry <= running):
+            raise ValueError('wake segment sample is out of order')
+        return {'index': index & 0xffffffff, 'interrupted': bool(index >> 32 & 1), 'nested': bool(index >> 33 & 1),
+                'wake_us': (running - ready) * 1e6 / frequency,
+                'before_entry_us': (entry - ready) * 1e6 / frequency if core else 0.0,
+                'chain_cycles': sum(row['cycles'] for row in segments.values()),
+                'segments': segments, 'parts': part}
+
+    result = {'switch_shift': shift, 'cores': [], 'ticks': {},
+              'scope': ('a chain starts at the outermost interrupt entry and is kept only when every point '
+                        'follows in order and it carried the release (CPU0: release inside the chain); a chain '
+                        'completed before a later interrupt links with that interrupt in its last segment; busy samples after '
+                        'the first are filed by the band setting at the wake; events are refills and backend stalls')}
+    for core in range(8):
+        linked, unlinked, nested, interrupted, first_state, *reserved = take(8)
+        if any(reserved) or nested > linked or interrupted > linked:
+            raise ValueError('wake segment core counts or reserved words are invalid')
+        cells = {}
+        for setting in ('off', 'on'):
+            count, pre, whole = take(3)
+            segments, part = values(WAKE_SEGMENTS), values(WAKE_PARTS)
+            if not count and (pre or whole):
+                raise ValueError('empty wake segment cell holds values')
+            cells[setting] = {'count': count,
+                'mean_wake_us': whole * 1e6 / frequency / count if count else None,
+                'mean_before_entry_us': pre * 1e6 / frequency / count if count else None,
+                'mean_segments': scaled(segments, count) if count else None,
+                'mean_parts': scaled(part, count) if count else None}
+        first = sample(core)
+        maxima = {setting: sample(core) for setting in ('off', 'on')}
+        if sum(cell['count'] for cell in cells.values()) + (first is not None) > linked:
+            raise ValueError('wake segment cells exceed the linked count')
+        result['cores'].append({'core': core, 'linked': linked, 'unlinked': unlinked, 'nested': nested,
+                                'interrupted': interrupted,
+                                'first_state': {'seen': bool(first_state >> 16 & 1), 'linked': bool(first_state >> 8 & 1),
+                                                'through_held_chain': bool(first_state >> 9 & 1),
+                                                'current_chain_stage': first_state & 0xff},
+                                **cells, 'first': first, 'maximum': maxima})
+
+    def tick():
+        count, cycles, outside, crossed = take(4)
+        events, outside_events = take(len(CAUSE_EVENTS)), take(len(CAUSE_EVENTS))
+        release_cycles = take(8)
+        release_events = [take(len(CAUSE_EVENTS)) for _ in range(8)]
+        if crossed > count or (not count and (cycles or outside or any(events) or any(release_cycles))):
+            raise ValueError('wake segment tick cell is inconsistent')
+        n = count or 1
+        return {'count': count, 'crossed': crossed, 'mean_cycles': cycles / n if count else None,
+                'mean_outside_cycles': outside / n if count else None,
+                'mean_events': dict(zip(CAUSE_EVENTS, (v / n for v in events))) if count else None,
+                'mean_outside_events': dict(zip(CAUSE_EVENTS, (v / n for v in outside_events))) if count else None,
+                'mean_release': [{'core': x, 'cycles': release_cycles[x] / n,
+                                  **dict(zip(CAUSE_EVENTS, (v / n for v in release_events[x])))}
+                                 for x in range(8)] if count else None}
+    for name in ('off', 'on', 'first', 'second'):
+        result['ticks'][name] = tick()
+    if offset != len(words):
+        raise ValueError('wake segment report has unread words')
+    return result
+
+
+def peel_bands(payload, result_size=None):
+    """Split the band probe section, which follows the service footer, from the result. Its footer
+    records the whole result's size, which exceeds the payload when a wake segment section followed it."""
     if len(payload) < 64 or struct.unpack_from('<Q', payload, len(payload) - 64)[0] != BAND_FOOTER_MAGIC:
         return payload, b''
     _, version, size, at, length, *rest = struct.unpack_from('<8Q', payload, len(payload) - 64)
-    if (version != 1 or size != len(payload) or length != BAND_BYTES or at % 64 or
+    if (version != 1 or size != (len(payload) if result_size is None else result_size) or
+            length != BAND_BYTES or at % 64 or
             at + length > len(payload) - 64 or any(rest) or any(payload[at + length:-64])):
         raise ValueError('band footer offsets, padding or report size are invalid')
     return payload[:at], payload[at:at + length]
@@ -1134,7 +1256,8 @@ def decode(payload, dma=False):
     if len(payload) < RESULT_BYTES:
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
     result_size = len(payload)
-    payload, band_tail = peel_bands(payload)
+    payload, wake_tail = peel_wake_segments(payload)
+    payload, band_tail = peel_bands(payload, result_size)
     payload, service_tail = peel_service_cycles(payload, result_size)
     payload, cause_tail, ping_tail, stream_mask = peel_latency_cause(payload, result_size)
     tail = payload[RESULT_BYTES:]
@@ -1342,7 +1465,8 @@ def decode(payload, dma=False):
     if cause_tail:
         if dma or pmu_tail or control_tail or scheduler_pmu_tail or not scheduler_tail:
             raise ValueError('cause report requires its exclusive traced CPU profile')
-        result['latency_cause'] = decode_latency_cause(cause_tail, frequency)
+        # The wake segment build lets the woken task read the event counters (PMUSERENR.ER).
+        result['latency_cause'] = decode_latency_cause(cause_tail, frequency, 12 if wake_tail else 4)
         result['latency_cause_ping'] = decode_latency_cause_ping(ping_tail, frequency,
             result['latency_cause']['tick']['effective_mhz'])
     if service_tail:
@@ -1350,7 +1474,11 @@ def decode(payload, dma=False):
             raise ValueError('service cycle report requires the cause profile')
         result['service_cycles'] = decode_service_cycles(service_tail)
     if band_tail:
-        if not service_tail:
-            raise ValueError('band probe report requires the service cycle profile')
+        if not cause_tail:
+            raise ValueError('band probe report requires the cause profile')
         result['bands'] = decode_bands(band_tail)
+    if wake_tail:
+        if not cause_tail:
+            raise ValueError('wake segment report requires the cause profile')
+        result['wake_segments'] = decode_wake_segments(wake_tail, frequency)
     return result

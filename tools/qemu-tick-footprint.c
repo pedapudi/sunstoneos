@@ -1,10 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* QEMU TCG plugin: record CPU0's executed instructions and data accesses
- * between two code addresses (the latency diagnostic's tick hooks), keeping
- * only windows in which a load of the phase word returned the selected value.
+/* QEMU TCG plugin: record one core's executed instructions and data accesses
+ * between two code addresses (by default CPU0 between the latency diagnostic's
+ * tick hooks), keeping only windows in which a load of the phase word returned
+ * the selected value.
  *
  * Arguments (all addresses hexadecimal):
- *   begin=ADDR end=ADDR   window entry and exit instructions on vCPU 0
+ *   begin=ADDR end=ADDR   window entry and exit instructions on the traced core
+ *   core=N                the traced core (decimal, default 0); a later entry
+ *                         at begin restarts the window
  *   mark=ADDR             repeatable; logs a marker when the address executes
  *   phase=ADDR value=N    keep a window only after a load of N from phase
  *   skip=LO-HI            repeatable; no data callbacks for code in [LO, HI)
@@ -42,8 +45,9 @@ static uint64_t begin_addr, end_addr, phase_addr, phase_value;
 static uint64_t marks[MARKS]; static unsigned nmarks;
 static uint64_t skip_lo[SKIPS], skip_hi[SKIPS]; static unsigned nskips;
 static unsigned long want = 20, kept;
+static unsigned traced;   /* the core whose windows are recorded */
 static FILE *out;
-static bool active;   /* a window of core 0 is open; QEMU runs every vCPU on one thread, so a plain flag is exact */
+static bool active;   /* a window of the traced core is open; QEMU runs every vCPU on one thread, so a plain flag is exact */
 static struct rec *buf; static size_t used, cap;
 static bool matched, done;
 
@@ -68,7 +72,7 @@ static void on_block(unsigned vcpu, void *ud)
 static void on_begin(unsigned vcpu, void *ud)
 {
     (void)vcpu; (void)ud;
-    if (current || done) return;
+    if (current != traced || done) return;
     used = 0; matched = false;
     active = true;
     put('M', begin_addr, 0, 0);
@@ -76,7 +80,7 @@ static void on_begin(unsigned vcpu, void *ud)
 static void on_end(unsigned vcpu, void *ud)
 {
     (void)vcpu; (void)ud;
-    if (current || !active) return;
+    if (current != traced || !active) return;
     put('M', end_addr, 0, 0);
     active = false;
     if (!matched) return;
@@ -94,7 +98,7 @@ static void on_end(unsigned vcpu, void *ud)
 static void on_mark(unsigned vcpu, void *ud)
 {
     (void)vcpu;
-    if (current || !active) return;
+    if (current != traced || !active) return;
     uint64_t arg = UINT64_MAX;
     GByteArray *buf = g_byte_array_new();
     if (x0 && qemu_plugin_read_register(x0, buf) == 8) memcpy(&arg, buf->data, 8);
@@ -116,13 +120,13 @@ static void on_vcpu_init(qemu_plugin_id_t id, unsigned vcpu)
 static void on_insn(unsigned vcpu, void *ud)
 {
     (void)vcpu;
-    if (current || !active) return;
+    if (current != traced || !active) return;
     put('I', (uint64_t)(uintptr_t)ud, 0, 0);
 }
 static void on_mem(unsigned vcpu, qemu_plugin_meminfo_t info, uint64_t vaddr, void *ud)
 {
     (void)vcpu;
-    if (current || !active) return;
+    if (current != traced || !active) return;
     bool store = qemu_plugin_mem_is_store(info);
     put(store ? 'W' : 'R', (uint64_t)(uintptr_t)ud, vaddr, 1u << qemu_plugin_mem_size_shift(info));
     if (!store && vaddr == phase_addr) {
@@ -181,6 +185,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_
         else if (!strcmp(argv[i], "phase")) phase_addr = strtoull(v, NULL, 16);
         else if (!strcmp(argv[i], "value")) phase_value = strtoull(v, NULL, 0);
         else if (!strcmp(argv[i], "windows")) want = strtoul(v, NULL, 0);
+        else if (!strcmp(argv[i], "core")) traced = (unsigned)strtoul(v, NULL, 10);
         else if (!strcmp(argv[i], "out")) path = v;
         else if (!strcmp(argv[i], "mark") && nmarks < MARKS) marks[nmarks++] = strtoull(v, NULL, 16);
         else if (!strcmp(argv[i], "skip") && nskips < SKIPS) {

@@ -66,8 +66,15 @@ extern uint32_t ulSunstoneTraceTaskTickets(void);
     if (ss_trace_wait.holder_generation != ss_trace_generation) ss_trace_wait.flags &= ~SS_SCHED_WAIT_TICKETS
 #define SS_LTRACE_ACQUIRED(core, id) ss_sched_trace_lock_acquired(&ssSchedTraceLocks[id].value, core, &ss_trace_wait)
 #define SS_LTRACE_RELEASE(id) ss_sched_trace_lock_release(&ssSchedTraceLocks[id].value)
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+/* Measurement build only: the wake segment record brackets each service part with the core's event counters. */
+#define SS_SERVICE_TRACE_BEGIN ss_wake_seg_part_begin(ssKernelCPUId()); const uint64_t ss_service_begin = ss_sched_trace_now()
+#define SS_SERVICE_TRACE_END(core, part) \
+    (ss_sched_trace_service(core, part, ss_service_begin, ss_sched_trace_now()), ss_wake_seg_part_end(core, part))
+#else
 #define SS_SERVICE_TRACE_BEGIN const uint64_t ss_service_begin = ss_sched_trace_now()
 #define SS_SERVICE_TRACE_END(core, part) ss_sched_trace_service(core, part, ss_service_begin, ss_sched_trace_now())
+#endif
 #else
 #define SS_LTRACE_BEGIN(id, site, serving, next, tickets) ((void)0)
 #define SS_LTRACE_GLOBAL_BEGIN(site) ((void)0)

@@ -122,7 +122,14 @@ static void band_window(unsigned i, unsigned c)
             if (now >= end) { finished = 1; break; }
         } else if (atomic_load_explicit(&band_notify.notified, memory_order_acquire) != given) {
             end = now + LATENCY_BAND_MARGIN_CYCLES;
-        } else if (atomic_load_explicit(&phase, memory_order_relaxed) != BUSY) break;
+        } else if (atomic_load_explicit(&phase, memory_order_relaxed) != BUSY ||
+                   atomic_load_explicit(&wake[BAND_NOTIFIER].completed, memory_order_acquire) >=
+                       LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES) {
+            /* CPU3 has no more samples, so no notification will end this
+             * window. Spinning on would keep this core from idling, and only
+             * an idle core admits its next sample. */
+            break;
+        }
     }
     atomic_store_explicit(&band_armed[i].armed, 0, memory_order_release);
     w.windows = 1;
@@ -329,6 +336,16 @@ static void wake_worker(void *argument)
             ss_latency_record_at(c, wake[c].metric, wake[c].released, running, (uintptr_t)wake_worker);
 #ifdef SUNSTONE_LATENCY_BAND_SWITCH
             bands.wake_on[c][index / 64] |= (uint64_t)(ss_band_switch_on(c) & 1u) << (index % 64);
+#endif
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+            if (wake[c].metric == SS_LAT_SCHED_BUSY && index >= LATENCY_IDLE_SAMPLES) {
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+                const unsigned setting = ss_band_switch_on(c) & 1u;
+#else
+                const unsigned setting = 1u;
+#endif
+                ss_wake_seg_running(c, wake[c].released, running, index - LATENCY_IDLE_SAMPLES, setting);
+            }
 #endif
             atomic_fetch_add_explicit(&wake[c].completed, 1, memory_order_release);
         }
@@ -573,5 +590,11 @@ void latency_workload_run(struct latency_result *out)
     const uint64_t band_footer[8] = {LATENCY_BAND_FOOTER_MAGIC, 1, sizeof(*out),
         offsetof(struct latency_result, bands), sizeof(out->bands), 0, 0, 0};
     for (unsigned word = 0; word < 8; ++word) out->band_footer[word] = band_footer[word];
+#endif
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+    configASSERT(ss_wake_seg_snapshot(&out->wake_segments));
+    const uint64_t wake_footer[8] = {SS_WAKE_SEG_FOOTER_MAGIC, 1, sizeof(*out),
+        offsetof(struct latency_result, wake_segments), sizeof(out->wake_segments), 0, 0, 0};
+    for (unsigned word = 0; word < 8; ++word) out->wake_footer[word] = wake_footer[word];
 #endif
 }

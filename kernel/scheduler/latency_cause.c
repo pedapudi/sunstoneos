@@ -43,6 +43,12 @@ static _Atomic unsigned armed, initialized, bench_requested, bench_completed;
 static _Alignas(64) uint64_t bench_store;
 static uint64_t bench_irq_before;
 static uint64_t observer_sample[SS_LATENCY_CAUSE_SAMPLES];
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+/* CR and ER: the woken task reads the cycle and event counters at EL0 (latency_cause.h, wake segments). */
+#define USERENR UINT64_C(12)
+#else
+#define USERENR UINT64_C(4)
+#endif
 
 static unsigned own(void)
 { return (unsigned)((READ(tpidrro_el0) >> 48) & 255); }
@@ -76,6 +82,153 @@ static void add(uint64_t *p,uint64_t v)
 { __atomic_fetch_add(p,v,__ATOMIC_RELAXED); }
 static void maximum(uint64_t *p,uint64_t v)
 { __asm__ volatile("ldumax %x0, xzr, [%1]" :: "r"(v),"r"(p) : "memory"); }
+
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+unsigned ss_band_switch_shift(void);
+#endif
+/* The chain in progress on each core and the last completed one, written only by that core. */
+struct chain_state {
+    unsigned stage, nested, part_open;
+    uint64_t entry_tick, switch_tick;
+    struct ss_wake_seg_values point[SS_WAKE_POINTS], part[SS_WAKE_PARTS], part_begin;
+};
+struct wake_chain { struct chain_state cur, held; };
+static struct { _Alignas(64) struct wake_chain c; } chain[SS_LATENCY_CAUSE_CORES];
+static struct ss_wake_seg_report wake_report;
+static uint64_t busy_complete_ticks;
+static void values_now(struct ss_wake_seg_values *v)
+{ v->cycles=cycles();events_now(v->events); }
+static void values_diff(struct ss_wake_seg_values *out,const struct ss_wake_seg_values *a,const struct ss_wake_seg_values *b)
+{
+    out->cycles=b->cycles-a->cycles;
+    for (unsigned i=0;i<EVENTS;++i) out->events[i]=(b->events[i]-a->events[i])&UINT32_MAX;
+}
+static void values_add(struct ss_wake_seg_values *sum,const struct ss_wake_seg_values *v)
+{
+    sum->cycles+=v->cycles;
+    for (unsigned i=0;i<EVENTS;++i) sum->events[i]+=v->events[i];
+}
+/* Point 0 starts a chain at each outermost interrupt, keeping a completed
+ * chain whose task has not yet run; every later point advances the chain only
+ * from the point before. Points 2-5 out of order break the chain; selections
+ * outside a chain (voluntary switches) leave it alone. */
+void ss_wake_seg_point(unsigned core,unsigned point)
+{
+    if (!active(core) || !own_el1(core) || point>=SS_WAKE_POINTS-1) return;
+    struct wake_chain *w=&chain[core].c;
+    struct chain_state *c=&w->cur;
+    if (!point) {
+        if (c->stage==SS_WAKE_POINTS-1) w->held=*c;
+        c->stage=1;c->nested=0;c->part_open=0;c->entry_tick=READ(cntvct_el0);c->switch_tick=0;
+        memset(c->part,0,sizeof(c->part));
+        values_now(&c->point[0]);
+        return;
+    }
+    if (c->stage==point) {
+        values_now(&c->point[point]);c->stage=point+1;
+        if (point==SS_WAKE_POINTS-2) c->switch_tick=READ(cntvct_el0);
+    }
+    else if (point<6) c->stage=0;
+}
+/* An owner exit with no work: its work and restore segments are empty. */
+void ss_wake_seg_fast(unsigned core)
+{
+    if (!active(core) || !own_el1(core)) return;
+    struct chain_state *c=&chain[core].c.cur;
+    if (c->stage!=3) { c->stage=0;return; }
+    values_now(&c->point[3]);c->point[4]=c->point[3];c->point[5]=c->point[3];c->stage=6;
+}
+void ss_wake_seg_part_begin(unsigned core)
+{
+    if (!active(core) || !own_el1(core)) return;
+    struct chain_state *c=&chain[core].c.cur;
+    if (c->stage!=4) return;
+    values_now(&c->part_begin);c->part_open=1;
+}
+void ss_wake_seg_part_end(unsigned core,unsigned part)
+{
+    if (!active(core) || !own_el1(core) || part>=SS_WAKE_PARTS) return;
+    struct chain_state *c=&chain[core].c.cur;
+    if (c->stage!=4 || !c->part_open) return;
+    struct ss_wake_seg_values now,d;values_now(&now);values_diff(&d,&c->part_begin,&now);
+    values_add(&c->part[part],&d);c->part_open=0;
+}
+/* Whether a completed chain carried the wake released at ready. */
+static bool chain_links(unsigned core,const struct chain_state *c,uint64_t ready,uint64_t running)
+{
+    return c->stage==SS_WAKE_POINTS-1 && c->entry_tick<=running && ready<=c->switch_tick &&
+        (core ? ready<=c->entry_tick : c->entry_tick<=ready);
+}
+void ss_wake_seg_running(unsigned core,uint64_t ready,uint64_t running,uint64_t index,unsigned setting)
+{
+    if (core>=SS_LATENCY_CAUSE_CORES || !active(core) || own()!=core) return;
+    struct wake_chain *w=&chain[core].c;
+    struct ss_wake_seg_values now;values_now(&now);
+    struct ss_wake_seg_core *r=&wake_report.core[core];
+    const struct chain_state *c=NULL;bool interrupted=false;
+    if (chain_links(core,&w->cur,ready,running)) c=&w->cur;
+    else if (chain_links(core,&w->held,ready,running)) { c=&w->held;interrupted=true; }
+    if (!index)
+        r->first_state=UINT64_C(1)<<16|(uint64_t)(c!=NULL)<<8|(uint64_t)interrupted<<9|w->cur.stage;
+    if (!c) { w->cur.stage=0;w->held.stage=0;++r->unlinked;return; }
+    ++r->linked;
+    if (c->nested) ++r->nested;
+    if (interrupted) ++r->interrupted;
+    struct ss_wake_seg_sample x={.ready=ready,.entry_tick=c->entry_tick,.running=running,
+        .index=(index&UINT32_MAX)|(uint64_t)interrupted<<32|(uint64_t)(c->nested!=0)<<33};
+    for (unsigned k=0;k<SS_WAKE_SEGMENTS-1;++k) values_diff(&x.segment[k],&c->point[k],&c->point[k+1]);
+    values_diff(&x.segment[SS_WAKE_SEGMENTS-1],&c->point[SS_WAKE_SEGMENTS-1],&now);
+    memcpy(x.part,c->part,sizeof(x.part));
+    w->cur.stage=0;w->held.stage=0;
+    if (!index) { r->first=x;return; }
+    struct ss_wake_seg_cell *cell=&r->cell[setting&1u];
+    ++cell->count;cell->pre_ticks+=core ? x.entry_tick-ready : 0;cell->whole_ticks+=running-ready;
+    for (unsigned k=0;k<SS_WAKE_SEGMENTS;++k) values_add(&cell->segment[k],&x.segment[k]);
+    for (unsigned k=0;k<SS_WAKE_PARTS;++k) values_add(&cell->part[k],&x.part[k]);
+    struct ss_wake_seg_sample *m=&r->maximum[setting&1u];
+    if (!m->running || running-ready>m->running-m->ready) *m=x;
+}
+bool ss_wake_seg_snapshot(struct ss_wake_seg_report *out)
+{
+    for (unsigned c=0;c<SS_LATENCY_CAUSE_CORES;++c)
+        if (!atomic_load_explicit(&state[c].frozen,memory_order_acquire)) return false;
+    wake_report.magic=SS_WAKE_SEG_MAGIC;wake_report.version=SS_WAKE_SEG_VERSION;
+    wake_report.bytes=sizeof(wake_report);wake_report.cores=SS_LATENCY_CAUSE_CORES;
+    wake_report.points=SS_WAKE_POINTS;wake_report.parts=SS_WAKE_PARTS;
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+    wake_report.switch_shift=ss_band_switch_shift();
+#endif
+    wake_report.complete=1;
+    memcpy(out,&wake_report,sizeof(wake_report));
+    return true;
+}
+static void wake_tick_add(struct ss_wake_seg_tick *t,const struct cause_state *s,uint64_t end,
+                          uint64_t outside,const uint64_t outside_ev[EVENTS])
+{
+    ++t->count;t->cycles+=end-s->tick.begin_cycles;t->outside_cycles+=outside;
+    for (unsigned i=0;i<EVENTS;++i) { t->events[i]+=s->ev_tick[i];t->outside_events[i]+=outside_ev[i]; }
+    for (unsigned x=0;x<SS_LATENCY_CAUSE_CORES;++x) {
+        t->release_cycles[x]+=s->tick.target[x].release_end-s->tick.target[x].release_begin;
+        for (unsigned i=0;i<EVENTS;++i) t->release_events[x][i]+=s->ev_release[x][i];
+    }
+}
+/* A busy complete tick, filed by the band setting at its start. */
+static void wake_tick(const struct cause_state *s,uint64_t end,uint64_t outside,const uint64_t outside_ev[EVENTS])
+{
+    unsigned setting=1;bool crossed=false;
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+    const unsigned shift=ss_band_switch_shift();
+    setting=(unsigned)(s->tick.begin_tick>>shift)&1u;
+    crossed=((s->tick.end_tick>>shift)&1u)!=setting;
+#endif
+    wake_tick_add(&wake_report.tick[setting],s,end,outside,outside_ev);
+    if (crossed) ++wake_report.tick[setting].crossed;
+    ++busy_complete_ticks;
+    if (busy_complete_ticks==1) wake_tick_add(&wake_report.first,s,end,outside,outside_ev);
+    else if (busy_complete_ticks==2) wake_tick_add(&wake_report.second,s,end,outside,outside_ev);
+}
+#endif
 
 void ss_latency_cause_arm(void)
 {
@@ -132,7 +285,7 @@ static void configure(unsigned core)
     uint64_t pmcr=READ(pmcr_el0),n=(pmcr>>11)&31;
     uint64_t all=((UINT64_C(1)<<n)-1)|CC_ENABLE;
     WRITE(pmcntenclr_el0,all);WRITE(pmintenclr_el1,all);WRITE(pmovsclr_el0,all);
-    WRITE(pmccfiltr_el0,0);WRITE(pmuserenr_el0,4);
+    WRITE(pmccfiltr_el0,0);WRITE(pmuserenr_el0,USERENR);
     if (n>=EVENTS) {
         /* Count at EL0 and EL1 (filter bits zero), as the cycle counter does. */
         WRITE(pmevtyper0_el0,event_types[0]);WRITE(pmevtyper1_el0,event_types[1]);
@@ -146,7 +299,7 @@ static void configure(unsigned core)
     r->userenr=READ(pmuserenr_el0);r->filter=READ(pmccfiltr_el0);
     r->enabled=READ(pmcntenset_el0);r->overflow=READ(pmovsclr_el0);
     r->icc_ctlr=READ(icc_ctlr_el1);r->pmr=READ(icc_pmr_el1);
-    r->status=(n>=EVENTS && (r->pmcr&0x4f)==0x41 && r->userenr==4 && !r->filter &&
+    r->status=(n>=EVENTS && (r->pmcr&0x4f)==0x41 && r->userenr==USERENR && !r->filter &&
         (r->enabled&all)==(CC_ENABLE|EVENT_ENABLE) && !(READ(pmintenset_el1)&all) && !(r->overflow&all))?
         SS_CAUSE_OK:SS_CAUSE_CONFIG;
     if (r->status==SS_CAUSE_OK) {
@@ -165,6 +318,10 @@ void ss_latency_cause_irq_begin(unsigned core,unsigned interrupt)
     }
     if (!active(core)) return;
     ++state[core].depth;
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+    if (state[core].depth==1) ss_wake_seg_point(core,0);
+    else chain[core].c.cur.nested=1;
+#endif
     add(&report.core[core].irq_count,1);
     if (!interrupt) add(&report.core[core].sgi_irq_count,1);
 }
@@ -177,6 +334,9 @@ void ss_latency_cause_irq_end(unsigned core)
     report.core[core].overflow=READ(pmovsclr_el0)&CC_ENABLE;
     if (report.core[core].overflow&CC_ENABLE) report.core[core].status=SS_CAUSE_CONFIG;
     --state[core].depth;
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+    if (!state[core].depth) ss_wake_seg_point(core,1);
+#endif
     WRITE(daif,saved);
 }
 void ss_latency_cause_tick_begin(void)
@@ -443,6 +603,9 @@ void ss_latency_cause_tick_end(void)
             }
             ++e->phase_ticks[p];e->phase_cycles[p]+=end-s->tick.begin_cycles;e->phase_outside_cycles[p]+=outside;
             for (unsigned i=0;i<EVENTS;++i) { e->phase_events[p][i]+=s->ev_tick[i];e->phase_outside[p][i]+=outside_ev[i]; }
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+            if (p==1) wake_tick(s,end,outside,outside_ev);
+#endif
         }
     }
     s->tick_depth=0;

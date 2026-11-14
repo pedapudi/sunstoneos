@@ -2,6 +2,12 @@
 #include "latency_trace.h"
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
 #include "sunstone_latency.h"
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+#include "latency_cause.h"
+#define WAKE_POINT(core, point) ss_wake_seg_point(core, point)
+#else
+#define WAKE_POINT(core, point) ((void)0)
+#endif
 
 struct ss_sched_irq_history {
     _Atomic uint64_t generation, stamp[5], service[5], passes, result, sequence, previous_end;
@@ -228,6 +234,7 @@ bool ss_sched_trace_irq_begin(unsigned core, uint64_t start)
     state[core].irq = (struct ss_sched_trace_irq){.stamp = {start}};
     state[core].guard_end = 0;
     state[core].irq_active = 1;
+    WAKE_POINT(core, 2);
     if (!core) {
         atomic_store_explicit(&cpu0_dispatch.owner,
             atomic_load_explicit(&cpu0_dispatch.completed, memory_order_acquire), memory_order_relaxed);
@@ -243,13 +250,19 @@ void ss_sched_trace_irq_guard(unsigned core)
 void ss_sched_trace_irq_fast(unsigned core)
 {
     if (!enabled(core) || !state[core].irq_active) return;
+#ifdef SUNSTONE_LATENCY_WAKE_SEGMENTS
+    ss_wake_seg_fast(core);
+#endif
     for (unsigned i = 1; i < 4; ++i) state[core].irq.stamp[i] = state[core].guard_end;
     ss_sched_trace_irq_end(core, 3);
 }
 void ss_sched_trace_irq_stamp(unsigned core, unsigned stamp)
 {
     const uint64_t now = ss_sched_trace_now();
-    if (enabled(core) && state[core].irq_active && stamp < 4) state[core].irq.stamp[stamp] = now;
+    if (enabled(core) && state[core].irq_active && stamp < 4) {
+        state[core].irq.stamp[stamp] = now;
+        if (stamp) WAKE_POINT(core, 2 + stamp);
+    }
 }
 static void irq_history_store(struct ss_sched_irq_history *out, const struct ss_sched_trace_irq_chain *in)
 {
@@ -348,6 +361,7 @@ void ss_sched_trace_switch_begin(unsigned core)
 {
     const uint64_t now = ss_sched_trace_now();
     if (!enabled(core)) return;
+    WAKE_POINT(core, 6);
     state[core].active_switch = (struct ss_sched_trace_switch){.begin = now,
         .previous_end = atomic_load_explicit(&state[core].switch_end, memory_order_relaxed),
         .irq_sequence = atomic_load_explicit(&ss_sched_trace_switch_irq[core], memory_order_relaxed),
@@ -358,6 +372,7 @@ void ss_sched_trace_switch_end(unsigned core, unsigned slot)
 {
     const uint64_t now = ss_sched_trace_now();
     if (!enabled(core)) return;
+    WAKE_POINT(core, 7);
     struct ss_sched_trace_switch *s = &state[core].active_switch;
     s->end = now;
     s->selected_slot = slot;

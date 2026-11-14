@@ -76,6 +76,10 @@ class Model:
                 if leaf:
                     if not self.regs['daif']&0x80:self.violation=('benchmark admits IRQ',hex(pc))
                     self.measuring=not self.measuring;self.samples.append((pc,self.measuring))
+            elif key.startswith('pmevcntr') and not self.el1:
+                # PMUSERENR_EL0.ER grants EL0 event counter reads (Arm ARM, PMUSERENR_EL0); without it the read traps.
+                if not self.regs['pmuserenr_el0']&8:self.violation=('EL0 event read without PMUSERENR.ER',hex(pc));uc.emu_stop();return
+                value=self.regs[key]
             else:
                 assert self.el1,('privileged read at EL0',key)
                 value=self.regs.get(key);assert value is not None,(key,hex(pc))
@@ -112,22 +116,122 @@ class Model:
         self.call('ss_latency_cause_arm');self.call('ss_latency_cause_irq_begin',0,30)
         assert self.call('ss_latency_cause_core_ready',0)==1
 
-def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
-    out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
+def build(out,name,defines,sources):
     flags=['/usr/bin/clang-21','--target=aarch64-none-elf','-march=armv8.1-a+lse','-mgeneral-regs-only',
            '-ffreestanding','-fno-builtin','-fno-stack-protector','-O2','-g','-Wall','-Wextra','-Werror',
            '-DSUNSTONE_LATENCY_CAUSE=1','-DSUNSTONE_LATENCY=1','-DSUNSTONE_SCHED_LATENCY_TRACE=1',
-           '-DSUNSTONE_LATENCY_SERVICE_CYCLES=1',
+           *defines,
            '-I'+str(ROOT/'checks/scheduler-cause-host'),'-I'+str(ROOT/'kernel/scheduler'),'-I'+str(ROOT/'include')]
     objects=[]
-    for name in ('kernel/scheduler/latency_cause.c','checks/scheduler-pmu-support.c',
-                 'kernel/scheduler/service_cycles.c','checks/service-cycles-support.c'):
-        obj=out/(Path(name).stem+'.o');objects.append(obj)
-        run=subprocess.run(flags+['-c',str(ROOT/name),'-o',str(obj)],text=True,capture_output=True,env=environment())
+    for source in sources:
+        obj=out/f'{name}-{Path(source).stem}.o';objects.append(obj)
+        run=subprocess.run(flags+['-c',str(ROOT/source),'-o',str(obj)],text=True,capture_output=True,env=environment())
         (out/(obj.stem+'.log')).write_text(run.stdout+run.stderr);assert not run.returncode,run.stderr
-    image=out/'cause.elf'
+    image=out/f'{name}.elf'
     subprocess.run([str(LLD),'-Ttext=0x41000000','-Tdata=0x41100000','-Tbss=0x41200000','-e','ss_latency_cause_arm',*map(str,objects),'-o',str(image)],check=True,env=environment())
+    return image
+# struct ss_wake_seg_report (kernel/scheduler/latency_cause.h), in bytes.
+WAKE_CELL,WAKE_SAMPLE,WAKE_CORE,WAKE_TICK=81*8,82*8,416*8,62*8
+def wake_core(m,c):return m.sym['wake_report']+128+c*WAKE_CORE
+def wake_cell(m,c,setting):return wake_core(m,c)+64+setting*WAKE_CELL
+def wake_tick_cell(m,n):return m.sym['wake_report']+128+8*WAKE_CORE+n*WAKE_TICK
+def wake_chain(m,core,skip=None,nest=False):
+    """One wake chain on `core`: interrupt entry and wrapper return, the owner exit points and a service part."""
+    m.core=core;m.el1=True
+    m.call('ss_latency_cause_irq_begin',core,30)
+    if nest:m.call('ss_latency_cause_irq_begin',core,0);m.call('ss_latency_cause_irq_end',core)
+    m.call('ss_latency_cause_irq_end',core)
+    for point in range(2,8):
+        if point==skip:continue
+        m.call('ss_wake_seg_point',core,point)
+        if point==3:m.call('ss_wake_seg_part_begin',core);m.call('ss_wake_seg_part_end',core,1)
+def wake_cases(image,results):
+    m=Model(image);m.setup();assert m.row(0)[4]==12
+    m.call('ss_latency_cause_irq_end',0)
+    # A remote wake: CPU1's chain starts at the interrupt after the release.
+    m.core=1;m.call('ss_latency_cause_irq_begin',1,30);assert m.call('ss_latency_cause_core_ready',1);m.call('ss_latency_cause_irq_end',1)
+    ready=m.clock;wake_chain(m,1);m.el1=False
+    m.call('ss_wake_seg_running',1,ready,m.clock+10,0,1)
+    assert m.readq(wake_core(m,1),3)==(1,0,0)
+    first=m.readq(wake_core(m,1)+64+2*WAKE_CELL,4)
+    assert first[0]==ready and ready<=first[1]<=first[2] and first[3]==0 and m.readq(wake_cell(m,1,1),1)[0]==0
+    ready=m.clock;wake_chain(m,1,nest=True);m.el1=False
+    m.call('ss_wake_seg_running',1,ready,m.clock+10,1,1)
+    assert m.readq(wake_core(m,1),3)==(2,0,1)
+    cell=m.readq(wake_cell(m,1,1),3+13*6)
+    segments=[cell[3+k*6] for k in range(8)];part=cell[3+8*6+6]
+    assert cell[0]==1 and cell[1]>0 and all(segments[:7]) and 0<part<segments[3],cell
+    assert m.readq(wake_core(m,1)+64+2*WAKE_CELL+WAKE_SAMPLE+WAKE_SAMPLE,4)[3]==1|1<<33
+    results.append('a remote wake chain from interrupt entry to the running task files its segments and service part; the first busy wake is kept apart; nesting is counted')
+    ready=m.clock;wake_chain(m,1,skip=3);m.el1=False
+    m.call('ss_wake_seg_running',1,ready,m.clock+10,2,1)
+    wake_chain(m,1);ready=m.clock+1;m.el1=False
+    m.call('ss_wake_seg_running',1,ready,m.clock+10,3,1)
+    assert m.readq(wake_core(m,1),3)==(2,2,1) and m.readq(wake_cell(m,1,1),1)[0]==1
+    results.append('a remote chain with a missing point, or one whose interrupt began before the release, is counted unlinked')
+    # An interrupt between the switch and running (the model's first busy wake on CPU0 met one) keeps the completed chain.
+    def interrupt_without_switch(m,core):
+        m.el1=True;m.call('ss_latency_cause_irq_begin',core,0);m.call('ss_latency_cause_irq_end',core)
+        for point in range(2,6):m.call('ss_wake_seg_point',core,point)
+    ready=m.clock;wake_chain(m,1);interrupt_without_switch(m,1);m.el1=False
+    m.call('ss_wake_seg_running',1,ready,m.clock+10,4,1)
+    core=m.readq(wake_core(m,1),4)
+    assert core[:2]==(3,2) and core[3]==1 and m.readq(wake_cell(m,1,1),1)[0]==2,core
+    results.append('a completed chain links through a later interrupt that switched nothing, and is counted interrupted')
+    wake_chain(m,1);m.el1=False;m.call('ss_wake_seg_running',1,0,m.clock+10,5,1)
+    ready=m.clock;interrupt_without_switch(m,1);m.el1=False
+    m.call('ss_wake_seg_running',1,ready,m.clock+10,6,1)
+    assert m.readq(wake_core(m,1),4)[:2]==(4,3)
+    m.core=0;m.el1=True;m.call('ss_latency_cause_irq_begin',0,30);m.call('ss_latency_cause_irq_end',0)
+    for point in range(2,8):m.call('ss_wake_seg_point',0,point)
+    ready=m.clock;interrupt_without_switch(m,0);m.el1=False
+    m.call('ss_wake_seg_running',0,ready,m.clock+10,7,1)
+    assert m.readq(wake_core(m,0),4)[:2]==(0,1)
+    results.append('a completed chain is consumed by its running task, and one that switched before the release cannot link')
+    # CPU0 releases its own task inside the tick interrupt that starts its chain (apps/latency/workload.c, ss_latency_tick_hook).
+    m.core=0;m.el1=True;m.call('ss_latency_cause_irq_begin',0,30);ready=m.clock
+    m.call('ss_latency_cause_irq_end',0)
+    for point in range(2,8):m.call('ss_wake_seg_point',0,point)
+    m.el1=False;m.call('ss_wake_seg_running',0,0,m.clock+10,0,1)
+    m.call('ss_wake_seg_running',0,ready,m.clock+10,1,1)
+    wake_chain(m,0);m.el1=False;m.call('ss_wake_seg_running',0,ready,m.clock+10,2,1)
+    assert m.readq(wake_core(m,0),3)==(0,4,0) and m.readq(wake_cell(m,0,1),2)==(0,0)
+    m.core=0;m.el1=True;m.call('ss_latency_cause_irq_begin',0,30);ready=m.clock;m.call('ss_latency_cause_irq_end',0)
+    for point in range(2,8):m.call('ss_wake_seg_point',0,point)
+    m.el1=False;m.call('ss_wake_seg_running',0,ready,m.clock+10,1,1)
+    assert m.readq(wake_core(m,0),3)==(1,4,0) and m.readq(wake_cell(m,0,1),2)==(1,0)
+    results.append("CPU0's own wake links only when its release falls inside the tick chain, and records no time before entry")
+    bad=Model(image);bad.setup();bad.call('ss_latency_cause_irq_end',0);bad.core=1
+    bad.call('ss_latency_cause_irq_begin',1,30);bad.call('ss_latency_cause_irq_end',1);wake_chain(bad,1);bad.el1=False
+    bad.regs['pmuserenr_el0']=4;bad.call('ss_wake_seg_running',1,0,bad.clock+10,1,1,allow_violation=True)
+    assert bad.violation and bad.violation[0]=='EL0 event read without PMUSERENR.ER'
+    results.append('the woken task reads event counters at EL0 only with PMUSERENR.ER, which the wake build sets')
+    m=Model(image);m.setup()
+    for tick in range(3):
+        m.call('ss_latency_cause_tick_begin')
+        for target in range(8):
+            m.call('ss_latency_cause_release_begin',target,1);m.call('ss_latency_cause_release_end',target)
+            m.call('ss_latency_cause_state_begin',target);m.call('ss_latency_cause_state_end',target,1,10,20,1)
+        m.call('ss_latency_cause_tick_end')
+    filed=[m.readq(wake_tick_cell(m,n),4) for n in range(4)]
+    assert [x[0] for x in filed]==[0,3,1,1] and filed[1][1]==sum(x[1] for x in filed[1:2]) and filed[2][1]>0
+    releases=m.readq(wake_tick_cell(m,1)+14*8,8);assert all(releases)
+    assert filed[2][1]+filed[3][1]<=filed[1][1]
+    results.append('busy complete ticks are filed by band setting with their releases, and the first and second are kept apart')
+    m.el1=False;assert not m.call('ss_wake_seg_snapshot',OUTPUT)
+    for c in range(8):m.core=c;m.call('ss_latency_cause_freeze',c)
+    assert m.call('ss_wake_seg_snapshot',OUTPUT)
+    assert m.readq(OUTPUT,8)==(0x5353574b53454731,1,28736,8,9,5,0,1)
+    results.append('the wake snapshot waits for every core to freeze and names its layout')
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
+    out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
+    image=build(out,'cause',['-DSUNSTONE_LATENCY_SERVICE_CYCLES=1'],
+                ('kernel/scheduler/latency_cause.c','checks/scheduler-pmu-support.c',
+                 'kernel/scheduler/service_cycles.c','checks/service-cycles-support.c'))
+    wake_image=build(out,'wake',['-DSUNSTONE_LATENCY_WAKE_SEGMENTS=1'],
+                     ('kernel/scheduler/latency_cause.c','checks/scheduler-pmu-support.c'))
     results=[]
     m=Model(image);m.call('ss_latency_cause_irq_begin',0,30);assert not m.call('ss_latency_cause_core_ready',0)
     m.call('ss_latency_cause_arm');m.el1=False;before=len(m.ops);m.call('ss_latency_cause_irq_begin',0,30)
@@ -236,6 +340,8 @@ def main():
     m.core=1;m.regs['pmuserenr_el0']=0;m.call('ss_service_cycles_end',SCRATCH,1);m.core=0;m.regs['pmuserenr_el0']=4
     assert busy_cells(m,1)==1
     results.append('a configured EL0 drain is recorded; one that resumes on an unconfigured CPU reads no counter and is dropped')
-    r={'passed':True,'cases':results,'leaf_boundaries':boundaries,'image':str(image),'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'physical_access':False}
+    wake_cases(wake_image,results)
+    r={'passed':True,'cases':results,'leaf_boundaries':boundaries,'image':str(image),'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),
+       'wake_image_sha256':hashlib.sha256(wake_image.read_bytes()).hexdigest(),'physical_access':False}
     (out/'report.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(r,indent=2))
 if __name__=='__main__':main()
