@@ -57,7 +57,7 @@ Queues, event groups and stream buffers lock their own hashed slot instead of th
 Board results are records in `docs/evidence/scheduler.jsonl` (runs and their summaries); host results and unrun predictions of the design are in `docs/evidence/scheduler-partitioned.jsonl` and `docs/evidence/scheduler-realtime.jsonl`. Earlier prose evidence is in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-108 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+109 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -169,4 +169,5 @@ Board results are records in `docs/evidence/scheduler.jsonl` (runs and their sum
 | `1793685079986070508-ab781052` | 2026-11-03 | 3-1 | `c73c4017ec3f` | returned | passed | run_total 122.634 s, run_total 122.634 s, p99_4khz 7.67 us, p999_4khz 10.17 us, max_4khz 15.33 us, wakes_ge10us_4khz 110, soak_mean 107.426 ms, control_max 3.25 us |
 | `1793685086096699705-1b726ad3` | 2026-11-03 | 3-1 | `c73c4017ec3f` | returned | passed | run_total 252.401 s, run_total 252.401 s, p99_4khz 7.67 us, p999_4khz 16.83 us, max_4khz 26.17 us, wakes_ge10us_4khz 224, soak_mean 107.691 ms, control_max 3.291 us |
 | `1794685533239173548-a5db9331` | 2026-11-14 | 3-1 | `06d84cf4c44d` | watchdog-reset | failed | run_total 37.124 s, launch 22.44 s, terminal_crumb 13.3957 s |
+| `1794686856094584863-be2b6699` | 2026-11-14 | 3-1 | `4cf527c5d956` | returned | inconclusive | run_total 24.328 s, first_contact_dcdc5 1000 mV, first_contact_dcdc3 800 mV, pmr_change 18 cycles, pmr_change_dsb_sy_isb 34 cycles, cpu1_on_worst 17.8 us, cpu1_off_worst 24.3 us, cpu2_on_worst 16 us, cpu2_off_worst 21.8 us, cpu0_worst 49.2 us, cpu0_on_worst 41.5 us, cpu3_worst 21 us, cpu4_worst 43.8 us, cpu5_worst 42.5 us, cpu6_worst 25 us, cpu7_worst 20.1 us, busy_tick 51479 cycles, busy_tick_l3 14.57, release_4_7 17589 cycles, release_4_7_l3 6.25 |
 <!-- evidence-table:end -->
