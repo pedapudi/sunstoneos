@@ -1040,9 +1040,11 @@ def decode_service_cycles(payload):
     return result
 
 
-def peel_latency_cause(payload):
+def peel_latency_cause(payload, result_size=None):
     """Split the cause and ping reports from the result. Footer version 1
-    streams on every core; version 2 names the streaming cores in its last word."""
+    streams on every core; version 2 names the streaming cores in its last word.
+    The footer records the whole result's size, which exceeds the payload when
+    a service cycle section followed it (result_size)."""
     cause_tail, ping_tail, stream_mask = b'', b'', 0xff
     if len(payload) >= 64 and struct.unpack_from('<Q', payload, len(payload) - 64)[0] == CAUSE_FOOTER_MAGIC:
         footer = struct.unpack_from('<8Q', payload, len(payload) - 64)
@@ -1051,7 +1053,7 @@ def peel_latency_cause(payload):
             stream_mask = last
         elif version != 1 or last:
             raise ValueError('cause footer offsets, padding or report sizes are invalid')
-        if (size != len(payload) or cause_size != CAUSE_BYTES or
+        if (size != (len(payload) if result_size is None else result_size) or cause_size != CAUSE_BYTES or
                 ping_size != CAUSE_PING_BYTES or cause_at < RESULT_BYTES or
                 cause_at % 64 or ping_at != cause_at + cause_size or
                 ping_at + ping_size > len(payload) - 64 or
@@ -1066,8 +1068,9 @@ def peel_latency_cause(payload):
 def decode(payload, dma=False):
     if len(payload) < RESULT_BYTES:
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
+    result_size = len(payload)
     payload, service_tail = peel_service_cycles(payload)
-    payload, cause_tail, ping_tail, stream_mask = peel_latency_cause(payload)
+    payload, cause_tail, ping_tail, stream_mask = peel_latency_cause(payload, result_size)
     tail = payload[RESULT_BYTES:]
     scheduler_pmu_tail = b''
     if len(tail) >= SCHED_PMU_BYTES and struct.unpack_from('<Q', tail, len(tail) - SCHED_PMU_BYTES)[0] == SCHED_PMU_MAGIC:

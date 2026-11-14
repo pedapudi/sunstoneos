@@ -213,9 +213,17 @@ def main():
     assert len(service) == host.SERVICE_BYTES
     assert [host.service_bin_bounds(i) for i in (0, 7, 8, 33, 103, 104)] == \
         [(0, 7), (56, 63), (64, 71), (576, 639), (245760, 262143), (262144, None)]
-    with_service = combined + service + struct.pack('<8Q', host.SERVICE_FOOTER_MAGIC, 1,
-        len(combined) + len(service) + 64, len(combined), len(service), 0, 0, 0)
-    assert host.peel_service_cycles(with_service) == (combined, service)
+    # As in the image, the cause footer records the size of the whole result, service section included
+    # (board entry 1794644716545175948-2ce0b5a1 was refused by a decoder that compared it with the peeled payload).
+    whole = len(combined) + len(service) + 64
+    cause_whole = bytearray(combined)
+    struct.pack_into('<Q', cause_whole, len(cause_whole) - 64 + 16, whole)
+    cause_whole = bytes(cause_whole)
+    with_service = cause_whole + service + struct.pack('<8Q', host.SERVICE_FOOTER_MAGIC, 1,
+        whole, len(cause_whole), len(service), 0, 0, 0)
+    assert host.peel_service_cycles(with_service) == (cause_whole, service)
+    assert host.peel_latency_cause(cause_whole, whole) == (prefix, original, ping, 0xff)
+    harness.refused(lambda: host.peel_latency_cause(cause_whole), 'footer', ValueError)
     decoded = host.decode_service_cycles(service)
     drain = decoded['phases']['busy'][5]['drain']['empty_return_on']
     assert (drain['count'], drain['p50_upper_cycles'], drain['max_cycles'], drain['interrupted']) == (4, 639, 631, 1)
