@@ -143,16 +143,30 @@ The gate and the landing run at nice +10 and the idle I/O class, and image-copyi
 ([board runner](board-runner.md#board-runs-keep-their-timing-while-the-gate-runs)). A check that copies a disk image calls
 `harness.copy_image`, not `shutil.copyfile`; `checks/host-priority.py` checks the priorities and the sparse copy.
 
-### A passing gate removes its bulky outputs
+### A passing step keeps its records and drops its build products
 
-A gate that passes deletes the fixture build trees (`build`, `build-*`, `inputs`) and the files over 8 MiB under its `evidence/` directory,
-and does the same to the earlier gates of the same landing label. It keeps `summary.txt`, `timing.txt`, `commands.txt`,
-`gate-record.json` (which `tools/land.py` reads), `disk-peak.json`, the step logs and the other evidence files. A failed gate keeps
-everything until a later gate of that label passes. The deletion is `slim_gate` in `tools/clean-generated.py` and obeys its refusals:
-no evidence records, sources or build directory that an evidence record or queue entry names. The per-checkout build directories
-(`gate-os-*`, `gate-img-*`, `gate-central-*`) are the incremental build caches and stay; `clean-generated.py stale-builds DAYS` prunes them.
-`clean-generated.py` never deletes a build directory that a check or tool names as `build/NAME` in its source (for example `npu-graph-variants`);
-the set is derived from the sources. `clean-generated.py slim-gates [--apply]` applies the same rule to the passing gate directories already on disk.
+At its end, after it records its peak disk use, a gate reduces the evidence directory of every step that passed (PASS or WARN) to its
+records. Step `image-NAME` writes `evidence/images/NAME`, `indexed-NAME` writes `evidence/indexed/NAME` and `check-NAME` writes
+`evidence/NAME`. A record is a text file of a record suffix (`.json`, `.jsonl`, `.log`, `.txt`, `.md`, `.csv` and a few others, or no
+suffix) up to 8 MiB that is no ELF file or archive. The step keeps the records at the top of its directory as plain files and
+compresses any of them over 1 MiB in place (`NAME.gz`); it packs the records of its subdirectories into one `records.tar.gz`. Everything
+else goes: object files, linked executables and images, generated sources, firmware and tensor copies, CMake build trees, fixture Git
+repositories and the fixture `build`, `build-*` and `inputs` directories. `retention.json` in the step directory records the count and
+bytes removed and the size and SHA-256 of every linked ELF removed. The gate also writes `images.json`: the path, size and SHA-256 of each
+image it built, because the per-checkout build directories that hold the images are rebuilt by the next gate on that checkout.
+
+A step that failed or was skipped keeps everything, and so does an evidence directory that no step names, so a failure stays
+diagnosable. The gate-root files stay as they are: `summary.txt`, `commands.txt`, `timing.txt`, `environment.txt`, `gate-record.json`,
+`disk-peak.json` and the step logs. These are the only files that anything reads from a gate directory after the gate: `tools/land.py`
+reads `summary.txt` and `gate-record.json`, `tools/host_space.py` reads `disk-peak.json`, the evidence records under `docs/evidence/` cite
+`summary.txt` and `commands.txt`, and the board runner copies each image into its own queue entry. A passing gate also slims every step
+of the earlier gates of its landing label, which were kept for diagnosis. The deletion is `slim_gate` in `tools/clean-generated.py` and
+obeys its refusals: no evidence records, sources or build directory that an evidence record or queue entry names. On a landing gate of
+88 steps this keeps 7 MB of 340 MB and takes under one second. The per-checkout build directories (`gate-os-*`, `gate-img-*`,
+`gate-central-*`) are the incremental build caches and stay; `clean-generated.py stale-builds DAYS` prunes them.
+`clean-generated.py` never deletes a build directory that a check or tool names as `build/NAME` in its source (for example
+`npu-graph-variants`); the set is derived from the sources. `clean-generated.py slim-gates [--apply]` applies the same rule to the gate
+directories already on disk, reading each step's verdict from `summary.txt`.
 
 ### The gate keeps its temporary files off /tmp
 

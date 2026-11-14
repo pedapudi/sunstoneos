@@ -432,7 +432,7 @@ def main(argv=None):
                 host_space.write_peak(output, [output, *build_root.glob('gate-*-' + tree)])
         except OSError:
             pass
-    atexit.register(record_peak)         # a failed gate keeps everything and still records its peak
+    atexit.register(record_peak)         # a gate that stops early still records its peak
 
     fail_fast = args.fail_fast
     jobs = 1 if fail_fast else args.jobs
@@ -823,10 +823,36 @@ def main(argv=None):
     note('mode: ' + ('fail-fast' if fail_fast else 'keep-going, %d parallel checks, memory guard %g GiB'
                      % (jobs, args.min_available_gb)) + ('' if args.full else ', slot %d of %d, %s, -j %d' % (
                          gate_lock.index, slots, args.priority, build_jobs)) + (', strict documentation checks' if args.strict_docs else ''))
+    def conclude(code):
+        """Record the gate's peak disk use and the hashes of the images it built, then slim the evidence of every passing step
+        (and, when the gate passed, the earlier gates of its landing label; tools/clean-generated.py). A failing step keeps everything."""
+        record_peak()
+        built = {}
+        for image in [*variants, *recipes]:
+            step = ('os-' if image in VARIANTS else 'img-') + image + '-build'
+            path = image_file(image)
+            if results.get(step) == 'PASS' and path.is_file():
+                digest = hashlib.sha256()
+                with path.open('rb') as stream:
+                    for block in iter(lambda: stream.read(1 << 20), b''):
+                        digest.update(block)
+                built[image] = {'elf': str(path), 'bytes': path.stat().st_size, 'sha256': digest.hexdigest()}
+        if built:
+            (output / 'images.json').write_text(json.dumps(built, indent=1, sort_keys=True) + '\n')
+        try:
+            spec = importlib.util.spec_from_file_location('clean_generated', Path(__file__).with_name('clean-generated.py'))
+            cleaner = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(cleaner)
+            freed = cleaner.slim_after_gate(output, args.label, dict(results), code == 0)
+            note('retention: freed %.1f MiB of build products of passing steps' % (freed / 2**20))
+        except Exception as error:
+            note('retention skipped: %s' % error)
+        return code
+
     try:
         elapsed = run_steps()
     except Stop:
-        return 1
+        return conclude(1)
     failed = sorted(name for name, verdict in results.items() if verdict == 'FAIL')
     skipped = sorted(name for name, verdict in results.items() if verdict == 'SKIP')
     warned = sorted(name for name, verdict in results.items() if verdict == 'WARN')
@@ -835,10 +861,10 @@ def main(argv=None):
     (output / 'timing.txt').write_text(''.join('%8.1f %s\n' % (seconds, name) for name, seconds in
                                               sorted(timings, key=lambda item: -item[1])))
     if not unchanged('during the selected steps'):
-        return 1
+        return conclude(1)
     if failed or skipped:
         note('FAIL selected integration checks: ' + ', '.join(failed + skipped))
-        return 1
+        return conclude(1)
     if affected_plan and affected_plan.get('revisions') and not changes:
         # tools/land.py reuses this pass for a landing: the tree it ran on and the checks it selected with their inputs.
         tree_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=source, text=True).strip()
@@ -846,16 +872,7 @@ def main(argv=None):
         (output / 'gate-record.json').write_text(json.dumps({'tree': tree_hash, 'base': affected_plan['revisions'][0], 'checks': {
             name: index[name].get('inputs', []) for name in selected if name in index}}, indent=1) + '\n')
     note('PASS selected integration checks; unselected behavior is not revalidated')
-    # A passing gate removes its own bulky outputs and those of earlier gates of the same landing (tools/clean-generated.py).
-    record_peak()
-    try:
-        spec = importlib.util.spec_from_file_location('clean_generated', Path(__file__).with_name('clean-generated.py'))
-        cleaner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cleaner)
-        note('retention: freed %.1f MiB of bulky outputs' % (cleaner.slim_after_pass(output, args.label) / 2**20))
-    except Exception as error:
-        note('retention skipped: %s' % error)
-    return 0
+    return conclude(0)
 
 if __name__ == '__main__':
     sys.exit(main())
