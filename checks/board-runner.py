@@ -1011,6 +1011,15 @@ def journal_cases(out):
            (['reset64','0x41000000'],['execute'])]
     for arguments,expected in table:
         assert sorted(board.fel_effects(arguments))==sorted(expected),(arguments,board.fel_effects(arguments))
+    big=root/'big.bin';big.write_bytes(bytes(128))
+    assert board.fel_effects(['write','0x02050000',str(file)])=={'register'}              # an MMIO bulk write (the WDT block) is journaled
+    assert board.fel_effects(['write','0x07090100',str(file)])=={'register'}              # RTC
+    assert board.fel_effects(['write','0xf3fc0',str(big)])=={'register'}                  # straddles the end of shared SRAM at 0xf4000
+    assert board.fel_effects(['write','0x52d40',str(big)])=={'register'}                  # straddles the end of the launcher at 0x52d80
+    assert board.fel_effects(['write','0x73fc0',str(big)])=={'register'}                  # straddles the start of shared SRAM
+    assert board.fel_effects(['write','0xf3f80',str(big)])=={'sram'}                      # ends exactly at 0xf4000
+    assert board.fel_effects(['write','0x52c00',str(file)])=={'sram'}
+    assert board.fel_effects(['write','0x71000',str(root/'missing.bin')])=={'register'}  # a size that cannot be read is journaled
     assert board.fel_effects(['frob','1'])=={'register'}                  # an unknown request is always journaled synchronously
     assert board.fel_effects(['write','0x41000000',str(file),'read','0x41000000','64','x','writel','0x1','0x2'])=={'dram','register'}
     def sequence(label,old):

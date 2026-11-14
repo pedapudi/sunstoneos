@@ -108,7 +108,7 @@ class TransportFailure(RuntimeError):
 # or tool that inspects an interrupted run (tools/finish-fel-read.py, tools/read-returned-result.py) reads session.json to learn what
 # the board may be doing and what it holds. What each class protects:
 #   reads (version, read, readl, hexdump, dump, sid)  nothing: no effect on the board; their entries are evidence, saved without sync
-#   SRAM staging writes (address below DRAM_BASE)       nothing alone: SRAM holds only the helpers that an exe starts, and every exe syncs
+#   SRAM staging writes (the whole range in FEL_SRAM)   nothing alone: SRAM holds only the helpers that an exe starts, and every exe syncs
 #   DRAM writes (address at or above DRAM_BASE)         the DRAM ownership: the first write of an epoch syncs, so recovery knows the DRAM
 #                                                       may hold the image; later writes of the epoch add nothing to know
 #   register writes (writel and any unknown command)    rail, clock, watchdog and power state: always synced
@@ -119,13 +119,20 @@ FEL_READS = frozenset({'version', 'ver', 'hexdump', 'dump', 'read', 'readl', 'si
 FEL_COMMANDS = FEL_READS | {'write', 'writel', 'exe', 'reset64', 'spl', 'fill', 'clear'}
 FEL_EXECUTES = frozenset({'exe', 'reset64', 'spl'})
 DRAM_BASE = 0x40000000
+# The SRAM that the runner stages into, each range from the constant or the document that fixes it. MMIO (the WDT, RTC and PMIC bus
+# registers, from 0x02000000) lies below DRAM_BASE too, so an address below DRAM_BASE is not enough: a write is SRAM staging only when
+# its whole range [address, address + size) lies inside one of these.
+FEL_SRAM = (images.LAUNCHER_SRAM,      # the launcher's reservation 0x52000..0x52d80 (docs/board-runner.md)
+            (0x71000, 0x71200),        # the ROM scratch that readl uses and the runner preserves (Live.sanity)
+            (0x74000, 0xf4000))        # shared SRAM, CPU addresses 0x00074000-0x000f3fff (the manual; docs/npu-platform.md)
 
 
-def fel_effects(arguments):
+def fel_effects(arguments, size_of=lambda path: os.stat(path).st_size):
     """The write-ahead class of one FEL transaction (a sequence of commands, each followed by its operands, which are addresses, sizes
     and paths and never a command name): the set of {'execute', 'register', 'dram', 'sram'} that it may change; empty for reads. A
-    command that is not known, or a write whose address does not parse, is a register effect, so an unknown request is always
-    journaled synchronously."""
+    command that is not known, a write whose address or size does not parse, and a write whose range is not wholly inside FEL_SRAM or
+    wholly at or above DRAM_BASE (MMIO, or a range straddling a boundary) are register effects, so such a request is always journaled
+    synchronously. size_of(path) is the size of the file a write sends."""
     effects, words, i = set(), list(arguments), 0
     if not words or words[0] not in FEL_COMMANDS:
         return {'register'}
@@ -138,8 +145,15 @@ def fel_effects(arguments):
             effects.add('execute')
         elif command == 'write':
             try:
-                effects.add('dram' if int(operands[0], 0) >= DRAM_BASE else 'sram')
-            except (IndexError, ValueError):
+                address = int(operands[0], 0)
+                end = address + size_of(operands[1])
+                if address >= DRAM_BASE:
+                    effects.add('dram')
+                elif any(low <= address and end <= high for low, high in FEL_SRAM):
+                    effects.add('sram')
+                else:
+                    effects.add('register')              # MMIO or a range that straddles a boundary
+            except (IndexError, ValueError, OSError):
                 effects.add('register')
         elif command not in FEL_READS:
             effects.add('register')

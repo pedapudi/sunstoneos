@@ -337,8 +337,8 @@ launch 10.7 s, DRAM 3.0 s and a total of 27.2 s with four gates running, against
   (182 saves of two syncs each in a 91-transaction run, 364 syncs, and 42 more for the readback files); one `fsync` takes 1.3 ms on an idle host
   and 66 ms at the median, 980 ms at the 99th percentile beside three writers, even in the idle I/O class, because the ext4 journal is shared.
   `tools/board.py` now classifies each transaction (`fel_effects`) and syncs the write-ahead entry only before one that recovery must know:
-  a register write (rail, clock, watchdog and power state), an execute (`exe`, `reset64`, `spl`; each starts a new DRAM epoch) and the first DRAM
-  write of an epoch (the DRAM ownership). A read, an SRAM staging write (the helpers an `exe` starts, and every `exe` syncs) and the later DRAM
+  a register write (rail, clock, watchdog and power state, and any write that is not wholly inside the SRAM ranges the runner stages into or wholly in DRAM, so an MMIO bulk write or a range straddling a boundary is synced), an execute (`exe`, `reset64`, `spl`; each starts a new DRAM epoch) and the first DRAM
+  write of an epoch (the DRAM ownership). A read, an SRAM staging write (wholly inside `FEL_SRAM`: the launcher reservation, the ROM scratch at 0x71000, shared SRAM 0x74000 to 0xf3fff; the helpers an `exe` starts, and every `exe` syncs) and the later DRAM
   writes of an epoch are saved without sync: the atomic replacement survives the death of the runner, and the next synced entry, which holds the
   whole record, carries them to disk. The readback files and the journal are synced once at the end of the run. A host crash in the middle of a
   run can therefore lose the unsynced reads and staging writes of the last stretch; it cannot lose the record of anything that changed the board.
