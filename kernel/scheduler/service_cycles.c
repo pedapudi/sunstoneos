@@ -17,8 +17,8 @@ struct local {
     unsigned services, state;
 } __attribute__((aligned(64)));
 static struct local local[CORES];
-static struct ss_service_cycles_report report = {
-    .magic = SS_SERVICE_CYCLES_MAGIC, .version = SS_SERVICE_CYCLES_VERSION, .bytes = sizeof(report),
+static struct ss_service_cycles_report service_report = {
+    .magic = SS_SERVICE_CYCLES_MAGIC, .version = SS_SERVICE_CYCLES_VERSION, .bytes = sizeof(service_report),
     .cores = CORES, .phases = SS_SERVICE_CYCLES_PHASES, .kinds = SS_SERVICE_CYCLES_KINDS,
     .states = SS_SERVICE_CYCLES_STATES, .bins = SS_SERVICE_CYCLES_BINS,
     .switch_shift = SS_SERVICE_CYCLES_SWITCH_SHIFT};
@@ -64,23 +64,30 @@ void ss_service_cycles_begin(struct ss_service_cycles_span *span, unsigned kind,
     }
     span->recording = core < CORES && ss_latency_cause_core_ready(core);
     span->irqs = span->recording ? ss_latency_cause_irq_count(core) : 0;
-    __asm__ volatile("isb\n mrs %0, pmccntr_el0" : "=r"(span->cycles) :: "memory");
+    span->cycles = 0;
+    /* Tasks call the drain at EL0, where the cycle counter is readable only
+     * after the cause build has configured this CPU (PMUSERENR_EL0.CR). */
+    if (span->recording) __asm__ volatile("isb\n mrs %0, pmccntr_el0" : "=r"(span->cycles) :: "memory");
 }
 /* A drain called by a task can resume on another CPU; its span is dropped. */
 void ss_service_cycles_end(const struct ss_service_cycles_span *span, unsigned core)
 {
-    uint64_t now;
-    __asm__ volatile("isb\n mrs %0, pmccntr_el0" : "=r"(now) :: "memory");
+    /* Read the counter only on the CPU that was configured when the span
+     * began; configuration is never undone, and freezing keeps the counter
+     * readable. */
+    uint64_t now = 0;
+    const bool same = span->recording && core == span->core;
+    if (same) __asm__ volatile("isb\n mrs %0, pmccntr_el0" : "=r"(now) :: "memory");
     if (span->core >= CORES) return;
     if (span->kind == SS_SERVICE_CYCLES_SERVICE) {
         --local[span->core].services;
         local[span->core].state = span->previous;
     }
-    if (!span->recording || core != span->core || !ss_latency_cause_core_ready(core)) return;
+    if (!same || !ss_latency_cause_core_ready(core)) return;
     const unsigned p = phase_at(ss_latency_now());
     if (p == NO_PHASE) return;
     const uint64_t cycles = now - span->cycles;
-    struct ss_service_cycles_cell *cell = &report.cell[p][core][span->kind][span->state];
+    struct ss_service_cycles_cell *cell = &service_report.cell[p][core][span->kind][span->state];
     if (ss_latency_cause_irq_count(core) != span->irqs) {
         ++cell->interrupted;
         cell->interrupted_sum += cycles;
@@ -97,7 +104,7 @@ bool ss_service_cycles_snapshot(struct ss_service_cycles_report *out)
 {
     for (unsigned c = 0; c < CORES; ++c)
         if (ss_latency_cause_core_ready(c)) return false;
-    report.complete = 1;
-    memcpy(out, &report, sizeof(report));
+    service_report.complete = 1;
+    memcpy(out, &service_report, sizeof(service_report));
     return true;
 }
