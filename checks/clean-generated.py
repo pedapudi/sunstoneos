@@ -10,6 +10,9 @@ It runs here with HOME set to a scratch directory that holds a miniature cache, 
               pinned builds (sunxi-a733, a733-ddr, qemu-virt);
   protected   evidence, sources, host, checkpoints, inputs, venv and bin are refused, as are queue databases and tokens;
   roots       a path outside the allowed roots, an allowed root itself, and a symbolic link out of the build directory are refused.
+  slim        a gate keeps the records of each passing step (subdirectories packed in records.tar.gz, records over 1 MiB gzip-compressed,
+              the hashes of linked executables in retention.json) and removes its build products; a failing or skipped step keeps
+              everything; a passing gate slims the earlier gates of its landing label whole; a second slim removes nothing.
 Usage: clean-generated.py --output DIR
 """
 import argparse
@@ -147,45 +150,98 @@ def main():
         print('PASS ' + line)
 
 
+def elf(kind):
+    """The 64-byte header of a little-endian AArch64 ELF file of type kind (1 an object file, 2 an executable), padded."""
+    return b'\x7fELF\x02\x01\x01' + bytes(9) + kind.to_bytes(2, 'little') + (183).to_bytes(2, 'little') + bytes(44) + bytes(4000)
+
+
 def slim(home, build, passed):
-    """slim-gates and slim_after_pass keep the records of a gate and remove its bulky outputs, whatever their mode."""
-    def gate(name, verdict):
+    """A gate keeps the records of its passing steps and removes their build products; a failing step keeps everything."""
+    import gzip
+    import hashlib
+    import tarfile
+
+    def gate(name, summary):
         directory = build / name
-        for kept in ('summary.txt', 'gate-record.json', 'timing.txt', 'disk-peak.json', 'image-x.log', 'evidence/images/a/result.json'):
-            (directory / kept).parent.mkdir(parents=True, exist_ok=True)
-            (directory / kept).write_text(verdict if kept == 'summary.txt' else '{}\n')
-        (directory / 'evidence/images/a/build').mkdir()
-        (directory / 'evidence/images/a/build/object.o').write_bytes(bytes(100))
-        fixture = directory / 'evidence/images/b/bundle/build'
-        fixture.mkdir(parents=True)
-        (fixture / 'x').write_bytes(bytes(10))
-        fixture.chmod(0o500)                       # a read-only fixture directory, as a check leaves it
-        (fixture.parent).chmod(0o500)
-        (directory / 'evidence/images/c').mkdir()
-        (directory / 'evidence/images/c/huge.bin').write_bytes(bytes(9 << 20))
-        for root, dirs, files in os.walk(directory):
-            for item in [root, *[os.path.join(root, f) for f in files]]:
+        files = {'summary.txt': summary.encode(), 'commands.txt': b'x\n', 'gate-record.json': b'{}\n', 'timing.txt': b'1 x\n',
+                 'disk-peak.json': b'{}\n', 'image-a.log': b'log\n', 'image-b.log': b'log\n',
+                 'evidence/sessions/a.bin': bytes(64)}                     # written by a session step: no step names it, so it stays
+        for step in ('images/a', 'images/b', 'indexed/c'):
+            files.update({
+                'evidence/%s/result.json' % step: b'{"passed": true}\n',
+                'evidence/%s/manifest.json' % step: (b'{"pad": "' + b'x' * (2 << 20) + b'"}\n'),   # a record over 1 MiB
+                'evidence/%s/case/run.log' % step: b'case passed\n',
+                'evidence/%s/case/input.bin' % step: bytes(100),
+                'evidence/%s/exe/model' % step: elf(2),                    # a linked executable
+                'evidence/%s/caller.o' % step: elf(1),
+                'evidence/%s/generated.c' % step: b'int x;\n',
+                'evidence/%s/tree/CMakeCache.txt' % step: b'cache\n',
+                'evidence/%s/tree/linked.elf' % step: elf(2),
+                'evidence/%s/fixture/.git/HEAD' % step: b'ref\n',
+                'evidence/%s/build/object.o' % step: elf(1),
+                'evidence/%s/huge.json' % step: b'{' + b' ' * (9 << 20) + b'}',
+            })
+        for relative, content in files.items():
+            (directory / relative).parent.mkdir(parents=True, exist_ok=True)
+            (directory / relative).write_bytes(content)
+        readonly = directory / 'evidence/images/a/bundle/build'
+        readonly.mkdir(parents=True)
+        (readonly / 'x').write_bytes(bytes(10))
+        readonly.chmod(0o500)                       # a read-only fixture directory, as a check leaves it
+        readonly.parent.chmod(0o500)
+        for root, dirs, names in os.walk(directory):
+            for item in [root, *[os.path.join(root, f) for f in names]]:
                 os.utime(item, (OLD, OLD))
         return directory
-    passing, failing = gate('gate-land-demo-1103-1103-100000', 'PASS selected\n'), gate('gate-land-demo-1103-1103-090000', 'FAIL kernel\n')
+
+    steps = 'PASS img-a-build\nPASS image-a\nFAIL image-b\nWARN indexed-c (documentation prose)\n'
+    current = gate('gate-land-demo-1103-1103-100000', steps + 'FAIL selected integration checks: image-b\n')
     code, text = run(home, 'slim-gates', '--apply')
-    assert code == 0 and 'Freed' in text and '1 passing' in text, text
-    assert not (passing / 'evidence/images/a/build').exists() and not (passing / 'evidence/images/b/bundle/build').exists()
-    assert not (passing / 'evidence/images/c/huge.bin').exists(), 'a file over 8 MiB stayed'
-    for kept in ('summary.txt', 'gate-record.json', 'timing.txt', 'disk-peak.json', 'image-x.log', 'evidence/images/a/result.json'):
-        assert (passing / kept).exists(), kept
-    assert (failing / 'evidence/images/a/build/object.o').exists(), 'a failed gate lost its outputs'
-    passed.append('slim-gates removes the bulky outputs of a passing gate, read-only directories included, and keeps its records and a failed gate')
-    # A later passing gate of the same landing label slims the earlier failed one; another label's gate is untouched.
-    other = gate('gate-land-demo-two-1103-1103-080000', 'FAIL kernel\n')
-    code = subprocess.run([sys.executable, '-B', '-c', 'import importlib.util as u, pathlib, sys\n'
-        's = u.spec_from_file_location("cg", sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)\n'
-        'print(m.slim_after_pass(pathlib.Path(sys.argv[2]), sys.argv[3]))', str(TOOL), str(passing), 'land-demo-1103-1103-100000'],
-        env=dict(os.environ, HOME=str(home)), capture_output=True, text=True)
-    assert code.returncode == 0, code.stderr
-    assert not (failing / 'evidence/images/a/build').exists() and (failing / 'summary.txt').exists()
-    assert (other / 'evidence/images/a/build/object.o').exists()
-    passed.append('a passing gate also slims the earlier failed gates of its landing label and no other')
+    assert code == 0 and 'Freed' in text, text
+    for step in ('images/a', 'indexed/c'):
+        kept = current / 'evidence' / step
+        assert (kept / 'result.json').read_bytes() == b'{"passed": true}\n', step
+        for gone in ('exe', 'caller.o', 'generated.c', 'tree', 'fixture', 'build', 'case', 'huge.json', 'manifest.json'):
+            assert not (kept / gone).exists(), '%s/%s stayed' % (step, gone)
+        assert gzip.decompress((kept / 'manifest.json.gz').read_bytes()) == b'{"pad": "' + b'x' * (2 << 20) + b'"}\n'
+        with tarfile.open(kept / 'records.tar.gz') as archive:
+            assert sorted(archive.getnames()) == ['case/run.log'], archive.getnames()
+            assert archive.extractfile('case/run.log').read() == b'case passed\n'
+        record = json.loads((kept / 'retention.json').read_text())
+        assert sorted(record['linked_elf']) == ['exe/model', 'tree/linked.elf'], record
+        assert record['linked_elf']['exe/model']['sha256'] == hashlib.sha256(elf(2)).hexdigest(), record
+    assert not (current / 'evidence/images/a/bundle').exists(), 'the read-only fixture stayed'
+    failed = current / 'evidence/images/b'
+    for kept in ('exe/model', 'caller.o', 'generated.c', 'tree/linked.elf', 'case/input.bin', 'huge.json', 'manifest.json'):
+        assert (failed / kept).exists(), 'the failing step lost ' + kept
+    assert not (failed / 'retention.json').exists()
+    for kept in ('summary.txt', 'commands.txt', 'gate-record.json', 'timing.txt', 'disk-peak.json', 'image-a.log', 'evidence/sessions/a.bin'):
+        assert (current / kept).exists(), kept
+    passed.append('slim-gates keeps the records of the passing steps of a failed gate, packs their subdirectories, records the '
+                  'hashes of their linked executables and removes their build products; the failing step keeps everything')
+    code, text = run(home, 'slim-gates', '--apply')
+    assert code == 0 and 'Freed 0.0 GiB' in text and (current / 'evidence/images/a/records.tar.gz').is_file(), text
+    passed.append('a second slim removes nothing and keeps the archives it wrote')
+
+    def after_gate(output, label, verdicts, passed_gate):
+        done = subprocess.run([sys.executable, '-B', '-c', 'import importlib.util as u, json, pathlib, sys\n'
+            's = u.spec_from_file_location("cg", sys.argv[1]); m = u.module_from_spec(s); s.loader.exec_module(m)\n'
+            'print(m.slim_after_gate(pathlib.Path(sys.argv[2]), sys.argv[3], json.loads(sys.argv[4]), sys.argv[5] == "1"))',
+            str(TOOL), str(output), label, json.dumps(verdicts), '1' if passed_gate else '0'],
+            env=dict(os.environ, HOME=str(home)), capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+    # The gate passes its own verdicts; a failed gate leaves the earlier gates of its label alone, a passing one slims them whole.
+    other = gate('gate-land-demo-two-1103-1103-080000', steps)
+    newer = gate('gate-land-demo-1103-1103-110000', '')
+    after_gate(newer, 'land-demo-1103-1103-110000', {'image-a': 'PASS', 'image-b': 'FAIL', 'indexed-c': 'SKIP'}, False)
+    assert not (newer / 'evidence/images/a/exe').exists() and (newer / 'evidence/images/b/exe/model').exists()
+    assert (newer / 'evidence/indexed/c/exe/model').exists(), 'a skipped step was slimmed'
+    assert (failed / 'exe/model').exists(), 'a failed gate slimmed an earlier gate of its label'
+    after_gate(newer, 'land-demo-1103-1103-110000', {'image-a': 'PASS', 'image-b': 'PASS', 'indexed-c': 'PASS'}, True)
+    assert not (failed / 'exe').exists() and (failed / 'result.json').exists() and (failed / 'retention.json').exists()
+    assert not (current / 'evidence/sessions/a.bin').exists() and (current / 'summary.txt').exists()
+    assert (other / 'evidence/images/b/exe/model').exists() and (other / 'evidence/images/a/exe/model').exists()
+    passed.append('a passing gate slims the earlier gates of its landing label whole and no other; a failing gate slims only its own passing steps')
     for item in build.glob('gate-*'):
         for root, dirs, files in os.walk(item):
             for name in dirs:

@@ -12,7 +12,7 @@ sys.dont_write_bytecode = True
 import harness
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECK_INPUTS = ('checks/affected.py', 'checks/check-index.py', 'checks/harness.py')
+CHECK_INPUTS = ('checks/affected.py', 'checks/check-index.py', 'checks/harness.py', 'tools/build_graph.py', 'tools/gate_images.py')
 
 
 def current_inputs():
@@ -50,6 +50,9 @@ def main():
     (source / 'checks').mkdir(parents=True)
     for name in ('affected.py', 'check-index.py', 'harness.py'):
         shutil.copyfile(ROOT / 'checks' / name, source / 'checks' / name)
+    (source / 'tools').mkdir()
+    for name in ('build_graph.py', 'gate_images.py'):          # the index reads the image recipes and the build graph (tools/build_graph.py)
+        shutil.copyfile(ROOT / 'tools' / name, source / 'tools' / name)
     env = {**harness.environment(), 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1'}
 
     def run(*command):
