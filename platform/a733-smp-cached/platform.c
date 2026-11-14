@@ -113,12 +113,17 @@ void a733_smp_primary_el1(void)
         a733_smp_exit_privileged(4, 0x206);
 #endif
     uintptr_t r=a733_cached_runtime[0].redistributor,g=r+0x10000;
-    *(volatile uint8_t *)(g+0x400+30)=portLOWEST_USABLE_INTERRUPT_PRIORITY<<portPRIORITY_SHIFT;
+    /* The tick sits at the API level with SGI 0 and the devices, so no band
+     * mask holds it (kernel/scheduler/bands.h). */
+    *(volatile uint8_t *)(g+0x400+30)=portMAX_API_PRIORITY_MASK;
     *(volatile uint32_t *)(g+0x100)=1u<<30;
 #ifdef SUNSTONE_TASK_DEADLINES
     /* CNTV is independent of scheduler CNTP. EL3 admitted its implemented
-     * Group1NS level-sensitive PPI; API calls require this priority or lower. */
-    *(volatile uint8_t *)(g+0x400+27)=0xd8;
+     * Group1NS level-sensitive PPI. It sits at the API level with the tick
+     * and the devices, so no band mask holds a precise wake
+     * (kernel/scheduler/bands.h); a Non-secure write of 0xd8 would read
+     * 0xd0, the band-3 mask. */
+    *(volatile uint8_t *)(g+0x400+27)=portMAX_API_PRIORITY_MASK;
     *(volatile uint32_t *)(g+0x100)=1u<<27;
 #endif
     __asm__ volatile("dsb sy":::"memory");
@@ -184,7 +189,8 @@ void vApplicationIRQHandler(uint64_t interrupt)
     } else if(interrupt==27 && !c) {
         sunstone_deadline_irq();
 #endif
-    } else if(interrupt==0 && c<8) {
+    } else if(interrupt<=3 && c<8) {
+        /* SGI 0 and the band SGIs 1-3 (kernel/scheduler/bands.h). */
         /* Only this core writes its count, so a plain load and store suffice;
          * the relaxed store keeps other cores' relaxed loads untorn. */
         __atomic_store_n(&a733_smp_core_results[c].sgis,a733_smp_core_results[c].sgis+1,__ATOMIC_RELAXED);

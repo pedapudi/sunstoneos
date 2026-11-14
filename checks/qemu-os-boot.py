@@ -581,7 +581,8 @@ def main():
         real init hook, which creates its tasks through the kit's ss_task_create_static_affinity_set (apps/latency/workload.c)."""
         mutated = out / 'latency-direct-workload.c'
         text = (ROOT / 'apps/latency/workload.c').read_text()
-        assert text.count('ss_task_create_static_affinity_set(') == 2, 'the latency workload no longer creates its tasks through the kit'
+        # Two creations for the wake and load tasks, two for the band probe and background tasks (SUNSTONE_LATENCY_BAND_SWITCH).
+        assert text.count('ss_task_create_static_affinity_set(') == 4, 'the latency workload no longer creates its tasks through the kit'
         mutated.write_text(text.replace('ss_task_create_static_affinity_set(', 'xTaskCreateStaticAffinitySet('))
         image = Image(out / 'build-latency-direct', extra_defines=['-DSUNSTONE_LATENCY=1', '-I' + str(ROOT / 'apps/latency')],
                       extra_sources=['runtime/latency.c', 'runtime/latency_irq.c'], latency=True)

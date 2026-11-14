@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import re
 import struct
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
@@ -23,6 +24,16 @@ spec.loader.exec_module(fault)
 Q = lambda n: struct.pack('<Q', n)
 EPOCH = 0x73520261024
 DEADLINE = 480000000
+
+
+def scheduler_interrupts():
+    """The enable bits the workload holds on each core when the terminal starts: the tick (PPI30) and SGI 0
+    (platform/a733/cpu_continue.c), and SGIs 1-3 when publications use reschedule bands (configSS_BAND_SGIS in
+    platform/a733-smp-cached/FreeRTOSConfig.h; platform/a733-smp-cached/continue.c enables them). Stage 2 of the bands
+    (board entry 1794685533239173548-a5db9331) parked every core in the capture when it disabled only SGI 0 and PPI30."""
+    config = (ROOT / 'platform/a733-smp-cached/FreeRTOSConfig.h').read_text()
+    bands = re.search(r'^#define configSS_BAND_SGIS 1\b', config, re.M)
+    return 1 << 30 | (0xf if bands else 1)
 
 class Model:
     def __init__(self, image):
@@ -177,11 +188,11 @@ class Model:
             self.uc.mem_write(self.s['a733_cached_records']+c*128,struct.pack('<3Q',EPOCH,c,3))
             self.uc.mem_write(self.s['a733_smp_core_results']+c*128,struct.pack('<5Q',32,7,2,0,40 if c==0 else 1))
             r=0x03460000+c*0x20000
-            self.put32(r+0x14,0);self.put32(r+0x10100,0x40000001)
+            self.put32(r+0x14,0);self.put32(r+0x10100,scheduler_interrupts())
             # NS priority0xe0 is Secure0xf0. Every timer now changes PPI30,
             # while its neighboring priority bytes must survive restoration.
             self.put32(r+0x1041c,(self.u32(r+0x1041c)&~0x00ff0000)|0x00f00000)
-            self.put32(r+0x10200,0x40000001)
+            self.put32(r+0x10200,scheduler_interrupts())
             if c:self.put32(0x07052008+c*0x1000,8)
             self.uc.reg_write(fault.REGS[0],c)
             self.uc.reg_write(UC_ARM64_REG_SP,self.s['a733_cpu_el1_stacks']+(c+1)*32768)

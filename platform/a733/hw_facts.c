@@ -168,7 +168,7 @@ static void capture_shared(unsigned core)
             /* The priority byte of a PPI on this core: read, write the value the platform writes next,
              * read back, restore. */
             volatile uint8_t *byte = (volatile uint8_t *)(sgi + 0x400 + aux);
-            const uint8_t entry = *byte, wrote = aux == 27 ? 0xd8 : (uint8_t)hwf_platform.ppi30_priority;
+            const uint8_t entry = *byte, wrote = (uint8_t)(aux == 27 ? hwf_platform.ppi27_priority : hwf_platform.ppi30_priority);
             *byte = wrote; __asm__ volatile("dsb sy" ::: "memory");
             v = *byte; out_aux = wrote;
             *byte = entry; __asm__ volatile("dsb sy" ::: "memory");

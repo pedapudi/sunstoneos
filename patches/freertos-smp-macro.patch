@@ -10,10 +10,46 @@
  /* *INDENT-OFF* */
  #ifdef __cplusplus
      extern "C" {
-@@ -142,10 +142,47 @@
+@@ -142,10 +145,105 @@
      extern void vInterruptCore( uint32_t ulInterruptID, uint8_t ucCoreID );
  #endif /* if !defined(__ASSEMBLER__) */
  
++#if ( configNUMBER_OF_CORES > 1 )
++/* State that only its own core writes, one 64-byte line per core.
++ * ullTaskHasFPUContext is saved as part of the task context: when it is
++ * non-zero the floating point context is saved and restored for the task.
++ * ullOwnedLocks has bit eLockNum set while the core holds that lock.
++ * ullOpenMask holds, XOR 0xff, the value the core writes to ICC_PMR_EL1
++ * when a task-level path leaves the API mask: the mask of its running task's
++ * band (interrupt-level restores write their saved value, port.c). A
++ * zero word opens every priority (0xff), so a kernel that sets no band keeps
++ * the port's original behaviour. The core writes its own word with the API
++ * mask held (portSET_OPEN_MASK); portASM.S reads it at portOPEN_MASK_OFFSET. */
++    #define portOPEN_MASK_OFFSET    16
++    #if !defined(__ASSEMBLER__)
++        typedef struct PortCoreState
++        {
++            uint64_t ullTaskHasFPUContext;
++            volatile uint64_t ullOwnedLocks;
++            volatile uint64_t ullOpenMask;
++        } __attribute__( ( aligned( 64 ) ) ) PortCoreState_t;
++        extern PortCoreState_t xPortCoreStates[];
++
++        /* EL1 only: the mask this core opens to. */
++        static inline __attribute__( ( always_inline ) ) uint64_t ullPortOpenMask( void )
++        {
++            uint64_t ullCore;
++
++            __asm volatile ( "MRS %0, tpidr_el1" : "=r" ( ullCore ) );
++            return xPortCoreStates[ ullCore & 0xffU ].ullOpenMask ^ 0xffU;
++        }
++        #define portOPEN_MASK()    ullPortOpenMask()
++        /* EL1, on core ulCore, with the API mask held. */
++        #define portSET_OPEN_MASK( ulCore, ulMask ) \
++    ( xPortCoreStates[ ( ulCore ) ].ullOpenMask = ( ( uint64_t ) ( ulMask ) ^ 0xffU ) )
++    #endif /* if !defined(__ASSEMBLER__) */
++#endif /* if ( configNUMBER_OF_CORES > 1 ) */
++
 +/* The old TAS lock is an attribution control for recorder builds only.
 + * Select it with -DSUNSTONE_LOCK_TAS_CONTROL=1 in CMAKE_C_FLAGS. */
 +#ifndef SUNSTONE_LOCK_TAS_CONTROL
@@ -27,11 +63,11 @@
  /* Use SVC so this is safe from EL0. EL1 sites in the port use direct MSR. */
 -#define portDISABLE_INTERRUPTS() __asm volatile ( "SVC %0" : : "i" ( portSVC_DISABLE_INTERRUPTS ) : "memory" )
 +    #define portDISABLE_INTERRUPTS() __asm volatile ( "SVC %0" : : "i" ( portSVC_DISABLE_INTERRUPTS ) : "memory" )
- 
--#define portENABLE_INTERRUPTS()  __asm volatile ( "SVC %0" : : "i" ( portSVC_ENABLE_INTERRUPTS ) : "memory" )
++
 +    #define portENABLE_INTERRUPTS()  __asm volatile ( "SVC %0" : : "i" ( portSVC_ENABLE_INTERRUPTS ) : "memory" )
 +#else
-+
+ 
+-#define portENABLE_INTERRUPTS()  __asm volatile ( "SVC %0" : : "i" ( portSVC_ENABLE_INTERRUPTS ) : "memory" )
 +/* TPIDRRO_EL0 describes the task that a core runs: bits [47:0] hold its TCB,
 + * bits [55:48] the core index and bit 56 is set when the task runs at EL1.
 + * Only EL1 writes it; EL0 can read it. A zero TCB field means that the core
@@ -54,13 +90,35 @@
 +                         "2:                         \n"                                    \
 +                         : "=&r" ( ullTaskRegister ) : "i" ( ulMask ), "i" ( ulSvc ) : "memory" ); \
 +    } while( 0 )
++    /* Leave the API mask: an EL1 task writes its core's open mask in line
++     * (ullPortOpenMask); an EL0 task uses the SVC, which writes the same. */
++    #define portOPEN_PRIORITY_MASK( ulSvc )                                                \
++    do {                                                                                   \
++        uint64_t ullTaskRegister, ullLine;                                                 \
++        __asm volatile ( "MRS %0, TPIDRRO_EL0       \n"                                    \
++                         "TBZ %0, #56, 1f            \n"                                    \
++                         "MRS %0, tpidr_el1          \n"                                    \
++                         "AND %0, %0, #0xff          \n"                                    \
++                         "ADD %1, %2, %0, LSL #6     \n"                                    \
++                         "LDR %0, [%1, %3]           \n"                                    \
++                         "EOR %0, %0, #0xff          \n"                                    \
++                         "MSR ICC_PMR_EL1, %0        \n"                                    \
++                         "DSB SY                     \n"                                    \
++                         "ISB SY                     \n"                                    \
++                         "B 2f                       \n"                                    \
++                         "1: SVC %4                  \n"                                    \
++                         "2:                         \n"                                    \
++                         : "=&r" ( ullTaskRegister ), "=&r" ( ullLine )                    \
++                         : "r" ( xPortCoreStates ), "i" ( portOPEN_MASK_OFFSET ), "i" ( ulSvc ) \
++                         : "memory" );                                                     \
++    } while( 0 )
 +    #define portDISABLE_INTERRUPTS()    portSET_PRIORITY_MASK( portSVC_DISABLE_INTERRUPTS, portMAX_API_PRIORITY_MASK )
-+    #define portENABLE_INTERRUPTS()     portSET_PRIORITY_MASK( portSVC_ENABLE_INTERRUPTS, portUNMASK_VALUE )
++    #define portENABLE_INTERRUPTS()     portOPEN_PRIORITY_MASK( portSVC_ENABLE_INTERRUPTS )
 +#endif /* if ( configNUMBER_OF_CORES == 1 ) */
  
  /* In all GICs 255 can be written to the priority mask register to unmask all
   * (but the lowest) interrupt priority. */
-@@ -269,6 +297,20 @@
+@@ -269,6 +367,20 @@
                                          BaseType_t uxAcquire );
          extern uint8_t ucPortGetCoreID( void );
          extern uint8_t ucPortGetCoreIDFromIsr( void );
@@ -81,7 +139,7 @@
      #endif /* if !defined(__ASSEMBLER__) */
  
      #define portSET_INTERRUPT_MASK()         uxPortSetInterruptMask()
-@@ -293,7 +335,7 @@
+@@ -293,7 +405,7 @@
  
  #endif /* configNUMBER_OF_CORES > 1 */
  

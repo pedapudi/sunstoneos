@@ -299,13 +299,16 @@ void ss_latency_cause_sgi_end(unsigned target)
 }
 
 /* x0 selects the case, x1 the resident Normal-memory line, x2 the production
- * SGI value, x3 the unchanged PMR. Every body shares the same ISB endpoints.
- * No stack or report store occurs between the two PMCCNTR reads. Raw SGI+DSB
- * does not have the preceding context synchronization of the SYNC cases. */
+ * SGI value, x3 the PMR value to write: the unchanged PMR for cases 10 and 14,
+ * a different value for cases 15 and 16 (the band build's PMR change cases),
+ * after which the entry PMR is restored outside the measured interval. Every
+ * body shares the same ISB endpoints. No stack or report store occurs between
+ * the two PMCCNTR reads. Raw SGI+DSB does not have the preceding context
+ * synchronization of the SYNC cases. */
 __attribute__((naked,noinline)) uint64_t ss_latency_cause_bench_leaf(unsigned which,uint64_t *line,uint64_t sgi,uint64_t pmr)
 {
     __asm__ volatile(
-        "mrs x4, daif\n msr daifset, #2\n ldr x5, [x1]\n add x5, x5, #1\n dsb sy\n isb\n dsb ishst\n"
+        "mrs x4, daif\n msr daifset, #2\n mrs x8, icc_pmr_el1\n ldr x5, [x1]\n add x5, x5, #1\n dsb sy\n isb\n dsb ishst\n"
         "adr x7, 80f\n ldrsw x6, [x7, w0, uxtw #2]\n add x7, x7, x6\n br x7\n"
         ".macro CASE label, body:vararg\n \\label:\n isb\n mrs x6, pmccntr_el0\n \\body\n b 90f\n .endm\n"
         "CASE 1, nop\n CASE 2, isb\n CASE 3, dsb ish\n CASE 4, dsb sy\n"
@@ -320,11 +323,32 @@ __attribute__((naked,noinline)) uint64_t ss_latency_cause_bench_leaf(unsigned wh
         "13: isb\n mrs x6, pmccntr_el0\n msr icc_sgi1r_el1, x2\n isb\n dsb ish\n b 90f\n"
         "14: isb\n mrs x6, pmccntr_el0\n msr icc_sgi1r_el1, x2\n isb\n dsb sy\n b 90f\n"
         "15: isb\n mrs x6, pmccntr_el0\n msr icc_pmr_el1, x3\n dsb sy\n b 90f\n"
-        "90: isb\n mrs x7, pmccntr_el0\n sub x0, x7, x6\n dsb sy\n isb\n msr daif, x4\n ret\n"
+        "CASE 16, msr icc_pmr_el1, x3\n"
+        "17: isb\n mrs x6, pmccntr_el0\n msr icc_pmr_el1, x3\n dsb sy\n isb\n b 90f\n"
+        "90: isb\n mrs x7, pmccntr_el0\n sub x0, x7, x6\n msr icc_pmr_el1, x8\n dsb sy\n isb\n msr daif, x4\n ret\n"
         ".purgem CASE\n .balign 4\n 80:\n"
         ".word 1b-80b,2b-80b,3b-80b,4b-80b,5b-80b,6b-80b,7b-80b\n"
-        ".word 8b-80b,9b-80b,10b-80b,11b-80b,12b-80b,13b-80b,14b-80b,15b-80b\n");
+        ".word 8b-80b,9b-80b,10b-80b,11b-80b,12b-80b,13b-80b,14b-80b,15b-80b\n"
+        ".word 16b-80b,17b-80b\n");
 }
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+/* The band build's PMR change cases (leaf cases 15 and 16): a write that
+ * changes the mask alone, and the context restore's write, DSB SY and ISB.
+ * The written value alternates between 0xd0 and 0xf0, the band 3 mask and the
+ * open mask, and is 0xe0 when that equals the entry PMR, so every write
+ * changes the mask. */
+#define SS_BAND_PMR_CASES 2u
+static struct { uint64_t count[SS_BAND_PMR_CASES], cycles[SS_BAND_PMR_CASES][SS_LATENCY_CAUSE_SAMPLES]; } band_pmr;
+bool ss_band_pmr_snapshot(uint64_t count[2], uint64_t cycles[2][SS_LATENCY_CAUSE_SAMPLES])
+{
+    if (!atomic_load_explicit(&bench_completed,memory_order_acquire)) return false;
+    memcpy(count,band_pmr.count,sizeof(band_pmr.count));
+    memcpy(cycles,band_pmr.cycles,sizeof(band_pmr.cycles));
+    return true;
+}
+#else
+#define SS_BAND_PMR_CASES 0u
+#endif
 static void bench_step(void)
 {
     if (!atomic_load_explicit(&bench_requested,memory_order_acquire) ||
@@ -338,6 +362,20 @@ static void bench_step(void)
     for (unsigned c=0;c<SS_CAUSE_CASES;++c) {
         unsigned sample=(unsigned)report.bench.count[c];
         if (sample>=SS_LATENCY_CAUSE_SAMPLES) continue;
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+        /* The PMR change samples interleave with the last case's. */
+        if (c+1==SS_CAUSE_CASES) {
+            for (unsigned k=0;k<SS_BAND_PMR_CASES;++k) {
+                unsigned n=(unsigned)band_pmr.count[k];
+                if (n>sample) continue;
+                uint64_t entry=READ(icc_pmr_el1),change=(n&1u)?0xd0u:0xf0u;
+                if (change==entry) change=0xe0u;
+                band_pmr.cycles[k][n]=ss_latency_cause_bench_leaf(SS_CAUSE_CASES+k,&bench_store,portSGI1R_VALUE(0,1),change);
+                band_pmr.count[k]=n+1;
+                return;
+            }
+        }
+#endif
         if (c==SS_CAUSE_BLANK) {
             /* The real empty release hooks retain their begin store and call
              * overhead. No notification or SGI runs between them. The measured

@@ -9,6 +9,7 @@
 #include "task.h"
 #include "platform.h"
 #include "a733_memory_local.h"
+#include "../../kernel/scheduler/bands.h"
 #include "sunstone_deadline.h"
 #include "irq_table.h"
 #include "qemu_os.h"
@@ -145,12 +146,22 @@ static void local_init(void) {
     write32(s + 0xd00, 0);
     write32(s + 0x180, 0xffffffff);
     write32(s + 0x280, 0xffffffff);
+#if configSS_BAND_SGIS
+    /* SGI 0 and the tick at the API level, the band SGIs 1-3 below it
+     * (kernel/scheduler/bands.h), as on the A733. */
+    *(volatile uint8_t *)(s + 0x400) = SS_BAND_COMMAND_PRIORITY;
+    for (unsigned b = 1; b <= SS_BANDS; ++b) *(volatile uint8_t *)(s + 0x400 + b) = SS_BAND_SGI_PRIORITY(b);
+    *(volatile uint8_t *)(s + 0x400 + TIMER_IRQ) = SS_BAND_COMMAND_PRIORITY;
+    const uint32_t sgis = 0xfU;
+#else
     uint8_t priority = portLOWEST_USABLE_INTERRUPT_PRIORITY << portPRIORITY_SHIFT;
     *(volatile uint8_t *)(s + 0x400) = priority;
     *(volatile uint8_t *)(s + 0x400 + TIMER_IRQ) = priority;
+    const uint32_t sgis = 1U;
+#endif
     /* The virtual timer wakes precise waits; API calls need this priority or lower. */
     *(volatile uint8_t *)(s + 0x400 + DEADLINE_IRQ) = 0xd8;
-    write32(s + 0x100, 1 | (core() ? 0 : (1U << TIMER_IRQ) | (1U << DEADLINE_IRQ)));
+    write32(s + 0x100, sgis | (core() ? 0 : (1U << TIMER_IRQ) | (1U << DEADLINE_IRQ)));
     wait_clear(r, 8);
     uint64_t value = 1;
     __asm__ volatile("msr ICC_SRE_EL1, %0\n isb" :: "r"(value) : "memory");
@@ -171,7 +182,8 @@ static uintptr_t facts_redistributor(unsigned c) { return GICR + c * 0x20000; }
 static uint32_t facts_read32(uintptr_t address) { return a733_mmio_read32(address); }
 const struct hwf_platform hwf_platform = {
     .platform = HWF_PLATFORM_QEMU_OS, .distributor = GICD, .redistributor = facts_redistributor, .read32 = facts_read32,
-    .api_mask = portMAX_API_PRIORITY_MASK, .ppi30_priority = portLOWEST_USABLE_INTERRUPT_PRIORITY << portPRIORITY_SHIFT,
+    .api_mask = portMAX_API_PRIORITY_MASK, .ppi30_priority = portMAX_API_PRIORITY_MASK,
+    .ppi27_priority = 0xd8,
 };
 #endif
 void platform_init(void) {
@@ -242,7 +254,7 @@ void vApplicationIRQHandler(uint64_t interrupt) {
     unsigned c = core();
     if (interrupt == TIMER_IRQ && !c) FreeRTOS_Tick_Handler();
     else if (interrupt == DEADLINE_IRQ && !c) sunstone_deadline_irq();
-    else if (interrupt == 0) { FreeRTOS_SGI_Handler(); if (!c) sunstone_deadline_rearm(); }
+    else if (interrupt <= 3) { FreeRTOS_SGI_Handler(); if (!c) sunstone_deadline_rearm(); }
     else if (interrupt < 1020 && a733_irq_table_dispatch((unsigned)interrupt, c)) {}
     else if (interrupt < 1020) platform_panic("unexpected interrupt", (unsigned)interrupt);
 }

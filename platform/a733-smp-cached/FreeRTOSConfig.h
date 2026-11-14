@@ -46,6 +46,8 @@
 #define configUSE_RECURSIVE_MUTEXES 1
 #define INCLUDE_xSemaphoreGetMutexHolder 1
 #endif
+/* Publications use the band SGIs 1-3 (kernel/scheduler/bands.h). */
+#define configSS_BAND_SGIS 1
 #ifndef __ASSEMBLER__
 #include "../../include/a733_cpu_power.h"
 #define vApplicationPassiveIdleHook a733_cpu_idle
@@ -54,11 +56,13 @@ void a733_smp_startup_check(void);
 uintptr_t a733_smp_priority_address(void);
 /* The port's ICC_SGI1R_EL1 value for one core: MPIDR Aff1 is the A733 core
  * number, so the target list holds bit 0 and Aff1 the core
- * (a733_cpu_sgi1r). The port sends only SGI 0. */
+ * (a733_cpu_sgi1r). The port sends SGI 0 and the band SGIs 1-3
+ * (kernel/scheduler/bands.h), whose priorities each core writes at EL1
+ * (a733_smp_band_sgis). */
 static inline uint64_t a733_smp_sgi1r(unsigned interrupt, unsigned core)
 {
-    configASSERT(interrupt == 0 && core < 8);
-    return ((uint64_t)core << 16) | 1;
+    configASSERT(interrupt <= 3 && core < 8);
+    return ((uint64_t)interrupt << 24) | ((uint64_t)core << 16) | 1;
 }
 #define portSGI1R_VALUE(interrupt, core) a733_smp_sgi1r((interrupt), (core))
 #endif

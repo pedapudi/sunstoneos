@@ -32,6 +32,12 @@ CAUSE_CASES = ('blank', 'isb', 'dsb_ish', 'dsb_sy', 'store', 'store_dsb_ish',
                'sgi_isb', 'sgi_isb_dsb_ish', 'sgi_isb_dsb_sy', 'pmr_same_dsb_sy')
 SERVICE_MAGIC = 0x5353535643594331
 SERVICE_FOOTER_MAGIC = 0x5353535643594631
+BAND_MAGIC = 0x535342414e445331
+BAND_FOOTER_MAGIC = 0x535342414e444631
+BAND_BYTES = 1872
+BAND_PROBES = 2
+BAND_BINS = 8
+BAND_CELL_FIELDS = ('windows', 'cycles', 'foreign', 'foreign_irq', 'foreign_max', 'foreign_sum', 'own', 'own_max')
 SERVICE_CELL = 464
 SERVICE_BINS = 105
 SERVICE_BYTES = 128 + 2 * 8 * 2 * 2 * SERVICE_CELL
@@ -996,12 +1002,71 @@ def service_quantile(bins, count, fraction):
     raise ValueError('service cycle bins hold fewer spans than the count')
 
 
-def peel_service_cycles(payload):
-    """Split the service cycle section, which follows the cause footer, from the result."""
+def peel_bands(payload):
+    """Split the band probe section, which follows the service footer, from the result."""
+    if len(payload) < 64 or struct.unpack_from('<Q', payload, len(payload) - 64)[0] != BAND_FOOTER_MAGIC:
+        return payload, b''
+    _, version, size, at, length, *rest = struct.unpack_from('<8Q', payload, len(payload) - 64)
+    if (version != 1 or size != len(payload) or length != BAND_BYTES or at % 64 or
+            at + length > len(payload) - 64 or any(rest) or any(payload[at + length:-64])):
+        raise ValueError('band footer offsets, padding or report size are invalid')
+    return payload[:at], payload[at:at + length]
+
+
+def decode_bands(payload):
+    """The band probes on CPUs 1 and 2, by band setting, the setting of each
+    wake sample, and CPU0's PMR change benchmark (apps/latency/workload.h)."""
+    words = struct.unpack('<' + 'Q' * (BAND_BYTES // 8), payload)
+    (magic, version, size, gap, margin, shift, notified, timeouts), rest = words[:8], words[8:]
+    discarded, runs, unfinished = rest[0:2], rest[2:4], rest[4:6]
+    complete, reserved = rest[6], rest[7]
+    if (magic, version, size, complete, reserved) != (BAND_MAGIC, 1, BAND_BYTES, 1, 0) or not gap or not margin:
+        raise ValueError('band report header is invalid or incomplete')
+    offset = 16
+    wake_on = []
+    for core in range(8):
+        bits = words[offset:offset + 3]
+        offset += 3
+        wake_on.append([bits[i // 64] >> (i % 64) & 1 for i in range(192)])
+    probes = []
+    for probe in range(BAND_PROBES):
+        settings = {}
+        for setting in ('off', 'on'):
+            cell = dict(zip(BAND_CELL_FIELDS, words[offset:offset + 8]))
+            bins = list(words[offset + 8:offset + 16])
+            offset += 16
+            if (sum(bins) != cell['foreign'] or cell['foreign_irq'] > cell['foreign'] or
+                    (cell['foreign'] and not gap < cell['foreign_max'] <= cell['foreign_sum']) or
+                    (not cell['foreign'] and (cell['foreign_max'] or cell['foreign_sum'])) or
+                    (not cell['own'] and cell['own_max'])):
+                raise ValueError('band probe cell is inconsistent')
+            cell['bins'] = bins
+            cell['foreign_mean'] = cell['foreign_sum'] / cell['foreign'] if cell['foreign'] else None
+            settings[setting] = cell
+        probes.append({'core': 1 + probe, 'discarded_windows': discarded[probe],
+                       'unfinished_windows': unfinished[probe], 'background_runs': runs[probe], **settings})
+    pmr = {}
+    counts = words[offset:offset + 2]
+    offset += 2
+    for name, count in zip(('pmr_change', 'pmr_change_dsb_sy_isb'), counts):
+        if count != 64:
+            raise ValueError('band PMR change samples are incomplete')
+        pmr[name] = cycle_distribution(words[offset:offset + 64])
+        offset += 64
+    return {'gap_cycles': gap, 'margin_cycles': margin, 'switch_shift': shift, 'notified': notified,
+            'wait_timeouts': timeouts, 'probes': probes, 'wake_on': wake_on, 'pmr_benchmark': pmr,
+            'scope': ('cycles from each probe core\'s cycle counter; a gap is foreign when the probe\'s own wake '
+                      'task did not complete in it; windows filed by the band setting in force at their start')}
+
+
+def peel_service_cycles(payload, result_size=None):
+    """Split the service cycle section, which follows the cause footer, from the result. Its footer
+    records the whole result's size, which exceeds the payload when a band section followed it."""
     if len(payload) < 64 or struct.unpack_from('<Q', payload, len(payload) - 64)[0] != SERVICE_FOOTER_MAGIC:
         return payload, b''
     _, version, size, at, length, *rest = struct.unpack_from('<8Q', payload, len(payload) - 64)
-    if (version != 1 or size != len(payload) or length != SERVICE_BYTES or at % 64 or
+    if (version != 1 or size != (len(payload) if result_size is None else result_size) or
+            length != SERVICE_BYTES or at % 64 or
             at + length > len(payload) - 64 or any(rest) or any(payload[at + length:-64])):
         raise ValueError('service cycle footer offsets, padding or report size are invalid')
     return payload[:at], payload[at:at + length]
@@ -1069,7 +1134,8 @@ def decode(payload, dma=False):
     if len(payload) < RESULT_BYTES:
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
     result_size = len(payload)
-    payload, service_tail = peel_service_cycles(payload)
+    payload, band_tail = peel_bands(payload)
+    payload, service_tail = peel_service_cycles(payload, result_size)
     payload, cause_tail, ping_tail, stream_mask = peel_latency_cause(payload, result_size)
     tail = payload[RESULT_BYTES:]
     scheduler_pmu_tail = b''
@@ -1283,4 +1349,8 @@ def decode(payload, dma=False):
         if not cause_tail:
             raise ValueError('service cycle report requires the cause profile')
         result['service_cycles'] = decode_service_cycles(service_tail)
+    if band_tail:
+        if not service_tail:
+            raise ValueError('band probe report requires the service cycle profile')
+        result['bands'] = decode_bands(band_tail)
     return result

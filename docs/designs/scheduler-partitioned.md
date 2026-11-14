@@ -252,13 +252,80 @@ need not make one. An SGI that cannot preempt costs the owner one service pass,
 the target, not on the waker. An SGI that arrives while one is already pending
 at the GIC costs the owner nothing more.
 
-A later stage can drop the SGIs that cannot preempt without a read on the
-waker. Each priority band gets its own SGI number with a matching GIC priority,
-and the owner writes `ICC_PMR_EL1` to its running band on every switch. The GIC
-then delivers only SGIs that would preempt and holds the rest pending until the
-owner's priority falls. The cost is one priority-mask write per switch, which
-has not been measured, and the design must fit the kernel's use of the priority
-mask for the API mask.
+### Reschedule bands: the GIC holds publications that cannot preempt
+
+Status: implemented on the A733 and QEMU platforms; the board run that measures
+latency with the masks on and off is pending.
+
+The eight task priorities form three bands: priorities 0 to 3 are band 1, 4
+and 5 are band 2, and 6 and 7 are band 3 (`kernel/scheduler/bands.h`). A
+publication for a task of band b sends SGI b. The three band SGIs take the
+three lowest usable GIC priority levels, band 1 lowest. While a core runs a
+task of band b, its open mask, the `ICC_PMR_EL1` value it holds outside the
+API mask, is the priority of SGI b - 1; band 1 and the idle task open every
+priority. The GIC therefore delivers every publication of the running band and
+above, and keeps a lower band's publication pending until the core's band
+falls. A task of priority 7 must preempt a running task of priority 6, so the
+mask cannot be the priority of the running band's own SGI, which would hold
+publications of the same band.
+
+| Interrupt | A733, Non-secure view | QEMU |
+| --- | --- | --- |
+| API mask | 0xb0 | 0x98 |
+| SGI 0, tick (PPI 30), device interrupts | 0xb0 | 0x98 (SGI 0, tick); 0xd8 (devices) |
+| SGI 1, SGI 2, SGI 3 | 0xe0, 0xd0, 0xc0 | 0xf0, 0xe8, 0xe0 |
+| Open mask in band 1, 2, 3 | 0xff, 0xe0, 0xd0 | 0xff, 0xf0, 0xe8 |
+
+SGI 0 carries every reason other than a publication: owner commands, the
+control count, migration and yield. A service continuation, and the check for
+pending work at selection, signal with the band of the highest pending hint,
+or with SGI 0 when commands, controls or repairs are due.
+
+The core's open mask lives in its `xPortCoreStates` line (offset 16, stored
+XOR 0xff so that a zero line opens every priority), the line whose FPU
+indicator the context restore already reads. Selection writes it after it
+stores the selected task, and a priority change of the running task writes it
+again. Every task-level path that leaves the API mask writes the core's current
+open mask: the context restore, the enable and unmask supervisor calls and
+`vPortClearInterruptMask`, where a restore value above the API mask is replaced
+by the open mask. A priority change inside a task's masked region can move the
+band after the value was saved.
+
+The interrupt-level restores, `vPortClearInterruptMaskFromISR` and the owner's
+interrupt exit, write the saved value and read no open mask. Inside an
+interrupt the band changes only through a selection, or through a priority
+change of the running task, which requests a reschedule. Either way the
+interrupt exit reaches the context restore, which writes the open mask, before
+the interrupted task runs. With preemption disabled the old band's mask stays
+until the deferred yield, and the selection there reads every pending hint
+whether or not its SGI was delivered. CPU0's busy tick therefore reads no
+`xPortCoreStates` line (`checks/tick-footprint-budget.py`), and the bands add
+one store to the core's own line per selection.
+The cost of the `ICC_PMR_EL1` write itself (the cause bench's cases 16 and 17,
+one with the barriers the port uses and one without) is measured by the
+stage-2 board run.
+
+Every device interrupt sits at the API level, above every band mask, so a band
+mask holds no device interrupt. On the A733 the route tables store 0xd8, which
+reads 0xb0 at Non-secure EL1: thermal (INTID 71), USB2 and xHCI host
+completion (187, in images with `SUNSTONE_BOARD_USB2_IRQ`; the host is polled
+otherwise), NPU (97), SD (193), headset UART (35), radio SDIO (194), DMA0 and
+audio (143), GPU (95), I2C (43 to 46 and 237), RTC (228) and ISP0 (149, 153
+and 161). The deadline timer (PPI 27) and the tick (PPI 30) are written at the
+API level; a Non-secure write of 0xd8 would read 0xd0, the band-3 mask. The
+crypto engine, video unit and G2D are polled and enable no interrupt. The
+control interrupt class (stored 0xa0) sits above the API mask.
+`checks/scheduler-bands.py` checks these rules on the values `bands.h` yields
+for both platforms and on every route table in the source.
+
+Each A733 core enables SGIs 0 to 3 (`SS_SCHEDULER_SGI_BITS`,
+`platform/a733-smp-cached/continue.c`). The returning image's capture disables
+and drains every one of them with the tick before it requires the core's SGI
+and PPI enables and pending bits to read zero
+(`apps/cpu-runtime-qualification/runtime.c`, `apps/os/return-runtime.patch`).
+A capture that disabled SGI 0 alone parked every core until the watchdog reset
+the board (entry `1794685533239173548-a5db9331`); `checks/os-cpu-return.py`
+models the enables and pending bits the band image leaves.
 The final check and WFI occur with `DAIF.I` masking IRQ entry and the GIC
 priority mask admitting the reschedule interrupt, so a pending eligible IRQ
 prevents indefinite sleep.

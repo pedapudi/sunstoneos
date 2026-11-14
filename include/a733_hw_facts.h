@@ -45,7 +45,8 @@ _Static_assert(sizeof(struct hwf_slot) == 16 && sizeof(struct hwf_header) == 64,
 _Static_assert(sizeof(struct hwf_table) == 64 + 16 * HWF_SHARED_SLOTS + 16 * HWF_CORES * HWF_CORE_SLOTS, "hardware facts layout");
 
 /* What a board supplies to the capture: the distributor, the redistributor of a core, a word read for
- * device memory, the FreeRTOS API priority mask in ICC_PMR_EL1 form, and the platform number. */
+ * device memory, the FreeRTOS API priority mask in ICC_PMR_EL1 form, the platform number, and the priority bytes the
+ * platform writes for PPI 30 (the tick) and PPI 27 (the deadline timer). */
 struct hwf_platform {
     uint32_t platform;
     uintptr_t distributor;
@@ -53,6 +54,7 @@ struct hwf_platform {
     uint32_t (*read32)(uintptr_t address);
     uint32_t api_mask;
     uint32_t ppi30_priority;
+    uint32_t ppi27_priority;
 };
 extern const struct hwf_platform hwf_platform;
 /* The table lives in the facts application (apps/hw-facts/main.c), which an application may read; the capture

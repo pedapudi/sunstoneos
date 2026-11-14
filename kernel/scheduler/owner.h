@@ -17,6 +17,10 @@ struct ss_owner_backend {
     void (*wait)(void *);    /* WFE; admitted holders must make bounded progress. */
     void (*event)(void *);   /* Complete release writes, then SEV (DSB ISHST). */
     void (*sgi)(void *, unsigned); /* Completes DSB ISHST before SGI write. */
+    /* The publication SGI for a hint of `priority` (kernel/scheduler/bands.h):
+     * the SGI of the task's band, which a target running a higher band holds.
+     * Completes DSB ISHST before the SGI write. NULL sends sgi. */
+    void (*publish)(void *, unsigned cpu, unsigned priority);
     void *context;
 };
 void ss_owner_barrier(const struct ss_owner_backend *);
@@ -106,6 +110,10 @@ typedef void (*ss_owner_inspect)(void *, unsigned slot, unsigned hint_priority);
 unsigned ss_owner_drain(struct ss_owner *, ss_owner_inspect, void *);
 /* Owner CPU only. True while a hint is unmerged or detached. */
 bool ss_owner_has_pending(const struct ss_owner *);
+/* Owner CPU only. The highest priority among unmerged, spilled and detached
+ * hints, or -1 when none is pending. Unmerged hints are read from their
+ * outbox entries, which costs a line per source whose count moved. */
+int ss_owner_pending_top(const struct ss_owner *);
 /* Owner CPU only. True while a hint for this slot is unmerged or detached. */
 bool ss_owner_slot_pending(const struct ss_owner *, unsigned slot);
 /* Signal the owner again when hints remain after its pass. */

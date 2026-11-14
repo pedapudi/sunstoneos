@@ -35,8 +35,9 @@ An interrupt may call the FromISR API when its stored priority is at least 0xd8,
 
 | INTID | Use | Group | Stored priority | Non-secure view | Route | Trigger |
 | --- | --- | --- | --- | --- | --- | --- |
-| 27 | Shared timer (CNTV) | Non-secure 1 (`continue.c:120-121`) | 0xe8 when the OS writes 0xd8 (`platform.c:121`); 0xd8 where EL3 sets it (NPU finite image, `apps/npu-finite/deadline.c:15-20`) | 0xd0 (`config.intid27.stored_priority_written_ns`, measured `priority_after_write`); 0xb0 in the NPU finite image (entry `1793587317962103239-5bbfc48d`) | Per core; core 0 handles it | Level (`continue.c:122-124`) |
-| 30 | Scheduler tick (CNTP) | Non-secure 1 (`cpu_continue.c:115`) | 0xf0 for the OS write of 0xe0 (`platform.c:116`) | 0xe0 (measured `priority_after_write`) | Per core; core 0 handles it | Level (`cpu_continue.c:118`) |
+| 0 to 3 | Reschedule SGIs (`kernel/scheduler/bands.h`) | Non-secure 1 (`cpu_continue.c:115`) | 0xd8, 0xf0, 0xe8, 0xe0 (`continue.c:136`) | 0xb0, 0xe0, 0xd0, 0xc0 (the Non-secure view of the stored values) | Per core | Edge |
+| 27 | Shared timer (CNTV) | Non-secure 1 (`continue.c:150-151`) | 0xd8 for the OS write of 0xb0, the API mask (`platform.c:126`); 0xd8 where EL3 sets it (NPU finite image, `apps/npu-finite/deadline.c:15-20`) | 0xb0 (`config.intid27.stored_priority_written_ns`; the write rule is measured with 0xd8, which read 0xd0, the band-3 mask); 0xb0 in the NPU finite image (entry `1793587317962103239-5bbfc48d`) | Per core; core 0 handles it | Level (`continue.c:152-154`) |
+| 30 | Scheduler tick (CNTP) | Non-secure 1 (`cpu_continue.c:115`) | 0xd8 for the OS write of 0xb0, the API mask (`platform.c:118`) | 0xb0 (the write rule, measured on PPI 27) | Per core; core 0 handles it | Level (`cpu_continue.c:118`) |
 | 97 | NPU | Non-secure 1 (`irq_table.c:70-71`) | 0xd8 (`sunstone-manifest.py:347`) | 0xb0 (measured) | Core 1, `OS_NPU_CORE` (`apps/os/npu.h:6`, `irq_table.c:76`) | Level (`irq_table.c:72`) |
 | 187 | USB2 host | Non-secure 1 | 0xd8 (`sunstone-manifest.py:346`) | 0xb0 (derived, `config.spi187.ns_view_priority`) | Core 0 | Level |
 | 71, 143, 95 | Thermal, DMA0, GPU | Non-secure 1 | 0xd8 (`sunstone-manifest.py:345-350`) | 0xb0 | Core 0 (GPU: application core) | Level |
@@ -64,5 +65,5 @@ registers (`continue.S:129-131`).
 - `GICD_CTLR` reads in the Non-secure layout: 0x12 is EnableGrp1A and ARE_NS; `DS`, `ARE_S`, EnableGrp0 and
   EnableGrp1S are not visible (IHI0069, `GICD_CTLR`, "Non-secure access when GICD_CTLR.DS == 0").
 - RAZ/WI: `GICD_IGROUPR`, `GICD_IGRPMODR`, `GICR_IGROUPR0`, `GICR_IGRPMODR0` and every field of a Secure interrupt
-  (`platform/a733/npu_irq.c` comment; facts with status `raz-in-view`). SGIs 1 to 15 read priority 0 because only SGI 0
-  is written (`cpu_continue.c:120`); they are Non-secure Group 1 (`cpu_continue.c:115`).
+  (`platform/a733/npu_irq.c` comment; facts with status `raz-in-view`). SGIs 4 to 15 read priority 0 because only SGIs 0
+  to 3 are written (`cpu_continue.c:120`, then `continue.c:136`); they are Non-secure Group 1 (`cpu_continue.c:115`).

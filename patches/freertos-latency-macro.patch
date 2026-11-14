@@ -1,8 +1,8 @@
 --- portmacro.h
 +++ portmacro.h
-@@ -171,8 +171,24 @@
-                          "2:                         \n"                                    \
-                          : "=&r" ( ullTaskRegister ) : "i" ( ulMask ), "i" ( ulSvc ) : "memory" ); \
+@@ -240,8 +240,24 @@
+                          : "r" ( xPortCoreStates ), "i" ( portOPEN_MASK_OFFSET ), "i" ( ulSvc ) \
+                          : "memory" );                                                     \
      } while( 0 )
 +    #if defined( SUNSTONE_LATENCY ) && !defined( __ASSEMBLER__ )
 +        #include "sunstone_latency.h"
@@ -16,11 +16,11 @@
 +        } while( 0 )
 +        #define portENABLE_INTERRUPTS() do { \
 +            ss_latency_mask_close( portGET_CORE_ID(), ( uintptr_t ) __builtin_return_address( 0 ) ); \
-+            portSET_PRIORITY_MASK( portSVC_ENABLE_INTERRUPTS, portUNMASK_VALUE ); \
++            portOPEN_PRIORITY_MASK( portSVC_ENABLE_INTERRUPTS ); \
 +        } while( 0 )
 +    #else
      #define portDISABLE_INTERRUPTS()    portSET_PRIORITY_MASK( portSVC_DISABLE_INTERRUPTS, portMAX_API_PRIORITY_MASK )
-     #define portENABLE_INTERRUPTS()     portSET_PRIORITY_MASK( portSVC_ENABLE_INTERRUPTS, portUNMASK_VALUE )
+     #define portENABLE_INTERRUPTS()     portOPEN_PRIORITY_MASK( portSVC_ENABLE_INTERRUPTS )
 +    #endif
  #endif /* if ( configNUMBER_OF_CORES == 1 ) */
  

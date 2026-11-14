@@ -82,10 +82,13 @@ def main():
     flags = dict(re.findall(r'^(C_(?:DEFINES|INCLUDES|FLAGS)) = (.*)$',
                             (target / 'flags.make').read_text(), re.M))
     compile_flags = shlex.split(' '.join(flags[k] for k in ('C_DEFINES', 'C_INCLUDES', 'C_FLAGS')))
+    asm_flags = dict(re.findall(r'^(ASM_(?:DEFINES|INCLUDES|FLAGS)) = (.*)$', (target / 'flags.make').read_text(), re.M))
+    asm_flags = shlex.split(' '.join(asm_flags[k] for k in ('ASM_DEFINES', 'ASM_INCLUDES', 'ASM_FLAGS')))
     link = shlex.split((target / 'link.txt').read_text())
     adapter = (ROOT / 'kernel/scheduler/freertos.c').read_text()
     tasks = (build / 'freertos-smp/tasks.c').read_text()
     port = (build / 'freertos-smp/port.c').read_text()
+    port_asm = (build / 'freertos-smp/portASM.S').read_text()
     fixture = (ROOT / 'checks/scheduler-partitioned-qemu.c').read_text()
 
     times, times_lock = {}, threading.Lock()      # host seconds of each QEMU run, written to qemu-times.json
@@ -255,6 +258,28 @@ def main():
         return f'{file}:0x{number:016x}'
 
     cases = {
+        # Reschedule bands (kernel/scheduler/bands.h): each old design fails the fixture's bands_verify.
+        'band-publication-sgi0': ('adapter',
+            [('vInterruptCore(ss_band(priority), (uint8_t)cpu);', 'vInterruptCore(0, (uint8_t)cpu);')],
+            failure('checks/scheduler-partitioned-qemu.c', line(fixture,
+                '    configASSERT(__atomic_load_n(&qemu_smp_sgis[BAND_CORE][3], __ATOMIC_RELAXED) > sgi3);'))),
+        'band-strict-mask': ('adapter',
+            [('portSET_OPEN_MASK(c, ss_band_mask(priority));',
+              'portSET_OPEN_MASK(c, ss_band(priority) <= 1u ? 0xffu : SS_BAND_SGI_PRIORITY(ss_band(priority)));')],
+            # A held same-band publication stalls the earlier withholding phase (its receiver and home blocker are
+            # both band 2) or, past it, the band-3 preemption.
+            (failure('checks/scheduler-partitioned-qemu.c', line(fixture,
+                '        configASSERT(withholding_completed == i + 1);')),
+             failure('checks/scheduler-partitioned-qemu.c', line(fixture,
+                '    configASSERT(__atomic_load_n(&band_top_ran, __ATOMIC_ACQUIRE));')))),
+        'band-stale-restore': ('asm',
+            [('B.LS 61f\nportLOAD_OPEN_MASK X0, X1\n61:', 'B.LS 61f\n61:')],
+            failure('checks/scheduler-partitioned-qemu.c', line(fixture,
+                '    configASSERT(__atomic_load_n(&band_top_stale, __ATOMIC_RELAXED) == BAND_OPEN_READBACK);'))),
+        'band-restore-opens-all': ('asm',
+            [('portLOAD_OPEN_MASK X1, X4 /* The band mask; X4 is restored from the frame below */', 'MOV X1, #255')],
+            failure('checks/scheduler-partitioned-qemu.c', line(fixture,
+                '    configASSERT(__atomic_load_n(&band_high_samples, __ATOMIC_RELAXED) && !__atomic_load_n(&band_high_other, __ATOMIC_RELAXED));'))),
         'gate-admission-acquiring': ('adapter',
             [('if (gate != SS_GATE_ACQUIRING && gate != SS_GATE_HELD) return irq;',
               'if (true && gate != SS_GATE_HELD) return irq;')],
@@ -412,11 +437,11 @@ def main():
         kind, changes, expected = cases[name]
         directory = output / name
         directory.mkdir(exist_ok=True)
-        code = {'adapter': adapter, 'port': port, 'tasks': tasks, 'fixture': fixture}[kind]
+        code = {'adapter': adapter, 'port': port, 'asm': port_asm, 'tasks': tasks, 'fixture': fixture}[kind]
         for before, after in changes:
             assert code.count(before) == 1, (name, before)
             code = code.replace(before, after)
-        source = directory / {'adapter': 'freertos.c', 'port': 'port.c',
+        source = directory / {'adapter': 'freertos.c', 'port': 'port.c', 'asm': 'portASM.S',
                               'tasks': 'tasks.c', 'fixture': 'fixture.c'}[kind]
         source.write_text(code)
         if kind == 'adapter':
@@ -431,11 +456,14 @@ def main():
         elif kind == 'fixture':
             unit = source
             original_object = 'CMakeFiles/scheduler-partitioned-qemu.dir/checks/scheduler-partitioned-qemu.c.obj'
+        elif kind == 'asm':
+            unit = source
+            original_object = 'CMakeFiles/scheduler-partitioned-qemu.dir/freertos-smp/portASM.S.obj'
         else:
             unit = source
             original_object = 'CMakeFiles/scheduler-partitioned-qemu.dir/freertos-smp/port.c.obj'
         obj, elf = directory / 'changed.o', directory / 'negative.elf'
-        command = [link[0], '--target=aarch64-none-elf', *compile_flags,
+        command = [link[0], '--target=aarch64-none-elf', *(asm_flags if kind == 'asm' else compile_flags),
                    *(['-mgeneral-regs-only'] if kind in ('adapter', 'tasks') else []), '-c', str(unit), '-o', str(obj)]
         compiled = subprocess.run(command, cwd=build, env=env, text=True, capture_output=True)
         (directory / 'compile.log').write_text(compiled.stdout + compiled.stderr)

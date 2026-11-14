@@ -23,7 +23,9 @@
 /* The manifest's output_limit (apps/latency/cmake/application.cmake): traced
  * and control profiles declare 131072 bytes, the cause profile 147456 and
  * the cause profile with service cycles 180224. */
-#if defined(SUNSTONE_LATENCY_SERVICE_CYCLES)
+#if defined(SUNSTONE_LATENCY_BAND_SWITCH)
+#define LATENCY_RESULT_LIMIT 184320U
+#elif defined(SUNSTONE_LATENCY_SERVICE_CYCLES)
 #define LATENCY_RESULT_LIMIT 180224U
 #elif defined(SUNSTONE_LATENCY_CAUSE)
 #define LATENCY_RESULT_LIMIT 147456U
@@ -47,6 +49,46 @@ struct latency_wake_sample {
 };
 #define LATENCY_WAKE_IDLE 1U
 #define LATENCY_WAKE_BUSY 2U
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+/* The band probes (docs/designs/scheduler-partitioned.md, "Reschedule bands").
+ * A probe task at priority 6 (band 3) on each of CPUs 1 and 2 spins on the
+ * cycle counter in the busy phase and records every gap above
+ * LATENCY_BAND_GAP_CYCLES. After each of its wakes, CPU3's wake task
+ * notifies a priority-2 (band 1) background task on CPUs 1 and 2; the probe
+ * keeps sampling for LATENCY_BAND_MARGIN_CYCLES after that notification, then
+ * lowers itself to priority 1 so that the background task runs and blocks
+ * again, and returns to priority 6. A gap in which the probe's own wake task
+ * completed is the probe's own; any other is foreign. Each window is filed
+ * under the band setting (off, on) that its core applied at the window's
+ * start; a window whose core changed setting before its end is discarded. */
+#define LATENCY_BAND_MAGIC UINT64_C(0x535342414e445331)
+#define LATENCY_BAND_FOOTER_MAGIC UINT64_C(0x535342414e444631)
+#define LATENCY_BAND_PROBES 2U
+#define LATENCY_BAND_BINS 8U
+#define LATENCY_BAND_GAP_CYCLES 300U
+#define LATENCY_BAND_MARGIN_CYCLES 50000U
+/* Foreign gaps by size: [300, 512), [512, 1024), ... [16384, 32768), then 32768 cycles and more. */
+struct latency_band_cell {
+    uint64_t windows, cycles;
+    uint64_t foreign, foreign_irq, foreign_max, foreign_sum;
+    uint64_t own, own_max;
+    uint64_t bins[LATENCY_BAND_BINS];
+};
+_Static_assert(sizeof(struct latency_band_cell) == 128, "band cell layout");
+struct latency_band_report {
+    uint64_t magic, version, bytes, gap_cycles, margin_cycles, switch_shift, notified, wait_timeouts;
+    uint64_t discarded[LATENCY_BAND_PROBES], background_runs[LATENCY_BAND_PROBES], unfinished[LATENCY_BAND_PROBES];
+    uint64_t complete, reserved;
+    /* Bit i of word i / 64: the band setting the core applied when wake sample i was recorded (1 on). */
+    uint64_t wake_on[8][3];
+    struct latency_band_cell cell[LATENCY_BAND_PROBES][2];
+    /* CPU0's PMR write that changes the mask, 64 samples each in cycles,
+     * taken with the cause benchmark: [0] the write alone, [1] the write,
+     * DSB SY and ISB (the context restore's sequence). */
+    uint64_t pmr_count[2], pmr_cycles[2][64];
+};
+_Static_assert(sizeof(struct latency_band_report) == 128 + 192 + 512 + 16 + 1024, "band report layout");
+#endif
 struct latency_result {
     uint64_t magic, frequency, elapsed_ticks;
     uint32_t core_mask, model, dma_jobs, timer_irq_core_mask;
@@ -85,6 +127,12 @@ struct latency_result {
      * and the section finds the cause report as before. */
     struct ss_service_cycles_report service __attribute__((aligned(64)));
     uint64_t service_footer[8] __attribute__((aligned(64)));
+#endif
+#ifdef SUNSTONE_LATENCY_BAND_SWITCH
+    /* After the service footer, so a decoder that strips this section's
+     * footer and the section finds the service section as before. */
+    struct latency_band_report bands __attribute__((aligned(64)));
+    uint64_t band_footer[8] __attribute__((aligned(64)));
 #endif
 };
 _Static_assert(offsetof(struct latency_result, core) == 320 &&
@@ -125,7 +173,13 @@ _Static_assert(offsetof(struct latency_result, pmu_windows) % 64 == 0 &&
     sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT, "scheduler PMU report tail layout");
 #endif
 
-#if defined(SUNSTONE_LATENCY_SERVICE_CYCLES)
+#if defined(SUNSTONE_LATENCY_BAND_SWITCH)
+_Static_assert(sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT &&
+    offsetof(struct latency_result, service) == offsetof(struct latency_result, cause_footer) + 64 &&
+    offsetof(struct latency_result, bands) == offsetof(struct latency_result, service_footer) + 64 &&
+    offsetof(struct latency_result, band_footer) + 64 == sizeof(struct latency_result),
+    "band section follows the service footer and fits the declared result region");
+#elif defined(SUNSTONE_LATENCY_SERVICE_CYCLES)
 _Static_assert(sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT &&
     offsetof(struct latency_result, service) == offsetof(struct latency_result, cause_footer) + 64 &&
     offsetof(struct latency_result, service_footer) + 64 == sizeof(struct latency_result),

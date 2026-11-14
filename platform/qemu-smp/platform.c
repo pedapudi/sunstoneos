@@ -2,6 +2,7 @@
 #include "task.h"
 #include "platform.h"
 #include "a733_memory_local.h"
+#include "../../kernel/scheduler/bands.h"
 
 #define UART 0x09000000UL
 #define GICD 0x08000000UL
@@ -79,10 +80,19 @@ static void local_init(void) {
     write32(s + 0xd00, 0);
     write32(s + 0x180, 0xffffffff);
     write32(s + 0x280, 0xffffffff);
+#if configSS_BAND_SGIS
+    /* SGI 0 and the tick at the API level, the band SGIs 1-3 below it
+     * (kernel/scheduler/bands.h). */
+    *(volatile uint8_t *)(s + 0x400) = SS_BAND_COMMAND_PRIORITY;
+    for (unsigned b = 1; b <= SS_BANDS; ++b) *(volatile uint8_t *)(s + 0x400 + b) = SS_BAND_SGI_PRIORITY(b);
+    *(volatile uint8_t *)(s + 0x400 + TIMER_IRQ) = SS_BAND_COMMAND_PRIORITY;
+    write32(s + 0x100, 0xfU | (core() ? 0 : 1U << TIMER_IRQ));
+#else
     uint8_t priority = portLOWEST_USABLE_INTERRUPT_PRIORITY << portPRIORITY_SHIFT;
     *(volatile uint8_t *)(s + 0x400) = priority;
     *(volatile uint8_t *)(s + 0x400 + TIMER_IRQ) = priority;
     write32(s + 0x100, 1 | (core() ? 0 : 1U << TIMER_IRQ));
+#endif
     wait_clear(r, 8);
     uint64_t value = 1;
     __asm__ volatile("msr ICC_SRE_EL1, %0\n isb" :: "r"(value) : "memory");
@@ -184,6 +194,10 @@ static void wake_arm(void) {
     wake_armed[c] = 1;
 }
 #endif
+#if configSS_BAND_SGIS
+/* SGIs 0-3 taken on each core (checks/scheduler-partitioned-qemu.c reads them). */
+uint32_t qemu_smp_sgis[configNUMBER_OF_CORES][SS_BANDS + 1];
+#endif
 void vApplicationIRQHandler(uint64_t interrupt) {
 #ifdef SS_WAKE
     {
@@ -217,6 +231,11 @@ void vApplicationIRQHandler(uint64_t interrupt) {
     }
 #endif
     if (interrupt == TIMER_IRQ) FreeRTOS_Tick_Handler();
-    else if (interrupt == 0) FreeRTOS_SGI_Handler();
+    else if (interrupt <= 3) { /* SGI 0 and the band SGIs (kernel/scheduler/bands.h) */
+#if configSS_BAND_SGIS
+        __atomic_fetch_add(&qemu_smp_sgis[core()][interrupt], 1, __ATOMIC_RELAXED);
+#endif
+        FreeRTOS_SGI_Handler();
+    }
     else if (interrupt < 1020) platform_panic("unexpected interrupt", interrupt);
 }
