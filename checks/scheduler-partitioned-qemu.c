@@ -852,6 +852,13 @@ static void delete_self_verify(void)
 }
 static void control_races_verify(void)
 {
+    /* The freeze steps hold CPU0's gate until CPU0's background task releases it. A mover may start on any core at a
+     * priority above the background; one that enters the kernel on CPU0 during a freeze waits at admission and starves
+     * the release. Each mover blocks on its first notification before any freeze. */
+    for (unsigned id = 0; id < 2; ++id) {
+        for (unsigned wait = 0; wait < 200 && eTaskGetState(movers[id]) != eBlocked; ++wait) vTaskDelay(1);
+        configASSERT(eTaskGetState(movers[id]) == eBlocked);
+    }
     /* The peer outranks the controller. At equal priority the voluntary yield
      * can select it just before a tick, and the slice ending at that tick
      * returns the core to the controller before the peer leaves its wait. */
@@ -1020,8 +1027,9 @@ static void control(void *unused)
      * and this wait only ends a run that hangs. Under QEMU's round-robin icount the elapsed ticks include the instructions of every
      * core that spins while it waits, so the phase takes 905 ticks in nearly every run, 1,600 in about one run in fifty under host
      * load, and 1,891 with the 3,000-turn owner-drain perturbation of checks/scheduler-control-linked.py (the old 2,000 ms bound failed
-     * a gate once). The bound is 4 times the slowest value measured, 1,891 ticks at configTICK_RATE_HZ 1,000: 7,600 ms. */
-    configASSERT(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(7600)) == 1);
+     * a gate once). The bound is 4 times the slowest value measured, 1,891 ticks at configTICK_RATE_HZ 1,000: 7,600 ms. Like the
+     * phase's tick bound below, it scales with an injected scheduler delay (limit()). */
+    configASSERT(ulTaskNotifyTake(pdTRUE, limit(pdMS_TO_TICKS(7600))) == 1);
     uint64_t busy_delta = __atomic_load_n(&busy[1], __ATOMIC_RELAXED) - busy_start;
     platform_puts("local-wake attempts="); platform_hex(local_wakes);
     platform_puts(" completions="); platform_hex(local_completed);
