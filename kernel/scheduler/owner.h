@@ -32,6 +32,9 @@ struct ss_owner_task {
     void *context;
     unsigned slot, priority;
     bool queued;
+    /* A copy of the task's core affinity (CPUs 0-7), written with it, so that
+     * an owner's scan of its queues for movable tasks reads only these links. */
+    uint8_t affinity;
 };
 struct ss_owner_fifo { struct ss_owner_task *head, *tail; };
 #define SS_CACHE_LINE 64u

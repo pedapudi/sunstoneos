@@ -174,6 +174,25 @@ static void eras_and_snapshot(void)
     assert(ss_deadline_snapshot(&h.published, &absolute) == SS_DEADLINE_VALUE);
     assert(absolute == 123);
 }
+/* An owner whose own timer serves its heap stops writing the publication; the
+ * heap itself keeps working and the publication keeps its last value. */
+static void unpublished(void)
+{
+    reset();
+    assert(ss_deadline_insert(&h, &e[0], NULL, 1, 50));
+    const uint64_t sequence = atomic_load(&h.published.sequence);
+    ss_deadline_unpublish(&h);
+    assert(ss_deadline_insert(&h, &e[1], NULL, 2, 20));
+    struct ss_deadline_result r;
+    assert(ss_deadline_pop_expired(&h, 20, &r) && r.generation == 2);
+    assert(ss_deadline_cancel(&h, &e[0], 1) && !h.count);
+    uint64_t value;
+    assert(atomic_load(&h.published.sequence) == sequence);
+    assert(ss_deadline_snapshot(&h.published, &value) == SS_DEADLINE_VALUE && value == 50);
+    reset();
+    assert(!h.unpublished && ss_deadline_insert(&h, &e[0], NULL, 1, 50));
+    assert(atomic_load(&h.published.sequence) == 2);
+}
 /* Stress the exact publication ordering with a concurrent remote reader.
  * A valid publication is present only for even deadline values. */
 static _Atomic bool writer_done;
@@ -206,6 +225,6 @@ static void concurrent_snapshot(void)
 int main(void)
 {
     dense_and_cancel(); ties(); random_reference();
-    bursts_and_generation(); eras_and_snapshot(); concurrent_snapshot();
-    puts("deadline: dense, ties, cancellation, reference order, batches, generations and eras pass");
+    bursts_and_generation(); eras_and_snapshot(); unpublished(); concurrent_snapshot();
+    puts("deadline: dense, ties, cancellation, reference order, batches, generations, eras and unpublished heaps pass");
 }

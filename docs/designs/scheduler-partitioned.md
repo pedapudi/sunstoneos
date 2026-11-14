@@ -588,6 +588,10 @@ idle task sets its idle bit and asks each owner whose targets include it, with o
 coalesced bit and one SGI. A task that would preempt the running one is not pulled,
 and neither is one while its core's current task is blocking, suspending or
 deleted. Placement moves with the task; an affinity change moves it back.
+Each queue link carries a copy of its task's affinity, written with the task's
+own, so the scan reads only the links. When no queued task may move, as on a core
+whose tasks are all pinned, the pass reads neither its current task's records
+nor the global idle bitmap.
 All-idle systems exchange no balancing timer events or periodic IPIs, and a
 rejection waits for a real candidate event rather than retrying.
 
@@ -916,6 +920,8 @@ no timer interrupt and stays in WFI. The PPI30 handler stops the timer, and the
 interrupt exit's service expires the deadline and arms the next one. EL0 cannot write
 the timer (`CNTKCTL_EL1.EL0PTEN` is clear), so a task-level change to an earlier tick
 sends the CPU SGI 0, and the arm happens at the interrupt exit, at EL1.
+Once the epoch is published, CPUs 1-7 stop writing their deadline publication
+(`ss_deadline_unpublish`), which only CPU0's periodic release reads.
 The sub-tick wait for drivers is a separate consumer:
 `sunstone_deadline_wait_until()` (`include/sunstone_deadline.h`, `runtime/deadline.c`) shares CPU0's generic-timer compare through a fixed 16-slot table (`DEADLINE_SLOTS`).
 

@@ -43,6 +43,7 @@ static void down(struct ss_deadline_heap *h, unsigned i,
 }
 static void publish(struct ss_deadline_heap *h)
 {
+    if (h->unpublished) return;
     /* Sequentially consistent atomics give one total order across all three
      * fields, including readers. No ordinary-data seqlock race is present. */
     uint64_t s = atomic_load_explicit(&h->published.sequence, memory_order_seq_cst);
@@ -58,6 +59,7 @@ void ss_deadline_init(struct ss_deadline_heap *h)
 {
     h->count = 0;
     h->order = 0;
+    h->unpublished = false;
     atomic_init(&h->published.sequence, 0);
     atomic_init(&h->published.deadline, 0);
     atomic_init(&h->published.present, 0);
@@ -125,6 +127,8 @@ unsigned ss_deadline_expire(struct ss_deadline_heap *h, uint64_t now,
     }
     return n;
 }
+void ss_deadline_unpublish(struct ss_deadline_heap *h)
+{ h->unpublished = true; }
 bool ss_deadline_next(const struct ss_deadline_heap *h, uint64_t *out)
 {
     if (!h->count) return false;

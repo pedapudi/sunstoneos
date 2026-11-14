@@ -29,6 +29,7 @@ struct ss_deadline_heap {
     struct ss_deadline_entry *entries[SS_DEADLINE_CAPACITY];
     uint64_t order;
     uint16_t count;
+    bool unpublished; /* ss_deadline_unpublish: the publication below is no longer written */
     /* CPU0's tick reads this snapshot of every owner: keep it off the owner's lines. */
     _Alignas(64) struct ss_deadline_publication published;
 };
@@ -62,6 +63,10 @@ typedef void (*ss_deadline_expired)(void *, const struct ss_deadline_result *);
 unsigned ss_deadline_expire(struct ss_deadline_heap *, uint64_t now,
                             unsigned budget, ss_deadline_expired, void *);
 bool ss_deadline_next(const struct ss_deadline_heap *, uint64_t *);
+/* The owner, once its own timer serves this heap and no other CPU will read
+ * the publication again: stop writing the publication, which keeps its last
+ * value. Irreversible. */
+void ss_deadline_unpublish(struct ss_deadline_heap *);
 /* Remote readers make one sequence snapshot, with no retry. UNKNOWN requires
  * conservative owner delivery by the stage-B tick adapter. Init precedes remote
  * access; fewer than 2^63 publications may overlap a reader (sequence ABA).

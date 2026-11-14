@@ -715,7 +715,8 @@ static void ssKernelSlotInitialize(void *opaque, unsigned slot, uint64_t incarna
     *s = (struct ssKernelTask){0};
     ssKernelTaskCommands[slot] = (struct ssKernelTaskCommands){0};
     s->ready = (struct ss_owner_task){ .context = t, .slot = slot,
-                                      .priority = (unsigned)t->uxPriority };
+                                      .priority = (unsigned)t->uxPriority,
+                                      .affinity = (uint8_t)t->uxCoreAffinityMask };
     ss_deadline_entry_init(&s->deadline);
     for (unsigned n = 0; n < configTASK_NOTIFICATION_ARRAY_ENTRIES; ++n) {
         ss_notification_init(&s->notification[n], 0);
@@ -1408,6 +1409,8 @@ static void ssKernelLocalArm(unsigned c, struct ssKernelCPU *cpu)
     if (!c) return;
     const uint64_t epoch = atomic_load_explicit(&ssKernelEpoch, memory_order_acquire);
     if (!epoch) return;
+    /* With the epoch published, CPU0's tick reads CPU0's deadlines only. */
+    if (!cpu->deadlines.unpublished) ss_deadline_unpublish(&cpu->deadlines);
     uint64_t tick = atomic_load_explicit(&cpu->slice_deadline, memory_order_relaxed), next;
     if (ss_deadline_next(&cpu->deadlines, &next) && next < tick) tick = next;
     if (tick < configINITIAL_TICK_COUNT) tick = configINITIAL_TICK_COUNT;
@@ -2681,6 +2684,7 @@ static bool ssKernelApplyMasked(void *context, unsigned slot, void *task,
         cpu->reschedule = true;
 #endif
     t->uxCoreAffinityMask = (UBaseType_t)state->affinity;
+    s->ready.affinity = (uint8_t)state->affinity;
     atomic_store_explicit(&s->base, state->priority, memory_order_release);
     if (state->dead || state->suspended) return !deferred;
     if (s->suspended || atomic_load_explicit(&s->execution, memory_order_acquire) == SS_K_SUSPENDED) {
@@ -2804,6 +2808,7 @@ static void ssKernelAdoptMasked(void *context, unsigned slot, void *task,
     atomic_store_explicit(&s->execution,
         atomic_load_explicit(&s->transfer_execution, memory_order_relaxed), memory_order_release);
     ((TCB_t *)task)->uxCoreAffinityMask = (UBaseType_t)ssKernelControl.slot[slot].desired.affinity;
+    s->ready.affinity = (uint8_t)((TCB_t *)task)->uxCoreAffinityMask;
     ssKernelInspect(NULL, slot, atomic_load_explicit(&s->effective, memory_order_acquire));
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
     extern void ss_kernel_test_ineligible_adopt(unsigned, bool) __attribute__((weak));
@@ -3245,7 +3250,7 @@ static uint64_t ssKernelPullTargets(struct ssKernelCPU *cpu, unsigned c)
         bitmap &= bitmap - 1;
         unsigned seen = 0;
         for (struct ss_owner_task *t = ss_owner_ready(&cpu->run, p)->head; t && seen < 8; t = t->next, ++seen)
-            targets |= (uint64_t)((TCB_t *)t->context)->uxCoreAffinityMask;
+            targets |= t->affinity;
     }
     return targets & ((UINT64_C(1) << configNUMBER_OF_CORES) - 1) & ~(UINT64_C(1) << c);
 }
@@ -3259,7 +3264,7 @@ static struct ss_owner_task *ssKernelPullCandidate(struct ssKernelCPU *cpu, unsi
         bitmap &= ~(UINT32_C(1) << p);
         unsigned seen = 0;
         for (struct ss_owner_task *t = ss_owner_ready(&cpu->run, p)->head; t && seen < 8; t = t->next, ++seen)
-            if (((uint64_t)((TCB_t *)t->context)->uxCoreAffinityMask >> target) & 1u) return t;
+            if ((t->affinity >> target) & 1u) return t;
     }
     return NULL;
 }
@@ -3279,16 +3284,20 @@ static void ssKernelPullServe(unsigned c)
     struct ssKernelCPU *cpu = &ssKernelCPUs[c];
     /* Only a core running a task can leave work waiting; a core entering idle selects at once. */
     /* A running task that is suspending, blocking or deleted leaves this core to the waiting one. */
+    /* The queued tasks' affinity comes first: when every one is pinned here,
+     * as on a core that streams and wakes its own tasks, neither the running
+     * task's records nor the shared idle mask is read. */
+    uint64_t targets = cpu->run.ready_bitmap ? ssKernelPullTargets(cpu, c) : 0;
     const struct ss_owner_task *current = cpu->run.current;
-    const bool keeps_core = current && !ssKernelTasks[current->slot].suspended && !ssKernelTasks[current->slot].dead &&
-        atomic_load_explicit(&ssKernelTasks[current->slot].execution, memory_order_acquire) == SS_K_RUNNING;
-    const uint64_t targets = cpu->run.ready_bitmap && keeps_core ? ssKernelPullTargets(cpu, c) : 0;
+    if (targets && !(current && !ssKernelTasks[current->slot].suspended && !ssKernelTasks[current->slot].dead &&
+                     atomic_load_explicit(&ssKernelTasks[current->slot].execution, memory_order_acquire) == SS_K_RUNNING))
+        targets = 0;
     if (atomic_load_explicit(&cpu->pull_targets, memory_order_relaxed) != targets)
         atomic_store_explicit(&cpu->pull_targets, targets, memory_order_release);
     uint64_t requests = 0;
     if (atomic_load_explicit(&cpu->pull_requests, memory_order_relaxed))
         requests = atomic_exchange_explicit(&cpu->pull_requests, 0, memory_order_acq_rel);
-    uint64_t serve = (requests | atomic_load_explicit(&ssKernelIdleMask, memory_order_acquire)) & targets;
+    uint64_t serve = targets ? (requests | atomic_load_explicit(&ssKernelIdleMask, memory_order_acquire)) & targets : 0;
 #if SS_PULL_MOVES_PER_PASS
     unsigned moved = 0;
 #endif
