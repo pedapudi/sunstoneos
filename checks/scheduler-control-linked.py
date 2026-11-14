@@ -36,19 +36,29 @@ YIELD_MODELS = ('scheduler-yield-qemu', 'scheduler-yield-storm-qemu')
 # yield models read (checks/scheduler-yield-qemu.c), as this many loop turns (about 5 instructions each) before every served mark.
 # The models' own end-of-run accounting fails above about 3,000 turns, so the case does not need the critical path to be the only
 # detector: it needs the critical path to cross the bound, which it does at 6,000 turns (276,127 instructions measured).
-WAKE_PATH_WORD, WAKE_PATH_REGRESSION_TURNS = 4, 6000
+WAKE_PATH_REGRESSION_TURNS = 6000      # in the table word after the last site (WAKE_PATH_WORD, below)
 PLUGIN_HEADER = CACHE / 'host/qemu-plugin-10.2.1/qemu-plugin.h'
 PLUGIN_HEADER_SHA256 = 'aebc639d01685893a9d71b9ef3afa7ea67e0be6a8959781c4057bd4974d05d4d'
-PERTURB_MODELS = ('scheduler-partitioned-qemu', 'scheduler-partitioned-storm-qemu')
-PERTURB_SITES = {'api-entry': 0, 'owner-publish': 1, 'owner-drain': 2, 'control-open': 3}
+PERTURB_SITES = {'api-entry': 0, 'owner-publish': 1, 'owner-drain': 2, 'control-open': 3, 'object-walk': 4}
+# Each model's pass marker and the sites it is swept at. The partitioned models link no event group, so the walk site
+# runs only in the objects model.
+SCHEDULER_SITES = ('api-entry', 'owner-publish', 'owner-drain', 'control-open')
+PERTURB_MODELS = {'scheduler-partitioned-qemu': ('PASS partitioned concurrent:', SCHEDULER_SITES),
+                  'scheduler-partitioned-storm-qemu': ('PASS partitioned concurrent:', SCHEDULER_SITES),
+                  'scheduler-objects-qemu': ('PASS objects:', ('object-walk',))}
 PERTURB_TURNS = (300, 1000, 3000)
+WAKE_PATH_WORD = len(PERTURB_SITES)             # derived from the site count, so a new site cannot collide with it
 CHECK_INPUTS = ['tools/qemu-critical-path.c', 'tools/qemu-plugin-glib', 'kernel/scheduler', 'patches/freertos-smp-c.patch',
-                'patches/freertos-partitioned-api.patch', 'checks/scheduler-partitioned-qemu.c',
+                'patches/freertos-partitioned-api.patch', 'patches/freertos-partitioned-objects.patch',
+                'checks/scheduler-partitioned-qemu.c',
                 'checks/scheduler-partitioned-qemu-config/FreeRTOSConfig.h',
                 'checks/scheduler-objects-qemu.c', 'checks/scheduler-yield-qemu.c']
 
 
 def main():
+    # The sites of the table are the enumerators of perturb.h; the yield models' wake-path word follows the last (SS_PERTURB_SITES).
+    enumerators = re.search(r'enum ss_kernel_perturb_site \{(.*?)\};', (ROOT / 'kernel/scheduler/perturb.h').read_text(), re.S).group(1)
+    assert len(re.findall(r'^\s*SS_PERTURB_(?!SITES)\w+', enumerators, re.M)) == len(PERTURB_SITES), 'PERTURB_SITES differs from perturb.h'
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', type=Path, required=True,
                         help='configured build with scheduler-partitioned-qemu built')
@@ -190,8 +200,8 @@ def main():
 
     if args.perturb:
         from concurrent.futures import ThreadPoolExecutor
-        points = [(model, site, turns) for model in PERTURB_MODELS
-                  for site in PERTURB_SITES for turns in PERTURB_TURNS]
+        points = [(model, site, turns) for model, (_, sites) in PERTURB_MODELS.items()
+                  for site in sites for turns in PERTURB_TURNS]
 
         def perturbed(point):
             model, site, turns = point
@@ -201,7 +211,7 @@ def main():
                 status, log = execute(build / (model + '.elf'), directory, 8, (PERTURB_SITES[site], turns))
             except AssertionError:
                 return point, 'QEMU timed out'
-            if status == 0 and 'PASS partitioned concurrent:' in log and 'FAIL' not in log:
+            if status == 0 and PERTURB_MODELS[model][0] in log and 'FAIL' not in log:
                 return point, None
             failed = re.search(r'FAIL [^\s]+', log)
             return point, failed.group(0) if failed else f'status {status}'
