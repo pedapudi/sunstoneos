@@ -1,13 +1,14 @@
 /* Fixed cold-card CPU owner. Protocol/source pins: cpu-sources.json and
  * docs/designs/cold-cpu-static-off.md. No CORE_RESET or power-rail writes. */
 #include <stdint.h>
+#include "marks.h"
 
 int a733_stage2_entry_state(void);
 int a733_stage2_time_valid(void);
 int a733_stage2_cpu_cache_owned(void);
 int a733_stage2_cpu_retained(void);
 
-static unsigned attempted;
+static unsigned attempted, where;
 static uint64_t started, last;
 static unsigned samples;
 static uint32_t rd(uintptr_t a)
@@ -41,7 +42,7 @@ static int requests_clear(unsigned core)
 {return !(rd(control(core))&1) && !(rd(control(core)+0x20)&1);}
 int a733_stage2_cpu_retained(void) {return attempted!=0;}
 
-int a733_stage2_cpu_cache_owned(void)
+static int owned(void)
 {
     uint64_t clidr,selector;
     uint32_t geometry[3];
@@ -51,6 +52,7 @@ int a733_stage2_cpu_cache_owned(void)
     if(attempted || !a733_stage2_entry_state() || !a733_stage2_time_valid() ||
        (rd(0x0701022c)&0x10001)!=0x10001)return 0;
     __asm__ volatile("mrs %0,clidr_el1\n mrs %1,csselr_el1":"=r"(clidr),"=r"(selector));
+    where=1;
     if((clidr&0x071fffff)!=0x03000123)return 0;
     for(unsigned level=0;level<3;++level) {
         uint64_t g;
@@ -58,11 +60,13 @@ int a733_stage2_cpu_cache_owned(void)
         geometry[level]=(uint32_t)g&0x0fffffff;
     }
     __asm__ volatile("msr csselr_el1,%0\n isb"::"r"(selector):"memory");
+    where=2;
     for(unsigned level=0;level<3;++level)if(geometry[level]!=expected[level])return 0;
     /* All preflight reads precede the first policy write. AIDR binds the
      * architecture; IIDR binds PCK-600 (revision fields may differ). */
     for(unsigned core=1;core<8;++core) {
         uintptr_t p=ppu(core);
+        where=0x10|core;
         uint32_t id=rd(p+0xfb0),policy=rd(p);
         if((rd(p+0xfc8)&0xfff00fff)!=0x0b60043b || rd(p+0xfcc)!=0x11 ||
            (id&0x101101ff)!=0x10110100 || rd(p+4) || (policy&~0x100u) ||
@@ -71,6 +75,7 @@ int a733_stage2_cpu_cache_owned(void)
     started=last=now();samples=0;
     for(unsigned core=1;core<8;++core) {
         uintptr_t p=ppu(core);
+        where=0x20|core;
         if(!bounded() || !requests_clear(core) || (rd(p)&~0x100u))return 0;
         attempted=1; /* A write may take effect even if subsequent reads fail. */
         wr(p,0);
@@ -87,6 +92,7 @@ int a733_stage2_cpu_cache_owned(void)
         wr(control(core),c|2);
         if(rd(control(core))!=(c|2))return 0;
     }
+    where=0x30;
     for(unsigned core=1;core<8;++core)
         if(!bounded() || rd(ppu(core)) || rd(ppu(core)+8) ||
            !requests_clear(core) || !(rd(control(core))&2))return 0;
@@ -94,6 +100,7 @@ int a733_stage2_cpu_cache_owned(void)
      * With every writer now excluded, finish all levels before SD admission.
      * Loop dimensions are bounded by the preflight, not untrusted shifts. */
     __asm__ volatile("dsb sy":::"memory");
+    where=0x40;
     for(unsigned level=0;level<3;++level) {
         unsigned ways=level==2?16:4,sets=level==0?128:level==1?512:1024;
         unsigned shift=level==2?28:30;
@@ -108,4 +115,14 @@ int a733_stage2_cpu_cache_owned(void)
     }
     __asm__ volatile("dsb sy\n isb":::"memory");
     return bounded();
+}
+/* A refusal records where the owner stopped in the snapshot word, which SD
+ * admission would otherwise fill (marks.h): 0 the entry checks, 1 CLIDR, 2 the
+ * cache geometry, 0x10|core the preflight, 0x20|core the static OFF write and
+ * wait, 0x30 the final recheck, 0x40 the cache clean. */
+int a733_stage2_cpu_cache_owned(void)
+{
+    int granted=owned();
+    if(!granted)a733_mark_word(A733_MARK_SNAPSHOT,UINT32_C(0x0c050000)|attempted<<8|where);
+    return granted;
 }

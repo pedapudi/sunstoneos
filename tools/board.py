@@ -737,16 +737,20 @@ class Live:
         self.sanity()
         self.record['fresh_fel'] = True
 
-    def boot_once(self, session_seconds):
+    def boot_once(self, session_seconds, measure=None):
         """Boot the card once under test control: write the boot-once value to GP2, reset through WDT0 and launch nothing.
 
         The first-stage gate on the card replaces the value with its cold record and boots boot0, DRAM training, the stage-2
         monitor and the slot's resident test image, which ends in a WDT0 reset through the gate's warm path. No FEL session
         exists while the board is away; the wait is the worked deadline of boot_once_deadline(). The words at the next
-        contact are read in one transaction before the gate record is cleared, and are recorded as boot_once."""
+        contact are read in one transaction before the gate record is cleared, and are recorded as boot_once.
+
+        With `measure` (the OS row), the card's diagnostic stage 2 parks after arming WDT0 0x41 and never enters the image;
+        the pass is then its stop at step 0x0f, and the wait has no session term."""
         flag, marker = crumbs.RESET_WORDS['flag'], crumbs.MARKER
-        terms = boot_once_deadline(session_seconds)
-        record = self.record['boot_once'] = {'gp2_written': crumbs.BOOT_ONCE, 'deadline': terms, 'passed': False}
+        terms = boot_once_deadline(0 if measure else session_seconds)
+        record = self.record['boot_once'] = {'gp2_written': crumbs.BOOT_ONCE, 'deadline': terms, 'passed': False,
+                                             'measure': measure}
         values = [int(x, 16) for x in self.tx('writel', hex(flag), hex(crumbs.BOOT_ONCE), 'readl', hex(flag), 'readl', hex(marker)).split()]
         require(len(values) == 2, 'Boot-once readback differs.')
         record.update(gp2_readback=values[0], marker_before=values[1])
@@ -773,9 +777,13 @@ class Live:
         record.update(wdt_mode_before=back['before'], wdt_mode_after=back['after'], reset_words=reset, gate=back['gate'],
                       breadcrumbs=words, decoded=decoded, last=words['last'], stop_value=words['last'] & 0xffff)
         expected = {'gp2': BOOT_ONCE_RETURN_RECORD, 'marker': crumbs.MARKER_KEYED, 'last': BOOT_ONCE_STOP, 'fault': 0}
+        if measure:
+            expected.update(tag=crumbs.STAGE2_TAG, last=BOOT_ONCE_MEASURE_STOP)
         observed = {'gp2': reset['flag'], 'marker': reset['marker'], 'last': words['last'], 'fault': words['fault']}
+        if measure:
+            observed['tag'] = words['tag']
         record['expected'], record['observed'] = expected, observed
-        record['passed'] = bool(observed == expected and decoded['session'] and not decoded.get('board_failure'))
+        record['passed'] = bool(observed == expected and (measure or decoded['session']) and not decoded.get('board_failure'))
         self.journal()
 
     def watch_expiry(self, armed_at, variant):
@@ -1224,6 +1232,8 @@ class Live:
 # WDT0 mode at entry (0x41), and the stop is the resident test's EL3 stop, stage 0x0111 with value 0x5000 (the stop-on-finish profile).
 BOOT_ONCE_RETURN_RECORD = crumbs.GATE_STAGE << 16 | crumbs.GATE_FLAGS['warm'] | 0x41
 BOOT_ONCE_STOP = crumbs.EL3_STOP << 16 | 0x5000
+# With --boot-once-measure the diagnostic stage 2 (a733-stage2-armed-stop) parks after its 0x41 arming: LAST is step 0x0f.
+BOOT_ONCE_MEASURE_STOP = 0x0c030f00
 BOOT_ONCE_SLOT_LOAD_S = 30      # the stage-2 loader's bound for the whole slot load (docs/boot-slots.md)
 BOOT_ONCE_GATE_COLD_MODE = 0xb1  # the gate arms WDT0 with this mode on its cold path; it covers boot0, DRAM training (about 5.1 s) and the package load
 BOOT_ONCE_MARGIN_S = 10         # the FEL re-enumeration margin every runner wait uses
@@ -1401,7 +1411,8 @@ def run_image(args, backend=Live):
                 if boot_slot is not None:
                     # The card boots instead of an upload: nothing is launched, no DRAM is brought up, the board is away.
                     result['dram_mode'] = 'sram-only'
-                    timed('boot-once', lambda: owner.boot_once(info['watchdog']['session_seconds']))
+                    timed('boot-once', lambda: owner.boot_once(info['watchdog']['session_seconds'],
+                                                               getattr(args, 'boot_once_measure', None)))
                     boot = result['boot_once'] = owner.record['boot_once']
                     result.update(outcome='watchdog-reset', dram_lost=True, rom_returned=True, expected_reset=boot['passed'])
                     if not boot['passed']:
@@ -2314,7 +2325,7 @@ class Queue:
 # The caller-controlled launch options a submission freezes in its queue entry.
 # Frozen options whose False differs from leaving them out: --no-restore-rails opts out of the automatic restoration.
 NEGATABLE_OPTIONS = ('restore_rails',)
-FROZEN_OPTIONS = ('kind','lifetime','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit','marker_clear_test','verify','boot_once_slot','rearm_expiry')
+FROZEN_OPTIONS = ('kind','lifetime','approved_by','storage_write','host_tree','fel','rail_helper','ddr_build','ddr_restore','training_dir','restore_rails','preserve_dram','preserve_budget_s','decode_application','objcopy','no_preflight','npu_pool','radio_stage_limit','marker_clear_test','verify','boot_once_slot','rearm_expiry','boot_once_measure')
 
 
 def radio_stage_limit(text):
@@ -2358,6 +2369,11 @@ def run_options(parser, submit=False):
                         'with no FEL session, for the slot image to run and end in its watchdog reset. IMAGE is the slot\'s runtime ELF, '
                         'checked against the slot manifest (the plan of tools/boot-slots.py); requires --lifetime resident and --approved-by '
                         'coordinator (docs/board-runner.md).')
+    parser.add_argument('--boot-once-measure', metavar='STAGE',
+                        help='With --boot-once-slot, measure the expiry of the arming that covers STAGE: the card\'s diagnostic stage 2 '
+                        'stops at that arming and leaves the reset to it. Allowed only for the last stage of tools/boot_chain.py when it '
+                        'is the one stage without a recovery and its arming has expired in a FEL session; requires --approved-by '
+                        'coordinator (docs/designs/card-boot-chain.md, "Measuring the OS row").')
     parser.add_argument('--no-preflight', metavar='REASON',
                         help='Queue or check an image whose host pre-flight cannot run; REASON is recorded in the entry and the result.')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')

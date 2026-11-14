@@ -711,6 +711,16 @@ value `0x5000`) and no fault; the outcome is then `watchdog-reset` with
 `expected_reset: true`. Any other words give the same outcome with a
 `first_failure` that lists the expected and observed words.
 
+`--boot-once-measure os` adds to a boot-once run the measurement of the OS
+row's WDT0 arming after boot0 ([card-boot-chain.md](designs/card-boot-chain.md),
+"Measuring the OS row"). It requires `--approved-by coordinator` and is
+admitted only while `measurable()` in `tools/boot_chain.py` returns nothing.
+The card must hold the diagnostic stage 2, which parks after its `0x41`
+arming. The deadline then has no session term (64 s), and the pass is the
+warm record `0x0c024041`, the marker `0x16aa16aa`, the stage-2 tag
+`0x53320001`, LAST `0x0c030f00` and no fault. The result decodes the
+stage-2 progress words under `boot_once.decoded.stage2`.
+
 The runner uploads both loads, arms WDT0 in mode `0x41`, sets and reads back
 the session tag and the entry state, and executes `0x52000`. The request image
 sets the vendor RTC request `0x5aa5a55a`. The warm-entry image sets no request

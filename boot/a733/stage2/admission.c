@@ -7,6 +7,7 @@
 #include "a733_clock_reference.h"
 #include "a733_mmc_read.h"
 #include <stdint.h>
+#include "marks.h"
 
 int a733_stage2_card_admission(uint32_t module_hz);
 int a733_stage2_card_present(void);
@@ -123,18 +124,37 @@ static int masked(void)
     return !(rd(0x03400000)&(1u<<31)) && !(rd(0x03400118)&2u) &&
         !(rd(0x03400318)&2u) && !(rd(0x03400218)&2u);
 }
-/* SDC0 registers are read last, behind the checked gate and reset. */
-static int inherited(void)
+/* SDC0 registers are read last, behind the checked gate and reset. Returns 0
+ * when boot0's state is admitted, otherwise the number of the first check
+ * that refused it, which the snapshot word records (marks.h). */
+static unsigned inherited(void)
 {
     uint32_t module = rd(CCU_SMHC0_CLK), function = rd(PF_CFG0) & 0x0fffffffu;
     uint32_t pull = rd(PF_PUL0) & 0x3fffu, pf6 = function & PF6_FUNCTION;
-    return parent() && masked() && (rd(CCU_SMHC0_BGR) & BUS_OPEN) == BUS_OPEN &&
-        (module & MODULE_GATE) && !(module & ~MODULE_MASK) && ((module >> 24) & 7) <= 4 &&
-        (function & ~PF6_FUNCTION) == SDC0_FUNCTIONS && (pf6 == PF6_FUNCTION || !pf6) &&
-        (pull & ~PF6_PULL) == SDC0_PULLS && (pull & PF6_PULL) <= PF6_PULL_UP && bank_3v3() &&
-        !(rd(SDC0 + 0x18) & SUNXI_SMHC_CMD_START) && !(rd(SDC0 + 0x3c) & SUNXI_SMHC_STATUS_BUSY) &&
-        !(rd(SDC0 + 0x80) & (UINT32_C(1) << 7));
+    if (!parent()) return 1;
+    if (!masked()) return 2;
+    if ((rd(CCU_SMHC0_BGR) & BUS_OPEN) != BUS_OPEN) return 3;
+    if (!(module & MODULE_GATE) || (module & ~MODULE_MASK) || ((module >> 24) & 7) > 4) return 4;
+    if ((function & ~PF6_FUNCTION) != SDC0_FUNCTIONS || (pf6 != PF6_FUNCTION && pf6)) return 5;
+    if ((pull & ~PF6_PULL) != SDC0_PULLS || (pull & PF6_PULL) > PF6_PULL_UP) return 6;
+    if (!bank_3v3()) return 7;
+    if (rd(SDC0 + 0x18) & SUNXI_SMHC_CMD_START) return 8;
+    if (rd(SDC0 + 0x3c) & SUNXI_SMHC_STATUS_BUSY) return 9;
+    if (rd(SDC0 + 0x80) & (UINT32_C(1) << 7)) return 10;
+    return 0;
 }
+/* boot0's SD state as admission found it: the SMHC0 module clock fields, the
+ * PF bank's withstand mode (6:5), selector (7) and detected level (14:13), the
+ * bus gate and reset (15), PF6's function (30:27) and, in 23:16, the step
+ * that refused (1..10 the checks of inherited(), 11 and up the writes). */
+static uint32_t snapshot(void)
+{
+    uint32_t module = rd(CCU_SMHC0_CLK) & MODULE_MASK;
+    return module | ((rd(GPIO_POW_MOD_SEL) >> 10 & 3) << 5) | ((rd(GPIO_POW_VAL_SET_CTL) & 1) << 7) |
+        ((rd(GPIO_POW_VAL) >> 10 & 3) << 13) | ((uint32_t)((rd(CCU_SMHC0_BGR) & BUS_OPEN) == BUS_OPEN) << 15) |
+        ((rd(PF_CFG0) >> 24 & 15) << 27);
+}
+
 /* Before every poll: the selected clock, bus, pins and bank voltage hold. */
 static int retained(void)
 {
@@ -144,21 +164,30 @@ static int retained(void)
 }
 
 /* The SD core calls this once, before its first controller access. */
-int a733_stage2_card_admission(uint32_t module_hz)
+static unsigned admission(void)
 {
-    if (module_hz != 400000 || selected || !a733_stage2_time_valid() || !inherited()) return 0;
+    unsigned refused = inherited();
+    if (refused) return refused;
     /* PF6 takes its pull-up before it becomes an input, as in the pin manager. */
-    if (!update(PF_PUL0, PF6_PULL, PF6_PULL_UP) || !update(PF_CFG0, PF6_FUNCTION, 0)) return 0;
+    if (!update(PF_PUL0, PF6_PULL, PF6_PULL_UP) || !update(PF_CFG0, PF6_FUNCTION, 0)) return 11;
     uint32_t gated = rd(CCU_SMHC0_CLK) & MODULE_MASK & ~MODULE_GATE;
     if (!update(CCU_SMHC0_CLK, MODULE_MASK, gated) ||
         !update(CCU_SMHC0_CLK, MODULE_MASK, IDENTIFY_MODULE & ~MODULE_GATE) ||
-        !update(CCU_SMHC0_CLK, MODULE_MASK, IDENTIFY_MODULE)) return 0;
+        !update(CCU_SMHC0_CLK, MODULE_MASK, IDENTIFY_MODULE)) return 12;
     uint64_t start = counter();
     for (uint32_t n = 0; counter() - start < SETTLE_TICKS; )
-        if (++n == SETTLE_SAMPLES || !a733_stage2_time_valid()) return 0;
+        if (++n == SETTLE_SAMPLES || !a733_stage2_time_valid()) return 13;
     running_module=IDENTIFY_MODULE;
     selected = 1;
-    return a733_stage2_card_present();
+    return a733_stage2_card_present() ? 0 : 14;
+}
+int a733_stage2_card_admission(uint32_t module_hz)
+{
+    if (module_hz != 400000 || selected || !a733_stage2_time_valid()) return 0;
+    uint32_t before = snapshot();
+    unsigned refused = admission();
+    a733_mark_word(A733_MARK_SNAPSHOT, before | (refused & 0xffu) << 16);
+    return !refused;
 }
 
 /* The loader's retained() callback asks this before every SD core poll.
