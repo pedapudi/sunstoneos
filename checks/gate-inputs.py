@@ -6,7 +6,7 @@ GATE_RUNS for their selected modes, including image modes of otherwise pure-host
 reason it needs a board) or GATE_WAIVED ("category | reason", for a helper module). tools/gate_images.py holds the image
 recipes. Cases:
   registry   a pure-host check may declare runs; every image a run names is a gate variant or a recipe; each recipe has a
-             configure list, a target and an ELF name; no check declares two answers; every waiver has a category and a reason;
+             configure list (empty only for a standalone 'project'), a target and an ELF name; no check declares two answers; every waiver has a category and a reason;
   coverage   every non-pure-host check of the index declares an answer, or needs only a board or USB access;
   refusal    a check that is affected but in no list is unsupplied, naming the check, and a registered one is supplied; a check
              needing USB access is reported as a board check and does not refuse; removing a registry entry makes its check
@@ -53,7 +53,7 @@ def main():
     index = affected.indexer.generate()
     inputs = gate.load_gate_inputs(index)
     for name, recipe in inputs['images'].items():
-        assert recipe['configure'] and recipe['target'] and recipe['elf'].endswith('.elf') and name not in gate.VARIANTS, name
+        assert (recipe['configure'] or recipe.get('project')) and recipe['target'] and recipe['elf'].endswith('.elf') and name not in gate.VARIANTS, name
     for name, entry in index.items():
         answers = [key for key in ('runs', 'board', 'waived') if key in entry['gate']]
         assert len(answers) <= 1 and not (entry['pure_host'] and any(a != 'runs' for a in answers)), (name, answers)
