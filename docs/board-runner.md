@@ -661,7 +661,13 @@ instruction cache before each register command, and runs a frozen copy.
 At first contact with a board, before the session's watchdog reset, every
 session reads the cold-boot marker (RTC `IC_CHARA`, `0x070901f0`), the GP2 gate
 record, the crystal control word and the WDT0 configuration and output words,
-and records them as `power_epoch`. It then clears the gate record and, if the
+and records them as `power_epoch`. The same read-only transaction also reads
+all eight RTC general-purpose words `0x07090100..0x0709011c` (tag, LAST, GP2,
+time, fault, ESR, ELR, FAR) and the WDT0 interrupt status `0x02050004`, and
+records them under `contact`. These words survive a watchdog reset and a power
+loss short enough to keep VDD_RTC up. After a run that never returned, they
+are the only record of where the boot stopped, so nothing is written before
+they are read. It then clears the gate record and, if the
 marker's low half does not read `0x16aa`, writes the keyed value `0x16aa16aa`.
 A session whose marker or cleared record does not read back stops before
 launch. The marker is an RTC-domain register; it survives watchdog resets and
@@ -748,6 +754,31 @@ disarms WDT0. If the ROM does not re-enumerate, WDT0 resets the board to FEL;
 the result is `watchdog-reset` with the RTC words, crumbs and elapsed time
 recorded. Any other invalid receipt quarantines the instance. The evidence
 qualifies only these SRAM paths. Card loading remains a separate test.
+
+### WDT0 re-arm expiry test
+
+Every WDT0 expiry the board has shown followed an arming from mode 0. The
+card first stage and stage 2 once re-armed WDT0 over an enabled watchdog with
+no disarm, and the first card boot under test control never returned.
+`--rearm-expiry`, with `--approved-by coordinator` and the warm-entry proof
+image, measures whether such a re-arm resets the board:
+
+- `runner`: from a disarmed WDT0 the runner arms mode `0x41`, then writes
+  mode `0xb1` and a restart with no disarm between, and reads back `0xb1`,
+  configuration 1 and output 2. It uploads and launches nothing.
+- `gate`: the runner runs the warm-entry proof as above. The gate re-arms
+  `0xb1` over the runner's `0x41`, and the runner leaves it armed after the
+  proof's FEL return.
+
+The runner then reads WDT0 without a disarm and waits for a new FEL instance
+until 10 seconds after the 16-second interval. A reset 16 to 21 seconds after
+the re-arm (the restart, or the execute request for `gate`) matches the
+prediction: the outcome is `watchdog-reset` with `expected_reset: true`. An
+earlier reset means the 4-second arming fired and the re-arm did not apply. If
+no new instance appears, the board is still in FEL: the runner disarms WDT0
+on the same instance and the outcome is `failure-return`, so the port stays
+usable. The result's `rearm_expiry` records the mode read, the interval, the
+deadline, whether a reset came and its time.
 
 ## USB class probes require finite device cleanup
 
