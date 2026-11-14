@@ -19,7 +19,7 @@
  * any C (MPIDR_EL1 reads 0 through the plugin interface: its raw field is empty, the value comes from a read function). The count of blocks whose argument differs from the register is written at
  * the end ("X mismatched-blocks N") as evidence of the defect, and the check requires every marker to run on the core its name gives.
  *
- * Arguments (hexadecimal addresses): lo=ADDR hi=ADDR  the marker functions [lo, hi), 8 bytes each, even slots wake, odd slots served;
+ * Arguments (hexadecimal addresses): lo=ADDR hi=ADDR  the marker functions [lo, hi), 8 bytes each (their meaning is the check's);
  *                                    spin=LO-HI       the spin function; out=PATH
  * Output: "M OFFSET CORE T0 .. T7 S0 .. S7\n" per marker call, OFFSET relative to lo; "X mismatched-blocks N\n" at the end.
  * Built by checks/scheduler-control-linked.py against the unmodified QEMU 10.2.1 qemu-plugin.h (SHA-256 checked there) and the GLib
