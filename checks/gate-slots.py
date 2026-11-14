@@ -12,12 +12,14 @@ Every case runs real processes on a temporary home directory, so the file locks 
   landing-jump slots held by a landing and two workers; an older worker and a newer landing wait: the slot a worker frees goes to
                the landing, then the next free slot to the worker, and a landing takes slot 0 when it frees;
   perturb-limit the kill limit of the perturbation sweep is a multiple of its slowest measured point in the same JSON;
+  board-hold   a gate holds its step while a runner is in its FEL work, a dead runner holds nothing, and gates keep off the reserved CPUs;
   stale-ticket a waiting gate that is killed leaves no ticket behind that holds the queue.
 Usage: gate-slots.py --output DIR
 """
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import select
 import subprocess
@@ -251,6 +253,41 @@ def case_perturb_limit():
     assert "['perturb']" in text and 'gate-slots.json' in text
 
 
+def case_board_hold(home):
+    """A gate holds its next step while a runner is in its FEL work, a dead runner holds nothing, a hung one holds until its deadline,
+    and a gate stays off the CPUs that config reserves."""
+    assert gate_slots.wait_for_board(home, announce=None) == 0.0
+    code = ("import sys,time; sys.path.insert(0,%r); import gate_slots; h=gate_slots.BoardFel(%r, %d); h.acquire(); "
+            "print('HELD', flush=True); sys.stdin.readline(); h.release(); print('FREE', flush=True); time.sleep(30)")
+    runner = Process(code % (str(ROOT / 'tools'), str(home), 60))
+    try:
+        assert runner.line(WAIT) == 'HELD'
+        waiter = Process("import sys,time; sys.path.insert(0,%r); import gate_slots; t=time.time(); "
+                         "gate_slots.wait_for_board(%r, announce=None); print('WAITED %%.2f' %% (time.time()-t), flush=True)"
+                         % (str(ROOT / 'tools'), str(home)))
+        assert waiter.line(1.0) is None, 'a step started beside a runner in its FEL work'
+        runner.release()
+        assert runner.line(WAIT) == 'FREE'
+        line = waiter.line(WAIT)
+        assert line and line.startswith('WAITED') and float(line.split()[1]) >= 0.9, line     # held until the runner released it
+        waiter.end()
+    finally:
+        runner.end()
+    crashed = Process(code % (str(ROOT / 'tools'), str(home), 60))
+    try:
+        assert crashed.line(WAIT) == 'HELD'
+        crashed.end()                                                                     # killed: the kernel frees its lock
+        assert gate_slots.wait_for_board(home, announce=None) < 5.0, 'a dead runner held a gate'
+    finally:
+        crashed.end()
+    keep = Process("import sys,os; sys.path.insert(0,%r); import gate_slots; "
+                   "print(sorted(gate_slots.reserve_cpus({'reserved_cpus': [%d]})) == sorted(os.sched_getaffinity(0)), %d in os.sched_getaffinity(0), flush=True)"
+                   % (str(ROOT / 'tools'), min(os.sched_getaffinity(0)), min(os.sched_getaffinity(0))))
+    assert keep.line(WAIT) == 'True False', 'reserve_cpus left the reserved CPU in the gate'
+    keep.end()
+    assert gate_slots.load_config()['reserved_cpus'], 'no CPU is reserved for the USB interrupt'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -263,7 +300,7 @@ def main():
     case_perturb_limit()
     print('PASS perturb-limit')
     for name, case in (('two-gates', case_two_gates), ('timing-lock', case_timing_lock), ('landing-jump', case_landing_jump),
-                       ('stale-ticket', case_stale_ticket)):
+                       ('stale-ticket', case_stale_ticket), ('board-hold', case_board_hold)):
         home = args.output / name
         home.mkdir()
         case(home)

@@ -312,7 +312,7 @@ gate record. The sequence is:
 2. The gate finds the value and takes its cold path with the marker set. It
    writes the cold record, `0x0c02` in bits 31:16, `COLD | ONCE`
    (`0x8000 | 0x1000`) and the WDT0 mode read at entry, over the boot-once
-   value, and reads the record back. Only then does it arm WDT0 for 16 s and
+   value, and reads the record back. Only then does it disarm WDT0, arm it for 16 s and
    enter boot0. A record that does not read back sends the gate to its warm
    path, so the board enters FEL instead of booting the card.
 3. Stage 2 accepts that record with WDT0 at `0xb1`, clears GP2 and renews WDT0
@@ -351,7 +351,8 @@ lie outside every partition.
   unmeasured, so that gate could have parked a board after a watchdog reset
   with no USB device. The revision checks them only before arming WDT0, and a
   watchdog refusal enters FEL. The cold path writes `0x16aa16aa` to
-  `0x070901f0` and reads it back, arms WDT0 at 16 seconds, and continues at
+  `0x070901f0` and reads it back, disarms WDT0 and arms it at 16 seconds
+  ([card-boot-chain.md](card-boot-chain.md)), and continues at
   boot0's reset stub `0x47b00`; if boot0 then hangs, the watchdog reset reaches
   the warm path and FEL. A marker that does not read back selects FEL.
 - **Gate record.** The warm and cold paths leave the LAST and fault words
@@ -373,11 +374,13 @@ lie outside every partition.
   every card read, and keeps the record in its report word `reserved1[22]`
   (offset 368 of the report at `0x47008200`;
   [monitor notes](../../boot/a733/stage2/README.md)). It then switches WDT0 to
-  the four-second mode when it arms the loaded image.
+  the four-second mode, after a disarm, when it arms the loaded image.
 - **Runner marker and reads.** At every new FEL instance, before the
   session's first watchdog reset, `tools/board.py` reads `0x07090108`,
   `0x070901f0`, `0x07090160` and the WDT0 configuration and output words, and
-  records them under `power_epoch`. It then clears a gate record and writes
+  records them under `power_epoch`, together with the eight RTC
+  general-purpose words `0x07090100..0x0709011c` and the WDT0 interrupt
+  status `0x02050004` (`contact`), all read before any write. It then clears a gate record and writes
   `0x16aa16aa` to the marker when its low half is not `0x16aa`. A marker that
   does not read back refuses the run before any reset. Every return reads the
   same words. When WDT0 reads zero and a warm gate record is present, the
@@ -519,3 +522,40 @@ warm path and the cold path before FEL. The board then presents no USB device
 until the card is removed. Step B executes the revised gate's code bytes on
 the board from SRAM, and the host checks execute the packaged sector at
 `0x83000`, before step D runs.
+
+### The port 3-3 card stays installed (decision of 2026-11-14)
+
+The first boot-once run (`1794619098327285673-8466a823`) did not return to
+FEL. After the user's replug the board came back by itself. A read-only
+capture (`1794643114289036712-ab8b9952`) then found the card exactly as the
+eight autonomous-boot writes left it:
+
+| Sectors | Contents |
+| --- | --- |
+| 0 | MBR `16134954`, FAT32 at sector 139,264 |
+| 16..497 | First stage `2e33cfa1` |
+| 8192 | Slot A header `a6e2ca91` |
+| 16384 | Zero (no slot B) |
+| 32800 | TOC1 `aa35e632` |
+| 40960 | Slot A payload `07b0d8a5` |
+
+The coordinator decided to keep the card as it is and not run the restore
+writes:
+
+- The first-contact words show that a cold power-up comes back to FEL by
+  itself, through the gate's 16-second WDT0 arming
+  ([card-boot-chain.md](card-boot-chain.md#records-for-the-next-miss)).
+- A warm reset never boots the card while the runner sets the marker at
+  every first contact.
+- Diagnosing stage 2 needs a valid slot A.
+
+The two restore writes stay prepared but unsubmitted under
+`~/.cache/sunstoneos/build/card-boot-1111/restore-1113/`:
+
+| Write | Extent | Candidate | Direction |
+| --- | --- | --- | --- |
+| R1 | 16..497 | The step C bytes (all zero), SHA-256 `27b88599` | `restore` |
+| R2 | 8192 | One zero sector | `layout` |
+
+R1 alone makes the card unbootable. Each write needs a fresh read-only
+capture first, because its backup hash names the card state it expects.

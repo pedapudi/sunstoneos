@@ -58,6 +58,9 @@ if not a.disabled_only:
   for mode,label in [(0,'control'),(1,'combined')]:
       executable=build(label,mode);payload=a.out/(label+'.bin')
       run([str(executable),'actual',str(payload)])
+      # The producer runs on virtual time (checks/cpu-npu-concurrency/producer.c): a second run writes the same bytes.
+      again=a.out/(label+'-again.bin');run([str(executable),'actual',str(again)])
+      assert again.read_bytes()==payload.read_bytes(),label+': two runs of the producer wrote different receipts'
       result=host.decode(payload.read_bytes(),mode=mode,model_index=0 if mode else None,reference=b'\0\xff' if mode else None)
       results.append(dict(case=label,passed=True,receipt=result))
       run([str(executable),'throttle-after-ready',str(a.out/(label+'-throttle.bin'))])
