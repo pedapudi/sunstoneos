@@ -33,11 +33,13 @@ int a733_smp_launch_prepare(void)
      * startup writes CNTFRQ. Reject an incompatible nonzero declaration. */
     ADMIT(!frequency || frequency==A733_SMP_COUNTER_HZ,13);
     /* Request words: magic,version,bytes,epoch,generation,inverse,lease,
-     * build-id PA, four build-id words, four admission-digest words. */
+     * build-id PA, four build-id words, four admission-digest words. The
+     * build ID lies in the text block or, in the OS image, in the read-only
+     * data block after it (apps/os/sealed-link.patch). */
     ADMIT(REQUEST[0]==REQUEST_MAGIC && REQUEST[1]==3 && REQUEST[2]==128,1);
     uint64_t epoch=REQUEST[3],generation=REQUEST[4],lease=REQUEST[6],id=REQUEST[7];
     ADMIT(epoch && generation && REQUEST[5]==~generation && lease &&
-        id>=0x41000000 && id<=0x411fffe0,2);
+        id>=0x41000000 && id<=0x413fffe0,2);
     /* Keep the default expressions stable: existing device preparers transform
      * them into their typed contracts. Combined accelerators select overrides
      * at compilation without changing those device-specific source anchors. */

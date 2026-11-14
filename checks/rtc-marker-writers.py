@@ -28,7 +28,8 @@ CHECK_INPUTS = ['apps', 'arch', 'boot', 'cmake', 'drivers', 'include', 'kernel',
 WRITERS = {'boot/a733/card-fel-gate.S', 'include/a733_card_fel_gate.h', 'tools/board.py', 'tools/a733-crumbs.py',
            'tools/card_recovery.py'}
 # Checks that model or execute those writers.
-CHECKS = {'checks/card-fel-recovery.py', 'checks/board-runner.py', 'checks/rtc-marker-writers.py'}
+# checks/stage2_marks.py names the marker only to refuse it: the stage-2 models fail on any stage-2 write to it.
+CHECKS = {'checks/card-fel-recovery.py', 'checks/board-runner.py', 'checks/rtc-marker-writers.py', 'checks/stage2_marks.py'}
 SUFFIXES = {'.c', '.h', '.S', '.s', '.py', '.patch', '.cmake', '.ld', '.txt', '.json', '.sh', '.cc', '.cpp'}
 PATTERNS = [
     re.compile(r'0x0*70901f0\b', re.I),                       # absolute address

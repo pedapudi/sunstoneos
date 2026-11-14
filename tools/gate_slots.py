@@ -3,7 +3,7 @@
 Gates used to run one at a time behind CACHE/gate.lock. A gate is mostly one or two busy cores for most of its length, so the
 host runs N of them at once: CACHE/gate.lock.0 to gate.lock.N-1, each held with flock by the gate that runs in it. N and the
 -j that a slot gives its build and check workers come from the measurements in tools/gate-slots.json, not from constants in
-code (slot_count, jobs_per_slot).
+code (slot_count, jobs_per_slot), and so do how many images a gate builds at once and the -j of each (image_builds).
 
 A gate that waits writes a ticket (CACHE/gate-queue/CLASS-TIME-PID.ticket) and holds a flock on it for as long as it waits, so a
 ticket whose owner died is recognised and removed. Every waiter orders the live tickets the same way, landings before workers
@@ -60,6 +60,21 @@ def jobs_per_slot(config, slots, cores=None):
     if cores is None:
         cores = host_facts()[0]
     return max(2, int(usable_cores(config, cores) // slots))
+
+
+def image_builds(config, build_jobs):
+    """How many image builds a gate runs at once, the -j of each and the measured peak resident set of one, in GiB.
+
+    The count is the measured choice (config: image_builds.concurrency), lowered if that many builds at the measured peak of one
+    would exceed the gate's own measured peak (gate.peak_rss_gb), so side-by-side builds never raise the memory that slot_count
+    budgets per slot. The slot's build cores are divided across the builds, rounded up. No image_builds entry: one build at a
+    time with all of them."""
+    entry = config.get('image_builds')
+    if not entry:
+        return 1, build_jobs, 0.0
+    peak = entry['peak_rss_gb']
+    count = max(1, min(entry['concurrency'], int(config['gate']['peak_rss_gb'] // peak)))
+    return count, max(1, -(-build_jobs // count)), peak
 
 
 def reserved_slots(config, slots):
@@ -241,3 +256,80 @@ def timing_lock(cache, label='', announce=print):
         yield
     finally:
         handle.close()
+
+
+# A board run is host-timed while the runner does its FEL work (rails, reset, DRAM, the launch upload, the restore): a gate that starts
+# a build or a QEMU run at that moment slows the run, and a slow run can miss its deadlines (docs/validation.md, "Gates and board
+# runs"). The runner holds a shared flock on CACHE/board-fel.lock for that work and releases it while the board runs the application;
+# a gate asks for the exclusive lock without waiting before it starts each step and waits while a runner holds it. The kernel frees
+# the lock when the runner dies, so a crashed runner stalls no gate, and a hung runner stalls a gate for at most the deadline that
+# the runner wrote into the lock file (the run's own lifetime bound).
+BOARD_FEL_LOCK = 'board-fel.lock'
+
+
+class BoardFel:
+    """The runner's side: hold the shared lock for the FEL work of one run."""
+    def __init__(self, cache, deadline_seconds):
+        self.path = Path(cache) / BOARD_FEL_LOCK
+        self.deadline_seconds = deadline_seconds
+        self.handle = None
+
+    def acquire(self):
+        if self.handle is not None:
+            return
+        try:
+            handle = _open(self.path)
+            fcntl.flock(handle, fcntl.LOCK_SH)
+            _describe(handle, json.dumps({'pid': os.getpid(), 'deadline': time.time() + self.deadline_seconds}) + '\n')
+            self.handle = handle
+        except OSError:
+            self.handle = None             # a runner never fails for want of this lock
+
+    def release(self):
+        if self.handle is not None:
+            self.handle.close()
+            self.handle = None
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *_):
+        self.release()
+
+
+def wait_for_board(cache, announce=print, poll=0.05, now=time.time):
+    """The gate's side: return once no runner is in its FEL work, or its deadline has passed. Returns the seconds waited."""
+    path = Path(cache) / BOARD_FEL_LOCK
+    started, announced = now(), False
+    while True:
+        try:
+            handle = _open(path)
+        except OSError:
+            return 0.0
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return now() - started if announced else 0.0
+        except BlockingIOError:
+            handle.seek(0)
+            try:
+                deadline = float(json.loads(handle.read() or '{}').get('deadline', 0))
+            except ValueError:
+                deadline = 0.0
+            if deadline and now() >= deadline:
+                return now() - started                # the runner outlived its own deadline: do not stall behind it
+            if announce and not announced:
+                announce('holding the next step: a board run is in its FEL work')
+                announced = True
+        finally:
+            handle.close()
+        time.sleep(poll)
+
+
+def reserve_cpus(config):
+    """Keep this process, and every process it starts, off the CPUs that config reserves for the xhci interrupt of the board's USB port."""
+    reserved = set(config.get('reserved_cpus', ()))
+    keep = sorted(set(os.sched_getaffinity(0)) - reserved)
+    if reserved and keep:
+        os.sched_setaffinity(0, keep)
+    return keep

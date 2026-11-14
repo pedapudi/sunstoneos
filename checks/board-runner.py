@@ -7,6 +7,7 @@ Optional --hello prepares a real generic CPU-return ELF without a board; the gen
 """
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -32,6 +33,10 @@ CARD_GATE = bytes.fromhex('00f020e3') * 6 + bytes(8)
 def passed(name):
     rows.append({'name':name,'passed':True})
     print('PASS',name)
+
+
+def arguments_for(root):
+    return arguments(root)
 
 
 def arguments(root, *extra, submit=False, development=False):
@@ -68,6 +73,11 @@ class Model:
             # A cold power-on ran the card gate and boot0, which found no package and entered FEL.
             # WDT0 mode reads its reset value 0 at a power-on gate entry.
             self.registers.update({board.crumbs.RESET_WORDS['flag']:0x0c028000,board.crumbs.MARKER:board.crumbs.MARKER_KEYED})
+        if variant=='card-cold-record':
+            # Words a stopped boot left in the RTC domain, and a pending WDT0 interval interrupt: the first contact
+            # records them before it writes anything.
+            self.registers.update({0x07090100:0x5c0dc5f9,0x07090104:0x0c030007,0x0709010c:0x19cf2,0x07090110:0xfa030001,
+                                   0x07090114:0x96000010,0x07090118:0x41019db8,0x0709011c:0x47008000,0x02050004:1})
         self.calls = []
         self.writes = []    # (address, bytes) of every write, in order: the sealed source is gone after the call
         self.programs = []
@@ -89,6 +99,15 @@ class Model:
             # the board through the warm path (card-once-other: boot0 found no package and entered FEL with the cold record).
             if self.variant=='card-once-other':
                 self.registers[flag]=0x0c029041
+            elif self.variant.startswith('card-once-measure'):
+                # The diagnostic stage 2 parked after its 0x41 arming (step 0x0f), or, in -early, at the card open (step 5)
+                # under the gate's 0xb1 after a finish that parked with the CPU policy retained.
+                early=self.variant=='card-once-measure-early'
+                self.registers[flag]=0x0c0240b1 if early else 0x0c024041
+                self.registers[board.crumbs.RTC+0x100]=board.crumbs.STAGE2_TAG
+                self.registers[board.crumbs.RTC+0x104]=0x0c030500 if early else 0x0c030f00
+                if early:
+                    self.registers[board.crumbs.RTC+0x110]=0x0c040c02
             else:
                 self.registers[flag]=0x0c024041
                 self.registers[board.crumbs.RTC+0x100]=0x5c0d0001
@@ -109,6 +128,9 @@ class Model:
             self.number += 1
             self.pending = False
             if not self.launched:self.card_reset()  # the session's WDT0 reset reaches the new instance
+            if getattr(self,'second_reset_at',None) is not None:
+                # The warm proof re-entered FEL with WDT0 re-armed at 0xb1; its expiry is the next reset.
+                self.pending,self.reset_at,self.second_reset_at=True,self.second_reset_at,None
         return self.node
 
     @contextlib.contextmanager
@@ -178,7 +200,15 @@ class Model:
                     # the marker and (marker-clear-sticks) the restore then fails.
                     if self.variant=='marker-unclearable' and value&0xffff!=board.crumbs.MARKER_SET:i+=3;continue
                     if self.variant=='marker-clear-sticks' and self.registers.get(address,0)==board.crumbs.MARKER_CLEAR:i+=3;continue
+                if self.variant=='rearm-ignored' and address==board.crumbs.WDT_MODE and value&0xffff==0xb1:i+=3;continue
                 self.registers[address] = value&0xffff if address in (board.crumbs.WDT_MODE,board.crumbs.WDT_CONFIG,board.crumbs.WDT_OUTPUT) else value
+                if address==board.crumbs.WDT_RESTART and self.variant.startswith('rearm-'):
+                    # The re-arm test: the runner's 0x41 would reset in 4 s; the 0xb1 written over it resets 16 s after its
+                    # restart (rearm-expires) or never (rearm-stops, the board stays in FEL on the same instance).
+                    if self.registers[board.crumbs.WDT_MODE]==0x41:self.pending,self.reset_at=True,self.clock+4
+                    elif self.variant=='rearm-stops':self.pending=False
+                    else:self.pending,self.reset_at=True,self.clock+16
+                    i+=3;continue
                 if address==board.crumbs.WDT_RESTART and self.registers[board.crumbs.WDT_MODE]==0x41:
                     self.pending=True
                     if self.registers.get(board.crumbs.RESET_WORDS['flag'])==board.crumbs.BOOT_ONCE:
@@ -259,6 +289,7 @@ class Model:
                         self.registers[board.crumbs.RTC+0x104]=0x0c020005
                     # The gate re-arms WDT0 at 16 s instead of disarming it.
                     self.registers[board.crumbs.WDT_MODE]=recovery.GATE_WATCHDOG
+                    if self.variant=='recovery-warm-rearm-expires':self.second_reset_at=self.clock+recovery.INTERVAL_SECONDS
                     if self.variant=='recovery-no-reenumerate':
                         # The ROM never re-enumerates; WDT0 expires and resets to FEL, leaving mode 1.
                         self.registers[board.crumbs.WDT_MODE]=1
@@ -797,6 +828,55 @@ def marker_clear_cases(out):
     passed('marker-clear-test-is-frozen-into-the-runner-command')
 
 
+def rearm_expiry_cases(out):
+    """--rearm-expiry: WDT0 is re-armed over an enabled watchdog with no disarm and left armed; the runner times the reset, and
+    a board that stays in FEL is disarmed on the same instance instead of being reported as a no-return."""
+    def configure(variant):
+        def apply(args):args.rearm_expiry='gate' if variant.startswith('recovery-') else 'runner'
+        return apply
+    for variant in ('rearm-expires','rearm-stops','rearm-ignored','recovery-warm-rearm-expires','recovery-warm-rearm-stops'):
+        result,model,owner=lifecycle(out/variant,variant,recovery=True,entry=2,configure=configure(variant))
+        test=result.get('rearm_expiry')
+        assert not model.quarantined,(variant,result)
+        if variant=='rearm-ignored':
+            assert 'readback differs' in result['first_failure']['detail'] and not owner.armed,(variant,result)
+            passed('rearm-expiry-'+variant);continue
+        if variant.startswith('rearm-'):
+            # FEL register writes only, from a disarmed WDT0: 0x41, then 0xb1 and a restart with no disarm between.
+            assert not any(c[0] in ('exe','reset64','write') for c in model.calls[1:]) or all(
+                int(c[1],0)==0x71000 for c in model.calls if c[0]=='write'),variant
+            writes=[c for c in model.calls if hex(board.crumbs.WDT_MODE) in c and 'writel' in c]
+            arm=next(i for i,c in enumerate(model.calls) if hex(board.crumbs.KEY|0x41) in c)
+            rearm=next(i for i,c in enumerate(model.calls) if hex(board.crumbs.KEY|0xb1) in c)
+            assert arm<rearm and not any(hex(board.crumbs.KEY) in c[c.index(hex(board.crumbs.WDT_MODE))+1:c.index(hex(board.crumbs.WDT_MODE))+2]
+                                         for c in model.calls[arm+1:rearm] if hex(board.crumbs.WDT_MODE) in c and 'writel' in c),writes
+            assert result['rearm_writes']['readback']==[0xb1,1,2] and result['dram_mode']=='sram-only'
+        else:
+            assert model.calls.count(['exe','0x52000'])==1 and test['variant']=='gate'
+        assert test['mode']==0xb1 and test['interval_s']==16 and test['deadline_s']==26,(variant,test)
+        if variant.endswith('expires'):
+            assert result['outcome']=='watchdog-reset' and result['expected_reset'] and test['matched'],(variant,result)
+            assert 16<=test['seconds_after_arm']<=21 and not result.get('first_failure') and board.result_passed(result,decoded=False)
+        else:
+            # WDT0 never fired: the runner disarmed it on the instance it was on; the port stays usable.
+            assert result['outcome']=='failure-return' and not test['reset'] and not result['expected_reset'],(variant,result)
+            assert 'No reset within 26 s' in result['first_failure']['detail'] and not owner.armed and model.registers[board.crumbs.WDT_MODE]==0
+            assert not board.result_passed(result,decoded=False)
+        passed('rearm-expiry-'+variant)
+    # Admission: coordinator approval and the warm-entry proof image; frozen in the queue entry.
+    args=arguments(out,'--kind','probe',development=True);args.rearm_expiry='runner'
+    info={'card_fel_recovery':{'profile':{'entry':2}},'descriptor':{}}
+    for approved,entry,word in ((None,2,'coordinator'),('coordinator',1,'warm-entry')):
+        args.approved_by=approved;info['card_fel_recovery']['profile']['entry']=entry
+        try:images.policy(info,args)
+        except ValueError as error:assert word in str(error),error
+        else:raise AssertionError(('--rearm-expiry admitted',approved,entry))
+    job={'image':'/image.elf','directory':str(out),'options':{'rearm_expiry':'gate','approved_by':'coordinator'}}
+    command=board.Queue.runner_command(job,'3-1')
+    assert 'rearm_expiry' in board.FROZEN_OPTIONS and command[command.index('--rearm-expiry')+1]=='gate',command
+    passed('rearm-expiry-requires-approval-and-the-warm-proof')
+
+
 def boot_once_cases(out):
     """--boot-once-slot: GP2 gets the boot-once value and reads back, WDT0 resets the board, nothing is launched or uploaded, and the
     runner waits with no FEL session for the card boot to end in the image's watchdog reset."""
@@ -865,6 +945,29 @@ def boot_once_cases(out):
     command=board.Queue.runner_command(job,'3-1')
     assert 'boot_once_slot' in board.FROZEN_OPTIONS and command[command.index('--boot-once-slot')+1]=='/slot.json',command
     passed('boot-once-requires-coordinator-approval-and-is-frozen')
+    # --boot-once-measure os: the diagnostic stage 2 parks after its 0x41 arming; the pass is step 0x0f with the stage-2 tag
+    # and the warm record of a 0x41 expiry, and the wait has no session term.
+    def measure(variant):
+        def configure(args):
+            args.boot_once_slot=out/'slot.json';args.approved_by='coordinator';args.boot_once_measure='os'
+        with patch.object(images,'boot_once_slot',return_value=slot):
+            return lifecycle(out/variant,variant,resident=True,configure=configure)
+    result,model,owner=measure('card-once-measure')
+    boot=result['boot_once']
+    assert boot['passed'] and result['expected_reset'] and boot['measure']=='os',boot
+    assert boot['deadline']['resident_session_s']==0 and boot['deadline']['total_s']==64,boot['deadline']
+    assert boot['expected']=={'gp2':0x0c024041,'marker':board.crumbs.MARKER_KEYED,'last':0x0c030f00,'fault':0,
+                              'tag':board.crumbs.STAGE2_TAG},boot['expected']
+    assert boot['decoded']['stage2']['last']['step']==0x0f,boot['decoded']
+    assert_no_launch(model)
+    passed('boot-once-measure-os-pass-is-step-0f')
+    result,model,owner=measure('card-once-measure-early')
+    boot=result['boot_once']
+    assert not boot['passed'] and result['first_failure']['site']=='boot-once',result
+    stage2=boot['decoded']['stage2']
+    assert stage2['last']['step']==5 and stage2['finish']=={'status':2,'parked':'CPU policy retained','detail':'0x0',
+                                                            'mmc_error':'0x0','mmc_interrupts':'0x0'},stage2
+    passed('boot-once-measure-earlier-stop-is-named-by-the-words')
 
 
 def boot_once_slot_cases(out):
@@ -880,6 +983,24 @@ def boot_once_slot_cases(out):
     try:images.boot_once_slot(args)
     except ValueError as error:assert 'no measured watchdog recovery' in str(error) and 'after boot0' in str(error),error
     else:raise AssertionError('A boot-once run was admitted while a chain stage has no measured recovery')
+    # A measuring run of the OS row needs the coordinator and is otherwise judged by tools/boot_chain.py measurable().
+    args.boot_once_measure='os'
+    try:images.boot_once_slot(args)
+    except ValueError as error:assert '--approved-by coordinator' in str(error),error
+    else:raise AssertionError('A measuring boot-once run was admitted without the coordinator')
+    args.approved_by='coordinator'
+    for stage,word in (('stage2','only the last stage'),('boot0','only the last stage')):
+        args.boot_once_measure=stage
+        try:images.boot_once_slot(args)
+        except ValueError as error:assert word in str(error),error
+        else:raise AssertionError(('measuring admitted for',stage))
+    args.boot_once_measure='os'
+    real_load=images.load
+    with patch.object(images,'load',lambda name,path:types.SimpleNamespace(flat_runtime=lambda image:runtime)
+                      if name=='boot_once_runtime' else real_load(name,path)):
+        assert images.boot_once_slot(args)['slot']=='A'
+    args.boot_once_measure=args.approved_by=None
+    passed('boot-once-measure-only-the-last-unproven-stage')
     card=types.SimpleNamespace(flat_runtime=lambda image:runtime,unproven=lambda:[])
     with patch.object(images,'load',return_value=card):
         write(images.hashlib.sha256(runtime).hexdigest())
@@ -946,6 +1067,12 @@ def transport_cases(out):
             assert clear<reset
         if variant=='card-cold-record':
             assert result['power_epoch'][0]['gate']=={'cold':True,'warm':False,'unmarked':False,'once':False,'refused_step':0,'mode':0}
+            contact=result['power_epoch'][0]['contact']
+            assert contact=={'rtc_100':0x5c0dc5f9,'rtc_104':0x0c030007,'rtc_108':0x0c028000,'rtc_10c':0x19cf2,'rtc_110':0xfa030001,
+                             'rtc_114':0x96000010,'rtc_118':0x41019db8,'rtc_11c':0x47008000,'wdt_status':1},contact
+            # One read-only transaction, and the first register access after the ROM checks.
+            read=next(i for i,c in enumerate(model.calls) if hex(0x0709011c) in c)
+            assert 'writel' not in model.calls[read] and not any(c[0]=='writel' for c in model.calls[:read]),model.calls[:read+1]
             assert result['power_epoch'][0]['flag_after']==0 and 'marker_after' in result['power_epoch'][0]
         if variant=='marker-stuck':
             assert 'cold-boot marker' in result['first_failure']['detail']
@@ -957,6 +1084,7 @@ def transport_cases(out):
     marker_clear_cases(out)
     boot_once_cases(out)
     boot_once_slot_cases(out)
+    rearm_expiry_cases(out)
     for variant,expected in (
             ('watchdog-before-entry','watchdog-reset'),('missing-return','host-error'),
             ('wrong-return-session','host-error'),('fel-after-return','host-error'),
@@ -993,6 +1121,84 @@ def transport_cases(out):
     else:raise AssertionError('transport error accepted')
     assert model.quarantined and len(model.calls)==0
     passed('transport-error-quarantines-unknown-instance')
+
+
+def journal_cases(out):
+    """The write-ahead journal syncs only before a transaction whose effect recovery must know (board.fel_effects), and a gate holds its
+    next step while a runner is in its FEL work.
+
+    Classification: reads, SRAM staging and the later DRAM writes of an epoch are saved without sync; the first DRAM write of an epoch,
+    every register write and every execute are synced before they reach the board. The counts: the same transactions with the old
+    behaviour (every journal entry before and after each transaction synced, and a sync per readback) and with the new."""
+    import gate_slots
+    root=out/'journal';root.mkdir()
+    file=root/'payload.bin';file.write_bytes(bytes(range(64)))
+    table=[(['version'],[]),(['read','0x71000','64',str(root/'r0.bin')],[]),(['readl','0x20'],[]),
+           (['write','0x71000',str(file)],['sram']),(['write','0x41000000',str(file)],['dram']),(['write','0x41000100',str(file)],['dram']),
+           (['read','0x41000000','64',str(root/'r1.bin')],[]),(['writel','0x2050018','0x16aa0002'],['register']),
+           (['write','0x41000200',str(file)],['dram']),(['readl','0x2050014'],[]),(['exe','0x71000'],['execute']),
+           (['reset64','0x41000000'],['execute'])]
+    for arguments,expected in table:
+        assert sorted(board.fel_effects(arguments))==sorted(expected),(arguments,board.fel_effects(arguments))
+    big=root/'big.bin';big.write_bytes(bytes(128))
+    assert board.fel_effects(['write','0x02050000',str(file)])=={'register'}              # an MMIO bulk write (the WDT block) is journaled
+    assert board.fel_effects(['write','0x07090100',str(file)])=={'register'}              # RTC
+    assert board.fel_effects(['write','0xf3fc0',str(big)])=={'register'}                  # straddles the end of shared SRAM at 0xf4000
+    assert board.fel_effects(['write','0x52d40',str(big)])=={'register'}                  # straddles the end of the launcher at 0x52d80
+    assert board.fel_effects(['write','0x73fc0',str(big)])=={'register'}                  # straddles the start of shared SRAM
+    assert board.fel_effects(['write','0xf3f80',str(big)])=={'sram'}                      # ends exactly at 0xf4000
+    assert board.fel_effects(['write','0x52c00',str(file)])=={'sram'}
+    assert board.fel_effects(['write','0x71000',str(root/'missing.bin')])=={'register'}  # a size that cannot be read is journaled
+    assert board.fel_effects(['frob','1'])=={'register'}                  # an unknown request is always journaled synchronously
+    assert board.fel_effects(['write','0x41000000',str(file),'read','0x41000000','64','x','writel','0x1','0x2'])=={'dram','register'}
+    def sequence(label,old):
+        base=root/label;base.mkdir();args=arguments_for(base)
+        model=Model('normal');owner=board.Live(args,base,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+        calls=[];real=board.os.fsync
+        original_journal=board.Live.journal
+        def counting(descriptor):
+            calls.append(descriptor);return real(descriptor)
+        def forced(self,durable=True):return original_journal(self,True)
+        patches=[patch.object(board.os,'fsync',counting),patch.object(board.os,'access',return_value=True)]
+        if old:patches+=[patch.object(board,'fel_effects',lambda a:{'register'}),patch.object(board.Live,'journal',forced)]
+        with contextlib.ExitStack() as stack:
+            for item in patches:stack.enter_context(item)
+            with owner.locked():
+                for arguments,_ in table[:-2]:
+                    if arguments[0] in ('read',):owner.read(int(arguments[1],0),int(arguments[2]),arguments[3])
+                    else:owner.tx(*arguments)
+                if old:calls.extend([None]*2)                              # the readback syncs of the old code: two reads above
+                owner.sync_evidence()
+        return len(calls),owner
+    before,_=sequence('before',True)
+    after,owner=sequence('after',False)
+    print(f'journal fsyncs for {len(table)-2} transactions: before {before}, after {after}')
+    assert after*3<=before,(before,after)
+    # The synced entries are the ones that matter: with the DRAM epoch bumped by an execute, the next DRAM write syncs again.
+    base=root/'epoch';base.mkdir();args=arguments_for(base);model=Model('normal')
+    owner=board.Live(args,base,{},access=model,process=model.process,now=model.now,sleep=model.sleep);flags=[]
+    original=board.Live.journal
+    def watch(self,durable=True):
+        flags.append(durable);return original(self,durable)
+    with patch.object(board.Live,'journal',watch),patch.object(board.os,'access',return_value=True),owner.locked():
+        owner.tx('write','0x41000000',str(file));owner.tx('write','0x41000100',str(file))
+        owner.epoch+=1;owner.tx('write','0x41000200',str(file))
+    assert flags[1:]==[True,False,False,False,True,False],flags   # flags[0] is adopt()                 # pre/post for each: only the first of an epoch is synced before
+    # A gate holds its step while a runner holds the lock, is released when the runner dies, and is bounded by the runner's deadline.
+    cache=root/'cache';cache.mkdir()
+    waited=gate_slots.wait_for_board(cache,announce=None)
+    assert waited==0.0
+    hold=gate_slots.BoardFel(cache,60);hold.acquire()
+    clock=[0.0]
+    def now():
+        return clock[0]
+    def tick(_):clock[0]+=1.0
+    with patch.object(gate_slots.time,'sleep',tick):
+        waited=gate_slots.wait_for_board(cache,announce=None,now=lambda:__import__('time').time()+clock[0])
+    assert waited>=59,waited                                              # nothing released it: the wait ended at the written deadline
+    hold.release()
+    assert gate_slots.wait_for_board(cache,announce=None)==0.0
+    passed('journal-sync-classes-and-gate-hold')
 
 
 def upload_verify_cases(out):
@@ -1452,9 +1658,24 @@ def daemon_cases(out):
         if n==0:Path(job['image']).write_bytes(b'mutated queued image')
     # Real runner child processes refuse these non-image fixtures in preflight.
     # Even an attempted discovery is a defect; these have no watchdog marker.
+    held={j:Path(j).read_bytes() for j in (json.loads(p.read_text())['image'] for p in (q.root/'entries').glob('*/entry.json'))}
     q.serve(once=True)
     state=json.loads((q.root/'state.json').read_text())
     assert not state['jobs'] and state['history'],state
+    # After each run the daemon holds the entry's image as a hard link to QUEUE/images/SHA256 (tools/board_image_store.py). The
+    # entry refused at claim (its queued bytes changed) never ran; the queue-wide fold holds it too. Every path keeps its bytes.
+    folded=[json.loads(line) for line in (q.root/'ledger.jsonl').read_text().splitlines() if '"images-folded"' in line]
+    assert len(folded)==2 and all(e['copies']>=1 for e in folded),folded
+    ran={e['job'] for e in folded}
+    store=images.load('board_image_store',ROOT/'tools/board_image_store.py')
+    for path,data in held.items():
+        stored=q.root/'images'/(hashlib.sha256(data).hexdigest()+Path(path).suffix)
+        assert Path(path).read_bytes()==data and os.path.exists(stored)==(Path(path).parent.name in ran),path
+    assert not store.fold_queue(q.root,apply=True)['mismatches']
+    for path,data in held.items():
+        stored=q.root/'images'/(hashlib.sha256(data).hexdigest()+Path(path).suffix)
+        assert Path(path).read_bytes()==data and os.path.samefile(path,stored),path
+    passed('daemon-folds-finished-entry-images-into-the-store-with-bytes-unchanged')
     finished=[json.loads((Path(j['directory'])/'entry.json').read_text()) for j in state['history']]
     assert all(j['state']=='done' and j['result']['outcome']=='refused-before-launch' for j in finished)
     assert all(not j['result'].get('launch_attempted') for j in finished)
@@ -2156,7 +2377,7 @@ def main():
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):withdraw_cases(args.out)
         with patch.object(board,'port_idle',return_value=True):reset_release_cases(args.out)
-    if 'transport' in groups:development_dram_cases(args.out);reference_cases(args.out);upload_verify_cases(args.out)
+    if 'transport' in groups:development_dram_cases(args.out);reference_cases(args.out);upload_verify_cases(args.out);journal_cases(args.out)
     if 'queue-integrity' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)

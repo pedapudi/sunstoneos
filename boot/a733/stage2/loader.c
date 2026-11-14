@@ -17,6 +17,7 @@
 #include "../../../platform/a733-smp-cached/boot.h"
 #include "sunstone_session.h"
 #include "session.h"
+#include "marks.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -95,6 +96,19 @@ static uint64_t counter(void)
     uint64_t n;
     __asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(n) :: "memory");
     return n;
+}
+void a733_mark_word(unsigned word, uint32_t value)
+{
+    if (word == A733_MARK_GP2 || word > A733_MARK_FAR) return;
+    __asm__ volatile("dsb sy" ::: "memory");
+    *(volatile uint32_t *)(uintptr_t)(UINT32_C(0x07090100) + 4u * word) = value;
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+/* LAST names the step stage 2 has started, with its detail in 7:0 (marks.h);
+ * a stop inside it leaves that step, and finish() adds the status in FAULT. */
+static __attribute__((noinline)) void mark(unsigned step)
+{
+    a733_mark_word(A733_MARK_LAST, A733_MARK_STEP | (step & 0xffffu));
 }
 
 /* Separate unit: admission of boot0's SD controller state and card presence
@@ -424,12 +438,16 @@ static void publish(uint64_t status, uint64_t detail)
 }
 static _Noreturn void finish(uint64_t status, uint64_t detail)
 {
-    if (!card_stop()) {
-        publish(11,status);
-        for (;;) __asm__ volatile("wfe");
-    }
-    if (a733_stage2_cpu_retained()) {
-        publish(12,status);
+    a733_mark_word(A733_MARK_ESR, (uint32_t)detail);
+    a733_mark_word(A733_MARK_ELR, (uint32_t)a733_stage2_report.mmc_error);
+    a733_mark_word(A733_MARK_FAR, (uint32_t)a733_stage2_report.mmc_interrupts);
+    uint32_t fault = A733_MARK_FINISH | (uint32_t)(status & 0xffu);
+    a733_mark_word(A733_MARK_FAULT, fault);
+    /* A park replaces the ROM return; bits 15:8 name why (11 or 12). */
+    uint64_t park = !card_stop() ? 11 : a733_stage2_cpu_retained() ? 12 : 0;
+    if (park) {
+        a733_mark_word(A733_MARK_FAULT, fault | (uint32_t)park << 8);
+        publish(park, status);
         for (;;) __asm__ volatile("wfe");
     }
     publish(status, detail);
@@ -472,6 +490,7 @@ static int arm(uint64_t *armed)
     *armed = counter();
     wr(0x02050014, 0x16aa0041);
     wr(0x0205000c, 0x14af);
+    mark(0x0e00);
     return (rd(0x02050014) & 0xffff) == 0x41 && (rd(0x02050010) & 0xffff) == 1 &&
         (rd(0x02050018) & 0xffff) == 2 && counter() - *armed < A733_SMP_COUNTER_HZ / 1000;
 }
@@ -496,9 +515,11 @@ static _Noreturn void enter(const struct slot_header *h)
         (volatile struct a733_smp_contract *)(uintptr_t)A733_SMP_CONTRACT_ADDRESS;
     volatile uint64_t *result = (volatile uint64_t *)(uintptr_t)A733_SMP_RESULT_ADDRESS;
     const struct ss_session_header *session = (const void *)((const uint8_t *)s + SS_SESSION_PREFIX_BYTES);
+    mark(0x0b00);
     if (!e || e->bytes < SS_SESSION_PREFIX_BYTES + sizeof(*session) ||
         e->bytes > SS_SESSION_MAX_BYTES || session->bytes != e->bytes) finish(ENTRY_REFUSED, 1);
     if (!a733_stage2_session_valid(s, (size_t)e->bytes, h->generation)) finish(ENTRY_REFUSED, 2);
+    mark(0x0c00);
     if (session->flags & SS_SESSION_BIND_SID) {
         uint32_t sid[4]; uint8_t digest[32];
         for (unsigned i = 0; i < 4; ++i) sid[i] = rd(0x03006200 + 4*i);
@@ -518,7 +539,22 @@ static _Noreturn void enter(const struct slot_header *h)
      * stays armed, so the forced-FEL return ends in a cold reset within four
      * seconds. */
     uint64_t armed = 0;
+    mark(0x0d00);
+#ifdef A733_STAGE2_STOP_ARMED
+    /* The diagnostic build arms 0x41 only in a boot-once boot (ONCE in the
+     * gate record). Any other cold boot, such as a power-up, parks under the
+     * gate's 16 s watchdog, the arming the board has shown to recover; detail
+     * 0xb1 in ESR names this stop. */
+    if (!(a733_stage2_report.reserved1[22] & 0x1000u)) finish(WATCHDOG, 0xb1);
+#endif
     if (!arm(&armed) || !armed) finish(WATCHDOG, armed);
+    mark(0x0f00);
+#ifdef A733_STAGE2_STOP_ARMED
+    /* Stop with 0x41 armed from mode 0 and no OS entry: the reset that follows
+     * measures that arming's expiry after boot0 (docs/designs/card-boot-chain.md). */
+    publish(ENTERED, 0);
+    for (;;) __asm__ volatile("wfe");
+#endif
     s->epoch = armed;
     uint64_t digest[4];
     storage_digest_bytes(s, (size_t)e->bytes, (uint8_t *)digest);
@@ -561,20 +597,27 @@ _Noreturn void a733_stage2_main(void)
     a733_stage2_report.bytes = sizeof(a733_stage2_report);
     a733_stage2_report.selected = UINT64_MAX;
     a733_stage2_report.start_counter = counter();
+    a733_mark_word(A733_MARK_TAG, A733_MARK_TAG_VALUE);
     /* The card first stage's cold state is consumed before anything else, so
      * its 16 s watchdog, started before boot0's DRAM training, restarts now. */
     uint32_t record = 0;
     int gate = a733_stage2_gate_entry(&record);
+    mark(0x0100 | (unsigned)gate);  /* Detail 2: the gate refused its record. */
     if (gate == 2) finish(ENTRY_REFUSED, 5);
     gated = gate == 1;
     a733_stage2_report.reserved1[22] = record;
+    mark(0x0200);
     if (!counter_runs()) finish(COUNTER, 0);
+    mark(0x0300);
     if (a733_stage2_remote_writers_excluded() != 1)
         finish(REMOTE_WRITERS, a733_stage2_remote_writers_mask());
+    mark(0x0400);
     if (a733_stage2_cpu_cache_owned() != 1) finish(CPU_CACHE, 0);
+    mark(0x0500);
     if (!card_open()) finish(CARD, a733_stage2_report.mmc_error);
     unsigned valid = 0;
     for (unsigned s = 0; s < 2; ++s) {
+        mark(0x0600 + (s << 8));
         unsigned r = header_read(header_sector[s], &headers[s]) ?
             header_check(&headers[s], s) : HEADER_READ;
         a733_stage2_report.slot[s].header = r;
@@ -590,6 +633,7 @@ _Noreturn void a733_stage2_main(void)
     for (unsigned n = 0, s = first; n < 2; ++n, s ^= 1) {
         if (!(valid & (1u << s))) continue;
         uint64_t extent = 0;
+        mark(0x0800 | s);
         unsigned r = load(&headers[s], &extent);
         a733_stage2_report.slot[s].load = r;
         a733_stage2_report.slot[s].extent = extent;
@@ -599,8 +643,10 @@ _Noreturn void a733_stage2_main(void)
             a733_stage2_report.generation = headers[s].generation;
             /* Remote and CPU/cache ownership preceded the first card access.
              * These local checks do not grant missing ownership evidence. */
+            mark(0x0900 | s);
             if (a733_stage2_reset_policy(gated) != 1 ||
                 a733_stage2_entry_state() != 1) finish(LOADED, headers[s].entry);
+            mark(0x0a00 | s);
             if (!card_stop()) finish(LOAD_FAILED,a733_stage2_report.mmc_error);
             enter(&headers[s]);
         }

@@ -15,9 +15,11 @@ import sys
 
 from harness import CLANG, SANITIZE, Image, environment, hook_addresses, instruction_sites, system_register_access
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, arm64_const as a64
+import stage2_marks
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_RUNS = [['--build', '{build:stage2}', '--output', '{output}']]
+GATE_RUNS = [['--build', '{build:stage2}', '--output', '{output}'],
+             ['--build', '{build:stage2-armed-stop}', '--variant', 'armed-stop', '--output', '{output}']]
 SESSION, CONTRACT, RESULT, SLOT = 0x41f00000, 0x42004000, 0x42000000, 0x43000000
 ENTRY, GENERATION = 0x41000000, 37
 
@@ -29,7 +31,7 @@ def module(name, path):
     return value
 
 
-def native_entry(image, raw, initial=None, consumed=False):
+def native_entry(image, raw, initial=None, consumed=False, record=0):
     """Run actual enter() through refusal or image entry; model only MMIO/counter.
 
     SD loading/hashing and CPU ownership precede this boundary. No SD operation
@@ -43,6 +45,8 @@ def native_entry(image, raw, initial=None, consumed=False):
     cpu.mem_write(SESSION, raw)
     if consumed:  # The entry consumed the card first stage's cold state.
         cpu.mem_write(image.address('gated'), (1).to_bytes(4, 'little'))
+    # The gate record the entry kept (report reserved1[22]); ONCE (0x1000) marks a boot-once boot.
+    cpu.mem_write(image.address('a733_stage2_report') + 368, record.to_bytes(8, 'little'))
     header = bytearray(512)
     struct.pack_into('<Q', header, 16, GENERATION)
     struct.pack_into('<I', header, 32, 2)
@@ -50,7 +54,7 @@ def native_entry(image, raw, initial=None, consumed=False):
     struct.pack_into('<3Q', header, 128, 40960, len(raw), SESSION)
     cpu.mem_write(SLOT, bytes(header))
     cpu.mem_write(RESULT, struct.pack('<Q', 0x415337334f525231) + bytes([0xa5]) * 120)
-    registers, writes, terminal = dict(initial or {}), [], []
+    registers, writes, terminal, marks = dict(initial or {}), [], [], []
     ticks = [24000000]
 
     def mmio_read(uc, offset, size, base):
@@ -59,6 +63,10 @@ def native_entry(image, raw, initial=None, consumed=False):
 
     def mmio_write(uc, offset, size, value, base):
         assert size == 4
+        if base == 0x07090000:  # Progress words only: never GP2 or the marker (checks/stage2_marks.py).
+            assert stage2_marks.allowed(base + offset, size), hex(base + offset)
+            marks.append([base + offset, value])
+            return
         writes.append([base + offset, value])
         registers[base + offset] = value & 0xffff if base == 0x02050000 else value
 
@@ -93,16 +101,71 @@ def native_entry(image, raw, initial=None, consumed=False):
     cpu.reg_write(a64.UC_ARM64_REG_X0, SLOT)
     cpu.emu_start(image.address('enter'), 0, count=200000)
     assert len(terminal) == 1, 'entry did not terminate within instruction budget'
-    return dict(terminal=terminal[0], writes=writes, ticks=ticks[0], registers=registers,
+    return dict(terminal=terminal[0], writes=writes, marks=marks, ticks=ticks[0], registers=registers,
                 session=bytes(cpu.mem_read(SESSION, len(raw))),
                 contract=bytes(cpu.mem_read(CONTRACT, image.layouts['a733_smp_contract']['reserved'] + 48)),
                 result=bytes(cpu.mem_read(RESULT, 128)),
                 report=bytes(cpu.mem_read(image.address('a733_stage2_report'), 512)))
 
 
+def mark_word(image, word, value):
+    """Call the linked a733_mark_word(word, value) and return the RTC writes it made."""
+    cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+    cpu.mem_map(0x41000000, 0x7000000)
+    for address, data in image.parts:
+        cpu.mem_write(address, data)
+    written = []
+    cpu.mmio_map(0x07090000, 0x1000, lambda uc, offset, size, base: 0, None,
+                 lambda uc, offset, size, value, base: written.append([0x07090000 + offset, size, value]), None)
+    sentinel = 0x47fff800
+    cpu.reg_write(a64.UC_ARM64_REG_SP, 0x47fff000)
+    cpu.reg_write(a64.UC_ARM64_REG_X0, word)
+    cpu.reg_write(a64.UC_ARM64_REG_X1, value)
+    cpu.reg_write(a64.UC_ARM64_REG_LR, sentinel)
+    cpu.emu_start(image.address('a733_mark_word'), sentinel, count=1000)
+    assert cpu.reg_read(a64.UC_ARM64_REG_PC) == sentinel
+    return written
+
+
+def last_steps(marks):
+    return [stage2_marks.step(v) for a, v in marks if a == stage2_marks.LAST]
+
+
+def armed_stop(args, image, plain, results):
+    """The diagnostic build: a boot-once boot arms 0x41 from mode 0 and parks without entering the OS; any other cold
+    boot parks before arming, under the gate's 16 s watchdog."""
+    chain = module('stage2_chain', 'tools/boot_chain.py')
+    stage = next(s for s in chain.STAGES if s['name'] == 'os')
+    gate = {0x02050014: 0xb1, 0x02050010: 1, 0x02050018: 2}
+    result = native_entry(image, plain, gate, consumed=True, record=0x0c029041)
+    assert result['terminal'] == 'refused' and result['contract'] == bytes(len(result['contract'])), 'armed-stop-once'
+    assert [address for address, _ in result['writes']] == [0x02050014, 0x02050018, 0x02050010, 0x02050014, 0x0205000c]
+    assert result['registers'][0x02050014] == 0x41
+    assert chain.armings(result['writes'], 0xb1) == [(stage['arming'], stage['mode'])], result['writes']
+    assert last_steps(result['marks'])[-1] == (0x0f, 0), result['marks']
+    assert result['session'] == plain, 'the stop comes before the session is stamped'
+    results.append(dict(name='armed-stop-once-arms-0x41-and-parks', accepted=True, linked=True))
+    for name, record, consumed in (('armed-stop-cold-power-up-keeps-0xb1', 0x0c028000, True),
+                                   ('armed-stop-not-consumed-keeps-0xb1', 0, False)):
+        result = native_entry(image, plain, gate, consumed=consumed, record=record)
+        assert result['terminal'] == 'refused', name
+        assert not any(0x02050000 <= address < 0x02051000 for address, _ in result['writes']), name
+        assert struct.unpack_from('<2Q', result['report'], 24) == (8, 0xb1), name
+        words = dict(result['marks'])
+        assert last_steps(result['marks'])[-1] == (0x0d, 0) and words[stage2_marks.ESR] == 0xb1, name
+        results.append(dict(name=name, accepted=False, linked=True))
+    summary = dict(passed=True, physical_access=False, variant=args.variant, cases=results,
+                   image_sha256=hashlib.sha256((args.build / 'a733-stage2-armed-stop.elf').read_bytes()).hexdigest(),
+                   limits=['SD loading, electrical state and the watchdog expiry itself are not modeled.'])
+    (args.output / 'result.json').write_text(json.dumps(summary, indent=2) + '\n')
+    print(f'PASS cold stage-2 armed stop: {len(results)} cases')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build', type=Path, required=True, help='current a733-stage2 ELF/binary directory')
+    parser.add_argument('--variant', choices=('enter', 'armed-stop'), default='enter',
+                        help='enter: a733-stage2, which enters the OS; armed-stop: the diagnostic a733-stage2-armed-stop')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
@@ -179,9 +242,21 @@ def main():
                '-I', str(ROOT / 'include'), str(ROOT / 'checks/stage2-session.c'),
                '-o', str(args.output / 'validator')]
     subprocess.run(command, check=True, env=environment())
-    image = Image(args.build / 'a733-stage2.elf', ('a733_smp_contract',))
+    elf = args.build / ('a733-stage2.elf' if args.variant == 'enter' else 'a733-stage2-armed-stop.elf')
+    image = Image(elf, ('a733_smp_contract',))
     contract_layout = image.layouts['a733_smp_contract']
     results = []
+    # The linked writer of the progress words ignores GP2, the marker's word index and any word past FAR.
+    for name in stage2_marks.negative_cases():
+        results.append(dict(name=name, accepted=False, linked=False))
+    for name, word in (('mark-word-refuses-gp2', 2), ('mark-word-refuses-marker', (stage2_marks.MARKER - 0x07090100) // 4),
+                       ('mark-word-refuses-past-far', 8)):
+        assert mark_word(image, word, 0x12345678) == [], name
+        results.append(dict(name=name, accepted=False, linked=True))
+    assert mark_word(image, 1, 0x0c030100) == [[stage2_marks.LAST, 4, 0x0c030100]]
+    results.append(dict(name='mark-word-writes-last', accepted=True, linked=True))
+    if args.variant == 'armed-stop':
+        return armed_stop(args, image, plain, results)
     for name, raw, expected in cases:
         path = args.output / (name + '.bin')
         path.write_bytes(raw)
@@ -206,6 +281,8 @@ def main():
             reserved = contract_layout['reserved']
             assert struct.unpack_from('<2Q', contract, reserved) == (SESSION, len(raw))
             assert contract[reserved + 16:reserved + 48] == hashlib.sha256(stamped).digest()
+            # The progress words name every entry step up to the armed watchdog.
+            assert last_steps(result['marks']) == [(0x0b, 0), (0x0c, 0), (0x0d, 0), (0x0e, 0), (0x0f, 0)], result['marks']
         else:
             assert result['terminal'] == 'refused', name
             assert not any(0x02050000 <= address < 0x02051000 for address, _ in result['writes']), name
@@ -213,6 +290,10 @@ def main():
             assert result['result'] == struct.pack('<Q', 0x415337334f525231) + bytes([0xa5]) * 120
             detail = 1 if struct.unpack_from('<I', raw, 608)[0] != len(raw) else 2
             assert struct.unpack_from('<2Q', result['report'], 24) == (7, detail), name
+            # LAST stops at the session step; FAULT and ESR hold the status and detail.
+            words = dict(result['marks'])
+            assert last_steps(result['marks']) == [(0x0b, 0)] and words[stage2_marks.FAULT] == stage2_marks.FINISH | 7, name
+            assert words[stage2_marks.ESR] == detail, name
         results.append(dict(name=name, accepted=expected, linked=True))
     # The card first stage's cold state at arming: WDT0 already counting at 0xb1
     # with configuration 1 and output 2 and GP2 cleared by the loader's entry.

@@ -41,6 +41,7 @@ def module(name, path):
 
 slots = module('boot_slots', 'tools/boot-slots.py')
 cold = module('cold_entry_check', 'checks/cold-entry.py')
+marks_rule = module('stage2_marks', 'checks/stage2_marks.py')
 
 SDC0, RVBAR = 0x04020000, 0x08001000
 GP2, WDT0 = 0x07090108, 0x02050000
@@ -272,7 +273,7 @@ class Board:
         self.values = {**BOOT0_STATE, **(changes or {})}
         self.card, self.counter, self.stuck, self.present = card, counter, stuck, present
         self.removed_after_reads, self.changed_after_reads = removed_after_reads, changed_after_reads
-        self.writes, self.detect_reads, self.gp2_writes = [], [], []
+        self.writes, self.detect_reads, self.gp2_writes, self.marks = [], [], [], []
 
     def page(self, base):
         def read(uc, offset, size, user):
@@ -294,6 +295,10 @@ class Board:
                 self.gp2_writes.append((value, len(self.card.reads)))
                 if address not in self.stuck:
                     self.values[address] = value
+                return
+            if address >> 12 == 0x07090:  # Progress words: never GP2 (above) or the marker.
+                assert marks_rule.allowed(address, size), hex(address)
+                self.marks.append((address, value))
                 return
             assert size == 4 and address in (SMHC0_CLK, PF_CFG0, PF_PUL0), hex(address)
             self.writes.append((address, value, self.counter()))
@@ -394,7 +399,7 @@ def main():
 
     def run(name, card_bytes, expected, fail_sector=None, registers=None, vector=False,
             counter_step=2400, expect_writes='all', sdc0=None, variant='normal', gate=None,
-            gate_record=0, **board_state):
+            gate_record=0, refused_check=None, **board_state):
         card = Card(card_bytes, fail_sector)
         card.variant=variant
         card.bounce=table["chunk"];card.extents=[e for plan in headers.values() for e in plan["extents"]]
@@ -500,6 +505,7 @@ def main():
                       or 0x08001004 <= address and end <= 0x0800100c
                       or SDC0 <= address and end <= SDC0 + 0x1000
                       or address in (SMHC0_CLK, PF_CFG0, PF_PUL0) and size == 4
+                      or marks_rule.allowed(address, size)
                       or gate is not None and size == 4 and (WDT0 <= address < WDT0 + 0x1000 or address == GP2)
                       or any(lo <= address and end <= hi for lo, hi in windows)):
                 foreign.append(hex(address))
@@ -536,8 +542,21 @@ def main():
             assert wdt[0x14] == 0xb1 and wdt[0x10] == 1 and wdt[0x18] == 2 and board.values[GP2] == 0
         if gate is not None and gate.get('clear_fails'):
             assert [w[:3] for w in wlog] == [(0x0c, 0x14af, 0)] and board.gp2_writes == [(0, 0)], (name, wlog)
+        # The progress words (boot/a733/stage2/marks.h): the tag and step 1 once stage 2 runs, every step in order,
+        # and the SD admission snapshot naming the check that refused boot0's state.
+        words = dict(board.marks)
+        steps = [marks_rule.step(v) for a, v in board.marks if a == marks_rule.LAST]
+        if vector:
+            assert words[marks_rule.FAULT] == marks_rule.EXCEPTION | 4 and words[marks_rule.ESR] == 0x96000010, (name, words)
+            assert words[marks_rule.FAR] == 0xdead0000 and words[marks_rule.ELR] == table['a733_stage2_main'] & 0xffffffff
+        elif cold_at_entry:
+            assert words.get(marks_rule.TAG) == marks_rule.TAG_VALUE and steps and steps[0][0] == 1, (name, steps, board.marks)
+            assert [n for n, _ in steps] == sorted(n for n, _ in steps), (name, steps)
+        if refused_check is not None:
+            assert words[marks_rule.SNAPSHOT] >> 16 & 0xff == refused_check, (name, hex(words[marks_rule.SNAPSHOT]))
         if enter_hit:
             assert gate.get('enters'), name
+            assert steps[-1][0] == 0x0a, (name, steps)
             report = bytes(cpu.mem_read(0x47008200, 512))
             assert struct.unpack_from('<Q', report, 368)[0] == gate_record, name
             result = {'case': name, 'entered_image_step': True, 'card_reads': len(card.reads),
@@ -605,6 +624,9 @@ def main():
                                  for s, r in zip('AB', per_slot)},
                        'report_sha256': hashlib.sha256(report).hexdigest()})
         assert (status, result['selected']) == expected[:2], (name, result)
+        assert words[marks_rule.FAULT] == marks_rule.FINISH | (status << 8 | detail if status in (11, 12) else status), (
+            name, hex(words[marks_rule.FAULT]))
+        result['marks'] = [[hex(a), hex(v)] for a, v in board.marks]
         if status == 1:
             assert fields[7] == CARD_SECTORS and detail == 0x41000000
             for e in headers[result['selected']]['extents']:
@@ -652,13 +674,15 @@ def main():
             assert failed['retained_dma'] and failed['card_reads']<=1,failed
         for name,change in (('parent-unlocked',{CCU+0xa0:0xde106300}),
                             ('irq-pending',{0x03400218:2})):
-            failed=run(name,image(both),(11,None,False),changes=change,expect_writes=False)
+            failed=run(name,image(both),(11,None,False),changes=change,expect_writes=False,refused_check=1 if name=='parent-unlocked' else 2)
             assert failed['card_accesses']==0 and failed['mmc_error']==SUNXI_MMC_ADMISSION
         failed=run('counter-stopped',image(both),(5,None,False),counter_step=0,expect_writes=False)
         assert failed['card_accesses']==0
     else:
         header_b = slots.HEADER_SECTORS['B']
-        run('slot-a-only', image(first), (1, 'A', True))
+        admitted = run('slot-a-only', image(first), (1, 'A', True), refused_check=0)
+        # boot0 writes 0x01155550 to the withstand mode register, which leaves PF adaptive (01); admission accepts it.
+        run('pf-bank-adaptive', image(first), (1, 'A', True), changes={POW_MOD_SEL: 0x01155550}, refused_check=0)
         run('slot-b-newer', image(both), (1, 'B', True))
         run('slot-b-payload-digest', image(both, (extent('B', 1)['first_sector'], 7)), (1, 'A', True))
         run('slot-b-header-digest', image(both, (header_b, 16)), (1, 'A', True))
@@ -679,24 +703,25 @@ def main():
         run('pf6-already-input', image(both), (1, 'B', True), expect_writes=SELECTED[2:],
             changes={PF_CFG0: 0x00222222, PF_PUL0: 0x1555})
         # boot0 state that admission refuses before any write or SD command.
-        for case, change in (('module-clock-gated', {SMHC0_CLK: 0x01000003}),
-                             ('bus-reset-asserted', {SMHC0_BGR: 0x00000001}),
-                             ('pf3-not-sdc0', {PF_CFG0: 0x0f223222}),
-                             ('pf-pull-missing', {PF_PUL0: 0x551}),
-                             ('pf6-output', {PF_CFG0: 0x01222222}),
-                             ('pf-bank-1v8', {POW_VAL_SET_CTL: 0})):
-            refused = run(case, image(both), (11, None, False), expect_writes=False, changes=change)
+        for case, change, check in (('module-clock-gated', {SMHC0_CLK: 0x01000003}, 4),
+                                    ('bus-reset-asserted', {SMHC0_BGR: 0x00000001}, 3),
+                                    ('pf3-not-sdc0', {PF_CFG0: 0x0f223222}, 5),
+                                    ('pf-pull-missing', {PF_PUL0: 0x551}, 6),
+                                    ('pf6-output', {PF_CFG0: 0x01222222}, 5),
+                                    ('pf-bank-1v8', {POW_VAL_SET_CTL: 0}, 7),
+                                    ('pf-bank-mode-1v8', {POW_MOD_SEL: 3 << 10}, 7)):
+            refused = run(case, image(both), (11, None, False), expect_writes=False, changes=change, refused_check=check)
             assert refused['mmc_error'] == SUNXI_MMC_ADMISSION and refused['card_accesses'] == 0, case
-        for case, registers in (('controller-command-pending', {0x18: 1 << 31}),
-                                ('internal-dma-enabled', {0x80: 1 << 7})):
-            refused = run(case, image(both), (11, None, False), expect_writes=False, sdc0=registers)
+        for case, registers, check in (('controller-command-pending', {0x18: 1 << 31}, 8),
+                                       ('internal-dma-enabled', {0x80: 1 << 7}, 10)):
+            refused = run(case, image(both), (11, None, False), expect_writes=False, sdc0=registers, refused_check=check)
             assert refused['mmc_error'] == SUNXI_MMC_ADMISSION and not refused['card_writes'], case
         # No card: the writes happen, then card detection refuses.
-        nocard = run('no-card', image(both), (11, None, False), present=False)
+        nocard = run('no-card', image(both), (11, None, False), present=False, refused_check=14)
         assert nocard['mmc_error'] == SUNXI_MMC_ADMISSION and not nocard['card_writes']
         # A gated module clock that does not read back stops admission at that write.
         stuck = run('module-clock-not-read-back', image(both), (11, None, False), expect_writes=True,
-                    stuck=(SMHC0_CLK,))
+                    stuck=(SMHC0_CLK,), refused_check=12)
         assert stuck['mmc_error'] == SUNXI_MMC_ADMISSION and len(stuck['board_writes']) == 3
         assert not stuck['card_writes']
         # Two header reads and the first slot B chunk, then card-detect reports no card.
@@ -750,8 +775,11 @@ def main():
                   'The card supply is not modeled: admission relies on boot0 having read this card, which no model establishes.',
                   'No launch contract is built and the loaded image is never entered; remote-writer exclusion, memory ownership and the cold ROM return remain unqualified.',
                   'Card images are sparse ordinary files written by tools/boot-slots.py; no card or block device was opened.']}
+    # The rule this model applies to RTC writes refuses GP2, the marker and anything outside 0x100..0x11c.
+    result['rtc_rule_negative_cases'] = marks_rule.negative_cases()
     (args.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
-    print('PASS stage-2 monitor:', len(cases), 'instruction-model cases')
+    print('PASS stage-2 monitor:', len(cases), 'instruction-model cases and',
+          len(result['rtc_rule_negative_cases']), 'RTC rule negative cases')
 
 
 if __name__ == '__main__':
