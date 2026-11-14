@@ -207,8 +207,10 @@ mean cores and peak resident memory of one gate, all measured with a sampler on 
 
 The steps whose result depends on wall time hold the exclusive `~/.cache/sunstoneos/gate-timing.lock` while they run and run alone in
 their gate: the soak, `scheduler-control-linked.py` (its perturbation sweep kills a QEMU run after 120 s of wall time, whatever the
-injected delay), `smp-ticket-lock.py`, `tick-footprint-budget.py`, `gpu-conformance.py`, `land.py`, `submit-wait.py` and the
-`SERIAL_CHECKS`. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
+injected delay), `smp-ticket-lock.py`, `tick-footprint-budget.py`, `gpu-conformance.py`, `land.py`, `submit-wait.py`, `cpu-npu-concurrency.py`,
+`cpu-npu-return-chain.py` and the `SERIAL_CHECKS`. The two CPU/NPU checks run the application's producer on eight host threads
+whose counter is the host's `CLOCK_MONOTONIC` (`checks/cpu-npu-concurrency/producer.c`); the receipt decoder allows 0.1 s
+after the 5 s work cutoff for every worker to finish its last chunk, which a loaded host can exceed. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
 pass criteria do not change. `checks/gate-slots.py` runs two gates at once, the exclusive timing lock, a landing that goes ahead of an
 older worker and a killed waiter.
 
