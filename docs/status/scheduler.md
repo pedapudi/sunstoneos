@@ -27,7 +27,8 @@ The cached-walk latency diagnostic measures A55 self-selection at 3 to 15.792 µ
 | Direct self-suspension and interruptible control preparation | host-tested; board timing target not met | Self-suspension drains no controls; maintenance attempts at most sixteen distinct records; full batch cost remains unqualified | [timing records](../evidence/scheduler-latency-measurement.jsonl); [measurement scope](../designs/scheduler-latency-measurement.md) |
 | Per-core scheduler PMU windows | host-tested; one board diagnostic returns normally | Cached walks; effective clocks 1793 and 1998 MHz; retained target windows have zero TLB walks; instrumented CPU0 tick reaches 165.917 µs | `1794497365941804086-44d410dc`; [counter scope](../designs/scheduler-latency-measurement.md#per-core-pmu-windows-retain-separate-event-banks) |
 | Diagnostic exclusion from production | host-tested | Default production OS and mimus builds contain no latency recorder, scheduler trace, scheduler PMU capture or restore-span implementation | `scheduler-production-measurement-exclusion`; [audit record](../evidence/scheduler-latency-measurement.jsonl) |
-| One-shot timers, capacity hints, topology-driven placement, EDF/CBS | open | None | [design](../designs/scheduler-partitioned.md#open-work) |
+| One-shot local timers on CPUs 1-7 | board-tested, one run | CPUs 1-3 awake 0.59, 0.76 and 0.32%; CPU0 busy tick 14,018 cycles | `1794692009857062646-48facc67`; [design](../designs/scheduler-partitioned.md#one-shot-local-timers-replace-periodic-scheduler-ticks) |
+| Capacity hints, topology-driven placement, EDF/CBS | open | None | [design](../designs/scheduler-partitioned.md#open-work) |
 
 ## Known limits
 
@@ -51,6 +52,7 @@ Queues, event groups and stream buffers lock their own hashed slot instead of th
 7. Idle pull: fix the missed pull or measure it on against off on the board.
 8. Control-path long runs (10^6 periods) at 1 to 8 kHz; only 10 kHz has them.
 9. Qualify heterogeneous placement and tickless timing.
+10. Move the control-interrupt measurement off PPI30 the next time it is needed. It uses PPI30 on CPUs 1-7, so its builds keep CPU0's periodic release and do not measure the shipped timer path.
 
 ## Evidence
 
