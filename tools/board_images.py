@@ -428,6 +428,13 @@ def policy(info, args, session=None):
                 symbol_bytes(args.image, 'os_resident_test_profile') == struct.pack('<3Q', 0x3154534554525353, 1, 0x5000),
                 'Resident FEL qualification requires the linked stop-on-finish test profile.')
     require(not getattr(args, 'marker_clear_test', False) or approved, '--marker-clear-test requires --approved-by coordinator.')
+    if getattr(args, 'rearm_expiry', None):
+        recovery = info.get('card_fel_recovery')
+        require(approved, '--rearm-expiry requires --approved-by coordinator.')
+        require(isinstance(recovery, dict) and recovery.get('profile', {}).get('entry') == 2,
+                '--rearm-expiry runs with the warm-entry SRAM proof image (a733-card-fel-warm.elf).')
+        require(not getattr(args, 'boot_once_slot', None) and not getattr(args, 'marker_clear_test', False) and not args.storage_write,
+                '--rearm-expiry is incompatible with --boot-once-slot, --marker-clear-test and --storage-write.')
     if getattr(args, 'boot_once_slot', None):
         require(approved, '--boot-once-slot requires --approved-by coordinator.')
         require(getattr(args, 'lifetime', 'returning') == 'resident',

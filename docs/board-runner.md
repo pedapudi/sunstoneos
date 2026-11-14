@@ -726,6 +726,31 @@ the result is `watchdog-reset` with the RTC words, crumbs and elapsed time
 recorded. Any other invalid receipt quarantines the instance. The evidence
 qualifies only these SRAM paths. Card loading remains a separate test.
 
+### WDT0 re-arm expiry test
+
+Every WDT0 expiry the board has shown followed an arming from mode 0. The
+card first stage and stage 2 once re-armed WDT0 over an enabled watchdog with
+no disarm, and the first card boot under test control never returned.
+`--rearm-expiry`, with `--approved-by coordinator` and the warm-entry proof
+image, measures whether such a re-arm resets the board:
+
+- `runner`: from a disarmed WDT0 the runner arms mode `0x41`, then writes
+  mode `0xb1` and a restart with no disarm between, and reads back `0xb1`,
+  configuration 1 and output 2. It uploads and launches nothing.
+- `gate`: the runner runs the warm-entry proof as above. The gate re-arms
+  `0xb1` over the runner's `0x41`, and the runner leaves it armed after the
+  proof's FEL return.
+
+The runner then reads WDT0 without a disarm and waits for a new FEL instance
+until 10 seconds after the 16-second interval. A reset 16 to 21 seconds after
+the re-arm (the restart, or the execute request for `gate`) matches the
+prediction: the outcome is `watchdog-reset` with `expected_reset: true`. An
+earlier reset means the 4-second arming fired and the re-arm did not apply. If
+no new instance appears, the board is still in FEL: the runner disarms WDT0
+on the same instance and the outcome is `failure-return`, so the port stays
+usable. The result's `rearm_expiry` records the mode read, the interval, the
+deadline, whether a reset came and its time.
+
 ## USB class probes require finite device cleanup
 
 `--kind usb-class` uses the existing [native probe contract](board-probe-contract.md).

@@ -109,6 +109,9 @@ class Model:
             self.number += 1
             self.pending = False
             if not self.launched:self.card_reset()  # the session's WDT0 reset reaches the new instance
+            if getattr(self,'second_reset_at',None) is not None:
+                # The warm proof re-entered FEL with WDT0 re-armed at 0xb1; its expiry is the next reset.
+                self.pending,self.reset_at,self.second_reset_at=True,self.second_reset_at,None
         return self.node
 
     @contextlib.contextmanager
@@ -178,7 +181,15 @@ class Model:
                     # the marker and (marker-clear-sticks) the restore then fails.
                     if self.variant=='marker-unclearable' and value&0xffff!=board.crumbs.MARKER_SET:i+=3;continue
                     if self.variant=='marker-clear-sticks' and self.registers.get(address,0)==board.crumbs.MARKER_CLEAR:i+=3;continue
+                if self.variant=='rearm-ignored' and address==board.crumbs.WDT_MODE and value&0xffff==0xb1:i+=3;continue
                 self.registers[address] = value&0xffff if address in (board.crumbs.WDT_MODE,board.crumbs.WDT_CONFIG,board.crumbs.WDT_OUTPUT) else value
+                if address==board.crumbs.WDT_RESTART and self.variant.startswith('rearm-'):
+                    # The re-arm test: the runner's 0x41 would reset in 4 s; the 0xb1 written over it resets 16 s after its
+                    # restart (rearm-expires) or never (rearm-stops, the board stays in FEL on the same instance).
+                    if self.registers[board.crumbs.WDT_MODE]==0x41:self.pending,self.reset_at=True,self.clock+4
+                    elif self.variant=='rearm-stops':self.pending=False
+                    else:self.pending,self.reset_at=True,self.clock+16
+                    i+=3;continue
                 if address==board.crumbs.WDT_RESTART and self.registers[board.crumbs.WDT_MODE]==0x41:
                     self.pending=True
                     if self.registers.get(board.crumbs.RESET_WORDS['flag'])==board.crumbs.BOOT_ONCE:
@@ -259,6 +270,7 @@ class Model:
                         self.registers[board.crumbs.RTC+0x104]=0x0c020005
                     # The gate re-arms WDT0 at 16 s instead of disarming it.
                     self.registers[board.crumbs.WDT_MODE]=recovery.GATE_WATCHDOG
+                    if self.variant=='recovery-warm-rearm-expires':self.second_reset_at=self.clock+recovery.INTERVAL_SECONDS
                     if self.variant=='recovery-no-reenumerate':
                         # The ROM never re-enumerates; WDT0 expires and resets to FEL, leaving mode 1.
                         self.registers[board.crumbs.WDT_MODE]=1
@@ -797,6 +809,55 @@ def marker_clear_cases(out):
     passed('marker-clear-test-is-frozen-into-the-runner-command')
 
 
+def rearm_expiry_cases(out):
+    """--rearm-expiry: WDT0 is re-armed over an enabled watchdog with no disarm and left armed; the runner times the reset, and
+    a board that stays in FEL is disarmed on the same instance instead of being reported as a no-return."""
+    def configure(variant):
+        def apply(args):args.rearm_expiry='gate' if variant.startswith('recovery-') else 'runner'
+        return apply
+    for variant in ('rearm-expires','rearm-stops','rearm-ignored','recovery-warm-rearm-expires','recovery-warm-rearm-stops'):
+        result,model,owner=lifecycle(out/variant,variant,recovery=True,entry=2,configure=configure(variant))
+        test=result.get('rearm_expiry')
+        assert not model.quarantined,(variant,result)
+        if variant=='rearm-ignored':
+            assert 'readback differs' in result['first_failure']['detail'] and not owner.armed,(variant,result)
+            passed('rearm-expiry-'+variant);continue
+        if variant.startswith('rearm-'):
+            # FEL register writes only, from a disarmed WDT0: 0x41, then 0xb1 and a restart with no disarm between.
+            assert not any(c[0] in ('exe','reset64','write') for c in model.calls[1:]) or all(
+                int(c[1],0)==0x71000 for c in model.calls if c[0]=='write'),variant
+            writes=[c for c in model.calls if hex(board.crumbs.WDT_MODE) in c and 'writel' in c]
+            arm=next(i for i,c in enumerate(model.calls) if hex(board.crumbs.KEY|0x41) in c)
+            rearm=next(i for i,c in enumerate(model.calls) if hex(board.crumbs.KEY|0xb1) in c)
+            assert arm<rearm and not any(hex(board.crumbs.KEY) in c[c.index(hex(board.crumbs.WDT_MODE))+1:c.index(hex(board.crumbs.WDT_MODE))+2]
+                                         for c in model.calls[arm+1:rearm] if hex(board.crumbs.WDT_MODE) in c and 'writel' in c),writes
+            assert result['rearm_writes']['readback']==[0xb1,1,2] and result['dram_mode']=='sram-only'
+        else:
+            assert model.calls.count(['exe','0x52000'])==1 and test['variant']=='gate'
+        assert test['mode']==0xb1 and test['interval_s']==16 and test['deadline_s']==26,(variant,test)
+        if variant.endswith('expires'):
+            assert result['outcome']=='watchdog-reset' and result['expected_reset'] and test['matched'],(variant,result)
+            assert 16<=test['seconds_after_arm']<=21 and not result.get('first_failure') and board.result_passed(result,decoded=False)
+        else:
+            # WDT0 never fired: the runner disarmed it on the instance it was on; the port stays usable.
+            assert result['outcome']=='failure-return' and not test['reset'] and not result['expected_reset'],(variant,result)
+            assert 'No reset within 26 s' in result['first_failure']['detail'] and not owner.armed and model.registers[board.crumbs.WDT_MODE]==0
+            assert not board.result_passed(result,decoded=False)
+        passed('rearm-expiry-'+variant)
+    # Admission: coordinator approval and the warm-entry proof image; frozen in the queue entry.
+    args=arguments(out,'--kind','probe',development=True);args.rearm_expiry='runner'
+    info={'card_fel_recovery':{'profile':{'entry':2}},'descriptor':{}}
+    for approved,entry,word in ((None,2,'coordinator'),('coordinator',1,'warm-entry')):
+        args.approved_by=approved;info['card_fel_recovery']['profile']['entry']=entry
+        try:images.policy(info,args)
+        except ValueError as error:assert word in str(error),error
+        else:raise AssertionError(('--rearm-expiry admitted',approved,entry))
+    job={'image':'/image.elf','directory':str(out),'options':{'rearm_expiry':'gate','approved_by':'coordinator'}}
+    command=board.Queue.runner_command(job,'3-1')
+    assert 'rearm_expiry' in board.FROZEN_OPTIONS and command[command.index('--rearm-expiry')+1]=='gate',command
+    passed('rearm-expiry-requires-approval-and-the-warm-proof')
+
+
 def boot_once_cases(out):
     """--boot-once-slot: GP2 gets the boot-once value and reads back, WDT0 resets the board, nothing is launched or uploaded, and the
     runner waits with no FEL session for the card boot to end in the image's watchdog reset."""
@@ -952,6 +1013,7 @@ def transport_cases(out):
     marker_clear_cases(out)
     boot_once_cases(out)
     boot_once_slot_cases(out)
+    rearm_expiry_cases(out)
     for variant,expected in (
             ('watchdog-before-entry','watchdog-reset'),('missing-return','host-error'),
             ('wrong-return-session','host-error'),('fel-after-return','host-error'),
