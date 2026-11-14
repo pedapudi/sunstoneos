@@ -17,6 +17,8 @@ struct a733_mmc_platform_native {
     unsigned holding; /* Register mutex entered by this binding, until leave or retain. */
     enum sunxi_mmc_sd_profile sd_profile; /* Set by successful actual platform admission. */
     unsigned bank_1v8; /* This binding stored the selector write to 1.8 V; only then is the write back to 3.3 V admitted. */
+    unsigned pf_switchable; /* Set by successful admission from the board description (a733_mmc_platform_config.pf_switchable). */
+    unsigned pf_mode_set, pf_mode_found; /* This binding stored the PF withstand field's move to adaptive; the field it replaced. */
 };
 /* Pure selected-aperture filter. Parent clocks, shared storage fabric, voltage,
  * PMIC, other storage controllers and card data writes are never writable. The

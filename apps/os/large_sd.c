@@ -201,6 +201,12 @@ static int dma_sync(void *cookie, uint8_t *b, size_t n, unsigned phase)
  * 4 configure, 5 native binding, 6 platform init, 7 identification (detail: result), 8 card query (result), 9 interrupt and timer
  * registration or irq arming (detail 1 platform, 2 or 3 GIC rearm), 10 owner task creation (sd_owner.c), 11 owner wait (sd_owner.c), 12 GIC mask before the baseline, 37 to 42 the recovery of a failed read (37 restart refused, 38 identification again, 39 card query, 40 interrupt re-armed) or the re-opening of a card found at 1.8 V (41 its read, 42 its close), 30 to 36 a refused read, write or status request (detail: result | platform stage << 8 | platform fault << 16 | core error << 24), 20 enable preconditions, 21 blob copy, 22 blob parse, 23 bounds verify (detail: object state), 24 write binding. */
 uint64_t os_sd_diag[4];
+/* The PF bank's power-mode register, voltage status and selector, raw, as the first open found them at its baseline and as the reopen at
+ * 1.8 V found them (zero when there was no reopen); sd_owner.c:diag_word carries their PF fields in a failed identification's record. */
+uint32_t os_sd_bank_first[3], os_sd_bank_reopen[3];
+/* The PF withstand field record (a733_mmc_platform.h pf_found) of the open that reached READY, and of the last close that completed with bit 3
+ * set; ss_storage_pf_bank reports both. */
+uint8_t os_sd_pf_open, os_sd_pf_closed;
 static inline int diag_set(uint64_t stage, uint64_t detail)
 {
     if (!os_sd_diag[0]) { os_sd_diag[0] = stage; os_sd_diag[1] = detail; }     /* the first stop is the one that matters */
@@ -250,7 +256,9 @@ static int configure(unsigned start18)
     if (start == UINT64_MAX) return 0;
     config = (struct a733_mmc_platform_config){.owner = owner, .handoff = s->lease | 1, .topology = generation ^ owner,
         .deadline_us = start + IDENTIFY_US, .lifetime_deadline_us = start + LIFETIME_US, .kind = SUNXI_MMC_SD,
-        .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .start_1v8 = (uint8_t)start18, .dma = descriptors};
+        .voltage_mask = 0x00300000, .sd_profile = SUNXI_MMC_SD_UHS_SDR104, .start_1v8 = (uint8_t)start18, .dma = descriptors,
+        /* Board description: CLDO5 supplies VCC18-PF for 1.8 V signalling (docs/clock-audit.md), so the PF bank's supply is switchable. */
+        .pf_switchable = 1};
     if (!config.topology || !fabric()) return 0;
     /* The pins carry whatever the ROM and the runner left; the provider replaces that state. */
     for (unsigned i = 0; i < 7; ++i) {
@@ -682,7 +690,9 @@ const struct os_large_device *os_large_device(void)
             if (r == A733_MMC_READY) break;
             if ((r != A733_MMC_PENDING && r != A733_MMC_BUSY) || !board_live(NULL) || now_us() >= config.deadline_us) {
                 (void)a733_mmc_platform_retain(&platform);
-                return DIAGP(7, PLAT(r));
+                if (!reopened) memcpy(os_sd_bank_first, platform.bank_raw, sizeof os_sd_bank_first);
+                memcpy(os_sd_bank_reopen, reopened ? platform.bank_raw : (const uint32_t[3]){0}, sizeof os_sd_bank_reopen);
+                return DIAGP(7, PLAT(r) | (uint64_t)platform.enter_obs << 40);   /* bits 47:40: what stage ENTER_1V8 found (a733_mmc_platform.h) */
             }
 #ifdef OS_SD_WRITE
             sd_pause();
@@ -708,9 +718,13 @@ const struct os_large_device *os_large_device(void)
             if(c==A733_MMC_BUSY||c==A733_MMC_PENDING)sd_pause();
         } while(c==A733_MMC_BUSY||c==A733_MMC_PENDING);
         if (c != A733_MMC_CLOSED) { (void)a733_mmc_platform_retain(&platform); return DIAGP(42, PLAT(c)); }
+        memcpy(os_sd_bank_first, platform.bank_raw, sizeof os_sd_bank_first);   /* the bank as the first open found it, kept across the reopen */
         memset(&platform, 0, sizeof platform); memset(&native, 0, sizeof native); memset(&card, 0, sizeof card);
         opened = 0; blocks_in_flight = 0; reopened = 1;
     }
+    /* The bank as the open that reached READY found it, kept on a pass as on a failure. */
+    memcpy(reopened ? os_sd_bank_reopen : os_sd_bank_first, platform.bank_raw, sizeof os_sd_bank_first);
+    os_sd_pf_open = platform.pf_found; os_sd_pf_closed = 0;
     record_mode();
 #ifndef OS_SD_WRITE
     if(!sunxi_mmc_set_irq(&platform.core,irq_taken,NULL)||!a733_mmc_platform_irq(&platform,1))return DIAGP(9,1);
@@ -767,6 +781,7 @@ void os_large_device_close(void)
         return;
     }
     descriptor_lease=(struct device_memory_lease){0};opened=0;
+    os_sd_pf_closed = (uint8_t)(8u | platform.pf_found);
 #ifndef OS_SD_WRITE
     atomic_store_explicit(&read_closed_us,sunstone_deadline_now_us(),memory_order_relaxed);
 #endif
