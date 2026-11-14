@@ -118,7 +118,8 @@ static volatile uint32_t isr_gives, task_takes;
 void ss_wake_isr(unsigned core)
 {
     BaseType_t woken = pdFALSE;
-    if (shared && !isr_stop) {
+    /* A delayed run takes more interrupts before the producers finish; a source sends at most PER_SOURCE messages. */
+    if (shared && !isr_stop && isr_sequence[core] < PER_SOURCE) {
         struct message m = { SOURCES / 2 + core, isr_sequence[core] };
         if (xQueueSendFromISR(shared, &m, &woken) == pdPASS) {
             __atomic_fetch_add(&produced_ok[m.source], 1, __ATOMIC_RELAXED);

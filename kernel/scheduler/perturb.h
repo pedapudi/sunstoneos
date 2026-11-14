@@ -11,6 +11,7 @@ enum ss_kernel_perturb_site {
     SS_PERTURB_OWNER_PUBLISH,  /* publisher: hint visible, doorbell decision not yet made */
     SS_PERTURB_OWNER_DRAIN,    /* owner: hints detached, not yet inspected */
     SS_PERTURB_CONTROL_OPEN,   /* owner: control batch admitted with interrupts open */
+    SS_PERTURB_OBJECT_WALK,    /* waker: a waiter-list item and its successor read, neither yet used */
     SS_PERTURB_SITES
 };
 #ifdef SS_KERNEL_TEST_PERTURB
