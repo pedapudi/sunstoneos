@@ -122,6 +122,15 @@ after each link, `manifest.json` with the build ID and the SHA-256 of the final
 ELF. `build-id.c` is rewritten only when the ID changes, so reconfiguring does
 not relink an unchanged image.
 
+An OS image's build directory also holds `build-id-inputs.txt`, which lists the
+identity behind its `build-id.txt`: first the text components, one per line,
+then one line `<sha256>  <path>` for each input file and library, in the order
+of hashing. Joining the text lines with `;` and appending the digests gives
+the string whose SHA-256 is the build ID, so two builds of one source that
+disagree can be compared line by line with `diff`.
+`checks/build-id-inputs.py` verifies this, with `--build DIRECTORY` for a
+configured image.
+
 `checks/build-identity.py` configures two copies of the repository and checks
 these properties; pass the usual cache options after `--`:
 

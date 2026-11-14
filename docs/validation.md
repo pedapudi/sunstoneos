@@ -175,20 +175,42 @@ and an application check needs its application build. A failed configure step
 skips only its own build. The last lines of the summary count the steps and
 name every failure; the line `PASS selected integration checks` appears only
 when none failed. `--fail-fast` runs the steps one at a time in their fixed
-order, stops at the first failure and writes `Stopped at first failure`. The targeted selections (`--target`, `--variant`,
-`--check`, `--affected`, `--changed`) are fail-fast unless `--keep-going` is
-given.
+order, stops at the first failure and writes `Stopped at first failure`. Every gate keeps going unless `--fail-fast` is given,
+targeted selections included: the same selection takes about a third of the time in parallel, and a gate holds a slot while it
+runs (below).
 
 Builds run one at a time and finish before any check starts. A keep-going gate
-then runs the checks in parallel. `--jobs N` bounds the workers (default 8). The
+then runs the checks in parallel. `--jobs N` bounds the workers and sets the `-j` of the builds (default: the gate's share of the
+usable cores, below; 8 and `-j 12` for `--full`). The
 gate starts no new check while `MemAvailable` is below `--min-available-gb`
 (default 32); a check that cannot start within `--memory-wait` seconds
 (default 3600) fails as not started. `--check-timeout` bounds each check
 (default 3600 seconds). A check that runs QEMU or times a result runs alone,
 after the parallel group finishes: the kernel and soak checks, every external
-application check, and the indexed checks named in `SERIAL_CHECKS` in
-[checks/check-index.py](../checks/check-index.py). The index reports the
+application check, the indexed checks named in `SERIAL_CHECKS` in
+[checks/check-index.py](../checks/check-index.py) and the wall-time checks of the timing lock (below). The index reports the
 choice as the `serial` field of each entry.
+
+### Gate slots and the timing lock
+
+The host runs N gates at once, not one. `tools/gate_slots.py` holds the slots as the files `~/.cache/sunstoneos/gate.lock.0` to
+`gate.lock.N-1`; a gate takes the first free one it may use and keeps the flock until it exits. A gate that finds none waits on a
+ticket in `~/.cache/sunstoneos/gate-queue/`; a waiter that is killed leaves no ticket that holds the queue. Landing gates
+(`tools/land.py` sets `SUNSTONE_GATE_PRIORITY=landing`; `--priority landing` does the same) go ahead of waiting worker gates and may
+take slot 0, which workers never use, so a landing does not wait behind workers. The full suite takes `gate-full.lock` and no slot.
+
+N and the share of cores a slot gives its builds and checks come from [tools/gate-slots.json](../tools/gate-slots.json), not from
+constants in the code: the host's cores and memory, the cores that other work on the host keeps busy, the memory kept free, and the
+mean cores and peak resident memory of one gate, all measured with a sampler on the process tree of gates that held the lock.
+`slot_count` takes the fewer of what the cores (usable cores divided by the mean cores of a gate) and the memory allow;
+`jobs_per_slot` divides the usable cores across the slots. Change a measurement there, not the code, when the host or the gate changes.
+
+The steps whose result depends on wall time hold the exclusive `~/.cache/sunstoneos/gate-timing.lock` while they run and run alone in
+their gate: the soak, `scheduler-control-linked.py` (its perturbation sweep kills a QEMU run after 120 s of wall time, whatever the
+injected delay), `smp-ticket-lock.py`, `tick-footprint-budget.py`, `gpu-conformance.py`, `land.py`, `submit-wait.py` and the
+`SERIAL_CHECKS`. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
+pass criteria do not change. `checks/gate-slots.py` runs two gates at once, the exclusive timing lock, a landing that goes ahead of an
+older worker and a killed waiter.
 
 Every check runs from the source directory with standard input closed and one
 environment: the process environment, `PYTHONDONTWRITEBYTECODE=1`,
@@ -214,8 +236,7 @@ the option that receives each check's new output directory. Every other check
 that reaches a device keeps its USB classification and is reported as PENDING;
 a name in `HOST_ONLY` that is not pure-host fails `check-index.py --verify`.
 
-Run the gate as `python3 tools/integration-gate.py SOURCE LABEL`; it takes the
-host-wide gate lock itself. `tools/configure.py` holds the host dependency
+Run the gate as `python3 tools/integration-gate.py SOURCE LABEL`; it takes a gate slot itself. `tools/configure.py` holds the host dependency
 configuration.
 `--build-root` selects a separate directory for new builds and gate evidence.
 The gate builds and checks software only; board runs remain separately queued.
