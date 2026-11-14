@@ -57,7 +57,7 @@ Queues, event groups and stream buffers lock their own hashed slot instead of th
 Board results are records in `docs/evidence/scheduler.jsonl` (runs and their summaries); host results and unrun predictions of the design are in `docs/evidence/scheduler-partitioned.jsonl` and `docs/evidence/scheduler-realtime.jsonl`. Earlier prose evidence is in [the historical log](../history/status-scheduler-20261101.md).
 
 <!-- evidence-table:begin -->
-110 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+111 records in `docs/evidence/scheduler.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -171,4 +171,5 @@ Board results are records in `docs/evidence/scheduler.jsonl` (runs and their sum
 | `1794685533239173548-a5db9331` | 2026-11-14 | 3-1 | `06d84cf4c44d` | watchdog-reset | failed | run_total 37.124 s, launch 22.44 s, terminal_crumb 13.3957 s |
 | `1794686856094584863-be2b6699` | 2026-11-14 | 3-1 | `4cf527c5d956` | returned | inconclusive | run_total 24.328 s, first_contact_dcdc5 1000 mV, first_contact_dcdc3 800 mV, pmr_change 18 cycles, pmr_change_dsb_sy_isb 34 cycles, cpu1_on_worst 17.8 us, cpu1_off_worst 24.3 us, cpu2_on_worst 16 us, cpu2_off_worst 21.8 us, cpu0_worst 49.2 us, cpu0_on_worst 41.5 us, cpu3_worst 21 us, cpu4_worst 43.8 us, cpu5_worst 42.5 us, cpu6_worst 25 us, cpu7_worst 20.1 us, busy_tick 51479 cycles, busy_tick_l3 14.57, release_4_7 17589 cycles, release_4_7_l3 6.25 |
 | `1794689664672090836-4cd53bf9` | 2026-11-14 | 3-1 | `5c4672b99619` | returned | inconclusive | run_total 23.975 s, run_total 23.97 s, first_contact_dcdc3 800 mV, first_contact_dcdc5 800 mV, cpu4_worst_on 38.7 us, cpu5_worst_on 39.8 us, cpu0_worst_on 40.1 us, cpu0_first 75.5 us, first_tick 104097 cycles, first_tick_l3 46, second_tick 53023 cycles, second_tick_l3 17, cpu4_l3_to_switch_end 63.2, cpu5_l3_to_switch_end 65.9, cpu1_3_l3_to_switch_end 3.3, release4_7_on 17277 cycles, release4_7_off 16951 cycles, release4_7_l3_on 5.3, release4_7_l3_off 5.38 |
+| `1794692009857062646-48facc67` | 2026-11-14 | 3-1 | `368da0185877` | host-error | passed | run_total 23.893 s, run_total 23.89 s, first_contact_dcdc3 800 mV, first_contact_dcdc5 800 mV, cpu0_busy_tick 14018 cycles, cpu0_first_tick 34464 cycles, cpu0_second_tick 19983 cycles, cpu4_release 3854 cycles, cpu4_release_l3 1.95 refills, arm_mean_max_core 278.7 cycles, arm_max 1513 cycles, cpu0_worst 21.9 us, cpu0_spread 12.3 us, cpu0_first_wake 42 us, cpu1_worst 15.8 us, cpu2_worst 15.7 us, cpu3_worst 14.3 us, cpu4_worst 43.5 us, cpu4_spread 15.6 us, cpu5_worst 41.3 us, cpu6_worst 23.5 us, cpu7_worst 23.1 us, cpu1_awake 0.592 %, cpu2_awake 0.756 %, cpu3_awake 0.324 %, cpu1_irq_rate 500.4 /s, cpu2_irq_rate 249.8 /s, cpu3_irq_rate 169.1 /s |
 <!-- evidence-table:end -->
