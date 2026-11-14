@@ -10,6 +10,12 @@
  *   skip=LO-HI            repeatable; no data callbacks for code in [LO, HI)
  *   windows=N out=PATH    stop after N kept windows; text output path
  *
+ * The executing core is read from the guest's TPIDR_EL1 (platform/qemu-smp/start.S
+ * sets it to the core index) once per executed block, because under
+ * -accel tcg,thread=single the vcpu argument of every callback names the vCPU
+ * that translated the block, not the one executing it (see
+ * tools/qemu-critical-path.c).
+ *
  * Output lines: "W n" opens a kept window, "M addr x0" a marker with the
  * argument register at that instruction, "I pc" an
  * instruction, "R pc addr size" or "W pc addr size" a data access, "E" the end.
@@ -29,14 +35,15 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
 enum { MARKS = 32, SKIPS = 8 };
 struct rec { char kind; uint64_t pc, addr; unsigned size; };
-static struct qemu_plugin_register *x0;
+static struct qemu_plugin_register *x0, *core_register;
+static unsigned current = UINT32_MAX;   /* the core executing the current block */
+static GByteArray *scratch;
 static uint64_t begin_addr, end_addr, phase_addr, phase_value;
 static uint64_t marks[MARKS]; static unsigned nmarks;
 static uint64_t skip_lo[SKIPS], skip_hi[SKIPS]; static unsigned nskips;
 static unsigned long want = 20, kept;
 static FILE *out;
-static struct qemu_plugin_scoreboard *board;
-static qemu_plugin_u64 active;
+static bool active;   /* a window of core 0 is open; QEMU runs every vCPU on one thread, so a plain flag is exact */
 static struct rec *buf; static size_t used, cap;
 static bool matched, done;
 
@@ -49,20 +56,29 @@ static void put(char kind, uint64_t pc, uint64_t addr, unsigned size)
     }
     buf[used++] = (struct rec){kind, pc, addr, size};
 }
+static void on_block(unsigned vcpu, void *ud)
+{
+    (void)vcpu; (void)ud;
+    uint64_t value = UINT64_MAX;
+    g_byte_array_set_size(scratch, 0);
+    int bytes = qemu_plugin_read_register(core_register, scratch);
+    if (bytes > 0) { value = 0; memcpy(&value, scratch->data, bytes > 8 ? 8 : (size_t)bytes); }
+    current = (unsigned)(value & 0xff);
+}
 static void on_begin(unsigned vcpu, void *ud)
 {
-    (void)ud;
-    if (vcpu || done) return;
+    (void)vcpu; (void)ud;
+    if (current || done) return;
     used = 0; matched = false;
-    qemu_plugin_u64_set(active, 0, 1);
+    active = true;
     put('M', begin_addr, 0, 0);
 }
 static void on_end(unsigned vcpu, void *ud)
 {
-    (void)ud;
-    if (vcpu || !qemu_plugin_u64_get(active, 0)) return;
+    (void)vcpu; (void)ud;
+    if (current || !active) return;
     put('M', end_addr, 0, 0);
-    qemu_plugin_u64_set(active, 0, 0);
+    active = false;
     if (!matched) return;
     fprintf(out, "W %lu\n", kept);
     for (size_t i = 0; i < used; ++i) {
@@ -77,7 +93,8 @@ static void on_end(unsigned vcpu, void *ud)
 }
 static void on_mark(unsigned vcpu, void *ud)
 {
-    if (vcpu || !qemu_plugin_u64_get(active, 0)) return;
+    (void)vcpu;
+    if (current || !active) return;
     uint64_t arg = UINT64_MAX;
     GByteArray *buf = g_byte_array_new();
     if (x0 && qemu_plugin_read_register(x0, buf) == 8) memcpy(&arg, buf->data, 8);
@@ -86,22 +103,26 @@ static void on_mark(unsigned vcpu, void *ud)
 }
 static void on_vcpu_init(qemu_plugin_id_t id, unsigned vcpu)
 {
-    (void)id;
-    if (vcpu) return;
+    (void)id; (void)vcpu;
+    if (core_register) return;
     GArray *regs = qemu_plugin_get_registers();
     qemu_plugin_reg_descriptor *d = (qemu_plugin_reg_descriptor *)regs->data;
-    for (unsigned i = 0; i < regs->len; ++i)
+    for (unsigned i = 0; i < regs->len; ++i) {
         if (!strcmp(d[i].name, "x0")) x0 = d[i].handle;
+        if (!strcmp(d[i].name, "TPIDR_EL1")) core_register = d[i].handle;
+    }
     g_array_unref(regs);
 }
 static void on_insn(unsigned vcpu, void *ud)
 {
-    if (vcpu) return;
+    (void)vcpu;
+    if (current || !active) return;
     put('I', (uint64_t)(uintptr_t)ud, 0, 0);
 }
 static void on_mem(unsigned vcpu, qemu_plugin_meminfo_t info, uint64_t vaddr, void *ud)
 {
-    if (vcpu || !qemu_plugin_u64_get(active, 0)) return;
+    (void)vcpu;
+    if (current || !active) return;
     bool store = qemu_plugin_mem_is_store(info);
     put(store ? 'W' : 'R', (uint64_t)(uintptr_t)ud, vaddr, 1u << qemu_plugin_mem_size_shift(info));
     if (!store && vaddr == phase_addr) {
@@ -122,6 +143,8 @@ static void on_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 {
     (void)id;
     size_t n = qemu_plugin_tb_n_insns(tb);
+    /* Block callbacks run before the instruction callbacks of the same block, and a block runs on one vCPU to its end. */
+    qemu_plugin_register_vcpu_tb_exec_cb(tb, on_block, QEMU_PLUGIN_CB_R_REGS, NULL);
     for (size_t i = 0; i < n; ++i) {
         struct qemu_plugin_insn *insn = qemu_plugin_tb_get_insn(tb, i);
         uint64_t pc = qemu_plugin_insn_vaddr(insn);
@@ -134,8 +157,8 @@ static void on_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
             if (pc == marks[m])
                 qemu_plugin_register_vcpu_insn_exec_cb(insn, on_mark, QEMU_PLUGIN_CB_R_REGS, ud);
         if (skipped(pc)) continue;
-        qemu_plugin_register_vcpu_insn_exec_cond_cb(insn, on_insn, QEMU_PLUGIN_CB_NO_REGS,
-                                                    QEMU_PLUGIN_COND_NE, active, 0, ud);
+        /* Not a conditional callback: QEMU 10.2.1 aborts in arm_mmu_idx_el with one under -icount. */
+        qemu_plugin_register_vcpu_insn_exec_cb(insn, on_insn, QEMU_PLUGIN_CB_NO_REGS, ud);
         qemu_plugin_register_vcpu_mem_cb(insn, on_mem, QEMU_PLUGIN_CB_NO_REGS, QEMU_PLUGIN_MEM_RW, ud);
     }
 }
@@ -169,8 +192,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_
     if (!begin_addr || !end_addr || !phase_addr) return -1;
     out = fopen(path, "w");
     if (!out) return -1;
-    board = qemu_plugin_scoreboard_new(sizeof(uint64_t));
-    active = qemu_plugin_scoreboard_u64(board);
+    scratch = g_byte_array_new();
     qemu_plugin_register_vcpu_init_cb(id, on_vcpu_init);
     qemu_plugin_register_vcpu_tb_trans_cb(id, on_trans);
     qemu_plugin_register_atexit_cb(id, on_plugin_exit, NULL);

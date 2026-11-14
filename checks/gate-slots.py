@@ -12,6 +12,8 @@ Every case runs real processes on a temporary home directory, so the file locks 
   landing-jump slots held by a landing and two workers; an older worker and a newer landing wait: the slot a worker frees goes to
                the landing, then the next free slot to the worker, and a landing takes slot 0 when it frees;
   perturb-limit the kill limit of the perturbation sweep is a multiple of its slowest measured point in the same JSON;
+  footprint-run the tick-footprint check runs QEMU on one thread with a fixed icount, so host load cannot change how many busy
+               ticks it traces, and kills it at a multiple of its slowest measured run in the same JSON;
   board-hold   a gate holds its step while a runner is in its FEL work, a dead runner holds nothing, and gates keep off the reserved CPUs;
   stale-ticket a waiting gate that is killed leaves no ticket behind that holds the queue.
 Usage: gate-slots.py --output DIR
@@ -249,6 +251,18 @@ def case_perturb_limit():
     assert "['perturb']" in text and 'gate-slots.json' in text
 
 
+def case_footprint_run():
+    """The tick-footprint check runs QEMU on one thread with a fixed icount and a kill limit from the same JSON, not a literal.
+    Under multi-threaded TCG a landing gate kept 195 busy ticks, below the check's minimum of 200, when other gates loaded the host."""
+    measured = CONFIG['tick_footprint']
+    assert measured['slowest_run_seconds'] > 0 and measured['kill_multiplier'] >= 4, measured
+    text = (ROOT / 'checks/tick-footprint-budget.py').read_text()
+    assert "'tcg,thread=single', '-icount', 'shift=0,sleep=off'" in text and 'thread=multi' not in text, \
+        'the footprint model runs with guest time taken from the host'
+    assert 'timeout=QEMU_KILL_SECONDS' in text and 'timeout=600' not in text, 'the footprint run is killed on a literal limit'
+    assert "['tick_footprint']" in text and 'gate-slots.json' in text
+
+
 def case_board_hold(home):
     """A gate holds its next step while a runner is in its FEL work, a dead runner holds nothing, a hung one holds until its deadline,
     and a gate stays off the CPUs that config reserves."""
@@ -295,6 +309,8 @@ def main():
     print('PASS image-builds')
     case_perturb_limit()
     print('PASS perturb-limit')
+    case_footprint_run()
+    print('PASS footprint-run')
     for name, case in (('two-gates', case_two_gates), ('timing-lock', case_timing_lock), ('landing-jump', case_landing_jump),
                        ('stale-ticket', case_stale_ticket), ('board-hold', case_board_hold)):
         home = args.output / name
