@@ -156,7 +156,14 @@ bytes removed and the size and SHA-256 of every linked ELF removed. The gate als
 image it built, because the per-checkout build directories that hold the images are rebuilt by the next gate on that checkout.
 
 A step that failed or was skipped keeps everything, and so does an evidence directory that no step names, so a failure stays
-diagnosable. The gate-root files stay as they are: `summary.txt`, `commands.txt`, `timing.txt`, `environment.txt`, `gate-record.json`,
+diagnosable. That includes the build products it ran on: the build directories are named after the checkout, not the gate, and every
+landing gate runs in `~/.cache/sunstoneos/land-integration`, so the next landing rebuilds into the same `gate-img-*` directories (on
+2026-11-14 a failing landing step's image was overwritten by the next landing before anyone re-ran it). At its end, while it still holds
+its checkout, a gate copies every build directory that a failing step's command names into `evidence/kept-builds/` (for a bundle, only the
+`out-` directory of its tree state), and `kept-builds/kept.json` records each failing step's command as run and pointed at the copies.
+Over the 130 gates of the week to 2026-11-14, 27 had a failing step, and the directories those steps named came to 39 MiB per failed
+gate at the median, 286 MiB at most and 1.7 GB in all. When a later gate of the same landing label passes, its slimming of the earlier
+gates removes the build products of the copies too. The gate-root files stay as they are: `summary.txt`, `commands.txt`, `timing.txt`, `environment.txt`, `gate-record.json`,
 `disk-peak.json` and the step logs. These are the only files that anything reads from a gate directory after the gate: `tools/land.py`
 reads `summary.txt` and `gate-record.json`, `tools/host_space.py` reads `disk-peak.json`, the evidence records under `docs/evidence/` cite
 `summary.txt` and `commands.txt`, and the board runner copies each image into its own queue entry. A passing gate also slims every step

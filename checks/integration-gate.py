@@ -725,6 +725,28 @@ exec "$REAL" "$@"
         self.assertIn('FAIL check-pmic-tree', summary)
         self.assertIn('PASS check-power-domains-tree', summary)
 
+    def test_failing_step_keeps_its_build_directory_from_the_next_gate(self):
+        central = self.sandbox / 'build' / ('gate-central-' + self.tree(self.source))
+        central.mkdir(parents=True)
+        (central / 'product.elf').write_text('first gate\n')
+        self.env['GATE_TEST_FAIL'] = 'kernel-check'
+        result = self.run_gate('--reason', 'Central build fails', '--target', 'kernel-check', '--check', 'kernel')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        kept_root = self.sandbox / 'build/gate-case/evidence/kept-builds'
+        kept = kept_root / central.name
+        self.assertEqual((kept / 'product.elf').read_text(), 'first gate\n')
+        record = json.loads((kept_root / 'kept.json').read_text())
+        self.assertEqual(record['central-build']['kept'], {str(central): str(kept)})
+        self.assertIn(str(kept), record['central-build']['rerun'])
+        self.assertNotIn(str(central), record['central-build']['rerun'])
+        # The next gate of the same checkout builds into the same directory; the first gate's copy does not change.
+        (central / 'product.elf').write_text('second gate\n')
+        self.env.pop('GATE_TEST_FAIL')
+        result = self.run_gate('--reason', 'Central build passes', '--target', 'kernel-check', '--check', 'kernel', label='second')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((kept / 'product.elf').read_text(), 'first gate\n')
+        self.assertFalse((self.sandbox / 'build/gate-second/evidence/kept-builds').exists())
+
     def test_failed_build_skips_only_the_checks_that_need_it(self):
         self.full_catalogue()
         self.env['GATE_TEST_FAIL'] = 'kernel-check'

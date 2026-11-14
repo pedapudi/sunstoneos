@@ -43,6 +43,7 @@ import host_space
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -451,7 +452,7 @@ def main(argv=None):
     image_builds, image_jobs, image_peak_gb = (1, build_jobs, 0) if fail_fast else gate_slots.image_builds(slot_config, build_jobs)
     # Every check, build and configure step runs with this environment; it is
     # recorded in environment.txt. Only the configure steps use cfg.sh.
-    results, timings = {}, []
+    results, timings, commands = {}, [], {}
     guard = threading.Lock()
 
     class Stop(Exception):
@@ -477,6 +478,7 @@ def main(argv=None):
         """Run one step; the result is recorded as PASS, WARN or FAIL."""
         command = [str(value) for value in command]
         with guard:
+            commands[name] = command
             with (output / 'commands.txt').open('a') as stream:
                 stream.write(name + ': ' + shlex.join(command) + '\n')
         gate_slots.wait_for_board(cache, note)       # a board run in its FEL work is host-timed: do not start a step beside it
@@ -862,10 +864,51 @@ def main(argv=None):
     note('mode: ' + ('fail-fast' if fail_fast else 'keep-going, %d parallel checks, memory guard %g GiB'
                      % (jobs, args.min_available_gb)) + ('' if args.full else ', slot %d of %d, %s, -j %d' % (
                          gate_lock.index, slots, args.priority, build_jobs)) + (', strict documentation checks' if args.strict_docs else ''))
+    def keep_failing_builds():
+        """Copy the build directories that a failing step names into this gate's evidence/kept-builds/ while the gate still holds its
+        checkout. The build directories are named after the checkout, not the gate, so the next gate of the same checkout (every
+        landing gate runs in CACHE/land-integration) rebuilds into them and would overwrite what the step ran on. A bundle keeps only
+        the out- directory of its tree state. kept.json records each failing step's command, as run and pointed at the copies."""
+        kept_root, record = output / 'evidence' / 'kept-builds', {}
+        for step in sorted(name for name, verdict in results.items() if verdict == 'FAIL' and name in commands):
+            sources = []
+            for token in commands[step]:
+                for part in token.split('='):
+                    path = Path(part)
+                    if not path.is_absolute() or build_root not in path.parents:
+                        continue
+                    parts = path.relative_to(build_root).parts
+                    top = build_root / parts[0]
+                    if not parts[0].startswith('gate-') or top == output or not top.is_dir():
+                        continue
+                    keep = top / parts[1] if len(parts) > 1 and parts[1].startswith('out-') and (top / parts[1]).is_dir() else top
+                    if keep not in sources:
+                        sources.append(keep)
+            copies = {}
+            for source_dir in sources:
+                target = kept_root / source_dir.relative_to(build_root)
+                if not target.exists():
+                    shutil.copytree(source_dir, target, symlinks=True)
+                copies[str(source_dir)] = str(target)
+            if copies:
+                rerun = list(commands[step])
+                for original, copy in sorted(copies.items(), key=lambda item: -len(item[0])):
+                    rerun = [value.replace(original, copy) for value in rerun]
+                record[step] = {'command': commands[step], 'kept': copies, 'rerun': rerun}
+        if record:
+            (kept_root / 'kept.json').write_text(json.dumps(record, indent=1, sort_keys=True) + '\n')
+            size = sum(f.stat().st_size for f in kept_root.rglob('*') if f.is_file() and not f.is_symlink())
+            note('kept the build directories of %d failing steps: %.1f MiB in %s' % (len(record), size / 2**20, kept_root))
+
     def conclude(code):
-        """Record the gate's peak disk use and the hashes of the images it built, then slim the evidence of every passing step
-        (and, when the gate passed, the earlier gates of its landing label; tools/clean-generated.py). A failing step keeps everything."""
+        """Record the gate's peak disk use and the hashes of the images it built, keep the build directories of the failing steps, then
+        slim the evidence of every passing step (and, when the gate passed, the earlier gates of its landing label, kept copies
+        included; tools/clean-generated.py). A failing step keeps everything."""
         record_peak()
+        try:
+            keep_failing_builds()
+        except OSError as error:
+            note('kept-builds: copying the build directories of the failing steps failed: %s' % error)
         built = {}
         for image in [*variants, *recipes]:
             step = ('os-' if image in VARIANTS else 'img-') + image + '-build'
