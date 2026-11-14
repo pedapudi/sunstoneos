@@ -4,6 +4,7 @@ get_filename_component(SUNSTONE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." 
 include("${SUNSTONE_SOURCE_ROOT}/cmake/kernel-flags.cmake")
 include("${SUNSTONE_SOURCE_ROOT}/cmake/patch.cmake")
 include("${SUNSTONE_SOURCE_ROOT}/cmake/latency-instrumentation.cmake")
+include("${SUNSTONE_SOURCE_ROOT}/cmake/current-tcb.cmake")
 set(smp_port "${FREERTOS_DIR}/portable/GCC/ARM_CR82")
 set(smp_build "${CMAKE_CURRENT_BINARY_DIR}/port")
 file(MAKE_DIRECTORY "${smp_build}")

@@ -38,6 +38,11 @@
     "slowest_run_seconds": 33.5,
     "kill_multiplier": 4
   },
+  "tick_footprint": {
+    "_comment": "checks/tick-footprint-budget.py runs the latency cause model on one TCG thread with a fixed icount; alone it takes 71.5 s, six at once beside twelve busy processes 72.6 to 96.6 s (2026-11-14). The kill limit is a hang backstop: kill_multiplier times the slowest.",
+    "slowest_run_seconds": 96.6,
+    "kill_multiplier": 4
+  },
   "reserved_cpus": [
     23
   ],

@@ -1,4 +1,5 @@
 include("${CMAKE_CURRENT_LIST_DIR}/scheduler-partitioned.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/current-tcb.cmake")
 # Separate cached eight-core A733 diagnostic.
 if(NOT DEFINED SUNSTONE_SOURCE_ROOT)
   set(SUNSTONE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")

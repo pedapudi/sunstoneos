@@ -398,6 +398,44 @@ of the E902 start registers (observed; reported in
 reaches a stub that returns 0, so the SD controller, clock and pins are left in
 boot0's transfer state ([boot-slots.md](../boot-slots.md)).
 
+### boot0 takes the same path after a watchdog reset as after a power-up
+
+boot0 reads no reset-source or reset-status register and has no standby-resume
+path. Its code holds no WDT0 address (`0x0205xxxx`), as a literal or built with
+`movw`/`movt`, so it never reads, reconfigures or disarms WDT0, and no ROM
+redirect address (`0x070501c0`, `0x070501c4`, `0x070501d4`). It reads four
+kinds of state that a WDT0 reset keeps, and none of them selects a different
+DRAM path or a resume jump (observed, `829ea8e3`):
+
+- **RTC general-purpose words 0–7.** The routine at `0x4a990` prints each
+  nonzero word and compares only GP2 (`0x07090108`). The value `0x5aa5a55a`
+  selects FEL (`0x4a9b4`). The value `0x5aa55aa5` starts a crashdump
+  handshake: boot0 writes `0x5aa55aa6`, waits for `0x5aa55aa7` and then enters
+  FEL (`0x4a9ca`–`0x4a9e2`). Before entering FEL, `main` clears GP2 (`0x4aa08`).
+  Any other value lets the boot continue.
+- **The RTC clock-source control word `LOSC_CTRL` (`0x07090000`).** The
+  CPU-PLL routine at `0x491b8` reads it at `0x49394`. With bit 0 clear, the
+  internal RC oscillator selected, boot0 sets the crystal gain bits 3:2 and
+  stores the word without the `0x16aa` key (`0x4947e`, store at `0x493de`), so
+  the source stays on the RC. With bit 0 set, the 32.768 kHz crystal
+  selected, a keyed store clears bits 0 and 14 (RC, automatic switch off). boot0
+  then sets the gain bits, calls its delay routine `0x48d80` with argument 50,
+  and stores the word with `0x16aa4001` set (crystal and automatic switch).
+  This store is the only boot0 write that can change the clock WDT0 counts in
+  configuration 1 (A733 User Manual V1.00, sections 8.3.6.5 and 9.1.7.1).
+- **The DCXO control word `0x07090160`.** Bit 14 (read at `0x49224`) skips
+  the CPU-PLL setup and bit 15 selects one of two PLL programs.
+- **The PMIC.** At TWI address `0x36` boot0 requires chip ID 3 in register
+  `0x0e` (`0x5d940`). It then sets bit 3 of register `0x10` and bit 7 of
+  registers `0x13`–`0x1a`. Repeating these settings does not change them.
+
+Every failure in `main` (board setup, the volume-key check, DRAM training or
+the package load) reaches the message "Failed preparing the second boot" at
+`0x5e1b8`. That path invalidates the branch predictor and branches to ROM
+`0x20`, the forced-FEL entry (`0x5e1d0`, `0x48ec6`). boot0 has no path that
+parks the CPU. Its DRAM path sets bit 0 of `0x07010250` before training in
+every boot (`0x57924`) and does not branch on that word.
+
 ### Writes boot0 does not make
 
 boot0 makes no write to the PCK-600 power controller, the GPU register window,

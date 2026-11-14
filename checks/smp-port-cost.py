@@ -52,7 +52,9 @@ CACHE = Path.home() / '.cache/sunstoneos'
 FREERTOS = CACHE / 'sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2'
 FLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-ffreestanding', '-fno-builtin',
          '-fno-stack-protector', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables',
-         '-ffunction-sections', '-fdata-sections', '-O2', '-g', '-Wall', '-Wextra', '-Werror']
+         '-ffunction-sections', '-fdata-sections', '-O2', '-g', '-Wall', '-Wextra', '-Werror',
+         # The patched tasks.c gives each core's current-task entry a cache line (include/sunstone_current_tcb.h).
+         '-DportCURRENT_TCB_SHIFT=6']
 QEMU = ['-machine', 'virt,gic-version=3,secure=off,virtualization=off', '-smp', '2', '-m', '128M',
         '-nographic', '-monitor', 'none', '-semihosting-config', 'enable=on,target=native', '-icount', 'shift=0']
 PORT = 'portable/GCC/ARM_CR82'

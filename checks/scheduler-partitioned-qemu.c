@@ -323,14 +323,14 @@ void __wrap_vTaskSwitchContext(BaseType_t cpu)
 {
     /* Every context save has just stored the outgoing task's SP_EL0 in the first word of its
      * control block. It must lie in a task stack, which here is static data, and be aligned. */
-    uintptr_t saved = *(uintptr_t *)pxCurrentTCBs[cpu];
+    uintptr_t saved = *(uintptr_t *)portCURRENT_TCB(cpu);
     configASSERT(saved >= (uintptr_t)__bss_start && saved < (uintptr_t)__bss_end && !(saved & 15));
     in_switch[cpu] = 1;
     __real_vTaskSwitchContext(cpu);
     in_switch[cpu] = 0;
     __atomic_fetch_add(&switches[cpu], 1, __ATOMIC_RELAXED);
     /* TPIDRRO still identifies the saved outgoing frame until port restore. */
-    unsigned idle = uxTaskPriorityGet(pxCurrentTCBs[cpu]) == 0;
+    unsigned idle = uxTaskPriorityGet(portCURRENT_TCB(cpu)) == 0;
     __atomic_store_n(&selected_idle[cpu], idle, __ATOMIC_RELAXED);
     if (idle) __atomic_fetch_add(&idle_selected[cpu], 1, __ATOMIC_RELAXED);
 }
@@ -862,9 +862,10 @@ static void control_races_verify(void)
 {
     /* The freeze steps hold CPU0's gate until CPU0's background task releases it. A mover may start on any core at a
      * priority above the background; one that enters the kernel on CPU0 during a freeze waits at admission and starves
-     * the release. Each mover blocks on its first notification before any freeze. */
+     * the release. Each mover blocks on its first notification before any freeze. A mover at priority 3 runs only in the
+     * time that the controller and CPU0's worker leave, which shrinks as an injected delay grows. */
     for (unsigned id = 0; id < 2; ++id) {
-        for (unsigned wait = 0; wait < 200 && eTaskGetState(movers[id]) != eBlocked; ++wait) vTaskDelay(1);
+        for (unsigned wait = 0; wait < limit(200) && eTaskGetState(movers[id]) != eBlocked; ++wait) vTaskDelay(1);
         configASSERT(eTaskGetState(movers[id]) == eBlocked);
     }
     /* The peer outranks the controller. At equal priority the voluntary yield

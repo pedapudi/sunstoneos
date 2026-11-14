@@ -322,14 +322,14 @@ static bool ssKernelHandlePin(void *task, struct ss_kernel_pin *pin)
 static unsigned ssKernelCPUId(void) { return (unsigned)portGET_CORE_ID(); }
 static TaskHandle_t ssKernelCurrentSnapshot(unsigned cpu)
 {
-    return __atomic_load_n(&pxCurrentTCBs[cpu], __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&portCURRENT_TCB(cpu), __ATOMIC_ACQUIRE);
 }
 static uint64_t ssKernelNow(void)
 { return atomic_load_explicit(&ssKernelTime, memory_order_acquire); }
 static TCB_t *ssKernelSelf(void)
 {
     /* Boot has no migration and has not installed the task register yet. */
-    if (!xSchedulerRunning) return pxCurrentTCBs[ssKernelCPUId()];
+    if (!xSchedulerRunning) return portCURRENT_TCB(ssKernelCPUId());
     /* One architectural snapshot binds task identity across migration. */
     return (TCB_t *)(uintptr_t)(ullPortGetTaskRegister() & portTASK_REGISTER_TCB_MASK);
 }
@@ -619,7 +619,7 @@ static bool ssKernelAddTask(TCB_t *t)
     bool yield = false;
     if (slot < SS_OWNER_SLOTS && xSchedulerRunning) {
         struct ssKernelCPU *cpu = &ssKernelCPUs[ssKernelCPUId()];
-        if (owner == ssKernelCPUId() && t->uxPriority > pxCurrentTCBs[owner]->uxPriority) {
+        if (owner == ssKernelCPUId() && t->uxPriority > portCURRENT_TCB(owner)->uxPriority) {
             cpu->reschedule = true;
             yield = !cpu->preempt;
         }
@@ -1596,8 +1596,9 @@ static void ssKernelSwitch(unsigned c)
     atomic_store_explicit(&s->execution, SS_K_RUNNING, memory_order_release);
     s->off_cpu = false;
     ssKernelPullIdle(c, (((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0);
-    __atomic_store_n(&pxCurrentTCBs[c], selected->context, __ATOMIC_RELEASE);
-    pxCurrentTCBs[c]->xTaskRunState = (BaseType_t)c;
+    __atomic_store_n(&portCURRENT_TCB(c), selected->context, __ATOMIC_RELEASE);
+    portCURRENT_TCB(c)->xTaskRunState = (BaseType_t)c;
+    traceCURRENT_TCB_SET(c, selected->context, (((TCB_t *)selected->context)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0);
 #ifndef SS_KERNEL_TEST_NO_IDLE_PULL
     /* The selecting pass skips the pull, and the pull takes compatibility locks the selector
      * never takes. A migratable task left waiting behind the task just selected, with an
@@ -1612,15 +1613,15 @@ static void ssKernelSwitch(unsigned c)
 #endif
     ssKernelSliceRefresh(c, true);
     traceTASK_SWITCHED_IN();
-    portTASK_SWITCH_HOOK(pxCurrentTCBs[c]);
+    portTASK_SWITCH_HOOK(portCURRENT_TCB(c));
 #if ( configUSE_POSIX_ERRNO == 1 )
-    FreeRTOS_errno = pxCurrentTCBs[c]->iTaskErrno;
+    FreeRTOS_errno = portCURRENT_TCB(c)->iTaskErrno;
 #endif
 #if ( configUSE_C_RUNTIME_TLS_SUPPORT == 1 )
-    configSET_TLS_BLOCK(pxCurrentTCBs[c]->xTLSBlock);
+    configSET_TLS_BLOCK(portCURRENT_TCB(c)->xTLSBlock);
 #endif
     cpu->reschedule = false;
-    bool idle = (pxCurrentTCBs[c]->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0;
+    bool idle = (portCURRENT_TCB(c)->uxTaskAttributes & taskATTRIBUTE_IS_IDLE) != 0;
     if (ss_owner_commit_dispatch(&cpu->run, selected->priority, idle)) {
         cpu->reschedule = true;
         ssKernelForce(c);
@@ -2217,8 +2218,43 @@ static bool ssKernelControlPause(void *context, unsigned c)
     (void)context;
     return ssKernelCPUs[c].reschedule || ss_owner_has_pending(&ssKernelCPUs[c].run);
 }
+/* Whether a drain on this CPU has work: an admitted control request (pending and not parked), or a gate that is being
+ * acquired or is held, which the drain answers with a checkpoint. Acquire loads only; the mask is not changed. */
+static inline bool ssKernelControlDue(unsigned c)
+{
+    unsigned gate = atomic_load_explicit(&ssKernelControl.gate_phase, memory_order_acquire);
+    return gate == SS_GATE_ACQUIRING || gate == SS_GATE_HELD || ss_control_has_pending(&ssKernelControl, c);
+}
+#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+static void ssKernelControlDrainTestAfter(unsigned c)
+{
+    for (unsigned w = 0; w < 2; ++w) {
+        uint64_t orphan = ssKernelCPUs[c].object_repair[w] &
+            ~atomic_load_explicit(&ssKernelControl.parked[c].word[w], memory_order_acquire) &
+            ~atomic_load_explicit(&ssKernelControl.pending[c].word[w], memory_order_acquire);
+        configASSERT(!orphan);
+    }
+    extern void ss_kernel_test_after_control_batch(unsigned) __attribute__((weak));
+    if (ss_kernel_test_after_control_batch) ss_kernel_test_after_control_batch(c);
+}
+#endif
+/* Most entries find no request. They test the pending words and the gate with acquire loads and return without
+ * raising the mask. A request published after the test is not lost: every publication that makes a request pending and
+ * not parked on a CPU signals that CPU with an SGI after the bit is visible (hint, ss_control_wake_mask), or is made by
+ * the CPU's own current task as it enters the owner (ss_control_suspend_current). The SGI enters the owner at the
+ * next point where the mask opens, and that entry's service drains the request. */
 static void ssKernelControlDrain(void)
 {
+    if (xSchedulerRunning) {
+        const unsigned c = ssKernelCPUId();
+        if (!ssKernelControlDue(c)) {
+            SS_KERNEL_PERTURB(SS_PERTURB_CONTROL_OPEN);
+#ifdef SS_KERNEL_TEST_ADMIN_ENTER
+            ssKernelControlDrainTestAfter(c);
+#endif
+            return;
+        }
+    }
     const bool exception = ((ullPortGetTaskRegister() >> portTASK_REGISTER_EL1_BIT) & 1U) != 0;
     const bool disabled = ssKernelIrqsDisabled();
     UBaseType_t irq = portSET_INTERRUPT_MASK();
@@ -2256,14 +2292,7 @@ static void ssKernelControlDrain(void)
     SS_KERNEL_PERTURB(SS_PERTURB_CONTROL_OPEN);
     (void)ss_control_drain_excluding(&ssKernelControl, c, cpu->control_seen);
 #ifdef SS_KERNEL_TEST_ADMIN_ENTER
-    for (unsigned w = 0; w < 2; ++w) {
-        uint64_t orphan = cpu->object_repair[w] &
-            ~atomic_load_explicit(&ssKernelControl.parked[c].word[w], memory_order_acquire) &
-            ~atomic_load_explicit(&ssKernelControl.pending[c].word[w], memory_order_acquire);
-        configASSERT(!orphan);
-    }
-    extern void ss_kernel_test_after_control_batch(unsigned) __attribute__((weak));
-    if (ss_kernel_test_after_control_batch) ss_kernel_test_after_control_batch(c);
+    ssKernelControlDrainTestAfter(c);
 #endif
     if (xSchedulerRunning) {
         if (exception) (void)portSET_INTERRUPT_MASK_FROM_ISR();
@@ -3440,7 +3469,7 @@ static void ssKernelSuspendAll(void)
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
     ++ssKernelCPUs[c].preempt;
-    uintptr_t holder = (uintptr_t)pxCurrentTCBs[c];
+    uintptr_t holder = (uintptr_t)portCURRENT_TCB(c);
     uint64_t incarnation = xSchedulerRunning ? atomic_load_explicit(
         &ssKernelRegistry.descriptor[ssKernelCurrent()->ready.slot].incarnation, memory_order_acquire) : 0;
     portCLEAR_INTERRUPT_MASK(irq);
@@ -3450,7 +3479,7 @@ static BaseType_t ssKernelResumeAll(void)
 {
     UBaseType_t irq = portSET_INTERRUPT_MASK();
     unsigned c = ssKernelCPUId();
-    uintptr_t holder = (uintptr_t)pxCurrentTCBs[c];
+    uintptr_t holder = (uintptr_t)portCURRENT_TCB(c);
     uint64_t incarnation = xSchedulerRunning ? atomic_load_explicit(
         &ssKernelRegistry.descriptor[ssKernelCurrent()->ready.slot].incarnation, memory_order_acquire) : 0;
     bool yield = ss_control_resume_all(&ssKernelControl, c, holder, incarnation,
