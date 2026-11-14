@@ -180,7 +180,7 @@ targeted selections included: the same selection takes about a third of the time
 runs (below).
 
 Builds run one at a time and finish before any check starts. A keep-going gate
-then runs the checks in parallel. `--jobs N` bounds the workers and sets the `-j` of the builds (default: the gate's share of the
+then runs the checks in parallel, longest first: the order follows the host seconds that the latest 20 earlier gates recorded in their `timing.txt`, the most recent record of each step winning, and a step with no record starts first. The order changes no check's inputs or verdict; it lets the longest check start when the builds end instead of after the shorter ones. `--jobs N` bounds the workers and sets the `-j` of the builds (default: the gate's share of the
 usable cores, below; 8 and `-j 12` for `--full`). The
 gate starts no new check while `MemAvailable` is below `--min-available-gb`
 (default 32); a check that cannot start within `--memory-wait` seconds
