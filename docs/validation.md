@@ -143,16 +143,30 @@ The gate and the landing run at nice +10 and the idle I/O class, and image-copyi
 ([board runner](board-runner.md#board-runs-keep-their-timing-while-the-gate-runs)). A check that copies a disk image calls
 `harness.copy_image`, not `shutil.copyfile`; `checks/host-priority.py` checks the priorities and the sparse copy.
 
-### A passing gate removes its bulky outputs
+### A passing step keeps its records and drops its build products
 
-A gate that passes deletes the fixture build trees (`build`, `build-*`, `inputs`) and the files over 8 MiB under its `evidence/` directory,
-and does the same to the earlier gates of the same landing label. It keeps `summary.txt`, `timing.txt`, `commands.txt`,
-`gate-record.json` (which `tools/land.py` reads), `disk-peak.json`, the step logs and the other evidence files. A failed gate keeps
-everything until a later gate of that label passes. The deletion is `slim_gate` in `tools/clean-generated.py` and obeys its refusals:
-no evidence records, sources or build directory that an evidence record or queue entry names. The per-checkout build directories
-(`gate-os-*`, `gate-img-*`, `gate-central-*`) are the incremental build caches and stay; `clean-generated.py stale-builds DAYS` prunes them.
-`clean-generated.py` never deletes a build directory that a check or tool names as `build/NAME` in its source (for example `npu-graph-variants`);
-the set is derived from the sources. `clean-generated.py slim-gates [--apply]` applies the same rule to the passing gate directories already on disk.
+At its end, after it records its peak disk use, a gate reduces the evidence directory of every step that passed (PASS or WARN) to its
+records. Step `image-NAME` writes `evidence/images/NAME`, `indexed-NAME` writes `evidence/indexed/NAME` and `check-NAME` writes
+`evidence/NAME`. A record is a text file of a record suffix (`.json`, `.jsonl`, `.log`, `.txt`, `.md`, `.csv` and a few others, or no
+suffix) up to 8 MiB that is no ELF file or archive. The step keeps the records at the top of its directory as plain files and
+compresses any of them over 1 MiB in place (`NAME.gz`); it packs the records of its subdirectories into one `records.tar.gz`. Everything
+else goes: object files, linked executables and images, generated sources, firmware and tensor copies, CMake build trees, fixture Git
+repositories and the fixture `build`, `build-*` and `inputs` directories. `retention.json` in the step directory records the count and
+bytes removed and the size and SHA-256 of every linked ELF removed. The gate also writes `images.json`: the path, size and SHA-256 of each
+image it built, because the per-checkout build directories that hold the images are rebuilt by the next gate on that checkout.
+
+A step that failed or was skipped keeps everything, and so does an evidence directory that no step names, so a failure stays
+diagnosable. The gate-root files stay as they are: `summary.txt`, `commands.txt`, `timing.txt`, `environment.txt`, `gate-record.json`,
+`disk-peak.json` and the step logs. These are the only files that anything reads from a gate directory after the gate: `tools/land.py`
+reads `summary.txt` and `gate-record.json`, `tools/host_space.py` reads `disk-peak.json`, the evidence records under `docs/evidence/` cite
+`summary.txt` and `commands.txt`, and the board runner copies each image into its own queue entry. A passing gate also slims every step
+of the earlier gates of its landing label, which were kept for diagnosis. The deletion is `slim_gate` in `tools/clean-generated.py` and
+obeys its refusals: no evidence records, sources or build directory that an evidence record or queue entry names. On a landing gate of
+88 steps this keeps 7 MB of 340 MB and takes under one second. The per-checkout build directories (`gate-os-*`, `gate-img-*`,
+`gate-central-*`) are the incremental build caches and stay; `clean-generated.py stale-builds DAYS` prunes them.
+`clean-generated.py` never deletes a build directory that a check or tool names as `build/NAME` in its source (for example
+`npu-graph-variants`); the set is derived from the sources. `clean-generated.py slim-gates [--apply]` applies the same rule to the gate
+directories already on disk, reading each step's verdict from `summary.txt`.
 
 ### The gate keeps its temporary files off /tmp
 
@@ -191,6 +205,39 @@ application check, the indexed checks named in `SERIAL_CHECKS` in
 [checks/check-index.py](../checks/check-index.py) and the wall-time checks of the timing lock (below). The index reports the
 choice as the `serial` field of each entry.
 
+### Scheduler QEMU models: wake latency is a critical path
+
+The yield models (`scheduler-yield-qemu` and `scheduler-yield-storm-qemu`, run by `checks/scheduler-control-linked.py`) used to assert that
+no ordinary wake took more than half of the 400 microsecond wake period, measured as the counter ticks from the wake interrupt to the
+served task. The runs use one TCG thread and `-icount shift=0,sleep=off`, where the eight vCPUs take turns and guest time is the sum of
+the instructions that all of them execute. A core that spins while it waits, here the priority-1 busy task of the victim core, therefore
+adds its instructions to the elapsed time of the wake, which on hardware, where the cores run in parallel, it does not. How many of
+them it adds depends on the order in which the vCPUs happen to interleave, and under host load that order differed in about one run
+in twenty: the worst wake was 11,207 ticks (90 percent of the 12,500-tick bound) in 23 of 24 runs and 16,016 ticks in the other. QEMU 10.2.1's own host-timed paths are not the cause: the round-robin kick timer runs on the virtual clock, and no RCU
+force-kick occurred in 72 loaded runs. The cause of the different interleavings is not identified; QEMU pinned to one or two otherwise idle
+cores differed in 22 to 25 percent of runs, so it is not starvation of the QEMU thread.
+
+The bound is now on the critical path of each wake, in instructions: the instructions of the owner (core 0) plus the instructions of the
+victim core itself, both outside the spin function, between the wake interrupt and the served task. `tools/qemu-critical-path.c` is a TCG
+plugin that counts the instructions each vCPU executes (the quantity the PMU instruction counter of each core reports under icount) and
+snapshots the counts at the empty marker functions `ymark_isr_N` and `ymark_srv_N` that `checks/scheduler-yield-qemu.c` calls on core N; the
+check subtracts the two snapshots. The bound stays 200 microseconds: at the model's one nanosecond per instruction (1,000 instructions per
+microsecond, 16 per tick of the 62.5 MHz counter) it is 200,000 instructions, the value of the old 12,500 ticks. The models no longer
+assert the tick latency; they still count raised and served wakes, the pending switch requests and the fast-path exits.
+
+Over 132 runs under 24 and 48 busy host processes the worst critical path was 41,924 instructions in every run of the yield model (21
+percent of the bound) and 17,022 in every run of the storm model (8.5 percent); it did not vary with the interleaving. An earlier version of
+the plugin counted 36,855 to 84,814 because it took the executing core from the callback's `vcpu` argument, which in QEMU 10.2.1
+(`accel/tcg/plugin-gen.c`, `gen_cpu_index`) is the index of the vCPU that translated the block, baked in as a constant when the run is not
+`CF_PARALLEL`, as `-accel tcg,thread=single` is; translated blocks are shared by all vCPUs, so vCPU 0 was credited with the instructions
+of every core (118 million of the blocks of one run), and the inline per-vCPU counters share the defect. The plugin now reads TPIDR_EL1,
+which `platform/qemu-smp/start.S` sets to the core index before any C, in every block (MPIDR_EL1 reads 0 through the plugin interface), and
+the check requires every marker to have run on the core that its name gives (4,242 of 4,242 do). The case `yield-wake-path-regression`
+runs the model with 6,000 extra loop turns of work on the wake path (about 10 instructions each) and requires the critical path to cross the
+bound (217,260 measured, 8.6 percent above it, the same in every run). The bound is not the only detector there, and cannot be: the
+models' own end-of-run accounting fails above about 3,000 turns, where the critical path is 65,000 instructions, and a run that fails
+ends early, so the path of the larger delays does not rise monotonically (8,000 turns: 119,619).
+
 ### Gate slots and the timing lock
 
 The host runs N gates at once, not one. `tools/gate_slots.py` holds the slots as the files `~/.cache/sunstoneos/gate.lock.0` to
@@ -206,11 +253,10 @@ mean cores and peak resident memory of one gate, all measured with a sampler on 
 `jobs_per_slot` divides the usable cores across the slots. Change a measurement there, not the code, when the host or the gate changes.
 
 The steps whose result depends on wall time hold the exclusive `~/.cache/sunstoneos/gate-timing.lock` while they run and run alone in
-their gate: the soak, `scheduler-control-linked.py` (its perturbation sweep kills a QEMU run after 120 s of wall time, whatever the
-injected delay), `smp-ticket-lock.py`, `tick-footprint-budget.py`, `gpu-conformance.py`, `land.py`, `submit-wait.py`, `cpu-npu-concurrency.py`,
-`cpu-npu-return-chain.py` and the `SERIAL_CHECKS`. The two CPU/NPU checks run the application's producer on eight host threads
-whose counter is the host's `CLOCK_MONOTONIC` (`checks/cpu-npu-concurrency/producer.c`); the receipt decoder allows 0.1 s
-after the 5 s work cutoff for every worker to finish its last chunk, which a loaded host can exceed. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
+their gate: the soak, `scheduler-control-linked.py` (which also runs the yield models, whose wake bound is the critical path described above; its perturbation sweep kills a QEMU run that exceeds four times the slowest measured point, 85.7 s, recorded in the same
+file; the runs count instructions, so the host load does not change them), `smp-ticket-lock.py`, `tick-footprint-budget.py`, `gpu-conformance.py`, `land.py`, `submit-wait.py` and the `SERIAL_CHECKS`. The two CPU/NPU
+checks (`cpu-npu-concurrency.py`, `cpu-npu-return-chain.py`) need no lock: their producer runs the application's threads on a
+virtual counter (`checks/cpu-npu-concurrency/producer.c`), so two runs write the same receipt whatever the host load. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
 pass criteria do not change. `checks/gate-slots.py` runs two gates at once, the exclusive timing lock, a landing that goes ahead of an
 older worker and a killed waiter.
 
