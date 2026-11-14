@@ -282,15 +282,25 @@ pending work at selection, signal with the band of the highest pending hint,
 or with SGI 0 when commands, controls or repairs are due.
 
 The core's open mask lives in its `xPortCoreStates` line (offset 16, stored
-XOR 0xff so that a zero line opens every priority). Selection writes it after
-it stores the selected task, and a priority change of the running task writes
-it again. Every path that leaves the API mask writes the core's current open
-mask, never a saved copy: the context restore, the enable and unmask
-supervisor calls, `vPortClearInterruptMask`, `vPortClearInterruptMaskFromISR`
-and the owner's interrupt exit. A restore value above the API mask is replaced
-by the open mask, because a switch inside the masked region can change the
-core's band after the value was saved. The restore paths already write
-`ICC_PMR_EL1`, so the bands add one store to the core's own line per selection.
+XOR 0xff so that a zero line opens every priority), the line whose FPU
+indicator the context restore already reads. Selection writes it after it
+stores the selected task, and a priority change of the running task writes it
+again. Every task-level path that leaves the API mask writes the core's current
+open mask: the context restore, the enable and unmask supervisor calls and
+`vPortClearInterruptMask`, where a restore value above the API mask is replaced
+by the open mask. A priority change inside a task's masked region can move the
+band after the value was saved.
+
+The interrupt-level restores, `vPortClearInterruptMaskFromISR` and the owner's
+interrupt exit, write the saved value and read no open mask. Inside an
+interrupt the band changes only through a selection, or through a priority
+change of the running task, which requests a reschedule. Either way the
+interrupt exit reaches the context restore, which writes the open mask, before
+the interrupted task runs. With preemption disabled the old band's mask stays
+until the deferred yield, and the selection there reads every pending hint
+whether or not its SGI was delivered. CPU0's busy tick therefore reads no
+`xPortCoreStates` line (`checks/tick-footprint-budget.py`), and the bands add
+one store to the core's own line per selection.
 The cost of the `ICC_PMR_EL1` write itself (the cause bench's cases 16 and 17,
 one with the barriers the port uses and one without) is measured by the
 stage-2 board run.

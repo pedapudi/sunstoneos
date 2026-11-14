@@ -364,7 +364,10 @@ static __attribute__((noinline)) void ssKernelPublishSGI(void *context, unsigned
 #endif
     }
 }
-static const struct ss_owner_backend ssKernelBackend = { .sgi = ssKernelSGI, .publish = ssKernelPublishSGI };
+/* One line: a publication reads the publish and context members, and the
+ * 48-byte table must not straddle two lines on CPU0's release path. */
+static const struct ss_owner_backend ssKernelBackend __attribute__((aligned(64))) =
+    { .sgi = ssKernelSGI, .publish = ssKernelPublishSGI };
 #else
 static const struct ss_owner_backend ssKernelBackend = { .sgi = ssKernelSGI };
 #endif
@@ -478,8 +481,10 @@ static inline __attribute__((always_inline)) void ssKernelForce(unsigned cpu)
 }
 #if configSS_BAND_SGIS
 /* CPU c, with the API mask held: its running task is now of `priority`, so
- * its open mask becomes that priority's band mask (bands.h). Every later exit
- * from the API mask writes it (portmacro.h, portOPEN_MASK). */
+ * its open mask becomes that priority's band mask (bands.h). Every later
+ * task-level exit from the API mask writes it (portmacro.h, portOPEN_MASK); a
+ * change inside an interrupt requests a reschedule, so the interrupt exit
+ * reaches the context restore, which writes it too. */
 static inline __attribute__((always_inline)) void ssKernelBandSet(unsigned c, unsigned priority)
 {
 #ifdef SUNSTONE_LATENCY_BAND_SWITCH
@@ -2012,14 +2017,7 @@ BaseType_t ssKernelOwnerIRQExit(void)
 #endif
     /* Set PSTATE.I before restoring the mask: portCLEAR_INTERRUPT_MASK_FROM_ISR clears it after the write, and an
      * ordinary interrupt taken then would be a second outermost exit inside this one. */
-    /* An open previous mask reopens to the core's current band mask, which
-     * this exit's selection or priority change may have moved (bands.h). */
-#if configSS_BAND_SGIS
-    const uint64_t restore = previous > portMAX_API_PRIORITY_MASK ? portOPEN_MASK() : (uint64_t)previous;
-#else
-    const uint64_t restore = (uint64_t)previous;
-#endif
-    __asm__ volatile("msr daifset, #2\n dsb sy\n isb\n msr icc_pmr_el1, %0\n dsb sy\n isb" :: "r"(restore) : "memory");
+    __asm__ volatile("msr daifset, #2\n dsb sy\n isb\n msr icc_pmr_el1, %0\n dsb sy\n isb" :: "r"((uint64_t)previous) : "memory");
 #ifdef SUNSTONE_LATENCY
     /* The mask was raised through portSET_INTERRUPT_MASK_FROM_ISR, which opens the latency build's masked span; this
      * restore bypasses portCLEAR_INTERRUPT_MASK_FROM_ISR, so close the span here, as that macro would. Otherwise it

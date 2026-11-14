@@ -10,7 +10,7 @@
  /* *INDENT-OFF* */
  #ifdef __cplusplus
      extern "C" {
-@@ -142,10 +145,104 @@
+@@ -142,10 +145,105 @@
      extern void vInterruptCore( uint32_t ulInterruptID, uint8_t ucCoreID );
  #endif /* if !defined(__ASSEMBLER__) */
  
@@ -20,7 +20,8 @@
 + * non-zero the floating point context is saved and restored for the task.
 + * ullOwnedLocks has bit eLockNum set while the core holds that lock.
 + * ullOpenMask holds, XOR 0xff, the value the core writes to ICC_PMR_EL1
-+ * whenever it leaves the API mask: the mask of its running task's band. A
++ * when a task-level path leaves the API mask: the mask of its running task's
++ * band (interrupt-level restores write their saved value, port.c). A
 + * zero word opens every priority (0xff), so a kernel that sets no band keeps
 + * the port's original behaviour. The core writes its own word with the API
 + * mask held (portSET_OPEN_MASK); portASM.S reads it at portOPEN_MASK_OFFSET. */
@@ -117,7 +118,7 @@
  
  /* In all GICs 255 can be written to the priority mask register to unmask all
   * (but the lowest) interrupt priority. */
-@@ -269,6 +366,20 @@
+@@ -269,6 +367,20 @@
                                          BaseType_t uxAcquire );
          extern uint8_t ucPortGetCoreID( void );
          extern uint8_t ucPortGetCoreIDFromIsr( void );
@@ -138,7 +139,7 @@
      #endif /* if !defined(__ASSEMBLER__) */
  
      #define portSET_INTERRUPT_MASK()         uxPortSetInterruptMask()
-@@ -293,7 +404,7 @@
+@@ -293,7 +405,7 @@
  
  #endif /* configNUMBER_OF_CORES > 1 */
  

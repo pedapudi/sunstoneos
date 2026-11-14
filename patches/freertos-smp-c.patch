@@ -194,7 +194,7 @@
      if( uxNewMaskValue == portUNMASK_VALUE )
      {
          /* Unmask all interrupt priorities. */
-@@ -1413,9 +1453,10 @@
+@@ -1413,14 +1453,22 @@
      }
      else
      {
@@ -207,20 +207,18 @@
              : "i" ( portSVC_UNMASK_INTERRUPTS )
              : "memory"
          );
-@@ -1424,6 +1465,13 @@
+     }
+ }
++/* The interrupt-level restore writes the saved value. Inside an interrupt
++ * the core's band changes only through a selection, or through a priority
++ * change of the running task, which requests a reschedule; either way the
++ * interrupt exit reaches the context restore, which writes the open mask,
++ * before the interrupted task runs. With preemption disabled the old band's
++ * mask stays until the deferred yield, and the selection there reads every
++ * pending hint whether or not its SGI was delivered. */
  
  void vPortClearInterruptMaskFromISR( UBaseType_t uxNewMaskValue )
  {
-+    #if ( configNUMBER_OF_CORES > 1 )
-+        /* As vPortClearInterruptMask: open to the current band mask. */
-+        if( uxNewMaskValue > portMAX_API_PRIORITY_MASK )
-+        {
-+            uxNewMaskValue = portOPEN_MASK();
-+        }
-+    #endif
-     __asm volatile (
-         "MSR DAIFSET, #2        \n"
-         "DSB SY                 \n"
 @@ -1444,6 +1492,26 @@
  {
      UBaseType_t ullPMRValue;
