@@ -1,12 +1,11 @@
 # Every card boot stage needs a measured watchdog recovery
 
-**Status: host-tested.** The boot0 and stage-2 rows have a board record of
-their recovery; the OS row does not. The runner therefore refuses every
-ordinary boot-once run and admits only a run that measures the OS row's
-arming (see "Measuring the OS row"). The disarm before each re-arm in the
-first stage and stage 2, the stage-2 progress words and the diagnostic
-stage-2 build are source and host checks only; they reach the card only with
-a coordinator-approved storage write.
+**Status: failed on the board.** The port 3-3 card holds the disarm-first
+first stage and the diagnostic stage 2 (writes D1 and D2 of 2026-11-14). The
+boot-once run that measures the OS row then did not return (see "Card boots
+of this first stage"). No further card boot runs until the cause is known
+from data. The boot0 and stage-2 rows have a board record of their recovery
+after a power-up; the OS row has none.
 
 A card boot under test control ([card-fel-recovery.md](card-fel-recovery.md))
 returns to FEL only when WDT0 resets the board after any stage hangs or
@@ -223,3 +222,31 @@ log shows one enumeration of port 3-3, at 23:48:47, 27 seconds after port
 2026-11-14 the coordinator added it to `MEASURED` as the arming of mode
 `0xb1` from mode 0 expiring after boot0, which grants the boot0 and stage-2
 rows.
+
+## Card boots of this first stage
+
+Three card boots have started on port 3-3 since the first stage was
+installed. The boots that started from a WDT0 expiry reset did not return to
+FEL; the boot that started from a power-up did.
+
+| Boot | Start of the cold path | WDT0 arming before boot0 | Stage 2 | Returned to FEL |
+| --- | --- | --- | --- | --- |
+| Boot-once, 2026-11-13 (`1794619098327285673-8466a823`) | The runner's `0x41` expiry reset, boot-once record | The old gate: `0xb1` written over the retained `0x41` | Normal build | No |
+| Replug, 2026-11-13 (`1794643114289036712-ab8b9952`) | Power-up | The old gate: `0xb1` from the power-up state | Normal build, no boot-once record, never arms `0x41` | Yes, through the `0xb1` expiry |
+| Boot-once with `--boot-once-measure os`, 2026-11-14 (`1794675338482809309-27c7ed0f`) | The runner's `0x41` expiry reset, boot-once record | The disarm-first gate: mode 0, then `0xb1` | Armed-stop build | No |
+
+The run of 2026-11-14 wrote the boot-once value, read it back with the
+marker set, and armed WDT0 `0x41`; the board left USB at that reset and no
+FEL device appeared within the 64-second deadline or 71 seconds after the
+reset. No word was read after the reset, so the step stage 2 reached is
+unknown. Neither stage 2's `0x41` nor the gate's `0xb1` reset the board.
+Because the gate now writes mode 0 before arming, the re-arm over a retained
+mode no longer separates the failed boots from the boot that returned; the
+start of the cold path does. Every FEL-only expiry after an expiry reset has
+reset the board, including the disarm-first gate's warm path on port 3-1
+(`1794675168534838087-526c0fd2`, 18.158 s); none of them ran boot0.
+
+Before that run, the first contact read WDT0 configuration `0x101`, where
+the read-only capture before the writes (`1794675109428657635-3a8d28e4`) read
+configuration 1.
+

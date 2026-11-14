@@ -644,6 +644,22 @@ distinct attempts (`SS_OWNER_BATCH`); a reissued hint waits for the next entry.
 Selection skips control preparation and object timeout work. Incoming-wake
 drain and dispatch publication still close the saved-frame selection handshake.
 
+Most maintenance entries find no control request: unperturbed, 97.6% of the
+openings in the objects model and 75% in the partitioned model admitted no
+work. Before it raises the mask, the entry tests the CPU's pending words (less
+the parked bits) and the gate phase with acquire loads, and it returns at once
+when neither shows work. A request published after that test is still taken.
+Every publication that makes a request pending and not parked on a CPU sends
+that CPU an SGI after the bit is visible (a hint, or a parked waiter's
+release), except a current task's own suspension, which enters the owner
+immediately. The SGI enters the owner at the next point where the mask opens,
+and that entry drains the request. The perturbation sweep's `control-open`
+site delays both the empty return and the open batch. On QEMU, counted per
+guest core, the median service entry falls from 1,081 to 656 instructions in
+the objects model and from 1,271 to 770 in the partitioned model, and the
+median control drain from 504 to 79 and from 549 to 92. Board cycles are not
+yet measured.
+
 Nested interrupt exits leave pending work intact while preparation is active.
 The outer exit sets `PSTATE.I` before restoring PMR so an ordinary interrupt
 cannot enter an unfinished outer return. The control unlock signals FIFO

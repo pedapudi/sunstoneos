@@ -862,9 +862,10 @@ static void control_races_verify(void)
 {
     /* The freeze steps hold CPU0's gate until CPU0's background task releases it. A mover may start on any core at a
      * priority above the background; one that enters the kernel on CPU0 during a freeze waits at admission and starves
-     * the release. Each mover blocks on its first notification before any freeze. */
+     * the release. Each mover blocks on its first notification before any freeze. A mover at priority 3 runs only in the
+     * time that the controller and CPU0's worker leave, which shrinks as an injected delay grows. */
     for (unsigned id = 0; id < 2; ++id) {
-        for (unsigned wait = 0; wait < 200 && eTaskGetState(movers[id]) != eBlocked; ++wait) vTaskDelay(1);
+        for (unsigned wait = 0; wait < limit(200) && eTaskGetState(movers[id]) != eBlocked; ++wait) vTaskDelay(1);
         configASSERT(eTaskGetState(movers[id]) == eBlocked);
     }
     /* The peer outranks the controller. At equal priority the voluntary yield
