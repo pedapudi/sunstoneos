@@ -7,6 +7,9 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import harness
 ROOT=Path(__file__).resolve().parents[1]
 GATE_RUNS = [
     ['--tcp', '{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7', '--rsn', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--kernel', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--headers', '{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include', '--linker', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--reference-dir', '{cache}/sources/radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv', '--firmware', '{cache}/sources/radio/firmware/aic8800d80', '--evidence', '{output}'],
@@ -75,9 +78,9 @@ def main():
    env=dict(os.environ);lib=a.qemu.parent.parent/"lib/x86_64-linux-gnu"
    if lib.is_dir():env["LD_LIBRARY_PATH"]=str(lib)+(":"+env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
    for case in a.cases:
-    cmd=[str(a.qemu),"-M","virt,gic-version=3,secure=off,virtualization=off","-cpu","cortex-a53","-m","128M","-nographic","-nic","none","-monitor","none","-semihosting-config","enable=on,target=native,arg="+case,"-kernel",str(artifact)]
+    cmd=[str(a.qemu),"-M","virt,gic-version=3,secure=off,virtualization=off",*harness.QEMU_DETERMINISTIC,"-cpu","cortex-a53","-m","128M","-nographic","-nic","none","-monitor","none","-semihosting-config","enable=on,target=native,arg="+case,"-kernel",str(artifact)]
     try:
-     run=subprocess.run(cmd,capture_output=True,text=True,env=env,timeout=60);record={"case":case,"command":cmd,"returncode":run.returncode,"stdout":run.stdout,"stderr":run.stderr}
+     run=subprocess.run(cmd,capture_output=True,text=True,env=env,timeout=harness.qemu_kill_seconds("a733-radio-session"));record={"case":case,"command":cmd,"returncode":run.returncode,"stdout":run.stdout,"stderr":run.stderr}
     except subprocess.TimeoutExpired as error:record={"case":case,"command":cmd,"returncode":124,"stdout":str(error.stdout),"stderr":str(error.stderr)}
     result["runs"].append(record);print(case,record["returncode"],record["stdout"],flush=True)
     if record["returncode"]:break

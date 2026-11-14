@@ -30,6 +30,18 @@ CLANG = Path(os.environ.get('SUNSTONE_HOST_CLANG', '/usr/bin/clang-21'))
 LLD = Path(os.environ.get('SUNSTONE_HOST_LLD', CACHE / 'host/usr/bin/ld.lld-21'))
 
 
+# QEMU runs whose verdict can depend on guest time use one TCG thread and a fixed icount, so that guest time (a tick, a timeout, a clock reading)
+# follows the instructions executed and not the speed or the load of the host: the same image gives the same console output in every run
+# (checks/qemu-determinism.py). The kill limit is a hang backstop: 4 times the slowest run measured beside 24 busy processes, recorded per
+# check in tools/gate-slots.json (qemu_checks).
+QEMU_DETERMINISTIC = ['-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off']
+
+
+def qemu_kill_seconds(name):
+    limit = json.loads((Path(__file__).resolve().parents[1] / 'tools/gate-slots.json').read_text())['qemu_checks'][name]
+    return limit['kill_multiplier'] * limit['slowest_loaded_run_seconds']
+
+
 def copy_image(source, destination):
     """Copy a disk image without writing its empty blocks.
 

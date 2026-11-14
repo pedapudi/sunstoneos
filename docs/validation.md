@@ -156,7 +156,14 @@ bytes removed and the size and SHA-256 of every linked ELF removed. The gate als
 image it built, because the per-checkout build directories that hold the images are rebuilt by the next gate on that checkout.
 
 A step that failed or was skipped keeps everything, and so does an evidence directory that no step names, so a failure stays
-diagnosable. The gate-root files stay as they are: `summary.txt`, `commands.txt`, `timing.txt`, `environment.txt`, `gate-record.json`,
+diagnosable. That includes the build products it ran on: the build directories are named after the checkout, not the gate, and every
+landing gate runs in `~/.cache/sunstoneos/land-integration`, so the next landing rebuilds into the same `gate-img-*` directories (on
+2026-11-14 a failing landing step's image was overwritten by the next landing before anyone re-ran it). At its end, while it still holds
+its checkout, a gate copies every build directory that a failing step's command names into `evidence/kept-builds/` (for a bundle, only the
+`out-` directory of its tree state), and `kept-builds/kept.json` records each failing step's command as run and pointed at the copies.
+Over the 130 gates of the week to 2026-11-14, 27 had a failing step, and the directories those steps named came to 39 MiB per failed
+gate at the median, 286 MiB at most and 1.7 GB in all. When a later gate of the same landing label passes, its slimming of the earlier
+gates removes the build products of the copies too. The gate-root files stay as they are: `summary.txt`, `commands.txt`, `timing.txt`, `environment.txt`, `gate-record.json`,
 `disk-peak.json` and the step logs. These are the only files that anything reads from a gate directory after the gate: `tools/land.py`
 reads `summary.txt` and `gate-record.json`, `tools/host_space.py` reads `disk-peak.json`, the evidence records under `docs/evidence/` cite
 `summary.txt` and `commands.txt`, and the board runner copies each image into its own queue entry. A passing gate also slims every step
@@ -243,6 +250,26 @@ bound (217,260 measured, 8.6 percent above it, the same in every run). The bound
 models' own end-of-run accounting fails above about 3,000 turns, where the critical path is 65,000 instructions, and a run that fails
 ends early, so the path of the larger delays does not rise monotonically (8,000 turns: 119,619).
 
+### QEMU guest time in the radio checks
+
+A QEMU guest that runs without `-icount` counts a tick, a timeout and a clock reading in the host's time, so a verdict that reads them changes
+with the speed and the load of the host. The four radio checks that start a guest (`a733-radio-session`, `aic8800-dispatch`, `radio-network`
+and `radio-network-dhcp-dns`, 29 guest runs in all) did not use it. With 24 copies of each run at once beside 24 busy host processes
+(48 runs of each of the 29, 1,392 in all), 83 runs failed: 76 of 336 in `a733-radio-session` (six of its seven cases), 3 of 240 in
+`aic8800-dispatch` (the deadline case), 1 of 240 in `radio-network-dhcp-dns` (the DHCP case) and 3 of 48 in the `late` case of
+`radio-network`. The console output of the DHCP, static-address and SNTP cases differed in every run, because it prints times.
+
+They now pass `harness.QEMU_DETERMINISTIC` (`-accel tcg,thread=single -icount shift=0,sleep=off`), the flags of the yield models and the
+latency-control models, so that guest time follows the instructions executed. Under the same load all 1,392 runs pass and each case writes
+one console output, byte for byte, in all 48 runs; alone the verdict and the output are the same as before. The slowest run beside the
+busy processes was 3.8 s (`a733-radio-session`), 1.4 s (`aic8800-dispatch`), 1.8 s (`radio-network`) and 7.0 s (the DHCP case); the host
+kill limit of each check is 4 times that, recorded per check in `qemu_checks` of [tools/gate-slots.json](../tools/gate-slots.json), and
+only ends a run that hangs. `checks/qemu-icount-audit.py` fails a check that starts a guest without `-icount` unless it is listed with the
+reason its verdict does not read guest time: `checks/smp-ticket-lock.py` and `tools/check-smp.py` run multi-threaded TCG on purpose, to
+exercise the ticket lock's atomics on cores that run in parallel, and their guests assert no time. The checks `os-npu-graphs`,
+`os-npu-service` and `os-npu-fault` run on `checks/host/host_rtos.c`, whose clock is virtual and whose tasks switch only at their own
+calls, and `session-lifetime` and `a733-radio-platform` start no guest; none reads host time.
+
 ### Gate slots and the timing lock
 
 The host runs N gates at once, not one. `tools/gate_slots.py` holds the slots as the files `~/.cache/sunstoneos/gate.lock.0` to
@@ -270,9 +297,9 @@ host load (in one full run of the check beside 24 busy processes, 11 of 71 QEMU 
 heaviest perturbation, against a bound of 7,600; each progress wait of `scheduler-objects-qemu` has 4,000 ticks, and how close a run
 comes to that is not recorded.
 The perturbation sweep kills a QEMU run that exceeds eight times the slowest measured point,
-85.7 s, recorded in the same file; the slowest run took 192 s beside 24 busy processes. Other gates' work still runs beside them. The list is `timing_checks` and `timing_steps` in the same file. A check's
+85.7 s, recorded in the same file; the slowest run took 192 s beside 24 busy processes. Other gates' work still runs beside them. A gate that wants the lock writes a ticket in `~/.cache/sunstoneos/gate-timing-queue/` and takes the lock only when its ticket is the first live one, landings before workers and then oldest first, as for the slots; a free lock is not taken past an earlier waiter, and the gate that holds it keeps it until its step ends. A landing therefore waits only for the step that runs, not for the workers queued before it (measured on 2026-11-13: landing gates waited up to 475 s for this lock). The list is `timing_checks` and `timing_steps` in the same file. A check's
 pass criteria do not change. `checks/gate-slots.py` runs two gates at once, the exclusive timing lock, a landing that goes ahead of an
-older worker and a killed waiter.
+older worker, a landing that takes the timing lock ahead of an older waiting worker, and a killed waiter.
 
 Every check runs from the source directory with standard input closed and one
 environment: the process environment, `PYTHONDONTWRITEBYTECODE=1`,

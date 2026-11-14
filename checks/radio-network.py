@@ -7,6 +7,9 @@ from pathlib import Path
 import subprocess
 import shutil
 import tarfile
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import harness
 ROOT=Path(__file__).resolve().parents[1]
 GATE_RUNS = [
     ['--case', 'generation', '--tcp', '{cache}/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7', '--rsn', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--kernel', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--headers', '{cache}/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include', '--linker', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--evidence', '{output}'],
@@ -64,8 +67,8 @@ def main():
         artifact=out/("radio-network-"+result["elf_sha256"]+".elf");shutil.copyfile(elf,artifact);result["artifact"]=str(artifact)
         if not a.build_only:
             assert a.qemu
-            cmd=[str(a.qemu),"-M","virt,gic-version=3,secure=off,virtualization=off","-cpu","cortex-a53","-m","128M","-nographic","-nic","none","-monitor","none","-semihosting-config","enable=on,target=native,arg="+a.case,"-kernel",str(elf)]
-            run=subprocess.run(cmd,capture_output=True,text=True,timeout=60)
+            cmd=[str(a.qemu),"-M","virt,gic-version=3,secure=off,virtualization=off",*harness.QEMU_DETERMINISTIC,"-cpu","cortex-a53","-m","128M","-nographic","-nic","none","-monitor","none","-semihosting-config","enable=on,target=native,arg="+a.case,"-kernel",str(elf)]
+            run=subprocess.run(cmd,capture_output=True,text=True,timeout=harness.qemu_kill_seconds("radio-network"))
             result["run"]={"command":cmd,"exit_code":run.returncode,"stdout":run.stdout,"stderr":run.stderr}
     names=["checks/radio-network.c","checks/radio-network.py","cmake/radio-network.cmake",
            "drivers/net/aic8800_network.c","drivers/net/sunstone_net.c","include/aic8800_network.h",

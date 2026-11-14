@@ -46,5 +46,24 @@
   "reserved_cpus": [
     23
   ],
-  "reserved_cpus_comment": "CPUs that gates and the processes they start never use: the xhci interrupt of the board's USB port is handled almost entirely on CPU 23 (/proc/interrupts, 1.19 million of its interrupts there; 2026-11-13), and the runner's FEL transfers wait on it."
+  "reserved_cpus_comment": "CPUs that gates and the processes they start never use: the xhci interrupt of the board's USB port is handled almost entirely on CPU 23 (/proc/interrupts, 1.19 million of its interrupts there; 2026-11-13), and the runner's FEL transfers wait on it.",
+  "qemu_checks": {
+    "_comment": "Hang backstops for the QEMU runs of the radio checks, which run on one TCG thread with a fixed icount (harness.QEMU_DETERMINISTIC): kill_multiplier times the slowest run of any of the check's cases with 24 copies at once beside 24 busy host processes (48 runs per case, 2026-11-14; a733-radio-session 3.8 s, aic8800-dispatch 1.4 s, radio-network 1.8 s, radio-network-dhcp-dns 7.0 s).",
+    "a733-radio-session": {
+      "slowest_loaded_run_seconds": 3.8,
+      "kill_multiplier": 4
+    },
+    "aic8800-dispatch": {
+      "slowest_loaded_run_seconds": 1.4,
+      "kill_multiplier": 4
+    },
+    "radio-network": {
+      "slowest_loaded_run_seconds": 1.8,
+      "kill_multiplier": 4
+    },
+    "radio-network-dhcp-dns": {
+      "slowest_loaded_run_seconds": 7.0,
+      "kill_multiplier": 4
+    }
+  }
 }
