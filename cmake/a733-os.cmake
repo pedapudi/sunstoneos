@@ -295,6 +295,10 @@ elseif(SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/gpu-lifecycle/manifest.json"
     INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/gpu-lifecycle"
       "${SUNSTONE_SOURCE_ROOT}/apps/gpu-queue-peer")
+  # The exception-code walk (checks/irq-general-regs.py) counts the peer's entry, which the owner table holds, among
+  # the targets of indirect calls, so the peer keeps the OS's general-register flag.
+  set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/apps/gpu-queue-peer/main.c" PROPERTIES
+    COMPILE_OPTIONS -mgeneral-regs-only)
   target_compile_definitions(gpu-lifecycle PRIVATE
     GPU_LIFECYCLE_PEER=$<BOOL:${SUNSTONE_GPU_LIFECYCLE_PEER}>
     GPU_LIFECYCLE_FAIL_AFTER_SUBMIT=$<BOOL:${SUNSTONE_GPU_LIFECYCLE_FAIL_AFTER_SUBMIT}>
