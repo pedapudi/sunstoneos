@@ -83,8 +83,7 @@ static int rom_matches(struct a733_video_decoder *p)
     if(u->failed||u->locked||!a733_video_unit_timely(u))return 0;
     for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i) {
         uint32_t w;
-        if(u->ops.read(u->cookie,rom_identity[i].address,&w)!=1){u->uncertain=1;u->last_address=rom_identity[i].address;return 0;}
-        if(w!=rom_identity[i].word)return 0;
+        if(a733_video_unit_read_unlocked(u,rom_identity[i].address,&w)!=1||w!=rom_identity[i].word)return 0;
     }
     return 1;
 }

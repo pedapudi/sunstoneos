@@ -493,9 +493,29 @@ static void mclk_open(struct model *m){m->ccu[0x5e4/4]=0x40306;}
 /* The CCU words a hold-B fault left (run bd447f26), in case a watchdog reset keeps them: module gate and bus gate
  * open, reset released, the MBUS gate open. */
 static void hold_b_left(struct model *m){m->ccu[0xa88/4]=0x81000000;m->ccu[0xa8c/4]=0x40004;m->ccu[0x5e4/4]=0x40306;}
+/* a733_video_unit_read_unlocked: refused with the record untouched while the unit holds the mutex or has failed; a
+ * read the operation does not complete is uncertain and records its address; a completed read records the address
+ * and the word. */
+static unsigned unlocked_reads;
+static int unlocked_op(void *v,uintptr_t a,uint32_t *out)
+{(void)v;++unlocked_reads;if(a!=0x17000)return -1;*out=0x5a5a0001u;return 1;}
+static void unlocked_read_cases(void)
+{
+    struct a733_video_unit u={0};u.ops.read=unlocked_op;
+    uint32_t w=7;
+    u.last_address=0x1234;u.last_word=0x5678;
+    u.locked=1;assert(a733_video_unit_read_unlocked(&u,0x17000,&w)==0);
+    u.locked=0;u.failed=1;assert(a733_video_unit_read_unlocked(&u,0x17000,&w)==0);
+    assert(!unlocked_reads&&w==7&&u.last_address==0x1234&&u.last_word==0x5678&&!u.uncertain);
+    u.failed=0;assert(a733_video_unit_read_unlocked(&u,0x17000,&w)==1);
+    assert(w==0x5a5a0001u&&u.last_address==0x17000&&u.last_word==w&&!u.uncertain&&!u.failed);
+    assert(a733_video_unit_read_unlocked(&u,0x17004,&w)==-1);
+    assert(u.uncertain&&u.last_address==0x17004&&u.last_word==0x5a5a0001u&&unlocked_reads==2);
+}
 int main(int argc,char **argv)
 {
     assert(argc==3||(argc==4&&!strcmp(argv[3],"--reset")));
+    unlocked_read_cases();
     FILE*f=fopen(argv[1],"rb");assert(f);jpeg_n=fread(jpeg_bytes,1,sizeof(jpeg_bytes),f);assert(jpeg_n&&jpeg_n<sizeof(jpeg_bytes));fclose(f);
     f=fopen(argv[2],"rb");assert(f);assert(fread(rom_bytes,1,sizeof(rom_bytes),f)==sizeof(rom_bytes));assert(fgetc(f)==EOF);fclose(f);
     version=argc==4?UINT64_C(0x3331000021320):UINT64_C(0x3332100021321);

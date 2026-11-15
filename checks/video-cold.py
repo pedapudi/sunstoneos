@@ -9,7 +9,8 @@ port 3-3 FEL words (gates 0x5c0 0x110103ff, 0x5e0 0xf1055803, 0x5e4 0x4; PLL_VE0
 PLL entry and lock cases, the CCU words a hold-B fault left (refused at entry with no write), domain 2 OFF or adopted ON, critical gates clear after ON, two power lifetimes
 joined by the quiesce (docs/designs/video-pll.md), the VE+0x804 pulse under two readbacks that no source documents,
 and faults after the first write closed by a733_video_decoder_close. Every read the binding makes must pass the
-native read allowlist. Each mutant changes one text in one driver source; the model must
+native read allowlist. The unit's unlocked read (the PLL lock wait and the ROM identity) is also run alone: refused
+with the record untouched while the mutex is held or the unit has failed, and uncertain on a read that fails. Each mutant changes one text in one driver source; the model must
 fail with it.
 """
 import argparse
@@ -41,6 +42,12 @@ CHECK_INPUTS = ['drivers/video/a733_video_platform.c', 'drivers/video/a733_video
                 'include/a733_power_domains.h', 'include/a733_power_domain_row.h', 'apps/jpeg/fixture.py',
                 'apps/jpeg/fixtures.json']
 MUTANTS = [
+    ('drivers/video/a733_video_unit.c', 'if(u->ops.read(u->cookie,a,v)!=1){u->uncertain=1;return -1;}',
+     'if(u->ops.read(u->cookie,a,v)!=1)return -1;', 'unlocked read failure not uncertain'),
+    ('drivers/video/a733_video_unit.c', '    if(u->failed||u->locked)return 0;\n    u->last_address=a;\n',
+     '    u->last_address=a;\n    if(u->failed||u->locked)return 0;\n', 'refused unlocked read touches the record'),
+    ('drivers/video/a733_video_unit.c', '    if(u->failed||u->locked)return 0;\n', '    if(u->locked)return 0;\n',
+     'unlocked read on a failed unit'),
     ('drivers/video/a733_video_platform.c', 'check(u,CCU+0x1b10,0x30001,0x20000)', 'check(u,CCU+0x1b10,0x30001,0x10000)',
      'entry requires 0x1b10 at POWER_OFF'),
     ('drivers/video/a733_video_platform.c', 'p->checked=p->prepared=0;p->quiesced=1;u->failed=faulted;',
@@ -107,9 +114,11 @@ MUTANTS = [
      'bus gate close not read back'),
     ('drivers/video/a733_video_platform.c', '    if(!close_steps(u))return a733_video_unit_refuse_held(u);',
      '    if(!faulted&&!close_steps(u))return a733_video_unit_refuse_held(u);', 'fault close writes nothing'),
-    ('drivers/video/a733_video_unit.c', '    u->last_word=*v;\n    return 1;', '    return 1;', 'failing word not kept'),
-    ('drivers/video/a733_video_unit.c', '    u->last_word=*v;\n    return 1;',
-     '    u->last_word=*v;\n    return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);', 'deadline read per access'),
+    ('drivers/video/a733_video_unit.c', '{u->uncertain=1;return a733_video_unit_fail(u);}\n    u->last_word=*v;\n    return 1;',
+     '{u->uncertain=1;return a733_video_unit_fail(u);}\n    return 1;', 'failing word not kept'),
+    ('drivers/video/a733_video_unit.c', 'return a733_video_unit_fail(u);}\n    u->last_word=*v;\n    return 1;',
+     'return a733_video_unit_fail(u);}\n    u->last_word=*v;\n    return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);',
+     'deadline read per access'),
     ('drivers/video/a733_video_platform.c',
      '            uint64_t n;if(a733_video_unit_now(u,&n)!=1)return -1;\n'
      '            p->cold.lock_reads=u->pll_reads;p->cold.locked_at=n;',
