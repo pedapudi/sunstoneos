@@ -42,12 +42,13 @@ GPU-alone phase. A job runs 2,048 workgroups. [add4/program.h](add4/program.h) h
 [add4/sources.json](add4/sources.json) its compiler record; `apps/gpu-program/compile.py compile --profile 3
 --queue-program` reproduces it. The result keeps the 2,944-byte layout with version 4 and the later phases zero.
 
-`--define SUNSTONE_ACCEL_OVERLAP_COUNTERS=ON`, with the OS option `SUNSTONE_ACCEL_NSI_COUNTERS=ON` and the same
-manifest, builds the NSI counter calibration: the GPU-width build with four phases (idle for 100 ms, the GPU alone, the
-NPU alone, the core-2 stream alone), each counted on NSI ports 6 and 18 through the GPU call gateway. The result is the
-larger-job layout with version 5, followed by the counter record, 3,768 bytes in all (result.h, struct
-accel_overlap_counter_result). A counter call that fails ends the phases after the one it happened in, and the record
-keeps its status.
+`--define SUNSTONE_ACCEL_OVERLAP_COUNTERS=ON`, with the OS option `SUNSTONE_ACCEL_NSI_COUNTERS=ON` and `--manifest
+manifest-counters.json`, builds the NSI counter calibration: the GPU-width build with four counted phases (idle for
+100 ms, the GPU alone, the NPU alone, the core-2 stream alone), each counted on NSI ports 6 and 18 through the GPU call
+gateway, then two 600 ms window probes with a 100 ms counter period (the GPU alone on port 6, the NPU alone on port 18).
+The result is the larger-job layout with version 5 and six phases, followed by the counter record, 10,088 bytes in all
+(result.h, struct accel_overlap_counter_result). A counter call that fails ends the phases after the one it happened
+in, and the record keeps its status.
 
 A failure ends the session with `ss_fail_value`: the low 12 bits name the check in [main.c](main.c), bits 16 to 19 the
 phase (5 after the last phase), and the value the measured operand.

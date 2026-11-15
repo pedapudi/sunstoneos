@@ -388,11 +388,24 @@ GPU quiesce restores any bank left programmed. The owner writes six words in all
 priority, mode or limit word. [checks/nsi-counters.c](../../checks/nsi-counters.c) runs the sequence against a
 register model, with a failing or corrupt access injected at every read, write and readback.
 
+The vendor device tree places port 6 in the GPU_TOP power domain and port 18 in the NPU domain. The GPU backend's
+isolate step, which runs before every GPU power-off, restores the port-6 bank and refuses any later access to it until
+the next power-on. The NPU domain stays on once the NPU has started: its local stop leaves domain 4 on
+(drivers/npu/a733_npu_startup.c).
+
 The application reaches the owner through the GPU call gateway, from the GPU owner task only. The counter build of
 accel-overlap (`SUNSTONE_ACCEL_OVERLAP_COUNTERS`) runs four counted phases: idle for 100 ms, the GPU alone, the NPU
 alone and the core-2 stream alone, one second each, with a sample at half of each phase. The GPU and NPU jobs move
 known bytes, so their data counts calibrate the counters. The core-2 stream reaches DRAM through the CPU ports, so
 ports 6 and 18 should count almost nothing in that phase.
+
+Those phases set the period word to its largest value, 7.16 s at the 600 MHz NSI clock, so no period ends inside them.
+The vendor's readers print each count times its unit with no division by time, and the driver calls the period a
+sample timer, so a count may only become visible when a period ends. Two window probes follow: the GPU alone on port 6
+and the NPU alone on port 18, 600 ms each, with a 100 ms period and a sample every 5 ms. The samples show whether a
+count restarts, latches, stops or keeps rising when a period ends, and the probes calibrate the counters if the counted
+phases cannot. The build needs [manifest-counters.json](../../apps/accel-overlap/manifest-counters.json), whose output
+limit holds the 10,088-byte result.
 
 The two CPU bridges (AXI2HIF, 0x0a030000 and 0x0a040000) have counters too. The vendor driver accesses them behind
 a clock (`cpu_direct`, CCU 0x0c00 and 0x0c0c) and a selector bit (0x08000200) that no capture from port 3-1 has read.
