@@ -119,8 +119,8 @@ int a733_video_decoder_init(struct a733_video_decoder *,const struct a733_video_
  * hold, which sets version. d is the deadline of every call until the open ends. 1 open; 0 pending: the row has not
  * answered or the register lock was busy, so call again after the row's wake or a short block;
  * A733_VIDEO_OPEN_REFUSED: refused with no register written and the register lock free, so the decoder is as it was
- * and needs no close; A733_VIDEO_OPEN_FAULT: failed after the first write, so a733_video_decoder_close(..., 1) must
- * close it. */
+ * and needs no close; A733_VIDEO_OPEN_FAULT: failed after the first write, or keeping the register lock after a
+ * late access (in any hold, the entry hold included), so a733_video_decoder_close(..., 1) must close it. */
 enum { A733_VIDEO_OPEN_REFUSED = -1, A733_VIDEO_OPEN_FAULT = -2 };
 int a733_video_decoder_open(struct a733_video_decoder *,uint64_t d);
 /* The close of a started decoder (faulted 0) or of one that failed (faulted 1), under one register-lock hold, in the

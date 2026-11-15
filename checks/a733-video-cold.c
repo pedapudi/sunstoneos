@@ -40,7 +40,12 @@ struct cold_model {
      * pending once the module gate is open; the module gate does not open;
      * the bus gate does not close in the fault close. */
     unsigned vcu,irq_pending,stuck;
+    /* The clock jumps to the deadline at one read (LATE_ENTRY, LATE_HOLD_B); register-lock entries. */
+    unsigned late,late_done,enters;
 };
+#define LATE_ENTRY 1u  /* the first 0x5c0 read, in the entry hold, before any write */
+#define LATE_HOLD_B 2u /* the first GIC+0x208 read with the module gate open, in hold B */
+#define LATE_AT UINT64_C(100000) /* the open's deadline */
 #define VCU_CLEARS 1u
 #define VCU_STICKS 2u
 #define STUCK_MODULE 1u
@@ -123,7 +128,7 @@ static int cold_enter(void *v,uint64_t dl)
 {
     struct cold_model *c=v;
     if(c->pll&&c->pll_locked==3&&!c->settle_seen){assert(c->m.now>=c->pll_lock_at+21);c->settle_seen=1;}
-    int r=enter(v,dl);
+    int r=enter(v,dl);++c->enters;
     c->hold_start=c->m.reads+c->m.writes+c->rom_reads;
     if(c->holds<8)c->writes_at_hold[c->holds]=c->m.writes;
     return r;
@@ -144,6 +149,8 @@ static int cold_read(void *v,uintptr_t a,uint32_t *out)
     struct cold_model *c=v;struct model *m=&c->m;
     /* Every read the binding makes passes the native read allowlist, as on the board. */
     assert(a733_video_platform_native_readable(a));
+    if(c->late&&!c->late_done&&((c->late==LATE_ENTRY&&a==CCU+0x5c0&&!m->writes)||
+       (c->late==LATE_HOLD_B&&a==GIC+0x208&&(m->ccu[0xa88/4]&0x80000000)))){c->late_done=1;m->now=LATE_AT;}
     if(a>=0x17000&&a<0x22000) {
         assert(m->lock&&!m->writes);++c->rom_reads;
         memcpy(out,c->rom+(a-0x17000),4);return 1;
@@ -189,9 +196,9 @@ static int cold_write(void *v,uintptr_t a,unsigned width,uint32_t value)
     assert(m->writes<800);
     m->events[m->writes++]=(struct event){a,width,value};
     if(c->fault==4)return -1;
-    /* The decoder writes after the owner's ON answer only, and never a PCK
-     * register or the AHB and MBUS master gates. */
-    assert(row_on(c)&&domain_on()&&!(a>=PCK&&a<PCK+0x1000)&&a!=CCU+0x5c0&&a!=CCU+0x5e0);
+    /* The decoder's start writes after the owner's ON answer only; a fault close may close a start that never
+     * requested the row. Neither writes a PCK register or the AHB and MBUS master gates. */
+    assert((c->quiesced||(row_on(c)&&domain_on()))&&!(a>=PCK&&a<PCK+0x1000)&&a!=CCU+0x5c0&&a!=CCU+0x5e0);
     if(a==VE+0x804) {
         assert(m->ccu[0xa88/4]&0x80000000);
         assert(!m->memory&&c->cold_pulse<2);
@@ -280,12 +287,13 @@ struct lifetime {
     unsigned service; /* the OS service's open (apps/os/video_decode.c) instead of the JPEG job */
     unsigned vcu,irq_pending,stuck; /* struct cold_model */
     unsigned fault_close; /* after a refused start, the service's fault close (a733_video_decoder_close, faulted) */
+    unsigned late; /* struct cold_model */
 };
 struct outcome {
     int result;unsigned writes,owner_ppu_writes,owner_commands,decoder_pck_reads,polls_after_on;
     enum a733_power_row_state row;struct a733_video_cold_record rec;
     /* The fault close: its result and accesses, and the unit's last access and uncertain flag before it. */
-    int closed;unsigned close_accesses,uncertain;uint32_t last_address,last_word;
+    int closed;unsigned close_accesses,close_enters,uncertain,locked,writes_before_close;uint32_t last_address,last_word;
 };
 static uint8_t jpeg_bytes[65536];static size_t jpeg_n;static uint8_t rom_bytes[45056];static uint64_t version;
 /* The entry words: the platform model's, with the decoder in reset and
@@ -332,7 +340,7 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
     d.ppu[2][0]|=pol;d.ppu[2][2]|=sta;d.ack_us=l->ack_us;d.stall[2]=l->stall;
     memset(c,0,sizeof(*c));
     c->fault=l->fault;c->pll=l->pll;c->key_reads_zero=l->key_zero;
-    c->vcu=l->vcu;c->irq_pending=l->irq_pending;c->stuck=l->stuck;
+    c->vcu=l->vcu;c->irq_pending=l->irq_pending;c->stuck=l->stuck;c->late=l->late;
     setup(m,version);memcpy(c->rom,rom_bytes,sizeof(c->rom));
     fel_words(c,l);
     if(ccu_in)memcpy(m->ccu,ccu_in,sizeof(m->ccu));
@@ -398,10 +406,10 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
     if(checked_poll&&on_poll)assert(o.polls_after_on==1);
     if(result<0&&l->fault_close) {
         o.last_address=(uint32_t)dec->unit.last_address;o.last_word=dec->unit.last_word;
-        o.uncertain=dec->unit.uncertain;
-        const unsigned accesses=m->reads+m->writes;c->quiesced=1;c->stopping=1;c->pll_seq=0;
+        o.uncertain=dec->unit.uncertain;o.locked=m->lock;o.writes_before_close=m->writes;
+        const unsigned accesses=m->reads+m->writes,enters=c->enters;c->quiesced=1;c->stopping=1;c->pll_seq=0;
         o.closed=a733_video_decoder_close(dec,run.deadline+200000,1);
-        o.close_accesses=m->reads+m->writes-accesses;
+        o.close_accesses=m->reads+m->writes-accesses;o.close_enters=c->enters-enters;
         if(o.closed==1) {
             /* Closed for the rest of the power lifetime: a later open is refused with no access. */
             const unsigned after=m->reads+m->writes;
@@ -612,6 +620,20 @@ int main(int argc,char **argv)
             printf("fault%u %s: closed%d close_accesses%u last %08x=%08x\n",k,faults[k].name,o.closed,o.close_accesses,
                 o.last_address,o.last_word);
         }
+    }
+    /* A late access inside a hold fails the unit with the register lock held: the open reports a fault even in the
+     * entry hold, which wrote nothing, and the fault close continues in that hold (it takes no lock) and releases
+     * it. */
+    for(unsigned k=0;k<2;++k) {
+        const struct lifetime l={.ack_us=10,.pll=PLL_LOCKS,.pll_entry=FEL_PLL,.service=1,.fault_close=1,
+            .late=k?LATE_HOLD_B:LATE_ENTRY};
+        const struct outcome o=lifetime(&c,&l,0,0,0);
+        assert(c.late_done&&o.result==A733_VIDEO_OPEN_FAULT&&o.locked&&!o.uncertain&&o.closed==1);
+        assert(!o.close_enters&&!vm->lock&&!(vm->ccu[0xa88/4]&0x80000000)&&!(vm->ccu[0xa8c/4]&0x40004));
+        if(!k)assert(!o.writes_before_close&&o.row==A733_POWER_ROW_IDLE&&vm->ccu[0x220/4]==FEL_PLL);
+        else assert(o.writes_before_close&&vm->ccu[0x220/4]==0x01204d00u&&domain_on());
+        printf("late %s: result%d writes_before_close%u closed%d close_accesses%u\n",k?"hold B":"entry",o.result,
+            o.writes_before_close,o.closed,o.close_accesses);
     }
     /* Two lifetimes: the first from domain 0/0 and the FEL words, ending in
      * the quiesce; the second from the domain words it left, once with the

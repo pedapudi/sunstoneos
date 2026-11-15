@@ -224,9 +224,11 @@ static int acquire(struct a733_video_decoder *p,const void *j,uint64_t d,uint64_
     int r=start(p);if(r!=1)return r;
     p->checked=1;return 1;
 }
-/* A failed start wrote a register: only a close ends it. */
+/* A failed start wrote a register, or keeps the register lock: a late access or lock operation fails the unit inside
+ * its hold without releasing the lock (a733_video_unit_refuse_held), even in the entry hold, which writes nothing.
+ * Only a close ends either; the fault close continues in the held lock. */
 static int written(const struct a733_video_decoder *p)
-{return p->config.start==A733_VIDEO_COLD_NS_ROM&&p->cold_step>=COLD_HOLD_A;}
+{return p->unit.locked||(p->config.start==A733_VIDEO_COLD_NS_ROM&&p->cold_step>=COLD_HOLD_A);}
 int a733_video_decoder_open(struct a733_video_decoder *p,uint64_t d)
 {
     if(!p)return A733_VIDEO_OPEN_REFUSED;
