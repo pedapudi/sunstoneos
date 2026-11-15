@@ -48,7 +48,7 @@ tools/evidence.py sync        # regenerate the table in each status file
 tools/evidence.py validate    # schema, queue agreement, claims
 ```
 
-`add` reads `entry.json` and `result.json` under `~/.cache/sunstoneos/board-queue/` for the entry ID, port, hash, revision, hypothesis, outcome, date and run duration. Pass `--measure NAME=VALUE[UNIT]` for each key number, `--condition NAME=VALUE`, `--evidence PATH`, `--design PATH`, `--prediction` and `--conclusion` text, and `--verdict` when the default (`passed` for a normal return, `failed` for other outcomes, `inconclusive` for a refusal before launch) is wrong. `--replace` overwrites an existing record.
+`add` reads `entry.json` and `result.json` under `~/.cache/sunstoneos/board-queue/` for the entry ID, port, hash, revision, hypothesis, outcome, date and run duration, which it records as the `run_total` measurement and the run directory as evidence. Pass `--measure NAME=VALUE[UNIT]` for each other key number (a name already in the record is refused), `--condition NAME=VALUE`, `--evidence PATH`, `--design PATH`, `--prediction` and `--conclusion` text, and `--verdict` when the default (`passed` for a normal return, `failed` for other outcomes, `inconclusive` for a refusal before launch) is wrong. `--replace` overwrites an existing record.
 
 ## Status files
 

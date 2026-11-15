@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""Check that evidence records refuse device addresses and one access point's frequency and RSSI."""
+"""Check that evidence records refuse device addresses and one access point's frequency and RSSI, and that a record
+added from a queue entry names each measurement and evidence path once."""
+import argparse
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 
@@ -68,9 +71,38 @@ with tempfile.TemporaryDirectory(prefix='sunstone-evidence-addresses-') as tempo
     path.write_text(before + '{"id": "address-case-3", "subsystem": "radio", "note": "peer 02:11:22:33:44:55"}\n')
     assert any('device address' in problem for problem in evidence.validate_records(root))
 
+# add fills run_total from result.json: a --measure of the same name is refused, and the run directory given again with
+# --evidence is listed once (nine stage 7 records of 2026-11-15 carried both twice).
+with tempfile.TemporaryDirectory(prefix='sunstone-evidence-add-') as temporary:
+    root, queue, entry = Path(temporary) / 'root', Path(temporary) / 'queue', '1794741550815053099-4bf18ca8'
+    run = queue / 'entries' / entry / 'run'
+    run.mkdir(parents=True)
+    (queue / 'entries' / entry / 'entry.json').write_text(json.dumps(
+        {'kind': 'cpu-return', 'port': '3-1', 'hypothesis': 'host case'}))
+    (run / 'result.json').write_text(json.dumps(
+        {'time': 1794741550.8, 'port': '3-1', 'outcome': 'returned', 'normal_return': True, 'image_sha256': 'a0' * 32,
+         'git_revision': 'b1f0165f7aca8c4002b790356a0042c1db5e3392', 'durations': {'total': 24.249}}))
+    def add(*measures, evidence_paths=()):
+        evidence.cmd_add(argparse.Namespace(
+            root=str(root), queue=str(queue), entry_id=entry, subsystem='scheduler', hypothesis=None, verdict=None,
+            note=None, prediction=None, conclusion=None, design=None, date=None, measure=list(measures), condition=[],
+            evidence=list(evidence_paths), replace=True))
+        return json.loads((root / 'docs/evidence/scheduler.jsonl').read_text().splitlines()[-1])
+    try:
+        add('run_total=24.249s', 'cpu1_worst_us=15.2us')
+    except SystemExit as error:
+        assert 'run_total' in str(error), error
+    else:
+        raise AssertionError('add accepted a second run_total.')
+    recorded = str(run).replace(str(Path.home()), '~')
+    added = add('cpu1_worst_us=15.2us', evidence_paths=[recorded, recorded])
+    assert [m['name'] for m in added['measurements']] == ['run_total', 'cpu1_worst_us'], added['measurements']
+    assert added['evidence'] == [recorded], added['evidence']
+
 # The committed records hold no address and no identifying pair.
 committed = [problem for problem in evidence.validate_records(ROOT)
              if 'address' in problem or 'BSSID' in problem or 'RSSI' in problem]
 assert not committed, committed
 
-print('PASS: evidence records refuse device addresses and one access point\'s frequency and RSSI.')
+print('PASS: evidence records refuse device addresses and one access point\'s frequency and RSSI; add names each '
+      'measurement and evidence path once.')
