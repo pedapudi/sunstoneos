@@ -5,12 +5,15 @@
  * 0x02020000 + 0x200 * port + 0xc0: ENABLE, CLR and CYCLE, which the owner writes, then the read and write request,
  * data (16-byte units) and latency counters, which it only reads (vendor sunxi-nsi.h MBUS_PMU_*, lines 377-385; the
  * unit is ia_pmu_data_unit in sun60iw2p1.dtsi). The sequence follows __nsi_pmu_timer_store_v2 in sunxi-nsi.c: period,
- * disable, clear, enable, 10 us. No QoS, priority, mode or limit word is touched.
+ * disable, clear, enable, 10 us. The period (CYCLE) is the caller's, in NSI clock cycles, and must not be zero. No QoS,
+ * priority, mode or limit word is touched.
  *
  * The owner reads all eighteen words before any write and keeps them as the reset values. A bank whose enable bit is
  * already set belongs to another counter user: open then refuses with no write. Every write is read back. A phase
  * programs a bank, and ending the phase restores CYCLE, CLR and ENABLE to their reset values with readbacks; a
- * failed readback restores every programmed bank and refuses later writes until the next open. */
+ * failed readback restores every programmed bank and refuses later writes until the next open. Restore puts one bank
+ * back alone, for the power-off of its master's domain (the vendor device tree places port 6 in GPU_TOP and port 18 in
+ * the NPU domain). */
 #define A733_NSI_COUNTER_BASE UINT32_C(0x02020000)
 #define A733_NSI_COUNTER_BANKS 2u   /* ports 6 and 18, the two accelerator ports this diagnostic owns */
 #define A733_NSI_COUNTER_WORDS 9u   /* ENABLE, CLR, CYCLE, RQ_RD, RQ_WR, DT_RD, DT_WR, LA_RD, LA_WR */
@@ -31,11 +34,11 @@ struct a733_nsi_counters {
     uint32_t opened, failed, programmed;   /* programmed: one bit per bank */
     uint32_t fail_address, fail_value;
 };
-/* The application's call (through the GPU call gateway, gpu_queue_nsi_counters). OPEN fills reset; BEGIN fills clear,
- * the CLR readback; SAMPLE fills value; END fills value (just after the disable) and held (10 us later), then restores;
- * CLOSE restores any programmed bank. */
+/* The application's call (through the GPU call gateway, gpu_queue_nsi_counters). OPEN fills reset; BEGIN takes cycle
+ * and fills clear, the CLR readback; SAMPLE fills value; END fills value (just after the disable) and held (10 us
+ * later), then restores; CLOSE restores any programmed bank. */
 struct a733_nsi_counter_call {
-    uint32_t op, bank, status, clear;
+    uint32_t op, bank, status, clear, cycle, reserved;
     uint32_t reset[A733_NSI_COUNTER_BANKS][A733_NSI_COUNTER_WORDS];
     uint32_t value[A733_NSI_COUNTER_VALUES], held[A733_NSI_COUNTER_VALUES];
     uint32_t fail_address, fail_value;
@@ -46,10 +49,11 @@ int a733_nsi_counter_writable(uintptr_t address);
 int a733_nsi_counter_readable(uintptr_t address);
 int a733_nsi_counters_open(struct a733_nsi_counters *, const struct a733_nsi_counter_ops *, void *context,
                            uint32_t reset[A733_NSI_COUNTER_BANKS][A733_NSI_COUNTER_WORDS]);
-int a733_nsi_counters_begin(struct a733_nsi_counters *, unsigned bank, uint32_t *clear_readback);
+int a733_nsi_counters_begin(struct a733_nsi_counters *, unsigned bank, uint32_t cycle, uint32_t *clear_readback);
 int a733_nsi_counters_sample(struct a733_nsi_counters *, unsigned bank, uint32_t value[A733_NSI_COUNTER_VALUES]);
 int a733_nsi_counters_end(struct a733_nsi_counters *, unsigned bank, uint32_t value[A733_NSI_COUNTER_VALUES],
                           uint32_t held[A733_NSI_COUNTER_VALUES]);
+int a733_nsi_counters_restore(struct a733_nsi_counters *, unsigned bank);
 int a733_nsi_counters_close(struct a733_nsi_counters *);
 int a733_nsi_counters_call(struct a733_nsi_counters *, const struct a733_nsi_counter_ops *, void *context,
                            struct a733_nsi_counter_call *);

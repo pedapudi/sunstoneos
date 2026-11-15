@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define LONG 0xffffffffu      /* 7.16 s at the 600 MHz NSI clock */
+#define WINDOW 60000000u     /* 100 ms */
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); exit(1); } } while (0)
 
 struct access { char kind; uintptr_t address; uint32_t value; };
@@ -104,8 +106,8 @@ static void test_busy_refusal(void)
         CHECK(a733_nsi_counters_open(&c, &ops, &m, reset) == A733_NSI_C_BUSY);
         CHECK(m.writes == 0 && reset[busy][A733_NSI_W_ENABLE] & 1u);
         uint32_t clear;
-        CHECK(a733_nsi_counters_begin(&c, 0, &clear) == A733_NSI_C_REFUSED);
-        CHECK(a733_nsi_counters_begin(&c, 1, &clear) == A733_NSI_C_REFUSED);
+        CHECK(a733_nsi_counters_begin(&c, 0, LONG, &clear) == A733_NSI_C_REFUSED);
+        CHECK(a733_nsi_counters_begin(&c, 1, LONG, &clear) == A733_NSI_C_REFUSED);
         CHECK(m.writes == 0);
     }
     /* A failed read during open writes nothing and refuses later calls. */
@@ -113,7 +115,7 @@ static void test_busy_refusal(void)
     struct a733_nsi_counters c; memset(&c, 0, sizeof(c));
     CHECK(a733_nsi_counters_open(&c, &ops, &m, NULL) == A733_NSI_C_IO);
     uint32_t clear;
-    CHECK(a733_nsi_counters_begin(&c, 0, &clear) == A733_NSI_C_REFUSED && m.writes == 0);
+    CHECK(a733_nsi_counters_begin(&c, 0, LONG, &clear) == A733_NSI_C_REFUSED && m.writes == 0);
 }
 /* The vendor order, each write read back; live counting; the hold after disable; restore. */
 static void test_phase(void)
@@ -124,10 +126,10 @@ static void test_phase(void)
     CHECK(a733_nsi_counters_open(&c, &ops, &m, NULL) == A733_NSI_C_OK);
     const unsigned start = m.count;
     uint32_t clear = 0xffffffffu;
-    CHECK(a733_nsi_counters_begin(&c, 1, &clear) == A733_NSI_C_OK);
+    CHECK(a733_nsi_counters_begin(&c, 1, LONG, &clear) == A733_NSI_C_OK);
     const uintptr_t e = a733_nsi_counter_address(1, 0), cl = e + 4, cy = e + 8;
     const struct access want[] = {
-        {'w', cy, 0xffffffffu}, {'r', cy, 0xffffffffu},
+        {'w', cy, LONG}, {'r', cy, LONG},
         {'w', e, initial.word[1][0] & ~1u}, {'r', e, initial.word[1][0] & ~1u},
         {'r', cl, 0}, {'w', cl, 1}, {'r', cl, 0},
         {'w', e, initial.word[1][0] | 1u}, {'r', e, initial.word[1][0] | 1u},
@@ -147,10 +149,29 @@ static void test_phase(void)
     CHECK(a733_nsi_counters_end(&c, 1, value, held) == A733_NSI_C_OK);
     CHECK(value[0] == 1000 && held[0] == 1000 && value[2] == 1000);
     restored(&m, &initial);
-    CHECK(a733_nsi_counters_begin(&c, 1, &clear) == A733_NSI_C_OK);   /* a later phase programs again */
+    CHECK(a733_nsi_counters_begin(&c, 1, 0, &clear) == A733_NSI_C_REFUSED);   /* a zero period */
+    const unsigned before_window = m.count;
+    CHECK(a733_nsi_counters_begin(&c, 1, WINDOW, &clear) == A733_NSI_C_OK);   /* a later phase, a 100 ms window */
+    CHECK(m.log[before_window].kind == 'w' && m.log[before_window].address == cy && m.log[before_window].value == WINDOW);
+    CHECK(m.word[1][A733_NSI_W_CYCLE] == WINDOW);
     CHECK(a733_nsi_counters_close(&c) == A733_NSI_C_OK);               /* close restores the programmed bank */
     restored(&m, &initial);
-    CHECK(a733_nsi_counters_begin(&c, 0, &clear) == A733_NSI_C_REFUSED);
+    /* Restore of one bank, for its master's power-off: the other bank keeps counting. */
+    struct a733_nsi_counters d; memset(&d, 0, sizeof(d));
+    CHECK(a733_nsi_counters_open(&d, &ops, &m, NULL) == A733_NSI_C_OK);
+    const unsigned writes_open = m.writes;
+    CHECK(a733_nsi_counters_restore(&d, 0) == A733_NSI_C_OK && m.writes == writes_open);   /* nothing programmed */
+    CHECK(a733_nsi_counters_begin(&d, 0, LONG, &clear) == A733_NSI_C_OK);
+    CHECK(a733_nsi_counters_begin(&d, 1, LONG, &clear) == A733_NSI_C_OK);
+    CHECK(a733_nsi_counters_restore(&d, 0) == A733_NSI_C_OK);
+    CHECK(m.word[0][A733_NSI_W_ENABLE] == initial.word[0][A733_NSI_W_ENABLE] &&
+          m.word[0][A733_NSI_W_CYCLE] == initial.word[0][A733_NSI_W_CYCLE] && (m.word[1][A733_NSI_W_ENABLE] & 1u));
+    CHECK(a733_nsi_counters_sample(&d, 0, live) == A733_NSI_C_REFUSED);    /* bank 0 is no longer programmed */
+    CHECK(a733_nsi_counters_sample(&d, 1, live) == A733_NSI_C_OK);
+    CHECK(a733_nsi_counters_restore(&d, 2) == A733_NSI_C_REFUSED);
+    CHECK(a733_nsi_counters_close(&d) == A733_NSI_C_OK);
+    restored(&m, &initial);
+    CHECK(a733_nsi_counters_begin(&c, 0, LONG, &clear) == A733_NSI_C_REFUSED);
 }
 /* A CLR that keeps its bit is recorded and still restored to the reset value. */
 static void test_stuck_clear(void)
@@ -160,7 +181,7 @@ static void test_stuck_clear(void)
     struct a733_nsi_counters c; memset(&c, 0, sizeof(c));
     CHECK(a733_nsi_counters_open(&c, &ops, &m, NULL) == A733_NSI_C_OK);
     uint32_t clear = 0, value[6], held[6];
-    CHECK(a733_nsi_counters_begin(&c, 0, &clear) == A733_NSI_C_OK && clear == 1);
+    CHECK(a733_nsi_counters_begin(&c, 0, LONG, &clear) == A733_NSI_C_OK && clear == 1);
     CHECK(a733_nsi_counters_end(&c, 0, value, held) == A733_NSI_C_OK);
     restored(&m, &initial);
 }
@@ -180,8 +201,8 @@ static void test_failure_path(void)
                 m.corrupt_readback = corrupt;
                 if (on_write) m.fail_write_at = at; else m.fail_read_at = m.reads + at;
                 uint32_t clear, value[6], held[6];
-                int r = a733_nsi_counters_begin(&c, 0, &clear);
-                if (r == A733_NSI_C_OK) r = a733_nsi_counters_begin(&c, 1, &clear);
+                int r = a733_nsi_counters_begin(&c, 0, LONG, &clear);
+                if (r == A733_NSI_C_OK) r = a733_nsi_counters_begin(&c, 1, LONG, &clear);
                 if (r == A733_NSI_C_OK) { count(&m, 0, 7); r = a733_nsi_counters_sample(&c, 0, value); }
                 if (r == A733_NSI_C_OK) r = a733_nsi_counters_end(&c, 0, value, held);
                 if (r == A733_NSI_C_OK) r = a733_nsi_counters_end(&c, 1, value, held);
@@ -191,7 +212,7 @@ static void test_failure_path(void)
                 /* The only failure is the injected access, so every restore write after it succeeds. */
                 restored(&m, &initial);
                 const unsigned writes = m.writes;
-                CHECK(a733_nsi_counters_begin(&c, 0, &clear) == A733_NSI_C_REFUSED);
+                CHECK(a733_nsi_counters_begin(&c, 0, LONG, &clear) == A733_NSI_C_REFUSED);
                 CHECK(a733_nsi_counters_sample(&c, 0, value) == A733_NSI_C_REFUSED);
                 CHECK(a733_nsi_counters_close(&c) == A733_NSI_C_IO);
                 CHECK(m.writes == writes);   /* nothing left to restore */
@@ -206,7 +227,7 @@ static void test_restore_failure(void)
     struct a733_nsi_counters c; memset(&c, 0, sizeof(c));
     CHECK(a733_nsi_counters_open(&c, &ops, &m, NULL) == A733_NSI_C_OK);
     uint32_t clear;
-    CHECK(a733_nsi_counters_begin(&c, 0, &clear) == A733_NSI_C_OK);
+    CHECK(a733_nsi_counters_begin(&c, 0, LONG, &clear) == A733_NSI_C_OK);
     m.fail_write_at = m.writes + 2;   /* the restore's CYCLE write */
     CHECK(a733_nsi_counters_close(&c) == A733_NSI_C_IO && c.failed);
     CHECK(m.word[0][A733_NSI_W_ENABLE] == 0x100u);   /* the other restore writes still ran */
@@ -223,8 +244,10 @@ static void test_call(void)
     CHECK(a733_nsi_counters_call(&c, &ops, &m, &call) == A733_NSI_C_REFUSED);
     call = (struct a733_nsi_counter_call){.op = 99};
     CHECK(a733_nsi_counters_call(&c, &ops, &m, &call) == A733_NSI_C_REFUSED);
+    call = (struct a733_nsi_counter_call){.op = A733_NSI_BEGIN, .bank = 0};   /* no period */
+    CHECK(a733_nsi_counters_call(&c, &ops, &m, &call) == A733_NSI_C_REFUSED && m.writes == 0);
     m.fail_write_at = m.writes + 1;
-    call = (struct a733_nsi_counter_call){.op = A733_NSI_BEGIN, .bank = 0};
+    call = (struct a733_nsi_counter_call){.op = A733_NSI_BEGIN, .bank = 0, .cycle = WINDOW};
     CHECK(a733_nsi_counters_call(&c, &ops, &m, &call) == A733_NSI_C_IO && call.fail_address == 0x02020cc8u);
 }
 int main(void)
@@ -238,6 +261,6 @@ int main(void)
     test_restore_failure();
     test_call();
     puts("PASS nsi-counters: reads before writes, busy refusal, vendor order with readbacks, live and held counts, "
-         "restore, and the failure path at every write and readback");
+         "restore of all banks or one, the caller's period, and the failure path at every write and readback");
     return 0;
 }

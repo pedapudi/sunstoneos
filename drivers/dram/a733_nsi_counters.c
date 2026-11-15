@@ -102,14 +102,14 @@ int a733_nsi_counters_open(struct a733_nsi_counters *c, const struct a733_nsi_co
     c->opened = 1;
     return A733_NSI_C_OK;
 }
-int a733_nsi_counters_begin(struct a733_nsi_counters *c, unsigned bank, uint32_t *clear_readback)
+int a733_nsi_counters_begin(struct a733_nsi_counters *c, unsigned bank, uint32_t cycle, uint32_t *clear_readback)
 {
-    if (!c || !c->opened || c->failed || bank >= A733_NSI_COUNTER_BANKS || (c->programmed >> bank & 1u))
+    if (!c || !c->opened || c->failed || bank >= A733_NSI_COUNTER_BANKS || (c->programmed >> bank & 1u) || !cycle)
         return A733_NSI_C_REFUSED;
     const uint32_t enable = c->reset[bank][A733_NSI_W_ENABLE];
     uint32_t clear;
     c->programmed |= 1u << bank;   /* before the first write, so a miss restores this bank too */
-    if (!wr(c, a733_nsi_counter_address(bank, A733_NSI_W_CYCLE), UINT32_MAX, 1, NULL) ||
+    if (!wr(c, a733_nsi_counter_address(bank, A733_NSI_W_CYCLE), cycle, 1, NULL) ||
         !wr(c, a733_nsi_counter_address(bank, A733_NSI_W_ENABLE), enable & ~1u, 1, NULL) ||
         !rd(c, a733_nsi_counter_address(bank, A733_NSI_W_CLR), &clear) ||
         !wr(c, a733_nsi_counter_address(bank, A733_NSI_W_CLR), clear | 1u, 0, clear_readback) ||
@@ -138,6 +138,14 @@ int a733_nsi_counters_end(struct a733_nsi_counters *c, unsigned bank, uint32_t v
         !values(c, bank, value) || !settle(c) || !values(c, bank, held)) return fail(c);
     return restore_bank(c, bank) ? A733_NSI_C_OK : fail(c);
 }
+int a733_nsi_counters_restore(struct a733_nsi_counters *c, unsigned bank)
+{
+    if (!c || !c->opened || bank >= A733_NSI_COUNTER_BANKS) return A733_NSI_C_REFUSED;
+    if (!(c->programmed >> bank & 1u)) return A733_NSI_C_OK;
+    if (restore_bank(c, bank)) return A733_NSI_C_OK;
+    c->failed = 1;
+    return A733_NSI_C_IO;
+}
 int a733_nsi_counters_close(struct a733_nsi_counters *c)
 {
     if (!c || !c->opened) return A733_NSI_C_REFUSED;
@@ -153,7 +161,7 @@ int a733_nsi_counters_call(struct a733_nsi_counters *c, const struct a733_nsi_co
     int r;
     switch (a->op) {
     case A733_NSI_OPEN: r = a733_nsi_counters_open(c, ops, context, a->reset); break;
-    case A733_NSI_BEGIN: r = a733_nsi_counters_begin(c, a->bank, &a->clear); break;
+    case A733_NSI_BEGIN: r = a733_nsi_counters_begin(c, a->bank, a->cycle, &a->clear); break;
     case A733_NSI_SAMPLE: r = a733_nsi_counters_sample(c, a->bank, a->value); break;
     case A733_NSI_END: r = a733_nsi_counters_end(c, a->bank, a->value, a->held); break;
     case A733_NSI_CLOSE: r = a733_nsi_counters_close(c); break;

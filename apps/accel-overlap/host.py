@@ -16,10 +16,12 @@ LARGE_BYTES = 2944
 # The NSI counter calibration (ACCEL_OVERLAP_COUNTERS): the larger-job layout with four phases, followed by the counter
 # record (result.h: struct accel_overlap_counter_result).
 COUNTERS_VERSION = 5
-COUNTERS_BYTES = 3768
-COUNTER_NAMES = ('idle', 'gpu-alone', 'npu-alone', 'core-2')
-COUNTER_DEVICES = (0, 1, 2, 4)
-COUNTER_MODES = (0, 0, 0, 0x01)
+COUNTERS_BYTES = 10088
+COUNTER_NAMES = ('idle', 'gpu-alone', 'npu-alone', 'core-2', 'gpu-window', 'npu-window')
+COUNTER_DEVICES = (0, 1, 2, 4, 1, 2)
+COUNTER_MODES = (0, 0, 0, 0x01, 0, 0)
+COUNTED_PHASES = 4       # counted with CYCLE 0xffffffff on both ports; the last two phases are the window probes
+WINDOW_CYCLES = 60000000 # the probes' period: 100 ms at the 600 MHz NSI clock
 COUNTER_WORDS = ('rq_rd', 'rq_wr', 'dt_rd', 'dt_wr', 'la_rd', 'la_wr')
 COUNTER_PORTS = (6, 18)
 DATA_UNIT = 16           # bytes per data count of an initiator port (sun60iw2p1.dtsi ia_pmu_data_unit)
@@ -231,6 +233,8 @@ def decode_large(raw, counters=False):
                  'first_site': first_site, 'first_word': '0x%08x' % first_word}, 'phases': []}
     for i in range(1 if width else len(names)):
         at = 136 + 312 * i
+        if counters and not any(raw[at:at + 312]):
+            break   # a counter call failed in an earlier phase, so this one did not run
         devices, throttled = struct.unpack_from('<2I', raw, at)
         overlap, ticks, sweeps, stream_ticks = struct.unpack_from('<4Q', raw, at + 184)
         mask, per_sample = struct.unpack_from('<2I', raw, at + 216)
@@ -273,17 +277,63 @@ def decode_large(raw, counters=False):
     return r
 
 
+def window_model(samples, window_ticks):
+    """What the counters did across period ends, from one probe's samples of the data counts (DT_RD + DT_WR):
+    'zero' (never counted), 'latched' (held still between steps about one period apart: each step shows the last
+    period's count), 'restarts' (rose at almost every sample and fell back at each period end: each period's count is
+    the peak before a fall), 'stopped' (rose, then held still for more than one and a half periods) or 'free' (rose
+    through every period end)."""
+    v = [s['count'][2] + s['count'][3] for s in samples]
+    t = [s['ticks'] for s in samples]
+    out = {'model': None, 'samples': len(v), 'period_ms': None, 'period_units': None, 'period_counts': None}
+    if len(v) < 8:
+        return out
+    if not any(v):
+        out['model'] = 'zero'
+        return out
+    falls = [i for i in range(1, len(v)) if v[i] < v[i - 1]]
+    changes = [i for i in range(1, len(v)) if v[i] != v[i - 1]]
+    spacing = lambda idx: sorted(t[b] - t[a] for a, b in zip(idx, idx[1:]))
+    median = lambda xs: xs[len(xs) // 2] if xs else None
+    # A latched count changes only at period ends, a few times in the probe, and may rise or fall at each change; a
+    # restarting count changes at almost every sample and falls at each period end.
+    if len(changes) <= len(v) // 4:
+        out['model'] = 'latched'
+        gaps = spacing(changes)
+        ends = changes
+    elif falls:
+        out['model'] = 'restarts'
+        gaps = spacing(falls)
+        peaks = [i - 1 for i in falls[1:]]   # the first period started at the probe's begin, after the clear
+        ends = peaks or [falls[0] - 1]
+    else:
+        flat = len(v) - 1 - changes[-1]
+        if t[-1] - t[changes[-1]] > 1.5 * window_ticks and flat:
+            out['model'] = 'stopped'
+            out['period_ms'] = round(t[changes[-1]] / TICKS_PER_US / 1000, 1)
+            return out
+        out['model'] = 'free'
+        return out
+    gap = median(gaps) if gaps else t[(falls or changes)[0]]   # one period end seen: the first period began at 0
+    out['period_ms'] = round(gap / TICKS_PER_US / 1000, 1) if gap else None
+    pick = lambda w: sorted(samples[i]['count'][w] for i in ends)
+    out['period_counts'] = {w: median(pick(k)) for k, w in enumerate(('rq_rd', 'rq_wr', 'dt_rd', 'dt_wr'))}
+    out['period_units'] = median(sorted(v[i] for i in ends))
+    return out
+
+
 def decode_counters(raw):
-    """The NSI counter calibration (struct accel_overlap_counter_result)."""
+    """The NSI counter calibration (struct accel_overlap_counter_result). A record whose counter call failed decodes too:
+    the phases after the failure did not run, and the counter record still names the status and the failing address."""
     r = decode_large(raw, counters=True)
     at = LARGE_BYTES
     open_status, close_status, fail_address, fail_value = struct.unpack_from('<4I', raw, at)
     reset = struct.unpack_from('<18I', raw, at + 16)
     r['counters'] = {'open_status': open_status, 'close_status': close_status, 'fail_address': '0x%08x' % fail_address,
-                     'fail_value': '0x%08x' % fail_value,
+                     'fail_value': '0x%08x' % fail_value, 'phases_run': len(r['phases']),
                      'reset': {'port_%d' % port: ['0x%08x' % w for w in reset[9 * b:9 * b + 9]]
                                for b, port in enumerate(COUNTER_PORTS)}}
-    for i, phase in enumerate(r['phases']):
+    for i, phase in enumerate(r['phases'][:COUNTED_PHASES]):
         base = at + 16 + 72 + 184 * i
         status, clear0, clear1, _ = struct.unpack_from('<4I', raw, base)
         live = struct.unpack_from('<12I', raw, base + 16)
@@ -299,29 +349,62 @@ def decode_counters(raw):
                 'live': dict(zip(COUNTER_WORDS, live[6 * b:6 * b + 6])),
                 'held': dict(zip(COUNTER_WORDS, held[6 * b:6 * b + 6]))}
         phase['counters'] = c
-    gpu, npu = r['phases'][1], r['phases'][2]
-    gpu_jobs = gpu['gpu']['pipelined_jobs'] + 2 * gpu['slot_jobs']   # each slot ran a plain and a synced job
-    npu_jobs = npu['npu']['pipelined_jobs']
-    g, n = gpu['counters']['port_6']['value'], npu['counters']['port_18']['value']
-    per = lambda v, jobs: round(v / jobs, 1) if jobs else None
-    r['calibration'] = {
-        'gpu_jobs': gpu_jobs, 'npu_jobs': npu_jobs,
-        'gpu_known_read_units_per_job': r['gpu_elements'] * 8 // DATA_UNIT,
-        'gpu_known_write_units_per_job': r['gpu_elements'] * 4 // DATA_UNIT,
-        'npu_known_units_per_job': r['npu_tensor_bytes'] // DATA_UNIT,
-        'gpu_dt_rd_per_job': per(g['dt_rd'], gpu_jobs), 'gpu_dt_wr_per_job': per(g['dt_wr'], gpu_jobs),
-        'gpu_requests_per_job': per(g['rq_rd'] + g['rq_wr'], gpu_jobs),
-        'gpu_rq_rd_per_job': per(g['rq_rd'], gpu_jobs), 'gpu_rq_wr_per_job': per(g['rq_wr'], gpu_jobs),
-        'npu_dt_rd_per_job': per(n['dt_rd'], npu_jobs), 'npu_dt_wr_per_job': per(n['dt_wr'], npu_jobs),
-        'npu_requests_per_job': per(n['rq_rd'] + n['rq_wr'], npu_jobs),
-        'gpu_la_rd_per_request': round(g['la_rd'] / g['rq_rd'], 2) if g['rq_rd'] else None,
-        'npu_la_rd_per_request': round(n['la_rd'] / n['rq_rd'], 2) if n['rq_rd'] else None}
-    q = r['calibration']['gpu_requests_per_job']
-    r['calibration']['gpu_discriminator'] = (None if q is None else 'line requests: few resident tasks' if q < 100000 else
-                                            'per-lane requests: a per-request limit' if q > 200000 else 'undecided')
+    for k, phase in enumerate(r['phases'][COUNTED_PHASES:]):
+        base = at + 16 + 72 + 184 * COUNTED_PHASES + 3160 * k
+        status, bank, cycle, count, clear, _ = struct.unpack_from('<6I', raw, base)
+        begin, end = struct.unpack_from('<2Q', raw, base + 24)
+        value = struct.unpack_from('<6I', raw, base + 40)
+        held = struct.unpack_from('<6I', raw, base + 64)
+        samples = [{'ticks': x[0], 'jobs': x[1], 'count': x[2:6]}
+                   for x in (struct.unpack_from('<6I', raw, base + 88 + 24 * n) for n in range(min(count, 128)))]
+        window_ticks = cycle * TICKS_PER_US / 600 if cycle else None
+        q = {'status': status, 'port': COUNTER_PORTS[bank] if bank < 2 else None, 'cycle': cycle,
+             'clear_readback': '0x%08x' % clear, 'ms': round((end - begin) / TICKS_PER_US / 1000, 3) if end > begin else None,
+             'value': dict(zip(COUNTER_WORDS, value)), 'held': dict(zip(COUNTER_WORDS, held)),
+             'series': [[s['ticks'], s['jobs']] + list(s['count']) for s in samples]}
+        q.update(window_model(samples, window_ticks or 2400000))
+        if len(samples) >= 2 and samples[-1]['ticks'] > samples[0]['ticks']:
+            q['jobs_per_second'] = round((samples[-1]['jobs'] - samples[0]['jobs']) * TICKS_PER_US * 1e6 /
+                                         (samples[-1]['ticks'] - samples[0]['ticks']), 1)
+        if q['period_counts'] and q['period_ms'] and q.get('jobs_per_second'):
+            jobs = q['jobs_per_second'] * q['period_ms'] / 1000
+            q['per_job'] = {w: round(n / jobs, 1) for w, n in q['period_counts'].items()}
+        phase['probe'] = q
+    r['calibration'] = calibration(r)
     r['checks'] = counter_checks(r)
     r['in_range'] = all(c['ok'] for c in r['checks'])
     return r
+
+
+def calibration(r):
+    """Per-job counts. With a model in which a count can be read before its period ends ('restarts' or 'free'), the
+    counted phases give them over one second; with 'latched', the probes give them from one period's count."""
+    p = r['phases']
+    probes = [ph['probe'] for ph in p[COUNTED_PHASES:]]
+    models = sorted({q['model'] for q in probes if q['model']})
+    out = {'probe_models': models, 'source': None,
+           'gpu_known_read_units_per_job': r['gpu_elements'] * 8 // DATA_UNIT,
+           'gpu_known_write_units_per_job': r['gpu_elements'] * 4 // DATA_UNIT,
+           'npu_known_units_per_job': r['npu_tensor_bytes'] // DATA_UNIT}
+    per = lambda v, jobs: round(v / jobs, 1) if jobs else None
+    if len(p) >= 3 and models and set(models) <= {'restarts', 'free'}:
+        gpu, npu = p[1], p[2]
+        gpu_jobs = gpu['gpu']['pipelined_jobs'] + 2 * gpu['slot_jobs']   # each slot ran a plain and a synced job
+        npu_jobs = npu['npu']['pipelined_jobs']
+        g, n = gpu['counters']['port_6']['value'], npu['counters']['port_18']['value']
+        out.update(source='counted phases', gpu_jobs=gpu_jobs, npu_jobs=npu_jobs,
+                   gpu={w: per(g[w], gpu_jobs) for w in COUNTER_WORDS[:4]},
+                   npu={w: per(n[w], npu_jobs) for w in COUNTER_WORDS[:4]},
+                   gpu_la_rd_per_request=round(g['la_rd'] / g['rq_rd'], 2) if g['rq_rd'] else None,
+                   npu_la_rd_per_request=round(n['la_rd'] / n['rq_rd'], 2) if n['rq_rd'] else None)
+    elif len(probes) == 2 and models == ['latched'] and all(q.get('per_job') for q in probes):
+        out.update(source='window probes', gpu=probes[0]['per_job'], npu=probes[1]['per_job'])
+    if out.get('gpu'):
+        q = out['gpu']['rq_rd'] + out['gpu']['rq_wr'] if None not in (out['gpu']['rq_rd'], out['gpu']['rq_wr']) else None
+        out['gpu_requests_per_job'] = q
+        out['gpu_discriminator'] = (None if q is None else 'line requests: few resident tasks' if q < 100000 else
+                                    'per-lane requests: a per-request limit' if q > 200000 else 'undecided')
+    return out
 
 
 def counter_checks(r):
@@ -334,44 +417,58 @@ def counter_checks(r):
 
     k, p, cal = r['counters'], r['phases'], r['calibration']
     check('counter open status', k['open_status'], 0, 0)
+    check('phases run', k['phases_run'], len(COUNTER_NAMES), len(COUNTER_NAMES))
     check('counter close status', k['close_status'], 0, 0)
-    check('counter phase status', sum(1 for ph in p if ph['counters']['status']), 0, 0)
+    check('counter phase and probe status', sum(1 for ph in p if (ph.get('counters') or ph.get('probe'))['status']), 0, 0)
     check('reset enable bits set', sum(int(k['reset']['port_%d' % port][0], 16) & 1 for port in COUNTER_PORTS), 0, 0)
-    # The counters hold after the disable.
-    check('counts that moved after the disable', sum(
-        1 for ph in p for port in COUNTER_PORTS for w in COUNTER_WORDS
-        if ph['counters']['port_%d' % port]['held'][w] != ph['counters']['port_%d' % port]['value'][w]), 0, 0)
-    # Live counting: the data sample at half the phase, on the port of the phase's device.
-    for i, port in ((1, 6), (2, 18)):
-        c = p[i]['counters']['port_%d' % port]
-        total = c['value']['dt_rd'] + c['value']['dt_wr']
-        check('%s port %d live share at half' % (p[i]['name'], port),
-              round((c['live']['dt_rd'] + c['live']['dt_wr']) / total, 3) if total else None, 0.35, 0.65)
-    # Controls. Idle for 100 ms: under 10,000 data units (160 KB) on either port, 0.1% of the GPU phase's traffic in 100 ms.
-    # The core-2 stream reaches DRAM through the CPU ports: under 100,000 units on either port, 0.05% of its bytes.
-    for i, limit in ((0, 9999), (3, 99999)):
-        for port in COUNTER_PORTS:
-            v = p[i]['counters']['port_%d' % port]['value']
-            check('%s port %d data units' % (p[i]['name'], port), v['dt_rd'] + v['dt_wr'], 0, limit)
-    # Each accelerator's traffic stays off the other's port: below 1% of its own count.
-    g6 = p[1]['counters']['port_6']['value']; g18 = p[1]['counters']['port_18']['value']
-    n6 = p[2]['counters']['port_6']['value']; n18 = p[2]['counters']['port_18']['value']
-    check('gpu-alone port 18 share', round((g18['dt_rd'] + g18['dt_wr']) / max(1, g6['dt_rd'] + g6['dt_wr']), 4), 0, 0.01)
-    check('npu-alone port 6 share', round((n6['dt_rd'] + n6['dt_wr']) / max(1, n18['dt_rd'] + n18['dt_wr']), 4), 0, 0.01)
-    # Calibration on the known bytes per job (16-byte units).
+    if len(p) < len(COUNTER_NAMES):
+        return out
+    probes = [ph['probe'] for ph in p[COUNTED_PHASES:]]
+    check('probe samples', min(q['samples'] for q in probes), 100, 128)
+    check('probes agree on one model', len(cal['probe_models']) == 1 or None)
+    check('probe model counts', cal['probe_models'][0] in ('restarts', 'latched', 'free') if cal['probe_models'] else None)
+    if cal['probe_models'] and cal['probe_models'][0] in ('restarts', 'latched'):
+        for q in probes:   # the period follows CYCLE at the 600 MHz NSI clock: 100 ms
+            check('port %d probe period ms' % q['port'], q['period_ms'], 90, 110)
+    counted = cal['source'] == 'counted phases'
+    if counted:
+        # The counters hold after the disable.
+        check('counts that moved after the disable', sum(
+            1 for ph in p[:COUNTED_PHASES] for port in COUNTER_PORTS for w in COUNTER_WORDS
+            if ph['counters']['port_%d' % port]['held'][w] != ph['counters']['port_%d' % port]['value'][w]), 0, 0)
+        # Live counting: the data sample at half the phase, on the port of the phase's device.
+        for i, port in ((1, 6), (2, 18)):
+            c = p[i]['counters']['port_%d' % port]
+            total = c['value']['dt_rd'] + c['value']['dt_wr']
+            check('%s port %d live share at half' % (p[i]['name'], port),
+                  round((c['live']['dt_rd'] + c['live']['dt_wr']) / total, 3) if total else None, 0.35, 0.65)
+        # Controls. Idle for 100 ms: under 10,000 data units (160 KB) on either port, 0.1% of the GPU phase's traffic in
+        # 100 ms. The core-2 stream reaches DRAM through the CPU ports: under 100,000 units on either port, 0.05% of its
+        # bytes.
+        for i, limit in ((0, 9999), (3, 99999)):
+            for port in COUNTER_PORTS:
+                v = p[i]['counters']['port_%d' % port]['value']
+                check('%s port %d data units' % (p[i]['name'], port), v['dt_rd'] + v['dt_wr'], 0, limit)
+        # Each accelerator's traffic stays off the other's port: below 1% of its own count.
+        g6, g18 = p[1]['counters']['port_6']['value'], p[1]['counters']['port_18']['value']
+        n6, n18 = p[2]['counters']['port_6']['value'], p[2]['counters']['port_18']['value']
+        check('gpu-alone port 18 share', round((g18['dt_rd'] + g18['dt_wr']) / max(1, g6['dt_rd'] + g6['dt_wr']), 4), 0, 0.01)
+        check('npu-alone port 6 share', round((n6['dt_rd'] + n6['dt_wr']) / max(1, n18['dt_rd'] + n18['dt_wr']), 4), 0, 0.01)
+        check('counted phase longest ms', max(ph['counters']['ms'] or 0 for ph in p[:COUNTED_PHASES]), None, 1200)
+    # Calibration on the known bytes per job (16-byte units), from whichever source the model allows.
+    g, n = cal.get('gpu') or {}, cal.get('npu') or {}
     rd, wr, nb = cal['gpu_known_read_units_per_job'], cal['gpu_known_write_units_per_job'], cal['npu_known_units_per_job']
-    check('gpu dt_rd per job', cal['gpu_dt_rd_per_job'], rd, round(rd * 1.04))
-    check('gpu dt_wr per job', cal['gpu_dt_wr_per_job'], wr, round(2 * wr * 1.04))
-    check('gpu requests per job decide', cal['gpu_discriminator'] in ('line requests: few resident tasks',
-                                                                      'per-lane requests: a per-request limit') or None)
-    check('npu dt_rd per job', cal['npu_dt_rd_per_job'], nb, round(nb * 1.05))
-    check('npu dt_wr per job', cal['npu_dt_wr_per_job'], nb, round(nb * 1.02))
-    # The counted phases end well inside the 7.16 s period of CYCLE 0xffffffff at the 600 MHz NSI clock.
-    check('counted phase longest ms', max(ph['counters']['ms'] or 0 for ph in p), None, 1200)
+    slack = 1.0 if counted else 1.1   # a probe's period holds about 68 GPU jobs, so its per-job count carries about 2% more
+    check('gpu dt_rd per job', g.get('dt_rd'), round(rd / slack), round(rd * 1.04 * slack))
+    check('gpu dt_wr per job', g.get('dt_wr'), round(wr / slack), round(2 * wr * 1.04 * slack))
+    check('gpu requests per job decide', cal.get('gpu_discriminator') in ('line requests: few resident tasks',
+                                                                          'per-lane requests: a per-request limit') or None)
+    check('npu dt_rd per job', n.get('dt_rd'), round(nb / slack), round(nb * 1.05 * slack))
+    check('npu dt_wr per job', n.get('dt_wr'), round(nb / slack), round(nb * 1.02 * slack))
     # The accelerators run as in the width run (675.9 jobs/s) and stage 1c (10,183.9 jobs/s), within 10%.
     check('gpu alone jobs/s', p[1]['gpu']['jobs_per_second'], 608, 744)
     check('npu alone jobs/s', p[2]['npu']['jobs_per_second'], 9165, 11202)
-    check('gpu checked slot jobs', p[1]['slot_jobs'], 4, 4)
+    check('gpu checked slot jobs', p[1]['slot_jobs'] + p[4]['slot_jobs'], 8, 8)
     check('core-2 stream sweeps', p[3]['stream_sweeps'], 1)
     check('mismatches', sum(ph[d]['mismatches'] for ph in p for d in ('gpu', 'npu')), 0, 0)
     check('chase overflow', sum(ph['chase']['overflow'] for ph in p), 0, 0)

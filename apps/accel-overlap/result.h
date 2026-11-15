@@ -80,10 +80,14 @@ _Static_assert(sizeof(struct accel_overlap_sweep) == 56 && sizeof(struct accel_o
 /* The four-elements-per-lane GPU run (ACCEL_OVERLAP_WIDTH): the larger-job layout; only phase 0, the GPU alone, runs, and the
  * other phases stay zero. */
 #define ACCEL_OVERLAP_WIDTH_VERSION 4u
-/* The NSI counter calibration (ACCEL_OVERLAP_COUNTERS): the width build with four phases (idle, the GPU alone, the NPU alone,
- * core 2 streaming), NSI ports 6 and 18 counted in each; the larger-job header and phases, then the counter record. */
+/* The NSI counter calibration (ACCEL_OVERLAP_COUNTERS): the width build with four counted phases (idle, the GPU alone, the
+ * NPU alone, core 2 streaming), NSI ports 6 and 18 counted in each with the longest period, then two window probes (the GPU
+ * alone on port 6, the NPU alone on port 18) with a 100 ms period and a sample every 5 ms; the larger-job header and its
+ * six phases, then the counter record. */
 #define ACCEL_OVERLAP_COUNTERS_VERSION 5u
 #define ACCEL_OVERLAP_COUNTER_PHASES 4u
+#define ACCEL_OVERLAP_COUNTER_PROBES 2u
+#define ACCEL_OVERLAP_PROBE_SAMPLES 128u
 #define ACCEL_OVERLAP_INTERLEAVED 0x100u
 struct accel_overlap_large_phase {
     struct accel_overlap_phase run;
@@ -113,12 +117,25 @@ struct accel_overlap_counter_phase {
     uint32_t live[2][6], value[2][6], held[2][6];
     uint64_t begin, live_at, end;
 };
+/* One probe sample: ticks since the probe began, the device's jobs completed so far, and RQ_RD, RQ_WR, DT_RD, DT_WR. */
+struct accel_overlap_counter_sample {
+    uint32_t ticks, jobs, count[4];
+};
+/* A window probe: one bank with a short period; the values just after the disable and 10 us later; the samples. */
+struct accel_overlap_counter_probe {
+    uint32_t status, bank, cycle, samples, clear, reserved;
+    uint64_t begin, end;
+    uint32_t value[6], held[6];
+    struct accel_overlap_counter_sample sample[ACCEL_OVERLAP_PROBE_SAMPLES];
+};
 struct accel_overlap_counter_result {
     struct accel_overlap_large_result large;
     uint32_t open_status, close_status, fail_address, fail_value;
     uint32_t reset[2][9];                         /* every bank word read before any write */
     struct accel_overlap_counter_phase phase[ACCEL_OVERLAP_COUNTER_PHASES];
+    struct accel_overlap_counter_probe probe[ACCEL_OVERLAP_COUNTER_PROBES];
 };
-_Static_assert(sizeof(struct accel_overlap_counter_phase) == 184 && sizeof(struct accel_overlap_counter_result) == 3768,
+_Static_assert(sizeof(struct accel_overlap_counter_phase) == 184 && sizeof(struct accel_overlap_counter_sample) == 24 &&
+               sizeof(struct accel_overlap_counter_probe) == 3160 && sizeof(struct accel_overlap_counter_result) == 10088,
                "host.py decodes this layout");
 #endif

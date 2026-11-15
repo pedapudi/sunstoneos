@@ -23,8 +23,9 @@ option(SUNSTONE_ACCEL_OVERLAP_LARGE "Build accel-overlap as the larger-job strea
 # GPU-alone phase. It needs manifest-large.json, as the larger-job sweep does.
 option(SUNSTONE_ACCEL_OVERLAP_WIDTH "Build accel-overlap as the GPU-alone run of the four-elements-per-lane add" OFF)
 # The NSI counter calibration (ACCEL_OVERLAP_COUNTERS): the GPU-width build with four phases (idle, the GPU alone, the NPU
-# alone, the core-2 stream alone), each counted on NSI ports 6 and 18 by the OS counter owner. It needs manifest-large.json
-# and the OS built with SUNSTONE_ACCEL_NSI_COUNTERS.
+# alone, the core-2 stream alone), each counted on NSI ports 6 and 18 by the OS counter owner, then two 100 ms window probes.
+# It needs manifest-counters.json (manifest-large.json with room for the 10,088-byte result) and the OS built with
+# SUNSTONE_ACCEL_NSI_COUNTERS.
 option(SUNSTONE_ACCEL_OVERLAP_COUNTERS "Build accel-overlap as the NSI port 6 and 18 counter calibration" OFF)
 if(SUNSTONE_ACCEL_OVERLAP_COUNTERS)
   if(NOT SUNSTONE_ACCEL_NSI_COUNTERS)

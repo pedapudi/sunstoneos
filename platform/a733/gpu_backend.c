@@ -14,6 +14,10 @@
 #include "a733_gpu_platform_native.h"
 #include "pvr_gpu_crumb.h"
 #include "pvr_compute_queue.h"
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+void os_nsi_counters_power_off(unsigned bank);   /* platform/a733/nsi_counters_os.c */
+void os_nsi_counters_power_on(unsigned bank);
+#endif
 #ifdef SUNSTONE_GPU_NSI_PMU
 #include "a733_gpu_nsi_pmu.h"
 #endif
@@ -157,6 +161,9 @@ static int power_poll(void *context)
         if (result != 1 || b->power->phase != A733_GPU_PLATFORM_ON || !b->power->token || !b->power->delegated)
             return fail(b, A733_GPU_BACKEND_POWER), -1;
         b->phase = A733_GPU_BACKEND_IDENTIFY;
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+        os_nsi_counters_power_on(0);   /* GPU_TOP is on: port 6's counter bank may be accessed again */
+#endif
         sunstone_crumb(PVR_GPU_CRUMB_IDENTITY, 0);
         return 0;
     }
@@ -736,6 +743,9 @@ static int isolate(void *context)
         nsi_active->status=A733_NSI_IO;
         a733_gpu_backend_nsi_sample(2,nsi_active);
     }
+#endif
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+    os_nsi_counters_power_off(0);   /* port 6 belongs to GPU_TOP: restore its counter bank before the domain turns off */
 #endif
     uint64_t deadline = b->service->stop.deadline;
     if (b->service->stop.phase != PVR_GPU_STOP_ISOLATE ||
