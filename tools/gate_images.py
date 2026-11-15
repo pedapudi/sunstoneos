@@ -53,6 +53,10 @@ IMAGES = {
         '-DSUNSTONE_APPLICATION=gpu-lifecycle',
         '-DSUNSTONE_A733_OS_GPU=ON',
     ], 'target': 'sunstone-a733-os-gpu-lifecycle', 'elf': 'sunstone-a733-os-gpu-lifecycle.elf'},
+    # the returning G2D check image (apps/g2d-check, docs/g2d-os.md), whose fault return checks/os-g2d-fault-return.py runs
+    'ret-g2d': {'configure': [
+        '-DSUNSTONE_APPLICATION=g2d-check',
+    ], 'target': 'sunstone-a733-os-g2d-check', 'elf': 'sunstone-a733-os-g2d-check.elf'},
     # the returning latency diagnostic image
     'ret-latency': {'configure': [
         '-DSUNSTONE_LATENCY=ON',

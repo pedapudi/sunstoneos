@@ -100,8 +100,18 @@ are received; messages 2 and 4 are sent. Flags identify unqualified entropy,
 SSID match, PSK and CCMP support, target construction, entropy readiness,
 credential presence and entropy failure. The tail also records the number of
 matching scan results, selected frequency and RSSI, and connection and
-authorization times. It holds no SSID, key or credential byte. The access point
-list in this stage also omits SSIDs.
+authorization times. It holds no SSID, key or credential byte.
+
+No stage's access point list names an SSID. A scan hears the user's network
+among its neighbours, and the record reaches the host's result files; the list
+keeps each BSSID, frequency and RSSI. `checks/board-radio.c` checks that the
+scan-only record holds no name although the scan heard two.
+
+An association miss (a refused association, a timeout or a handshake that never
+completes) retains the radio, so its return ends at the watchdog and the record
+is lost. Its first failure record therefore carries the tail's codes: bits 31:16
+the association status code, bit 15 set, bits 14:12 the link, 11:8 the EAPOL
+frames sent and 7:4 those received (each at most 15), and 3:0 the stage.
 
 ## Entropy and credentials gate association only
 
@@ -128,10 +138,21 @@ remains excluded pending physical reset-route and accessory qualification
 ([Bluetooth return](bluetooth-return.md)).
 
 A scan-only return reports DONE after DOWN readbacks, transport and PMIC
-retirement, and credential cleanup. Full-station, association and entropy-only
-sessions retain FAULT value `0x905`: their crypto-engine ownership has no complete
-retirement proof. Returning admission therefore remains limited to the scanning
-station. A registered owner fault records its diagnostic and permits independent
+retirement, and credential cleanup. An association return also retires the
+crypto engine before DONE (`os_ce_retire_step` in `apps/os/ce_probe.c`): a TRNG
+task still in flight is polled to completion and its block zeroed, the
+controller must be idle, and `a733_ce_clock_retire` takes the CE down by the
+reverse of its bring-up (bus gate, MBUS gate, clock gate, module gate, both
+resets, then the clock source, each read back under the register lock). The
+clock token is then released, and the descriptor page is returned from the
+device, zeroed, cleaned and freed to the ledger. A CE that cannot be proved down
+keeps FAULT value `0x905` with the unmet step in bits 31:16 (1 clock, 2
+deadline, 3 engine fault or failed task, 4 not idle, 5 clock refused after a
+write, 6 token, 7 page). Full-station and entropy-only sessions retain FAULT
+value `0x905`: the full station's own entropy source and the entropy stage have
+no retirement path.
+
+A registered owner fault records its diagnostic and permits independent
 cleanup to continue, but prevents per-core terminal release
 ([owner audit](failure-return-audit.md)).
 

@@ -542,11 +542,9 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
             a733_radio_session_take_event(&r->session,&r->startup_event)){
             if(r->stage!=ONLINE&&r->startup_events!=UINT64_MAX)++r->startup_events;
             if(r->startup_event.kind==AIC8800_DISPATCH_SCAN&&r->config.report_memory.allocate){
-                /* The association stage's record names no SSID, so the list carries none. */
-                unsigned named=r->startup_event.metadata.scan.has_ssid&&!r->config.associate;
-                a733_radio_report_ap(&r->report,r->startup_event.metadata.scan.bssid,
-                    named?r->startup_event.metadata.scan.ssid:NULL,
-                    named?r->startup_event.metadata.scan.ssid_bytes:0,
+                /* The record names no SSID in any stage: a scan hears the user's network among its neighbours, and
+                 * the record reaches the host's result files. The list keeps the BSSID, frequency and RSSI. */
+                a733_radio_report_ap(&r->report,r->startup_event.metadata.scan.bssid,NULL,0,
                     r->startup_event.metadata.scan.frequency,r->startup_event.metadata.scan.rssi_dbm);
                 if(r->config.associate&&r->stage==SCANNING)assoc_candidate(r,&r->startup_event.metadata.scan);
             }
