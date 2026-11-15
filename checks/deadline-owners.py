@@ -4,8 +4,9 @@
 Every task that calls sunstone_deadline_register takes one slot of a table that the image's own tables size by
 OS_DEADLINE_OWNERS (runtime/deadline.c, tools/sunstone-manifest.py). The bound is a sum of terms: the owners column of each
 linked start entry (OS_START_ROWS), less the DMA0 pool's two tasks when both the audio and the dma entries count them,
-plus the board's registering tasks, the application's, the SD0 owner's and the background load's. This check derives each
-term from the linked image and refuses a column or term that differs from the code.
+plus the board's registering tasks, the application's, the large-region loader's, the SD0 owner's and the background
+load's. This check counts the registering tasks of each linked image and compares the count with the slot count that the
+image's tables store (sunstone_deadline_slot_count).
 
 From the disassembly and symbol table of each image the check builds:
 - the direct call graph: bl and b to the first instruction of a function;
@@ -27,15 +28,16 @@ calls. The check finds each function that calls sunstone_deadline_register and t
 direct calls, and requires it in CALLBACKS with the task it runs in. A registering creation that no term reaches, or a
 creation whose entry the check cannot resolve, fails the check.
 
-The check requires, in each image: each term at or below its value, the registering tasks at or below the image's slot
-count (sunstone_deadline_slot_count), and that slot count equal to the sum of the terms the image links. Over all the
-images, each column and term must be reached by some image. The images (GATE_RUNS) are the gate's OS variants and
-recipes that together link every start entry: no image links all of them, since the headset and the video decoder are
-linked per application. The bound of an image that links every service is the sum of the same proven terms.
+The check requires, in each image: the registering tasks equal to the image's slot count, each start entry's tasks at
+or below its column, and the board's at or below OS_BOARD_DEADLINE_OWNERS. Over all the images, every start entry, and
+the audio and dma entries together, must be linked in some image, so that every column takes part in some equality. The
+images (GATE_RUNS) are the gate's OS variants and recipes that together link every start entry: no image links all of
+them, since the headset and the video decoder are linked per application. The bound of an image that links every
+service is the sum of the same columns and terms.
 
-Two mutants are run before the result: the RTC start entry rebuilt with a second registering task and relinked (from
-the compile and link commands of the sup build), which the column comparison must refuse; and the RTC column raised by
-one in a copy of apps/os/os-services.h, which the comparison must also refuse.
+Two mutants are run before the result, both relinked from the compile and link commands of the sup build: the RTC start
+entry rebuilt with a second registering task, which the column comparison and the equality must refuse; and the image's
+tables rebuilt with the RTC column raised by one and no new task, which the equality must refuse.
 """
 import argparse
 import bisect
@@ -54,16 +56,12 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--elf', '{elf:sup}', '--elf', '{elf:headset}', '--elf', '{elf:ret-gpu}', '--elf', '{elf:ret-vdec}',
               '--elf', '{elf:ret-g2d}', '--elf', '{elf:os-deadline-owners}', '--mutant-build', '{build:sup}',
               '--output', '{output}']]
-# The files that create a task or register a deadline owner in the OS images, and the declaration and sizing of the
-# bound: a change to one selects this check. A new file that creates a registering task must be added here.
-CHECK_INPUTS = ['apps/os/os-services.h', 'apps/os/grants.c', 'runtime/deadline.c', 'include/sunstone_deadline.h',
+# The sources that create a task or register a deadline owner in the OS images, and the declaration and sizing of the
+# bound: a change to one selects this check. The OS and board applications are listed as directories; a new file
+# outside them that creates a registering task must be added here.
+CHECK_INPUTS = ['apps/os', 'apps/board', 'runtime/deadline.c', 'include/sunstone_deadline.h',
                 'include/sunstone_deadline_slot.h', 'tools/sunstone-manifest.py', 'tools/gate_images.py',
-                'apps/board/host_irq.c', 'apps/board/main.c', 'apps/board/radio.c', 'apps/os/main.patch',
-                'apps/os/application.c', 'apps/os/audio.c', 'apps/os/capture.c', 'apps/os/client.c', 'apps/os/cpu-return.c',
-                'apps/os/dma.c', 'apps/os/g2d.c', 'apps/os/gpu.c', 'apps/os/headset.c', 'apps/os/i2c.c', 'apps/os/large.c',
-                'apps/os/large_load.c', 'apps/os/large_sd.c', 'apps/os/npu-client.c', 'apps/os/npu.c', 'apps/os/radio.c',
-                'apps/os/rtc.c', 'apps/os/sd_owner.c', 'apps/os/services.c', 'apps/os/supervisor-wait.c', 'apps/os/thermal.c',
-                'apps/os/tlbi-issuer.c', 'apps/os/video_decode.c', 'drivers/dma/dma_service.c', 'drivers/gpu/gpu_queue.c',
+                'cmake/sunstone-image.cmake', 'drivers/dma/dma_service.c', 'drivers/gpu/gpu_queue.c',
                 'drivers/gpu/pvr_gpu_service.c', 'drivers/net/a733_radio_events.c', 'drivers/net/sunstone_net.c',
                 'drivers/net/a733_radio_session.c', 'drivers/npu/npu_runtime_queue.c', 'drivers/npu/npu_service.c',
                 'drivers/npu/a733_npu_runtime.c', 'platform/a733/dma_pool_session.c', 'runtime/bg_load.c']
@@ -75,9 +73,10 @@ REGISTER = 'sunstone_deadline_register'
 # The roots of the terms outside the start list.
 APPLICATION_ROOT = 'os_application_prepare'
 BOARD_ROOT = 'a733_smp_diagnostic_start'
-# Creations that belong to one term wherever they are reached: the SD0 owner, which the large-region loader or the
-# application's own storage call starts (apps/os/sd_owner.c start).
-SHARED_ENTRIES = {'sd_owner.c:owner_main': 'sd'}
+# Creations that belong to a term of their own wherever they are reached: the SD0 owner, which the large-region loader or
+# the application's own storage call starts (apps/os/sd_owner.c start), and the large-region loader, which registers only
+# through the SD0 binding (apps/os/large_sd.c, OS_LARGE_SD_DEADLINES).
+SHARED_ENTRIES = {'sd_owner.c:owner_main': 'sd', 'large_load.c:loader': 'large-sd'}
 # Creations whose task can register but that the OS never creates, with the reason.
 EXCLUDED = {
     'sunstone_net.c:worker': 'the network service creates its own worker only in sunstone_net_init; the OS binds the '
@@ -91,7 +90,7 @@ CALLBACKS = {
     'dma.c:mask': 'the RAM-copy service\'s retirement callback (dma_service_bind_retirement), called by the dma-service '
                   'worker, which registers at its entry',
     'npu_runtime_queue.c:power_owner': 'the entry of the NPU queue\'s power worker, which no OS code creates '
-                                       '(npu_runtime_queue_power_start has no caller)',
+                                       '(npu_runtime_queue_power_start has no OS caller)',
 }
 
 
@@ -275,14 +274,14 @@ class Image:
 
 
 def columns(text):
-    """{row name: owners} of OS_START_ROWS, and the literal terms, from the text of apps/os/os-services.h."""
+    """{row name: owners} of OS_START_ROWS, and the board's term, from the text of apps/os/os-services.h."""
     body = re.search(r'#define OS_START_ROWS\(X\)((?:[^\n]*\\\n)*[^\n]*)', text).group(1)
     rows = {}
     for row in re.findall(r'\bX\(([^()]*)\)', body):
         name, _prefix, _start, _with, owners = [a.strip() for a in row.split(',')]
         rows[name.strip('"')] = int(owners.rstrip('u'))
     literal = lambda name: int(re.search(r'^#define %s (\d+)u\s*$' % name, text, re.M).group(1))
-    return rows, {'board': literal('OS_BOARD_DEADLINE_OWNERS'), 'pool': literal('OS_DMA_POOL_OWNERS')}
+    return rows, literal('OS_BOARD_DEADLINE_OWNERS')
 
 
 def analyse(image):
@@ -325,43 +324,21 @@ def analyse(image):
 
 
 def compare(results, text):
-    """The refusals of the columns and terms in text against the analysed images; an empty list proves them."""
-    rows, literal = columns(text)
-    refusals, best = [], collections.defaultdict(int)
+    """The refusals of the columns in text against the analysed images; an empty list proves them."""
+    rows, board = columns(text)
+    refusals = []
     for path, r in results.items():
         image = Path(path).parent.name + '/' + Path(path).name
         for name in r['starts']:
             if name not in rows:
                 refusals.append('%s: start entry "%s" has no row in OS_START_ROWS' % (image, name))
-                continue
-        gpu = 'gpu-queue' in r['starts']
-        expected = {name: rows.get(name, 0) for name in r['starts']}
-        expected.update(board=literal['board'], application=1 + gpu)
+        limits = {name: rows.get(name, 0) for name in r['starts']}
+        limits['board'] = board
         for name, found in r['terms'].items():
-            best[name] = max(best[name], len(found))
-            if len(found) > expected[name]:
+            if name in limits and len(found) > limits[name]:
                 refusals.append('%s: %s creates %d registering tasks (%s), its column is %d' % (
-                    image, name, len(found), ', '.join(sorted(r['names'][t] for t in found)), expected[name]))
-        if gpu and len(r['terms']['application']) != 1 + gpu:
-            refusals.append('%s: the application creates %d registering tasks, %d expected' % (
-                image, len(r['terms']['application']), 1 + gpu))
-        sd = len(r['shared'].get('sd', ()))
-        best['sd'] = max(best['sd'], sd)
-        if sd > 1:
-            refusals.append('%s: %d SD0 owner tasks' % (image, sd))
-        both = 'audio' in r['starts'] and 'dma' in r['starts']
-        if both:
-            best['pool'] = max(best['pool'], len(r['pool']))
-            if len(r['pool']) != literal['pool']:
-                refusals.append('%s: the audio and dma entries share %d registering tasks, OS_DMA_POOL_OWNERS is %d' % (
-                    image, len(r['pool']), literal['pool']))
-        elif r['pool']:
-            refusals.append('%s: tasks shared between start entries outside the DMA0 pool' % image)
-        bound = (sum(expected[name] for name in r['starts']) - (literal['pool'] if both else 0) + literal['board'] +
-                 1 + gpu + (1 if sd else 0))
-        if bound != r['slots']:
-            refusals.append('%s: the image has %d deadline slots; its terms sum to %d' % (image, r['slots'], bound))
-        if r['tasks'] > r['slots']:
+                    image, name, len(found), ', '.join(sorted(r['names'][t] for t in found)), limits[name]))
+        if r['tasks'] != r['slots']:
             refusals.append('%s: %d registering tasks for %d slots' % (image, r['tasks'], r['slots']))
         for note in r['unresolved']:
             refusals.append('%s: a task creation at %#x whose entry function the check cannot resolve' % (image, note))
@@ -370,14 +347,11 @@ def compare(results, text):
         for name in r['uncovered']:
             if name not in CALLBACKS:
                 refusals.append('%s: %s registers but no registering task reaches it by direct calls' % (image, name))
-    for name, owners in rows.items():
+    for name in rows:
         if not any(name in r['starts'] for r in results.values()):
             refusals.append('start entry "%s" is linked in no analysed image' % name)
-        elif best[name] != owners:
-            refusals.append('%s: its column is %d; at most %d registering tasks in the analysed images' % (name, owners, best[name]))
-    for name, value in (('board', literal['board']), ('application', 2), ('sd', 1), ('pool', literal['pool'])):
-        if best[name] != value:
-            refusals.append('%s: %d at most in the analysed images, %d declared' % (name, best[name], value))
+    if not any('audio' in r['starts'] and 'dma' in r['starts'] for r in results.values()):
+        refusals.append('no analysed image links both the audio and the dma start entries')
     seen_uncovered = set().union(*(set(r['uncovered']) for r in results.values()))
     for name in CALLBACKS:
         if name not in seen_uncovered:
@@ -399,39 +373,56 @@ def summarize(image, r):
     return r
 
 
-def mutant_image(build, elf, output):
-    """The image of build relinked with apps/os/rtc.c creating a second registering task in its start entry."""
-    source = ROOT / 'apps/os/rtc.c'
-    text = source.read_text()
-    creation = 'owner=xTaskCreateStaticAffinitySet(os_rtc_task,"os-rtc",'
-    assert text.count(creation) == 1, 'apps/os/rtc.c no longer creates its owner task as the mutant expects'
-    mutated = text.replace('int os_rtc_start(void)\n{', 'static StackType_t second_stack[1024];static StaticTask_t second_tcb;\n'
-                           'int os_rtc_start(void)\n{', 1)
-    mutated = mutated.replace(creation, '(void)xTaskCreateStaticAffinitySet(os_rtc_task,"os-rtc-2",1024,NULL,4,second_stack,'
-                              '&second_tcb,1);\n    ' + creation, 1)
-    copy = output / 'mutant-rtc.c'
-    copy.write_text(mutated)
-    entry = [e for e in json.loads((build / 'compile_commands.json').read_text()) if Path(e['file']) == source]
-    assert len(entry) == 1, 'the build compiles apps/os/rtc.c %d times' % len(entry)
-    command = shlex.split(entry[0]['command'])
-    obj = command[command.index('-o') + 1]
-    command[command.index('-o') + 1] = str(output / 'mutant-rtc.o')
-    command[command.index('-c') + 1] = str(copy)
-    command[1:1] = ['-iquote', str(source.parent)]
-    done = subprocess.run(command, cwd=entry[0]['directory'], capture_output=True, text=True)
-    assert done.returncode == 0, 'the mutant apps/os/rtc.c does not compile:\n' + done.stderr
+def mutant_image(build, elf, output, tag, chosen, mutate):
+    """The image of build relinked with one object recompiled: the source that chosen selects among the objects linked
+    into elf, rewritten by mutate."""
     links = [p for p in (build / 'CMakeFiles').glob('*.dir/link.txt') if (' -o ' + elf.name + ' ') in p.read_text() or
              p.read_text().rstrip().endswith(' -o ' + elf.name)]
     assert len(links) == 1, 'no single link command writes %s' % elf.name
     link = shlex.split(next(l for l in links[0].read_text().splitlines() if ' -o ' in l))
-    relative = [i for i, a in enumerate(link) if a.endswith(obj) or obj.endswith(a)]
-    assert len(relative) == 1, 'the link command does not name the RTC object once'
-    link[relative[0]] = str(output / 'mutant-rtc.o')
-    link[link.index('-o') + 1] = str(output / 'mutant.elf')
+    entries = []
+    for e in json.loads((build / 'compile_commands.json').read_text()):
+        command = shlex.split(e['command'])
+        obj = command[command.index('-o') + 1]
+        if chosen(Path(e['file'])) and any(a.endswith(obj) for a in link):
+            entries.append((e, command, obj))
+    assert len(entries) == 1, 'the link of %s takes %d objects of the chosen source' % (elf.name, len(entries))
+    entry, command, obj = entries[0]
+    source = Path(entry['file'])
+    if not source.is_absolute():
+        source = Path(entry['directory']) / source
+    copy = output / ('%s%s' % (tag, source.suffix))
+    copy.write_text(mutate(source.read_text()))
+    command[command.index('-o') + 1] = str(output / (tag + '.o'))
+    command[command.index('-c') + 1] = str(copy)
+    command[1:1] = ['-iquote', str(source.parent)]
+    done = subprocess.run(command, cwd=entry['directory'], capture_output=True, text=True)
+    assert done.returncode == 0, 'the mutant %s does not compile:\n%s' % (source.name, done.stderr)
+    relative = [i for i, a in enumerate(link) if a.endswith(obj)]
+    assert len(relative) == 1, 'the link command does not name %s once' % obj
+    link[relative[0]] = str(output / (tag + '.o'))
+    link[link.index('-o') + 1] = str(output / (tag + '.elf'))
     link = [a for a in link if not a.startswith('-Wl,-Map,')]
     done = subprocess.run(link, cwd=build, capture_output=True, text=True)
     assert done.returncode == 0, 'the mutant image does not link:\n' + done.stderr[-2000:]
-    return output / 'mutant.elf'
+    return output / (tag + '.elf')
+
+
+def second_rtc_task(text):
+    """apps/os/rtc.c with a second registering task created in its start entry."""
+    creation = 'owner=xTaskCreateStaticAffinitySet(os_rtc_task,"os-rtc",'
+    assert text.count(creation) == 1, 'apps/os/rtc.c no longer creates its owner task as the mutant expects'
+    text = text.replace('int os_rtc_start(void)\n{', 'static StackType_t second_stack[1024];static StaticTask_t second_tcb;\n'
+                        'int os_rtc_start(void)\n{', 1)
+    return text.replace(creation, '(void)xTaskCreateStaticAffinitySet(os_rtc_task,"os-rtc-2",1024,NULL,4,second_stack,'
+                        '&second_tcb,1);\n    ' + creation, 1)
+
+
+def raised_rtc_column(text):
+    """apps/os/os-services.h with the RTC column raised by one."""
+    raised = re.sub(r'(X\("rtc", os_rtc, os_rtc_start, OS_ALWAYS, )1\)', r'\g<1>2)', text)
+    assert raised != text, 'apps/os/os-services.h no longer has the RTC row the mutant raises'
+    return raised
 
 
 def main():
@@ -447,21 +438,29 @@ def main():
         image = Image(path)
         results[str(path)] = summarize(image, analyse(image))
     refusals = compare(results, text)
+    def mutated(elf, header):
+        image = Image(elf)
+        changed = dict(results)
+        changed[str(args.elf[0])] = summarize(image, analyse(image))
+        return compare(changed, header)
+    first = '%s/%s' % (args.elf[0].parent.name, args.elf[0].name)
     # Mutant 1: a second registering task in the RTC entry, column unchanged.
-    mutant = mutant_image(args.mutant_build, args.elf[0], args.output)
-    image = Image(mutant)
-    mutated_results = dict(results)
-    mutated_results[str(args.elf[0])] = summarize(image, analyse(image))
-    caught = [r for r in compare(mutated_results, text) if 'rtc creates 2 registering tasks' in r]
+    rtc = ROOT / 'apps/os/rtc.c'
+    elf = mutant_image(args.mutant_build, args.elf[0], args.output, 'mutant-rtc', lambda p: p == rtc, second_rtc_task)
+    caught = [r for r in mutated(elf, text) if 'rtc creates 2 registering tasks' in r]
     assert caught, 'the mutant with a second registering RTC task passed the comparison'
-    # Mutant 2: the RTC column raised by one, no new task.
-    raised = re.sub(r'(X\("rtc", os_rtc, os_rtc_start, OS_ALWAYS, )1\)', r'\g<1>2)', text)
-    assert raised != text, 'apps/os/os-services.h no longer has the RTC row the mutant raises'
-    caught_raised = [r for r in compare(results, raised) if r.startswith('rtc: its column is 2')]
-    assert caught_raised, 'the raised RTC column passed the comparison'
+    # Mutant 2: the image's tables built with the RTC column raised by one, no new task.
+    raised = raised_rtc_column(text)
+    # The raised copy is included first; its include guard then keeps the tables' own include of the header out.
+    header = args.output / 'raised-os-services.h'
+    header.write_text(raised)
+    elf = mutant_image(args.mutant_build, args.elf[0], args.output, 'mutant-tables', lambda p: p.name == 'sunstone-tables.c',
+                       lambda source: '#include "%s"\n' % header + source)
+    caught_raised = [r for r in mutated(elf, raised) if r.startswith(first + ':') and 'registering tasks for' in r]
+    assert caught_raised, 'the tables with a raised RTC column passed the comparison'
     report = {'images': {p: {'slots': r['slots'], 'tasks': r['tasks'], 'starts': sorted(r['starts']),
                              'terms': {n: sorted(r['names'][t] for t in found) for n, found in r['terms'].items()},
-                             'sd': sorted(r['names'][t] for t in r['shared'].get('sd', ())),
+                             'shared': {n: sorted(r['names'][t] for t in found) for n, found in r['shared'].items()},
                              'shared_pool': sorted(r['names'][t] for t in r['pool']),
                              'uncovered_registrations': r['uncovered']} for p, r in results.items()},
               'mutants': {'second-rtc-task': caught, 'raised-rtc-column': caught_raised},

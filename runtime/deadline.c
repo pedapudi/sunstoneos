@@ -29,11 +29,13 @@ static struct sunstone_deadline_slot *find(TaskHandle_t owner)
         if(atomic_load_explicit(&slots[i].owner,memory_order_acquire)==owner)return &slots[i];
     return NULL;
 }
-/* The calling task's slot through its task-local pointer, or NULL when the task has not registered or the pointer names
- * a slot that the task does not own. Only the task itself writes the pointer, once, in sunstone_deadline_register,
- * before its first wait; the kernel reads the caller's own pointer with a plain load. */
+/* The calling task's slot through its task-local pointer, or NULL when there is no current task, the task has not
+ * registered, or the pointer names a slot that the task does not own. Only the task itself writes the pointer, once, in
+ * sunstone_deadline_register, before its first wait; the kernel reads the caller's own pointer with a plain load, which
+ * needs a current task. */
 static struct sunstone_deadline_slot *own(TaskHandle_t self)
 {
+    if(!self)return NULL;
     struct sunstone_deadline_slot *s=pvTaskGetThreadLocalStoragePointer(NULL,SUNSTONE_DEADLINE_TLS);
     if(!s)return NULL;
     if(s<slots||s>=slots+DEADLINE_SLOTS||atomic_load_explicit(&s->owner,memory_order_relaxed)!=self)return NULL;
@@ -53,8 +55,15 @@ int sunstone_deadline_register(void)
             s=&slots[i];atomic_store_explicit(&s->owner,owner,memory_order_release);break;
         }
     taskEXIT_CRITICAL();
-    if(s)vTaskSetThreadLocalStoragePointer(NULL,SUNSTONE_DEADLINE_TLS,s);
-    return s!=NULL;
+    if(!s)return 0;
+    vTaskSetThreadLocalStoragePointer(NULL,SUNSTONE_DEADLINE_TLS,s);
+    /* The setter returns nothing and stores nothing when the kernel cannot pin the task. Release the slot then, so a
+     * retry does not claim another one. */
+    if(pvTaskGetThreadLocalStoragePointer(NULL,SUNSTONE_DEADLINE_TLS)!=s){
+        atomic_store_explicit(&s->owner,NULL,memory_order_release);
+        return 0;
+    }
+    return 1;
 }
 static uint64_t earliest(void)
 {

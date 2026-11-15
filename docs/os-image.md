@@ -197,23 +197,11 @@ header instead of copying it.
 Each start entry also carries its number of deadline owners: the tasks that its
 start function creates, directly or through the tasks it creates, and that
 register a precise-wait slot (`sunstone_deadline_register`,
-`runtime/deadline.c`). The image's slot count, `OS_DEADLINE_OWNERS`, adds the
-linked entries' counts to the board's four registering tasks, the application
-task, the GPU peer when the GPU queue is linked, the write-capable SD owner and
-the optional background load. The audio and DMA entries share the two DMA0
-pool tasks, which `refused_compositions` keeps from being granted together, so
-the pool is counted once. The image's own tables hold the slots, because only
-they see the services that the application's options link.
-`checks/deadline-owners.py` derives the start entries' counts and the board,
-application, SD and DMA pool terms from the linked images; the background-load
-term is not derived, because no analysed image links it. The check follows each
-start entry's direct calls to the task creations they reach and finds which
-created tasks reach `sunstone_deadline_register`. It fails when an entry
-creates more registering tasks than its column in some image, when no analysed
-image reaches a column, or when an image's stored slot count differs from the
-sum. An entry's column is its largest count, so an image that does not link
-every registering task of an entry keeps a spare slot: the large-region
-loader's task registers only in images that link the loader's SD0 binding.
+`runtime/deadline.c`). The image's own tables hold the slots, sized by
+`OS_DEADLINE_OWNERS`, because only they see the services that the
+application's options link; `apps/os/os-services.h` lists the terms of that
+sum. `checks/deadline-owners.py` proves each column, and each image's slot
+count, from the linked images.
 
 The application ABI numbers stay where applications read them: the device bits
 in `include/sunstone_app.h` and the extent types in `include/sunstone_session.h`.

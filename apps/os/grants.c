@@ -63,8 +63,7 @@ static const struct {unsigned services;const char *reason;unsigned lifetimes;} r
     {OS_GRANT_NPU|OS_GRANT_AUDIO,"the NPU profile requires the recorded recognition composition, not live I2S capture"},
     {OS_GRANT_NPU|OS_GRANT_RADIO,"the NPU profile requires the recorded recognition composition, not the radio station"},
     {OS_GRANT_NPU|OS_GRANT_HEADSET,"the NPU profile requires the recorded recognition composition, not live headset capture"},
-    /* The audio and dma start entries share the DMA0 pool's deadline owners on this refusal (apps/os/os-services.h). */
-    {OS_DMA_POOL_EXCLUSIVE,OS_DMA_POOL_EXCLUSIVE_REASON},
+    {OS_GRANT_AUDIO|OS_GRANT_DMA,"one DMA0 owner and INTID 143: the adopted RAM-copy service excludes the I2S stream"},
     {OS_GRANT_AUDIO,"the returning lifetime has no qualified drain of the I2S stream",LIFETIME(A733_LIFETIME_RETURN)},
 #ifndef SUNSTONE_A733_OS_RADIO_SCAN
     {OS_GRANT_RADIO,"the returning lifetime shuts down only the scanning radio station",LIFETIME(A733_LIFETIME_RETURN)},

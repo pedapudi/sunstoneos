@@ -18,9 +18,9 @@ sensors not yet read at application start; an OS service that fails to start.
 
 Every case also counts the image's deadline-owner registrations. The board
 wraps sunstone_deadline_register and reports, before each exit, how many tasks
-claimed a precise-wait slot, how many were refused and how many slots the
-image's tables provide (OS_DEADLINE_OWNERS). A case fails when any
-registration is refused or the registered count exceeds the slot count.
+claimed a precise-wait slot and how many were refused. A case fails when any
+registration is refused, which means the image's slots (OS_DEADLINE_OWNERS)
+were too few.
 """
 import argparse
 import hashlib
@@ -462,7 +462,7 @@ class Case:
         self.main = (lines(output, 'APP-MAIN') or [None])[0]
         self.finished = (lines(output, 'APP-FINISHED') or [None])[0]
         self.cleared = (lines(output, 'THROTTLE-CLEARED') or [None])[0]
-        # The tasks that registered a deadline owner, the first registrations refused and the image's slot count.
+        # The tasks that registered a deadline owner and the first registrations refused.
         self.owners = (lines(output, 'DEADLINE-OWNERS') or [None])[0]
 
     def require(self, condition, message):
@@ -475,13 +475,12 @@ class Case:
         self.require(self.owners is not None, 'the run ended without its DEADLINE-OWNERS report')
 
     def owners_within_slots(self):
-        """Every task that registered a deadline owner found a slot: no first registration was refused and the count is at
-        or below the image's bound (OS_DEADLINE_OWNERS, apps/os/os-services.h)."""
+        """Every task that registered a deadline owner found a slot: no first registration was refused, so the image's
+        slots (OS_DEADLINE_OWNERS, apps/os/os-services.h) were enough."""
         if self.owners is None:
             return
-        registered, refused, slots = (int(self.owners[k]) for k in ('registered', 'refused', 'slots'))
-        self.require(refused == 0 and registered <= slots,
-                     '%d tasks registered a deadline owner and %d were refused, for %d slots' % (registered, refused, slots))
+        registered, refused = (int(self.owners[k]) for k in ('registered', 'refused'))
+        self.require(refused == 0, '%d tasks registered a deadline owner and %d were refused' % (registered, refused))
 
     def failed_with(self, group, detail=None):
         self.require(self.failure is not None and self.status == 3, 'no failure record (status %d)' % self.status)

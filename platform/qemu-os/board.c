@@ -120,10 +120,8 @@ _Noreturn void os_cpu_return_el0_fault(uint64_t esr, uint64_t far, uint64_t elr)
 /* ---- Deadline owners ----------------------------------------------------- */
 /* The check links every image with --wrap=sunstone_deadline_register, so each call of the OS's registration comes here.
  * A call from a task that holds no slot yet (its task-local pointer is empty) is that task's first; a refused first call
- * means the image's slots (OS_DEADLINE_OWNERS, apps/os/os-services.h) were too few. The run's end reports both counts
- * with the image's slot count. */
+ * means the image's slots (OS_DEADLINE_OWNERS, apps/os/os-services.h) were too few. The run's end reports both counts. */
 int __real_sunstone_deadline_register(void);
-extern const unsigned sunstone_deadline_slot_count;
 static atomic_uint deadline_tasks, deadline_refused;
 int __wrap_sunstone_deadline_register(void)
 {
@@ -137,8 +135,13 @@ static void deadline_report(void)
     struct line l = {.used = 0};
     put(&l, "DEADLINE-OWNERS registered="); put_dec(&l, atomic_load(&deadline_tasks));
     put(&l, " refused="); put_dec(&l, atomic_load(&deadline_refused));
-    put(&l, " slots="); put_dec(&l, sunstone_deadline_slot_count);
     flush(&l);
+}
+/* The monitor's ends of the run: the deadline-owner report, then the exit status. */
+static _Noreturn void board_exit(unsigned status)
+{
+    deadline_report();
+    platform_exit(status);
 }
 
 /* ---- Platform functions the OS image takes from the cached platform ----- */
@@ -217,7 +220,7 @@ void qemu_os_app_entry(const char *name, const struct ss_grant *grant)
     atomic_store(&entered_at, now_us());
     atomic_store(&entered, 1);
     /* A linger of one microsecond ends the run at the application's first instruction. */
-    if (qemu_os_scenario()->entry_linger_us == 1) { deadline_report(); platform_exit(0); }
+    if (qemu_os_scenario()->entry_linger_us == 1) board_exit(0);
 }
 /* EL0 task of the board, not of the OS: it watches the run and ends it. */
 static void monitor(void *unused)
@@ -233,11 +236,11 @@ static void monitor(void *unused)
         if (failure && t >= failure + FAILURE_GRACE_US) {
             put(&l, "APP-TASK-STATE state="); put_dec(&l, (uint64_t)eTaskGetState((TaskHandle_t)ss_application.task));
             flush(&l);
-            deadline_report(); platform_exit(3);
+            board_exit(3);
         }
         if (qemu_os_watchdog_expired()) {
             put(&l, "WATCHDOG-RESET t_us="); put_dec(&l, t); flush(&l);
-            deadline_report(); platform_exit(5);
+            board_exit(5);
         }
         if (!cleared && !ss_throttled()) {
             cleared = 1;
@@ -277,18 +280,18 @@ static void monitor(void *unused)
                 }
                 flush(&l);
             }
-            deadline_report(); platform_exit(0);
+            board_exit(0);
         }
         if (atomic_load(&entered) && s->entry_linger_us && t >= atomic_load(&entered_at) + s->entry_linger_us) {
             put(&l, "RUN-ENDED after entry t_us="); put_dec(&l, t); put(&l, " throttled="); put_dec(&l, (uint64_t)ss_throttled());
             flush(&l);
-            deadline_report(); platform_exit(0);
+            board_exit(0);
         }
         if (t > s->limit_us) {
             put(&l, "TIMEOUT t_us="); put_dec(&l, t); put(&l, " entered="); put_dec(&l, (uint64_t)atomic_load(&entered));
             put(&l, " finished="); put_dec(&l, (uint64_t)os_application_finished());
             flush(&l);
-            deadline_report(); platform_exit(4);
+            board_exit(4);
         }
     }
 }
