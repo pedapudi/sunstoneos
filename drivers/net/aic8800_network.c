@@ -110,6 +110,88 @@ void vApplicationIPNetworkEventHook_Multi(eIPCallbackEvent_t event,NetworkEndPoi
     atomic_fetch_add(&n->address_sequence,1);atomic_store(&n->address_ready,ip!=0);
     owner_event();
 }
+static uint16_t be16(const uint8_t *p){return (uint16_t)(p[0]<<8|p[1]);}
+static uint32_t be32(const uint8_t *p){return (uint32_t)p[0]<<24|(uint32_t)p[1]<<16|(uint32_t)p[2]<<8|p[3];}
+static uint16_t bump(uint16_t v){return v==UINT16_MAX?v:(uint16_t)(v+1u);}
+int aic8800_address_private(const uint8_t a[4])
+{return a[0]==10||(a[0]==172&&(a[1]&0xf0u)==16)||(a[0]==192&&a[1]==168);}
+void aic8800_address_trace_start(struct aic8800_address_trace *t,const uint8_t mac[6],uint64_t start_us)
+{memset(t,0,sizeof(*t));memcpy(t->mac,mac,6);t->start_us=start_us;}
+/* The UDP payload of an unfragmented IPv4 frame, with its ports and length; NULL for anything else. */
+static const uint8_t *udp_payload(const uint8_t *p,size_t n,uint16_t *sport,uint16_t *dport,size_t *length)
+{
+    if(n<42||p[12]!=8||p[13]!=0||(p[14]>>4)!=4)return NULL;
+    size_t ihl=(size_t)(p[14]&15u)*4u,total=be16(p+16);
+    if(ihl<20||p[23]!=17||(be16(p+20)&0x3fffu)||total<ihl+8||total>n-14)return NULL;
+    const uint8_t *u=p+14+ihl;size_t datagram=be16(u+4);
+    if(datagram<8||datagram>total-ihl)return NULL;
+    *sport=be16(u);*dport=be16(u+2);*length=datagram-8;return u+8;
+}
+/* One option of a BOOTP message (RFC 2131: options after the 236-byte fixed part and the magic cookie); NULL when it
+ * is absent or the walk meets a length past the end. */
+static const uint8_t *dhcp_option(const uint8_t *m,size_t n,uint8_t code,uint8_t *bytes)
+{
+    if(n<240||be32(m+236)!=0x63825363u)return NULL;
+    for(size_t i=240;i<n&&m[i]!=255;){
+        if(!m[i]){++i;continue;}
+        if(n-i<2||m[i+1]>n-i-2)return NULL;
+        if(m[i]==code){*bytes=m[i+1];return m+i+2;}
+        i+=2u+m[i+1];
+    }
+    return NULL;
+}
+static void dhcp_reply(struct aic8800_address_trace *t,unsigned type,const uint8_t *m,size_t n,uint32_t ms)
+{
+    struct aic8800_address_record *r=&t->record;uint8_t bytes=0;
+    const uint8_t *server=dhcp_option(m,n,54,&bytes);uint32_t server_id=server&&bytes==4?be32(server):0;
+    if(type==2){
+        /* The stack requests the first offer of its transaction. */
+        if(!r->offers){r->ms_offer=ms;t->offer_address=be32(m+16);t->offer_server=server_id;}
+        r->offers=bump(r->offers);return;
+    }
+    if(type!=5&&type!=6){r->ignored=bump(r->ignored);return;}
+    if(!r->acks&&!r->naks)r->ms_ack=ms;
+    if(type==6){r->naks=bump(r->naks);return;}
+    if(!r->acks){
+        if(aic8800_address_private(m+16))r->flags|=AIC8800_ADDRESS_PRIVATE;
+        if(r->offers&&be32(m+16)==t->offer_address)r->flags|=AIC8800_ADDRESS_OFFER_MATCH;
+        if(r->offers&&server_id&&server_id==t->offer_server)r->flags|=AIC8800_ADDRESS_SERVER_MATCH;
+        const uint8_t *value=dhcp_option(m,n,3,&bytes);
+        if(value&&bytes>=4){r->flags|=AIC8800_ADDRESS_ROUTER;if(aic8800_address_private(value))r->flags|=AIC8800_ADDRESS_ROUTER_PRIVATE;}
+        if((value=dhcp_option(m,n,51,&bytes))&&bytes==4){r->flags|=AIC8800_ADDRESS_LEASE_TIME;r->lease_seconds=be32(value);}
+        if((value=dhcp_option(m,n,6,&bytes)))r->dns_servers=(uint8_t)(bytes/4u);
+    }
+    r->acks=bump(r->acks);
+}
+void aic8800_address_observe(struct aic8800_address_trace *t,int sent,const uint8_t *p,size_t n,uint64_t now_us)
+{
+    uint16_t sport=0,dport=0;size_t length=0;const uint8_t *m;
+    if(!t||!p||!(m=udp_payload(p,n,&sport,&dport,&length)))return;
+    struct aic8800_address_record *r=&t->record;
+    uint64_t elapsed=now_us>t->start_us?(now_us-t->start_us)/1000u:0;uint32_t ms=elapsed>UINT32_MAX?UINT32_MAX:(uint32_t)elapsed;
+    if(sent&&dport==53){
+        if(length<12)return;
+        t->dns_id=be16(m);t->dns_set=1;if(!r->queries)r->ms_query=ms;r->queries=bump(r->queries);return;
+    }
+    if(!sent&&sport==53){
+        if(length<12||!t->dns_set||be16(m)!=t->dns_id||!(m[2]&0x80u)){r->ignored=bump(r->ignored);return;}
+        if(!r->responses){r->ms_response=ms;r->rcode=m[3]&15u;r->answers=be16(m+6);r->flags|=AIC8800_ADDRESS_DNS_MATCH;}
+        r->responses=bump(r->responses);return;
+    }
+    if(sent?(sport!=68||dport!=67):(sport!=67||dport!=68))return;
+    uint8_t bytes=0;const uint8_t *type=dhcp_option(m,length,53,&bytes);
+    if(!type||bytes!=1||m[0]!=(sent?1:2)||m[1]!=1||m[2]!=6){if(!sent)r->ignored=bump(r->ignored);return;}
+    if(sent){
+        t->xid=be32(m+4);t->xid_set=1;
+        if(dhcp_option(m,length,12,&bytes))r->flags|=AIC8800_ADDRESS_HOSTNAME_SENT;
+        if(*type==1){if(!r->discovers)r->ms_discover=ms;r->discovers=bump(r->discovers);}
+        else if(*type==3){if(!r->requests)r->ms_request=ms;r->requests=bump(r->requests);}
+        return;
+    }
+    /* Only this station's transaction: its identifier and the station's own hardware address. */
+    if(!t->xid_set||be32(m+4)!=t->xid||memcmp(m+28,t->mac,6)){r->ignored=bump(r->ignored);return;}
+    dhcp_reply(t,*type,m,length,ms);
+}
 static int dhcp_packet(const uint8_t *p,size_t bytes)
 {
     if(bytes<42||p[12]!=8||p[13]!=0||p[14]!=0x45||p[23]!=17)return 0;
@@ -179,6 +261,7 @@ int aic8800_network_activate(struct aic8800_network *n,const struct aic8800_netw
         c->transport->card->host->state!=SUNXI_SDIO_READY)return 0;
     if(a733_ranges_overlap_or_wrap(n,sizeof(*n),c,sizeof(*c)))return 0;
     memset(n,0,sizeof(*n));n->initialized=1;n->config=*c;n->generation=generation;
+    aic8800_address_trace_start(&n->address_trace,c->transport->wifi->mac,c->transport->card->host->last_now);
     if(c->dispatcher)n->receive=c->dispatcher;
     else{
         if(!aic8800_dispatch_init(&n->local_dispatcher,c->transport)){aic8800_network_fault(n);return 0;}
@@ -223,6 +306,7 @@ int aic8800_network_lost(const struct aic8800_network *n)
 void aic8800_network_poll(struct aic8800_network *n)
 {
     if(!n||!n->initialized)return;
+    n->address_trace.record.owner_cores|=(uint8_t)(1u<<portGET_CORE_ID());
     struct aic8800_sdio_transport *t=n->config.transport;
     if(address_expired(n)==1)address_revoke(n);
     if(atomic_load(&n->failed)){if(n->stack_started&&!n->down_sent){FreeRTOS_NetworkDown(&n->interface);n->down_sent=1;}return;}
@@ -241,6 +325,7 @@ void aic8800_network_poll(struct aic8800_network *n)
         struct aic8800_data_frame frame;
         if(!aic8800_dispatch_peek_data(n->receive,&frame))return; /* Other dispatcher retains raw/control ownership. */
         if(frame.generation!=n->generation){aic8800_network_fault(n);return;}
+        aic8800_address_observe(&n->address_trace,0,frame.ethernet,frame.bytes,t->card->host->last_now);
         NetworkBufferDescriptor_t *buffer=aic8800_network_ready(n)?pxGetNetworkBufferWithDescriptor(frame.bytes,0):NULL;
         if(buffer){
             memcpy(buffer->pucEthernetBuffer,frame.ethernet,frame.bytes);buffer->xDataLength=frame.bytes;
@@ -265,7 +350,9 @@ void aic8800_network_poll(struct aic8800_network *n)
         uint64_t deadline;
         if(!a733_deadline_after(now,n->config.tx_timeout,&deadline)){aic8800_network_fault(n);return;}
         if(deadline>t->deadline)deadline=t->deadline;
-        if(aic8800_transport_send_data(t,n->current.ethernet,n->current.bytes,deadline))n->active=1;
+        if(aic8800_transport_send_data(t,n->current.ethernet,n->current.bytes,deadline)){
+            n->active=1;aic8800_address_observe(&n->address_trace,1,n->current.ethernet,n->current.bytes,now);
+        }
     }
 }
 
@@ -274,7 +361,12 @@ void aic8800_network_poll(struct aic8800_network *n)
  * RX/output events too. Future timer/output callbacks see offline until resume. */
 void aic8800_network_ip_event(unsigned event,void *data)
 {
-    struct aic8800_network *n=stack_owner;if(!n||!atomic_load(&n->offline))return;
+    struct aic8800_network *n=stack_owner;if(!n)return;
+    /* Every return from the IP task's event wait passes here once: its wake count and the cores it woke on. */
+    atomic_fetch_add_explicit(&n->ip_wakes,1,memory_order_relaxed);
+    if(event==(unsigned)eNoEvent)atomic_fetch_add_explicit(&n->ip_empty_wakes,1,memory_order_relaxed);
+    atomic_fetch_or_explicit(&n->ip_cores,1u<<portGET_CORE_ID(),memory_order_relaxed);
+    if(!atomic_load(&n->offline))return;
     configASSERT(xIsCallingFromIPTask());
     unsigned epoch=atomic_load_explicit(&n->offline_request,memory_order_acquire);
     if(n->config.dhcp&&atomic_load_explicit(&n->resume_request,memory_order_acquire)==epoch&&

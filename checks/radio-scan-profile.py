@@ -42,7 +42,8 @@ assert native['size'] == prep.PROFILE_BYTES
 assert native['network_reserved'] == prep.STAGE_LIMIT_OFFSET
 for name in ('platform', 'radio_identity', 'transport', 'bootstrap', 'wifi', 'firmware_address', 'firmware_bytes',
              'session_owner', 'runtime_lease_us', 'renew_margin_us', 'binding_timeout_us', 'command_timeout_us', 'refill_timeout_us',
-             'association_timeout_us', 'security_timeout_us', 'platform_authority', 'platform_evidence'):
+             'association_timeout_us', 'security_timeout_us', 'platform_authority', 'platform_evidence', 'tx_timeout_us',
+             'queue_timeout_ticks', 'client_timeout_ticks', 'network_dhcp', 'address_timeout_ticks', 'lease_cap_ticks'):
     assert prep.PROFILE[name] == native[name], name
 for name in ('owner', 'topology', 'fabric', 'fabric_hz', 'expected', 'desired', 'card'):
     assert prep.PLATFORM[name] == native['platform.' + name], name

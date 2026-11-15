@@ -117,6 +117,12 @@ REFERENCE = re.compile(r'(docs/[^#\s]+\.(?:md|jsonl))(?:#(\S+))?')
 # point, which pick out the access point that the user's credential matched in the queue's scan list.
 MAC = re.compile(r'(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}'
                  r'|[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4})(?![0-9A-Fa-f])')
+# A Wi-Fi record also holds no IPv4 address: a leased address, gateway or DNS server locates the network as a BSSID does.
+# A dotted quad has exactly four parts of 0 to 255 and is not part of a longer dotted run, so a three-part version
+# string or a five-part number passes. Radio records only (docs/evidence/radio.jsonl).
+IPV4_OCTET = r'(?:25[0-5]|2[0-4]\d|[01]?\d?\d)'
+IPV4 = re.compile(r'(?<![\d.])' + IPV4_OCTET + r'(?:\.' + IPV4_OCTET + r'){3}(?!\.?\d)')
+IPV4_SUBSYSTEMS = ('radio',)
 # Protocol constants that have the address format and name no device.
 PROTOCOL_ADDRESSES = {
     '00:00:00:00:00:00': 'unset address',
@@ -156,9 +162,13 @@ def strings(value):
 
 
 def address_problems(record, where):
-    """A MAC-format value other than a protocol constant, a BSSID field, or one access point's frequency and RSSI."""
+    """A MAC-format value other than a protocol constant, a BSSID field, one access point's frequency and RSSI, or in
+    a radio record an IPv4 address."""
     problems = []
+    ipv4 = record.get('subsystem') in IPV4_SUBSYSTEMS
     for text in strings(record):
+        if ipv4 and IPV4.search(text):
+            problems.append(f'{where}: holds an IPv4 address; Wi-Fi records carry no leased, gateway or server address')
         for match in MAC.finditer(text):
             digits = re.sub(r'[^0-9a-f]', '', match.group(0).lower())
             if ':'.join(digits[i:i + 2] for i in range(0, 12, 2)) not in PROTOCOL_ADDRESSES:
