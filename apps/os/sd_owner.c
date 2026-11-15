@@ -413,8 +413,9 @@ TaskHandle_t os_sd_owner_task(void) { return owner; }
 static int open_published(void) { return atomic_load(&ready) != 0; }
 /* Wait for the open's result, up to OS_SD_OPEN_BOUND_US (sd_hw.h); an open that has not finished by then answers 0. The
  * bit is set after the result is stored and is never cleared, and a task notification cannot end an event-group wait. The
- * main task waits in its OS wait instead, which the owner ends (publish_ready) and which rechecks the result once it is
- * registered. The callers hold no deadline slot of their own. */
+ * main task first waits in its OS wait, which the owner ends (publish_ready) and which rechecks the result once it is
+ * registered; if that wait is refused, it waits for the bit as the other callers do. The callers hold no deadline slot of
+ * their own. */
 static int wait_ready(void)
 {
     const uint64_t limit = bound_from_now(OS_SD_OPEN_BOUND_US);
@@ -423,11 +424,11 @@ static int wait_ready(void)
         atomic_store(&main_waiting, self);
         main_wait(limit, open_published);
         atomic_store(&main_waiting, NULL);
-    } else {
-        const uint64_t now = sunstone_deadline_now_us();
-        const TickType_t ticks = now < limit ? (TickType_t)((limit - now + 999u) / 1000u * configTICK_RATE_HZ / 1000u) + 1u : 0;
-        (void)xEventGroupWaitBits(ready_group, READY_BIT, pdFALSE, pdTRUE, ticks);
+        if (open_published() || sunstone_deadline_now_us() >= limit) return atomic_load(&ready) == 1;
     }
+    const uint64_t now = sunstone_deadline_now_us();
+    const TickType_t ticks = now < limit ? (TickType_t)((limit - now + 999u) / 1000u * configTICK_RATE_HZ / 1000u) + 1u : 0;
+    (void)xEventGroupWaitBits(ready_group, READY_BIT, pdFALSE, pdTRUE, ticks);
     return atomic_load(&ready) == 1;
 }
 

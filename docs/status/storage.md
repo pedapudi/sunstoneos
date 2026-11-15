@@ -53,6 +53,8 @@ with loader close, but excludes interrupted writes and transport recovery
 9. Switch the application's verify to `fwr_read_cursor` and run it on the board.
 10. Let several tasks write one volume: a queue of requests in the SD owner in place of its single application mailbox, and a priority-inheriting lock per mounted volume in `sunstone_fs.c`. Until then one task per volume writes ([limits](../sd-card.md#11-measured-performance-and-limits)).
 11. Run storage-write-test mode 6 on port 3-3 once the port is back, to qualify the owner created at OS start.
+12. Bound every request the main task waits for. `OS_SD_PIECE_BOUND_US` (`apps/os/sd_hw.h`) covers one write piece after one loader read; the enable's re-read of the backup sectors, the close and a piece with recoveries can take longer, and the watchdog's renewal then stops one progress window after the bound. Derive a bound per request kind in `apps/os/sd_owner.c:post`, and add host cases in `checks/event-sd.c` for an open that passes its limit and a request that passes its bound. Run the owner's lock-free handoffs (`post`, `finish`, `publish_ready`) under a pthread harness with ThreadSanitizer.
+13. `checks/gate-slots.py:case_board_hold` failed one gate with `WAITED 0.85` against its minimum of 0.9 s: the waiting process starts its clock after its interpreter has started, while the parent's 1 s hold starts at the spawn, so a loaded host shortens the measured wait. Start the clock before the spawn, or compare against the hold's own release time.
 
 ## Evidence
 

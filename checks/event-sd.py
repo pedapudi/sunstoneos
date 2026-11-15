@@ -204,7 +204,10 @@ def main():
         # sample past the progress window finds the application stale.
         main_open = 'if (self == os_application_main_task()) {'
         main_piece = 'if (xTaskGetCurrentTaskHandle() == os_application_main_task()) {\n        atomic_store(&main_request, r);'
+        # One OS wait only: the wake at 1.6 s ends it, and the main task then waits for the bit undeclared.
+        loop = 'while (!done() && sunstone_deadline_now_us() < limit) {'
         for name, text, case in (('open-wait-undeclared', production.replace(main_open, 'if (0) {'), '15'),
+                                 ('one-os-wait', production.replace(loop, loop.replace('while', 'if', 1)), '15'),
                                  ('request-wait-undeclared', production.replace(main_piece, main_piece.replace(
                                      'xTaskGetCurrentTaskHandle() == os_application_main_task()', '0')), '16')):
             assert text != production, name

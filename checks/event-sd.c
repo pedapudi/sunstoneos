@@ -148,6 +148,8 @@ static struct { struct { uint64_t deadline_us; } session; } board={{100000000u}}
 /* The supervisor's verdict on the application while its main task waits: a sample in the shim's script task, where every
  * other service reports progress first. */
 static unsigned healthy_samples;
+/* A wake of the main task from another OS event (a USB change, say) in the middle of its wait. */
+static void stray_wake(void *unused){(void)unused;os_application_wake_task(main_task);}
 static void healthy_now(void *unused)
 {
     (void)unused;unsigned first=OS_SERVICES;
@@ -305,7 +307,8 @@ static void test(void *unused)
         puts("PASS a CPU return before the open answers the waiting task without touching the card");
     } else if(mode==15||mode==16){
         /* The main task waits longer than its 1 s progress window, inside the bound: for an open that takes 3 s and fails
-         * (15), or for a request that takes 2 s (16). The supervisor's verdict stays healthy throughout. */
+         * (15), with a wake from another OS event at 1.6 s, or for a request that takes 2 s (16). The supervisor's verdict
+         * stays healthy throughout. */
         main_task=test_task;
         assert(board_service_deadline_register(OS_SERVICE_APPLICATION));
         for(unsigned i=0;i<OS_SERVICES;++i)board_service_progress(i);
@@ -313,6 +316,7 @@ static void test(void *unused)
         const uint64_t from=now_us();
         const unsigned samples=mode==15?5u:3u;
         for(unsigned i=1;i<=samples;++i)host_run_at(from+i*500000u+250000u,healthy_now,NULL);
+        if(mode==15)host_run_at(from+1600000u,stray_wake,NULL);
         if(mode==15)assert(start()==0&&ready==-1&&fail_notes==1&&now_us()==from+3000000u);
         else assert(ss_storage_open_read()==1&&served==1&&unit_sectors==8u&&now_us()==from+2000000u);
         assert(healthy_samples==samples&&os_services_healthy(now_us())==1);
