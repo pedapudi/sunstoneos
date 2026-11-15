@@ -23,14 +23,20 @@ Cases, each starting from a service that failed in hold B (phase FAULT, step VD_
   with site 0x941 once per pass, and the registry never reaches DONE: the session fails at the bound.
 - uncertain-access: the binding's failure was an access with an unknown effect. The close touches nothing and the
   registry reports FAULT (site 0x941).
+- quiesce-interleaved: the quiesce step runs on another core while the owner task closes. The owner's close is run
+  once to record the phase and close_started words after each of its stores. The quiesce step is then run once for
+  every pair of those states (i <= j), with its first load of the two words served from state i and its later loads
+  from state j, as when the owner stores between the step's loads. No pair may report FAULT: the close succeeds.
 The image of the hold-B run (c1a4e4fc...) fails the first two cases: its quiesce step reports FAULT on every pass
-until the bound.
+until the bound. The image of the stage-1 rerun (7d63776e...) fails quiesce-interleaved: its close stored
+close_started before CLOSING and its quiesce step loaded phase first.
 
 Usage: os-vdec-fault-return.py --image ELF --output DIR"""
 import argparse
 import hashlib
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
+from unicorn import UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import (UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_X0,
                                  UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3)
 from harness import machine as harness_machine, Image, hook_addresses, save, skip_crumbs
@@ -86,7 +92,7 @@ def members(image):
     return layout, enums
 
 
-def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, application_close=False):
+def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, application_close=False, interleave=False):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -231,13 +237,40 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         assert state['slice_done'], (name, 'the owner task did not reach its wait')
 
     close_answer = None
-    if application_close:
+    words = {vd + layout['phase']: 'phase', vd + layout['close_started']: 'close_started'}
+    states, interleavings = [], []
+    if interleave:
+        # The owner's stores to the two words, each state as the store leaves it.
+        states.append({k: get(a) for a, k in words.items()})
+        def stored(m, access, address, size, value, data):
+            if address in words:
+                states.append({**states[-1], words[address]: value & 0xffffffff})
+        writes = uc.hook_add(UC_HOOK_MEM_WRITE, stored, begin=min(words), end=max(words) + 3)
+    if application_close or interleave:
         put(vd + layout['op'], enums['CLOSE_OP']); put(vd + layout['request'], enums['POSTED'])
         owner_slice()
         if get(vd + layout['request']) == enums['DONE']:
             close_answer = get(vd + layout['result']) - (1 << 32) if get(vd + layout['result']) >> 31 else \
                 get(vd + layout['result'])
     quiesce = image.address('video_decode_quiesce', UNIT)
+    if interleave:
+        uc.hook_del(writes)
+        after = {a: get(a) for a in words}
+        for i in range(len(states)):
+            for j in range(i, len(states)):
+                loads = []
+                def serve(m, access, address, size, value, data, i=i, j=j):
+                    if address in words:
+                        # A read hook runs before the load: the word it loads is the one written here.
+                        put(address, states[i if not loads else j][words[address]])
+                        loads.append(words[address])
+                reads = uc.hook_add(UC_HOOK_MEM_READ, serve, begin=min(words), end=max(words) + 3)
+                result = call(image.address('quiesce_step', UNIT), quiesce) & 0xffffffff
+                uc.hook_del(reads)
+                for a, v in after.items():
+                    put(a, v)
+                interleavings.append({'first': states[i], 'later': states[j], 'loads': loads, 'result': result})
+        state['notes'].clear()
     assert call(image.address('os_quiesce_register'), quiesce) == 1, (name, 'registration refused')
     state['requested'] = 1
     start, results = state['time'], []
@@ -255,7 +288,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         'case': name, 'passes': len(results), 'last_result': results[-1],
         'done_within_bound': results[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
         'phase': get(vd + layout['phase']), 'recorded_fault_step': get(vd + layout['fault_step']),
-        'close_answer': close_answer, 'record': record,
+        'close_answer': close_answer, 'record': record, 'store_states': states, 'interleavings': interleavings,
         'notes': [(hex(s), hex(v)) for s, v in state['notes']],
         'ccu': {hex(k): hex(ccu.words.get(k, 0)) for k in (0x220, 0xa88, 0xa8c, 0x5e4)},
         'ccu_writes': [(hex(a), hex(v)) for a, v in ccu.writes],
@@ -276,7 +309,8 @@ def main():
                  for s in ELFFile(stream).iter_segments() if s['p_type'] == 'PT_LOAD']
     assert layout and enums['CLOSED'] == 0 and enums['FAULT'] == 4
     cases = [('quiesce-closes', {}), ('application-closes', {'application_close': True}),
-             ('close-step-fails', {'stuck': {0xa8c: 0x00040004}}), ('uncertain-access', {'uncertain': True})]
+             ('close-step-fails', {'stuck': {0xa8c: 0x00040004}}), ('uncertain-access', {'uncertain': True}),
+             ('quiesce-interleaved', {'interleave': True})]
     rows, failures = [], []
     for name, options in cases:
         row = run_case(image, parts, layout, enums, name, **options)
@@ -302,6 +336,12 @@ def main():
                 problems.append('the record must say the fault was closed')
             if name == 'application-closes' and row['close_answer'] != -1:
                 problems.append('the application close of a faulted service must be answered -1')
+            if name == 'quiesce-interleaved':
+                if len(row['store_states']) < 3 or not row['interleavings']:
+                    problems.append('the close must store phase and close_started')
+                faults = [x for x in row['interleavings'] if x['result'] == QUIESCE['FAULT']]
+                if faults:
+                    problems.append(f'the quiesce reported FAULT while a close that succeeds ran: {faults[0]}')
         if row['ve_accesses']:
             problems.append('the close must not touch a decoder register')
         row['passed'] = not problems

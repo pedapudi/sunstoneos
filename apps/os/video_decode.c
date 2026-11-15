@@ -296,8 +296,10 @@ refused:
 static int do_close(void)
 {
     const unsigned faulted=atomic_load(&vd.phase)==FAULT;
-    atomic_store(&vd.close_started,1);
+    /* CLOSING before close_started: a quiesce step that loads close_started 1 then loads CLOSING or a later phase,
+     * never the FAULT this close started from (quiesce_step). */
     atomic_store(&vd.phase,CLOSING);
+    atomic_store(&vd.close_started,1);
     vd.limit=lease_now()+VD_CALL_US;
     if(vd.limit>session_deadline())vd.limit=session_deadline();
     RECORD(const uint32_t at_fault=vd.info.failed;)
@@ -353,10 +355,12 @@ void os_video_decode_irq(void){}
 
 int os_video_decode_task_privileged(void (*entry)(void *),void *context){return !context&&entry==os_video_decode_task;}
 int os_video_decode_pins(struct a733_pin_handoff *pins){return pins!=NULL;}
-/* A FAULT service first gets its close: DONE once it is CLOSED, FAULT (site 0x941) when a close step failed. */
+/* A FAULT service first gets its close: DONE once it is CLOSED, FAULT (site 0x941) when a close step failed. The step
+ * runs on another core while the owner closes, so it loads close_started before phase: do_close stores them in the
+ * opposite order, so FAULT seen after close_started 1 is the close's own failure, not the phase it started from. */
 static enum os_quiesce_result quiesce_step(struct os_quiesce *q)
 {
-    if(atomic_load(&vd.phase)==FAULT&&atomic_load(&vd.close_started)){
+    if(atomic_load(&vd.close_started)&&atomic_load(&vd.phase)==FAULT){
         (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x941,
             vd.fault_step<<24|(vd.fault_value&0xffffff),SUNSTONE_CRUMB_HERE());
         return OS_QUIESCE_FAULT;
