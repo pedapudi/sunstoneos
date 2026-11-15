@@ -7,7 +7,7 @@ Native SDC1 CMD52/CMD53 transport, immutable firmware staging, AIC8800D80 bootst
 Every OS image links the radio station, and it starts in a session that grants the radio device (`SS_DEVICE_RADIO`, bit 8), which the application must declare. The scanning station that returns to the host is a separate returning image (`SUNSTONE_A733_OS_RADIO_SCAN`). The Bluetooth headset is a library linked into an image whose application declares the headset device ([design](../designs/one-os-image.md)).
 
 
-**Board-qualified scope:** On the Orange Pi Zero 3W's AIC8800D80 module, through the one OS radio image and its stage limit: the first-run guard (PG and PM read 1.8 V), the vendor-order power-on of BLDO5 and CLDO1 at 1.8 V with matched shutdown readbacks, SDIO enumeration (function 1 and 2 identities), the chip and subrevision words, four-bit 25 MHz widening and the firmware upload to its start confirmation, runtime start with the binding check, and a passive 2.4 GHz scan that lists the access points heard (none on 5 GHz) with a normal return. The crypto engine's TRNG delivers 32-byte blocks in the radio OS image, **unqualified and for bring-up only**: health tests at hardware defaults, no characterization, and `entropy_qualified()` still refuses, so no production key may come from it. Association with a WPA2-PSK access point (stage limit 5) is board-qualified: the four-way handshake, the pairwise and group key installs, the port open, the orderly shutdown and the return, using the unqualified CE entropy for bring-up only. DHCP, DNS and data traffic are not yet run on the board.
+**Board-qualified scope:** On the Orange Pi Zero 3W's AIC8800D80 module, through the one OS radio image and its stage limit: the first-run guard (PG and PM read 1.8 V), the vendor-order power-on of BLDO5 and CLDO1 at 1.8 V with matched shutdown readbacks, SDIO enumeration (function 1 and 2 identities), the chip and subrevision words, four-bit 25 MHz widening and the firmware upload to its start confirmation, runtime start with the binding check, and a passive 2.4 GHz scan that lists the access points heard (none on 5 GHz) with a normal return. The crypto engine's TRNG delivers 32-byte blocks in the radio OS image, **unqualified and for bring-up only**: health tests at hardware defaults, no characterization, and `entropy_qualified()` still refuses, so no production key may come from it. Association with a WPA2-PSK access point (stage limit 5) is board-qualified: the four-way handshake, the pairwise and group key installs, the port open, the orderly shutdown and the return, using the unqualified CE entropy for bring-up only. DHCP, DNS and data traffic have not yet run on the board: the first address-stage run stopped at the pairwise key add (open work 1).
 
 ## Capabilities
 
@@ -17,16 +17,18 @@ Every OS image links the radio station, and it starts in a session that grants t
 | Passive Wi-Fi scan with shutdown and return | board-qualified | 22 access points, all on 2.4 GHz | [records](../evidence/radio.jsonl) |
 | CE TRNG entropy for bring-up (unqualified) | board-tested, unqualified | 32 bytes in about 4 ms | [records](../evidence/radio.jsonl) |
 | Wi-Fi association with WPA2-PSK (CCMP), keys installed, port opened, orderly shutdown and return | board-qualified | link secured 0.42 s after connect | [design](../designs/radio-service-stages.md), [records](../evidence/radio.jsonl) |
-| IPv4, DHCP and DNS, reconnect | host-tested | none | [radio-wifi.md](../radio-wifi.md) |
+| IPv4, DHCP and DNS (address stage, stage limit 6), reconnect | host-tested; first board run stopped at association | none | [radio-wifi.md](../radio-wifi.md), [design](../designs/radio-service-stages.md), open work 1 to 3 |
 | Bluetooth HFP audio gateway with voice-recognition activation | host-tested | `drivers/bluetooth/bt_hfp_ag.c` 11,572 B with call control off | [design](../designs/bluetooth-voice-recognition.md), `bluetooth-voice-recognition-budgets` |
-| WPA3 SAE association, top-rate SDIO, headset interoperability | open | none | open work 2 to 4 |
+| WPA3 SAE association, top-rate SDIO, headset interoperability | open | none | open work 4 to 6 |
 
 ## Open work
 
-1. Add a DHCP and DNS stage after association and run it on the board, then a TCP exchange ([design](../designs/radio-service-stages.md)). Run 5's missing key-add confirmation remains unexplained.
-2. Add capability reads, CMD5 and CMD11 voltage negotiation, drive and speed selection, PERI1 UHS clocks and CMD19 tuning for top-rate SDIO. The existing four-bit 25 MHz mode has [host-tested INTID194 completion](../designs/network-owner-events.md); physical interrupt timing remains unqualified.
-3. Complete WPA3 SAE: the arithmetic exists, while external authentication, protected management frames and SAE association remain.
-4. Qualify physical entropy and key-state observations, RF traffic, coexistence, sustained receive deadlines, broader modes, fault recovery and headset interoperability.
+1. Find why a key add's confirmation sometimes never arrives. In two of four runs that reached the pairwise key add (entries 1794738427185556712-c450b701 and 1794762013628333724-64b494b3), the status read after the write found nothing pending, the owner waited for the card's SDIO interrupt, and no latch reached the host within 6 s. In the runs that passed, every confirmation was already pending at that first read, so a wake from the card interrupt after an empty status read during association has not been shown on the board. The wait is in `drivers/net/aic8800_sdio_transport.c` (the empty `RX_STATUS` branch, which acknowledges the controller latch through `sunxi_sdio_ack_irq` in `drivers/storage/sunxi_sdio.c` before it waits). Next step: diff the vendor's interrupt enable and acknowledge sequence (`aicwf_sdio.c`: `aicwf_sdio_hal_irqhandler`, the D80 function 0 register 0x07 write and the interrupt configuration write at bus start) against ours, and add a host case in which the confirmation becomes pending between the empty status read and the acknowledge.
+2. Run the address stage (stage limit 6: DHCP lease and one DNS lookup, [design](../designs/radio-service-stages.md#the-address-stage-leases-an-ipv4-address-and-resolves-one-name)) on the board once item 1 is resolved; its first run stopped at the key add (item 1). Its record carries the IP task's wake count and the cores of the IP task and the radio owner, which decide the IP task's placement. Then add a TCP exchange through the SDK socket API to a host on the local network; propose the peer and an address-free record before building it.
+3. Qualify reconnect after a link loss on the board.
+4. Add capability reads, CMD5 and CMD11 voltage negotiation, drive and speed selection, PERI1 UHS clocks and CMD19 tuning for top-rate SDIO. The existing four-bit 25 MHz mode has [host-tested INTID194 completion](../designs/network-owner-events.md); physical interrupt timing remains unqualified.
+5. Complete WPA3 SAE: the arithmetic exists, while external authentication, protected management frames and SAE association remain.
+6. Qualify physical entropy and key-state observations, RF traffic, coexistence, sustained receive deadlines, broader modes, fault recovery and headset interoperability.
 
 ## Evidence
 
@@ -35,7 +37,7 @@ Design: [headset voice recognition](../designs/bluetooth-voice-recognition.md) (
 Board results are records in `docs/evidence/radio.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-radio-20261101.md).
 
 <!-- evidence-table:begin -->
-10 records in `docs/evidence/radio.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+11 records in `docs/evidence/radio.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -49,4 +51,5 @@ Board results are records in `docs/evidence/radio.jsonl`; add one with `tools/ev
 | `1794738427185556712-c450b701` | 2026-11-15 | 3-1 | `cc769b60e80e` | returned | failed | run_total 30.734 s, connect_after_arming 4.131 s, fault_after_arming 5.586 s, return_after_arming 5.683 s, eapol_received 2, eapol_sent 2, rsn_state 9 raw, expected_cfm 37 id, cfm_bytes 0 bytes, command_bound 1000 ms |
 | `1794745255109339882-f869332f` | 2026-11-15 | 3-1 | `3e837321a798` | returned | failed | run_total 29.555 s, connect_after_arming 4.124 s, fault_after_arming 4.545 s, return_after_arming 4.643 s, eapol_received 2, eapol_sent 2, rsn_state 9 raw, expected_cfm 37 id, cfm_bytes 2 bytes, cfm_status 0 raw, trace_rx_last_id 37 id, command_bound 6000 ms |
 | `1794751437798567373-be2dcf1b` | 2026-11-15 | 3-1 | `204b58a7782b` | returned | passed | run_total 30.023 s, connect_after_arming 4.13 s, authorized_after_arming 4.554 s, return_after_arming 4.663 s, eapol_received 2, eapol_sent 2, rsn_state 9 raw, aps_listed 7, aps_2_4ghz 7, aps_5ghz 0, table_pairs_done 2880 pairs, slowest_confirmed_id 36 id, slowest_confirmation 0 ms, trace_last_command 5124 id, trace_last_response 5125 id, orderly_shutdown_matched 1 |
+| `1794762013628333724-64b494b3` | 2026-11-15 | 3-1 | `12e2cfab18e7` | returned | failed | run_total 35.946 s, connect_after_arming 4.119 s, fault_after_arming 10.48 s, return_after_arming 10.583 s, eapol_received 2, eapol_sent 2, rsn_state 9 raw, aps_listed 9, table_pairs_done 2880 pairs, key_add_wait 5999 ms, status_reads_after_write 1, last_status 0 raw, rx_records_after_write 0, radio_interrupts_after_write 0, host_saw_sdio_latch 0, failure_shutdown_matched 1 |
 <!-- evidence-table:end -->

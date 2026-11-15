@@ -24,6 +24,33 @@ static void hint(void *task)
     portYIELD_FROM_ISR(woken);
 }
 static int pending_hint(void){return (int)ulTaskNotifyTake(pdTRUE,0);}
+static void hint_index2(void *task)
+{
+    BaseType_t woken=pdFALSE;
+    vTaskNotifyGiveIndexedFromISR((TaskHandle_t)task,2,&woken);
+    portYIELD_FROM_ISR(woken);
+}
+/* An owner whose deadline waits use index 2 (sunstone_deadline_register_index), as the G2D and video decoder owners
+ * do: an index-0 input during a wait neither ends it nor is taken by it, and a hint on index 2 ends it. */
+static volatile int indexed_done;
+static void indexed_owner(void *unused)
+{
+    (void)unused;
+    TaskHandle_t self=xTaskGetCurrentTaskHandle();
+    assert(!sunstone_deadline_register_index(configTASK_NOTIFICATION_ARRAY_ENTRIES));
+    assert(sunstone_deadline_register_index(2)&&sunstone_deadline_register_index(2)&&sunstone_deadline_register());
+    assert(!sunstone_deadline_register_index(1));
+    uint64_t at=host_time_us()+200;
+    host_irq_at(at-100,hint,self);
+    assert(sunstone_deadline_wait_until(at)==SUNSTONE_DEADLINE_EXPIRED&&host_time_us()==at);
+    assert(ulTaskNotifyTake(pdTRUE,0)==1);
+    at=host_time_us()+200;
+    host_irq_at(at-100,hint_index2,self);
+    assert(sunstone_deadline_wait_until(at)==SUNSTONE_DEADLINE_NOTIFIED&&host_time_us()==at-100);
+    assert(!ulTaskNotifyTake(pdTRUE,0)&&!ulTaskNotifyTakeIndexed(2,pdTRUE,0));
+    indexed_done=1;
+    vTaskSuspend(NULL);
+}
 
 /* The second owner of the simultaneous-owner case. */
 static volatile unsigned woke_order[2],woke_count;
@@ -39,7 +66,7 @@ static void owner2(void *unused)
     vTaskSuspend(NULL);
 }
 static void deliver_kick(void *unused){(void)unused;host_deadline_deliver_kick();}
-_Static_assert(SUNSTONE_DEADLINE_SLOTS>=2,"The race fixture uses two initial owners");
+_Static_assert(SUNSTONE_DEADLINE_SLOTS>=3,"The race fixture uses two initial owners and the indexed owner");
 static volatile int admitted[SUNSTONE_DEADLINE_SLOTS-1u];
 static void admit(void *index){admitted[(uintptr_t)index]=sunstone_deadline_register();vTaskSuspend(NULL);}
 /* Another task writes the first owner's task-local pointer, here to the second owner's slot. */
@@ -119,15 +146,18 @@ static void runtime_cases(void *unused)
      assert(sunstone_deadline_owner_record(t2,&record)&&!record.failed&&!record.armed);
      vTaskSetThreadLocalStoragePointer(NULL,SUNSTONE_DEADLINE_TLS,mine);
      assert(sunstone_deadline_register());}
-    /* Fill the selected declaration after the two existing owners, then
+    /* An owner with its own deadline index takes the third slot. */
+    assert(host_task_create("indexed",indexed_owner,NULL,3));
+    while(!indexed_done)vTaskDelay(1);
+    /* Fill the selected declaration after the three existing owners, then
      * refuse the next owner. Every attempted task must actually exist. */
-    const unsigned available=SUNSTONE_DEADLINE_SLOTS-2u;
+    const unsigned available=SUNSTONE_DEADLINE_SLOTS-3u;
     for(unsigned i=0;i<available;++i)assert(host_task_create("owner",admit,(void *)(uintptr_t)i,3));
     assert(host_task_create("overflow",admit,(void *)(uintptr_t)available,3));
     for(unsigned i=0;i<available;++i)assert(admitted[i]==1);
     assert(admitted[available]==0);
     assert(!host_critical_depth());
-    puts("PASS deadline arm, notification-before-sleep, exact expiry, cancellation, simultaneous owners, task-handle identity, slot bound once through the task-local pointer, a foreign pointer refused, fixed admission and owner progress");
+    puts("PASS deadline arm, notification-before-sleep, exact expiry, cancellation, simultaneous owners, task-handle identity, slot bound once through the task-local pointer, a foreign pointer refused, fixed admission, owner progress, and an owner whose waits use index 2 neither ended nor emptied by an index-0 input");
 }
 
 /* Execute the real service supervisor against the same runtime state. The board

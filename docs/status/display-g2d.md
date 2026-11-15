@@ -19,6 +19,7 @@ Native HDMI, DSI, DisplayPort, immutable scanout and retained G2D paths have hos
 | OS-image G2D copy of alpha-0 pixels on four alternative blender configurations ([g2d-os.md](../g2d-os.md#copy-paths)) | board-measured on 3-1 | none copies exactly: three write 0x00000000 like the vendor path, and the premultiplied words multiply colour by alpha | `1794732202569746479-c9b5e324` |
 | OS-image G2D rotate of ARGB8888 at 0, 90, 180 and 270 degrees through the rotate module ([g2d-os.md](../g2d-os.md#first-rotate-stage)) | board-qualified on 3-1 | 96 by 40 rectangle, every CRC as predicted, alpha-0 pixels copied exactly; 90 turns clockwise; launch to interrupt 16 to 23 us | `1794743298175050163-4ed14c80` |
 | OS-image G2D convert of NV16 camera frames to RGB with scaling, four YUV-to-RGB tables derived from the BT.601 and BT.709 matrices ([g2d-os.md](../g2d-os.md#third-conversion-stage)) | board-qualified on 3-1 | 640 by 480 in 1050 us (292 Mpixel/s) with every table, every CRC as predicted; luma 0 to 255 kept through csc0, rounding to nearest; scales to 320 by 240 and 224 by 224 in 1039 us, equal to the scaler model; one A76 in scalar C without NEON 2478 us | `1794754244027087094-2256ed85`, `1794752244516494656-bd8feb22`, `1794749218366895381-6f184f31` |
+| OS-image G2D convert of packed 4:2:2 frames (YUYV, UYVY, YVYU, VYUY) to RGB with vertical scaling through the vendor's linear vertical bank ([g2d-os.md](../g2d-os.md#packed-conversion-stage)) | board-measured on 3-1 | 640 by 480 YUYV and UYVY in 1050 us (292 Mpixel/s), every CRC as predicted, codes 0x20 and 0x21 are YUYV and UYVY; the 224 by 250 linear scale equals the model, edge rows included; the Lanczos vertical variant never finished (100 ms timeout); the random-frame scales did not run | `1794764737608773205-864354f2` |
 | HDMI, DSI, immutable scanout and retained G2D paths | host-tested | none | [g2d.md](../g2d.md), [displayport-native.md](../displayport-native.md) |
 | Visible sink output and physical pixels | open | none | open work 1 and 2 |
 
@@ -44,7 +45,15 @@ The OS-image service is described in [g2d-os.md](../g2d-os.md). Exact copies of 
 2. Establish DisplayPort negotiation: analog and SERDES authority, AUX clock, board revision, orientation, link training and sink output.
 3. Obtain panel-bound electrical, PLL, rail and wiring evidence, and the DSI read transactions.
 4. Add per-access ownership checks to the G2D command path.
-5. Measure a NEON conversion on one A76 once applications may build with FP and SIMD registers, since the engine is 2.5 times faster than scalar C only; then RGB888 output, NV12 input, NV12 and YUV420 camera rotation, flips on the board, a mixer job and a rotate in one session (the stray masking), other pixel sizes and translucent solid backgrounds.
+5. Finish the packed conversion stage ([g2d-os.md](../g2d-os.md#packed-conversion-stage), apps/g2d-convert). Run `1794764737608773205-864354f2` qualified the byte orders and the linear vertical bank; the Lanczos vertical variant timed out, which stopped the run before the random-frame scales.
+   - Next: remove the Lanczos variant (`A733_G2D_CONVERT_LANCZOS_VERTICAL`, `SUNSTONE_G2D_CONVERT_VARIANTS` for g2d-convert) and ops 4 and 6 from apps/g2d-convert, then run the frame-Q linear scale.
+   - Then add to that application a 1920 by 1080 YUYV frame scaled to 224 by 224 and a 1280 by 720 frame scaled to 640 by 360, generated on the board, each predicted by apps/g2d-convert/host.py, with the engine time reported (about 7 ms at 1080p at 296 Mpixel/s).
+   - Then make a USB camera frame one surface for the engine. drivers/usb's UVC path (uvc.c) delivers a frame as up to 1024 payload spans in transfer buffers. Measure a CPU gather into a large-region surface against a descriptor chain of the DMA controller (drivers/dma) copying each span, on the board, and keep the faster.
+   - Then parse the UVC colour-matching descriptor through the camera class interface, so that the matrix and range come from the camera.
+   - Then convert MJPEG frames, which ss_usb_camera_decode turns into I420 (code 0x2a), through the engine.
+6. Close the window in which an application request posted just before a quiesce opens the device after the quiesce closed it. The request's post (`call` in apps/os/g2d.c and apps/os/video_decode.c) tests `quiesce_wanted` and then posts; a quiesce that sets `quiesce_wanted` between the test and the post finds no request, and the owner's next `serve` opens the device. Next step: refuse an OPEN in `serve` while `quiesce_wanted` is set, and add the interleaving to checks/os-g2d-fault-return.py and checks/os-vdec-fault-return.py.
+7. Make the INTID-masked wait in each close retry. In `do_close` of apps/os/g2d.c and apps/os/video_decode.c the loop `for(i=0;r==1&&i<200;++i){r=gicv3_spi_masked(..);if(r==1)break;if(r==0)pause_us(10);}` exits after the first 0, so a distributor that does not yet report the line masked fails the close at once. Next step: loop while `r==0`, and add a case in which the distributor reports masked on the second read.
+8. Measure a NEON conversion on one A76 once applications may build with FP and SIMD registers, since the engine is 2.5 times faster than scalar C only; then RGB888 output, NV12 input, NV12 and YUV420 camera rotation, flips on the board, a mixer job and a rotate in one session (the stray masking), other pixel sizes and translucent solid backgrounds.
 
 ## Evidence
 
@@ -53,7 +62,7 @@ Designs: [command span validation](../designs/display-command-admission.md) (`do
 Board results are records in `docs/evidence/display-g2d.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-display-g2d-20261101.md).
 
 <!-- evidence-table:begin -->
-11 records in `docs/evidence/display-g2d.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+12 records in `docs/evidence/display-g2d.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -68,4 +77,5 @@ Board results are records in `docs/evidence/display-g2d.jsonl`; add one with `to
 | `1794749218366895381-6f184f31` | 2026-11-15 | 3-1 | `31ab76340302` | returned | failed | run_total 22.405 s, launch_to_irq_601_limited 1050.46 us, launch_to_irq_709_full 1049.08 us, engine_rate 292.4 Mpixel/s, cpu_first 2717.96 us, cpu_best 2695.96 us |
 | `1794752244516494656-bd8feb22` | 2026-11-15 | 3-1 | `40ef88476734` | returned | passed | run_total 24.082 s, launch_to_irq_vendor 1050.79 us, launch_to_irq_csc0 1049.21 us, launch_to_irq_scale_320 1039.33 us, launch_to_irq_scale_224 1038.38 us, engine_rate 292.4 Mpixel/s, cpu_first 2670.5 us, cpu_best 2646.46 us |
 | `1794754244027087094-2256ed85` | 2026-11-15 | 3-1 | `5157921030ce` | returned | passed | run_total 28.557 s, launch_to_irq_bt709_full 1050.54 us, launch_to_irq_bt601_full 1049.13 us, launch_to_irq_bt709_limited 1049 us, launch_to_irq_bt601_limited 1049.04 us, launch_to_irq_scale_320 1039.63 us, launch_to_irq_scale_224 1037.88 us, engine_rate 292.4 Mpixel/s, cpu_first 2478 us, cpu_best 2478 us |
+| `1794764737608773205-864354f2` | 2026-11-15 | 3-1 | `1fcf2fb55387` | returned | failed | run_total 24.331 s, op1_engine_us 1050.4 us, op2_engine_us 1048.3 us, op3_engine_us 1038.8 us, op1_mpixel_per_s 292.5, cpu_best_us 2536.5 us, total_run_s 24.33 s |
 <!-- evidence-table:end -->

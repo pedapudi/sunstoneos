@@ -157,6 +157,16 @@ static const uint32_t lan2coefftab32_full[512] = {
 };
 
 _Static_assert(sizeof(lan2coefftab32_full)==512*4,"Pinned scaler coefficient bank");
+/* g2d_scal.c linearcoefftab32 (19-26): 32 phases of two taps, 64 - 2p and 2p, the vendor's vertical luma bank for a
+ * packed or RGB source. */
+static const uint32_t linearcoefftab32[32] = {
+	0x00004000, 0x00023e00, 0x00043c00, 0x00063a00, 0x00083800,
+	0x000a3600, 0x000c3400, 0x000e3200, 0x00103000, 0x00122e00,
+	0x00142c00, 0x00162a00, 0x00182800, 0x001a2600, 0x001c2400,
+	0x001e2200, 0x00202000, 0x00221e00, 0x00241c00, 0x00261a00,
+	0x00281800, 0x002a1600, 0x002c1400, 0x002e1200, 0x00301000,
+	0x00320e00, 0x00340c00, 0x00360a00, 0x00380800, 0x003a0600,
+	0x003c0400, 0x003e0200, };
 /* g2d_scal.c g2d_vsu_calc_fir_coef (248-268): the word offset of the bank for a step with 19 fraction bits. */
 static uint32_t fir_coef(uint32_t step)
 {
@@ -182,27 +192,40 @@ int a733_g2d_convert_commands(void *memory,size_t capacity,const struct a733_g2d
     if(!memory||!c||(uintptr_t)memory%32||capacity!=4096||(rcq_iova&4095))return 0;
     const uint32_t w=c->w,h=c->h,ow=c->ow,oh=c->oh;
     const int32_t *table=a733_g2d_csc_table(c->csc);
-    if((c->format!=A733_G2D_YUV422_SP_A&&c->format!=A733_G2D_YUV422_SP_B)||c->out_format>7||!table||
+    const int packed=c->format-A733_G2D_YUV422_PACKED_FIRST<=A733_G2D_YUV422_PACKED_LAST-A733_G2D_YUV422_PACKED_FIRST;
+#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
+    const uint32_t variant=c->variant;
+#else
+    const uint32_t variant=0;
+#endif
+    if((!packed&&c->format!=A733_G2D_YUV422_SP_A&&c->format!=A733_G2D_YUV422_SP_B)||c->out_format>7||!table||
        w-1u>=A733_G2D_CONVERT_MAX||h-1u>=A733_G2D_CONVERT_MAX||ow-1u>=A733_G2D_CONVERT_MAX||
-       oh-1u>=A733_G2D_CONVERT_MAX||(c->sx&1)||c->luma_stride<w||c->chroma_stride<((w+1)&~1u)||
+       oh-1u>=A733_G2D_CONVERT_MAX||(c->sx&1)||(uint64_t)c->luma_stride<(uint64_t)w*(packed?2u:1u)||
+       (packed?(w&1)||w>A733_G2D_VSU_MAX_INPUT||c->chroma||c->chroma_stride:c->chroma_stride<((w+1)&~1u))||
        (uint64_t)c->output_stride<(uint64_t)ow*4||((c->luma|c->chroma|c->output|c->luma_stride|c->chroma_stride|
        c->output_stride)&3))return 0;
+#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
+    if(variant&~A733_G2D_CONVERT_VARIANT_BITS||(variant&&!packed))return 0;
+#endif
     /* g2d_vlayer_set (g2d_ovl_v.c 244-335): one luma byte and one chroma pair (2 bytes) for two pixels, so the chroma
-     * plane's rectangle starts at pitch1 * y + 2 * (x / 2). */
-    const uint64_t luma=origin(c->luma,c->luma_stride,c->sy,c->sx);
-    const uint64_t chroma=origin(c->chroma,c->chroma_stride,c->sy,c->sx);
+     * plane's rectangle starts at pitch1 * y + 2 * (x / 2); a packed plane has 2 bytes a pixel (g2d_byte_cal, g2d.c
+     * 368-370) and no chroma plane. */
+    const uint64_t luma=origin(c->luma,c->luma_stride,c->sy,c->sx*(packed?2u:1u));
+    const uint64_t chroma=packed?0:origin(c->chroma,c->chroma_stride,c->sy,c->sx);
     const uint64_t out=origin(c->output,c->output_stride,c->dy,c->dx*4u);
     if((luma|chroma|out)>>32)return 0;
     /* g2d_ovl_v_calc_coarse, the 4:2:2 semi-planar case (g2d_ovl_v.c 97-126): a source eight times wider or four
-     * times taller than the output is decimated before the scaler, and the scaler reads at most 2048 columns. */
+     * times taller than the output is decimated before the scaler, and the scaler reads at most 2048 columns. The
+     * packed case (88-95) decimates nothing. */
     uint32_t midw=w,midh=h,hd0=0,hd1=0,vd=0;
-    if(w>=ow<<3){
+    if(packed){/* w is at most 2048 */}
+    else if(w>=ow<<3){
         midw=ow<<3;if(midw>A733_G2D_VSU_MAX_INPUT)midw=A733_G2D_VSU_MAX_INPUT;
         hd0=midw<<16|w;hd1=midw<<15|((w+1)>>1);
     }else if(midw>A733_G2D_VSU_MAX_INPUT){
         midw=A733_G2D_VSU_MAX_INPUT;hd0=midw<<16|w;hd1=midw<<15|((w+1)>>1);
     }
-    if(h>=oh<<2){midh=oh<<2;vd=midh<<16|h;}
+    if(!packed&&h>=oh<<2){midh=oh<<2;vd=midh<<16|h;}
     memset(memory,0,capacity);uint8_t *p=memory;
     struct g2d_mixer_ovl_v_reg *v=(void *)(p+128);
     struct g2d_mixer_bld_reg *b=(void *)(p+384);
@@ -214,23 +237,24 @@ int a733_g2d_convert_commands(void *memory,size_t capacity,const struct a733_g2d
     /* g2d_vlayer_set: format, alpha mode 0 (pixel alpha), plane alpha 0xff, the layer enabled; no fill colour. */
     v->ovl_attr.dwval=UINT32_C(0xff000001)|(c->format<<8);
     v->ovl_mem.dwval=v->ovl_winsize.dwval=(w-1)|((h-1)<<16);
-    v->ovl_mem_pitch0=c->luma_stride;v->ovl_mem_pitch1=c->chroma_stride;
+    v->ovl_mem_pitch0=c->luma_stride;v->ovl_mem_pitch1=packed?0:c->chroma_stride;
     v->ovl_mem_low_addr0=(uint32_t)luma;v->ovl_mem_low_addr1=(uint32_t)chroma;
     v->hor_down_sample0.dwval=hd0;v->hor_down_sample1.dwval=hd1;
     v->ver_down_sample0.dwval=vd;v->ver_down_sample1.dwval=vd;
     /* g2d_vsu_para_set, the 4:2:2 semi-planar case (g2d_scal.c 270-312, 361-383, 453-475): the scaler on with the
      * coefficient access and the YUV filter type, the luma steps at full rate, the chroma at half width with the
      * horizontal step register at half the luma's, Lanczos banks for both horizontal filters and the vertical one,
-     * and every phase 0. */
+     * and every phase 0. The packed case (339-360) differs in filter_type 0 (287-290) and the linear vertical bank. */
     const uint32_t hstep=(midw<<19)/ow,vstep=(midh<<19)/oh,cw=(midw+1)>>1;
-    vs->vs_ctrl.dwval=0x10101;vs->out_size.dwval=size;vs->glb_alpha.dwval=255;
+    const int linear=packed&&!(variant&1u);
+    vs->vs_ctrl.dwval=linear?0x101:0x10101;vs->out_size.dwval=size;vs->glb_alpha.dwval=255;
     vs->y_ch_size.dwval=(midw-1)|((midh-1)<<16);
     vs->y_hor_step.dwval=hstep<<1;vs->y_ver_step.dwval=vstep<<1;
     vs->c_ch_size.dwval=(cw-1)|((midh-1)<<16);
     vs->c_hor_step.dwval=hstep;vs->c_ver_step.dwval=vstep<<1;
     memcpy(vs->vs_y_ch_hor_filter_coef,lan2coefftab32_full+fir_coef(hstep),32*4);
     memcpy(vs->vs_c_ch_hor_filter_coef,lan2coefftab32_full+fir_coef(hstep>>1),32*4);
-    memcpy(vs->vs_y_ch_ver_filter_coef,lan2coefftab32_full+fir_coef(vstep),32*4);
+    memcpy(vs->vs_y_ch_ver_filter_coef,linear?linearcoefftab32:lan2coefftab32_full+fir_coef(vstep),32*4);
     /* The blender: source-over, ROP 0xf0 and pipe 0 with its fill colour over the output rectangle, as g2d_bsp_bitblt
      * sets them (g2d_mixer.c 332-339), and the output size (bld_out_setting, straight alpha). The colour conversion
      * follows g2d_bsp_bld's order (g2d_mixer.c 216-220 and 287): csc0 converts at pipe 0's input

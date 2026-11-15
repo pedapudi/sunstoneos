@@ -3,8 +3,8 @@
 
 drivers/g2d/a733_g2d_convert.c builds the mixer's RCQ command page for one YUV-to-RGB conversion with scaling.
 vendor_blocks() below transcribes the vendor's g2d_bsp_bitblt with flag G2D_BLT_NONE (g2d_mixer.c 304-371 in
-linux-orangepi 2ac08e8c, bsp/drivers/g2d/g2d_rcq) for a 4:2:2 semi-planar source and a 32-bit RGB output, with the
-functions it calls: g2d_vlayer_set (g2d_ovl_v.c 244-335), g2d_ovl_v_calc_coarse (76-126), g2d_vsu_para_set and
+linux-orangepi 2ac08e8c, bsp/drivers/g2d/g2d_rcq) for a 4:2:2 semi-planar or packed source and a 32-bit RGB output,
+with the functions it calls: g2d_vlayer_set (g2d_ovl_v.c 244-335), g2d_ovl_v_calc_coarse (76-126), g2d_vsu_para_set and
 g2d_vsu_calc_fir_coef (g2d_scal.c 248-475), bld_porter_duff, bld_set_rop_ctrl, bld_in_set, bld_cs_set,
 bld_csc_reg_set and bld_out_setting (g2d_bld.c 84-354), and g2d_wb_set (g2d_wb.c 100-170), with g2d_byte_cal and
 cal_align (g2d.c 351-450). The colour conversion follows g2d_bsp_bld instead (g2d_mixer.c 216-220 and 287):
@@ -21,8 +21,11 @@ vendor keeps its register images between jobs and rewrites only what it sets), a
 first words as zero blocks, as a733_g2d_commands_at does.
 
 The check builds the builder on the host and runs it on the stage's three geometries, enlargements, the coarse
-decimation in both directions, the 2048-column scaler limit, odd widths, offsets, both 4:2:2 codes, the eight RGB
-orders and the four tables. Each accepted job must give the vendor's words in every block. Each job outside the
+decimation in both directions, the 2048-column scaler limit, odd widths, offsets, both 4:2:2 semi-planar codes, the
+four packed codes, the eight RGB orders and the four tables. It builds the builder a second time with
+SUNSTONE_G2D_CONVERT_VARIANTS, as board stage 10's image is built: there every job without a variant must give the
+same words, and a packed job with A733_G2D_CONVERT_LANCZOS_VERTICAL the vendor's words with filter_type 1 and the
+Lanczos bank of the vertical step in place of the linear bank. Each accepted job must give the vendor's words in every block. Each job outside the
 builder's contract must be refused. It also checks that the builder's Lanczos bank is drivers/g2d/a733_g2d.c's, and
 that every phase of every bank sums to 64, so a flat field passes the scaler unchanged.
 
@@ -41,6 +44,7 @@ ROOT = Path(__file__).resolve().parents[1]
 M32 = 0xffffffff
 G2D_V0, G2D_UI0, G2D_UI1, G2D_UI2, G2D_VSU, G2D_BLD, G2D_WB = 0x800, 0x1000, 0x1800, 0x2000, 0x8000, 0x400, 0x3000
 YUV422 = (0x24, 0x25, 0x26)
+PACKED = (0x20, 0x21, 0x22, 0x23)
 
 
 
@@ -66,6 +70,20 @@ def lan2_bank(path):
 def cal_align(width, align):
     """g2d.c 421-450."""
     return width if align == 0 else (width + align - 1) // align * align
+
+
+def linear_bank(path):
+    """The 32 words of linearcoefftab32 in a C source."""
+    text = Path(path).read_text()
+    body = text[text.index('linearcoefftab32[32] = {'):]
+    body = body[:body.index('};')]
+    words = [int(x, 16) for x in re.findall(r'0x[0-9a-fA-F]+', body.split('{', 1)[1])]
+    assert len(words) == 32, len(words)
+    return words
+
+
+# g2d_scal.c 19-26: phase p has taps 0, 64 - 2p, 2p, 0, lowest byte first.
+LINEAR = [(2 * p) << 16 | (64 - 2 * p) << 8 for p in range(32)]
 
 
 def fir_coef(step):
@@ -95,9 +113,14 @@ def vendor_blocks(src, dst, table, lan2):
     v[0x04] = size
     v[0x2c] = size                                                      # 269-272 ovl_winsize
     v[0x08] = 0                                                         # 275 ovl_mem_coor
-    assert src['format'] in YUV422                                      # 276-282: 4:2:2
-    cw, cx, cy = src['width'] >> 1, src['clip_x'] >> 1, src['clip_y']
-    ycnt, ucnt, vcnt = (1, 2, 0) if src['format'] != 0x26 else (1, 1, 1)  # 306, g2d_byte_cal (g2d.c 372-381)
+    packed = src['format'] in PACKED
+    assert packed or src['format'] in YUV422
+    if packed:                                                          # 298-303: no chroma plane
+        cw = cx = cy = 0
+        ycnt, ucnt, vcnt = 2, 0, 0                                      # 306, g2d_byte_cal (g2d.c 368-370)
+    else:                                                               # 276-282: 4:2:2 semi-planar
+        cw, cx, cy = src['width'] >> 1, src['clip_x'] >> 1, src['clip_y']
+        ycnt, ucnt, vcnt = (1, 2, 0) if src['format'] != 0x26 else (1, 1, 1)  # 306, g2d_byte_cal (g2d.c 372-381)
     pitch0 = cal_align(ycnt * src['width'], src['align'][0])            # 307
     pitch1 = cal_align(ucnt * cw, src['align'][1])                      # 309
     pitch2 = cal_align(vcnt * cw, src['align'][2])                      # 311
@@ -109,9 +132,12 @@ def vendor_blocks(src, dst, table, lan2):
     v[0x28] = (addr0 >> 32) & 0xff | ((addr1 >> 32) & 0xff) << 8 | ((addr2 >> 32) & 0xff) << 16  # 325-327
     # bbuff 1: no fill colour (328-329).
     # g2d_bsp_bitblt (g2d_mixer.c 315-371), G2D_BLT_NONE: g2d_vlayer_set above (316), mode 0 so no UI layer (318-320),
-    # and for a YUV source (321-331) g2d_ovl_v_calc_coarse, the 4:2:2 semi-planar case (g2d_ovl_v.c 97-126).
+    # and for a YUV source (321-331) g2d_ovl_v_calc_coarse, the 4:2:2 semi-planar case (g2d_ovl_v.c 97-126); the
+    # packed case (88-95) sets midw and midh to the input's size and writes nothing.
     inw, inh, outw, outh = src['w'], src['h'], dst['w'], dst['h']
-    if inw >= (outw << 3):
+    if packed:
+        midw, midh = inw, inh
+    elif inw >= (outw << 3):
         midw = min(outw << 3, 2048)
         v[0x30] = (midw << 16 | inw) & M32
         v[0x34] = (midw << 15 | ((inw + 1) >> 1)) & M32
@@ -121,7 +147,9 @@ def vendor_blocks(src, dst, table, lan2):
             midw = 2048
             v[0x30] = (midw << 16 | inw) & M32
             v[0x34] = (midw << 15 | ((inw + 1) >> 1)) & M32
-    if inh >= (outh << 2):
+    if packed:
+        pass
+    elif inh >= (outh << 2):
         midh = outh << 2
         v[0x38] = v[0x3c] = (midh << 16 | inh) & M32
     else:
@@ -140,13 +168,13 @@ def vendor_blocks(src, dst, table, lan2):
     for i in range(32):                                                 # 315-317 y horizontal
         vs[0x200 + 4 * i] = lan2[fir_coef(yhstep) + i]
     yvcoef = fir_coef(yvstep)                                           # 319
-    incw, inch = (midw + 1) >> 1, midh                                  # 361-366: 4:2:2 semi-planar
+    incw, inch = (midw + 1) >> 1, midh                                  # 339-345, 361-366: 4:2:2, both kinds
     vs[0xc0] = ((incw - 1) & 0x1fff) | ((inch - 1) & 0x1fff) << 16      # 367-368 c_ch_size
     vs[0xc8] = yhstep & M32                                             # 371 c_hor_step
     vs[0xcc] = (yvstep << 1) & M32                                      # 372 c_ver_step
     for i in range(32):
         vs[0x400 + 4 * i] = lan2[fir_coef(yhstep >> 1) + i]             # 373-377 c horizontal
-        vs[0x300 + 4 * i] = lan2[yvcoef + i]                            # 379-381 y vertical
+        vs[0x300 + 4 * i] = LINEAR[i] if packed else lan2[yvcoef + i]   # 354-356 linear, 379-381 Lanczos
     vs[0x90] = vs[0x98] = vs[0xd0] = vs[0xd8] = 0                       # 464-469 phases
     # bld_porter_duff(G2D_BLD_SRCOVER) (g2d_mixer.c 332; g2d_bld.c 375-376)
     b[0x4c] = 0x03010301
@@ -188,11 +216,15 @@ HARNESS = r'''
 static _Alignas(32) unsigned char page[4096];
 int main(void)
 {
-    unsigned v[18];
+    unsigned v[19];
     while (1) {
-        for (int i = 0; i < 18; ++i) if (scanf("%u", &v[i]) != 1) return 0;
+        for (int i = 0; i < 19; ++i) if (scanf("%u", &v[i]) != 1) return 0;
         const struct a733_g2d_convert c = {v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11],
-                                           v[12], v[13], v[14], v[15], v[16]};
+                                           v[12], v[13], v[14], v[15], v[16],
+#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
+                                           v[18]
+#endif
+        };
         if (!a733_g2d_convert_commands(page, sizeof(page), &c, v[17])) { printf("refused\n"); continue; }
         for (unsigned i = 0; i < sizeof(page); ++i) printf("%02x", page[i]);
         printf("\n");
@@ -201,25 +233,27 @@ int main(void)
 '''
 
 
-def build(out):
+def build(out, variants=False):
     cc = shutil.which('clang-21') or shutil.which('clang') or shutil.which('gcc')
     (out / 'harness.c').write_text(HARNESS)
-    binary = out / 'harness'
+    binary = out / ('harness-variants' if variants else 'harness')
+    flags = ['-DSUNSTONE_G2D_CONVERT_VARIANTS=1'] if variants else []
     done = subprocess.run([cc, '-std=c11', '-O1', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
-                           '-fno-sanitize-recover=all', '-Iinclude', '-Idrivers/g2d', str(out / 'harness.c'),
+                           '-fno-sanitize-recover=all', *flags, '-Iinclude', '-Idrivers/g2d', str(out / 'harness.c'),
                            'drivers/g2d/a733_g2d_convert.c', '-o', str(binary)], cwd=ROOT, capture_output=True, text=True)
     if done.returncode:
         sys.exit(done.stderr)
     return binary
 
 
-def job(src, dst, csc, rcq=0x10800000):
+def job(src, dst, csc, rcq=0x10800000, variant=0):
     """The builder's job for the vendor's images: the vendor's pitches and first-pixel bases."""
-    pitch0 = cal_align(src['width'], src['align'][0])
-    pitch1 = cal_align(2 * (src['width'] >> 1), src['align'][1])
+    packed = src['format'] in PACKED
+    pitch0 = cal_align((2 if packed else 1) * src['width'], src['align'][0])
+    pitch1 = 0 if packed else cal_align(2 * (src['width'] >> 1), src['align'][1])
     return [src['laddr'][0], src['laddr'][1], pitch0, pitch1, src['clip_x'], src['clip_y'], src['w'], src['h'],
             src['format'], dst['laddr'][0], cal_align(4 * dst['width'], dst['align'][0]), dst['clip_x'], dst['clip_y'],
-            dst['w'], dst['h'], dst['format'], csc, rcq]
+            dst['w'], dst['h'], dst['format'], csc, rcq, variant]
 
 
 def image(fmt, width, x, y, w, h, laddr, align=(0, 0, 0)):
@@ -245,6 +279,15 @@ def cases():
         for fmt in (0x24, 0x25):
             out_.append((f'scale-{w}x{h}-{ow}x{oh}-{fmt:#x}', image(fmt, w + (w & 1), 0, 0, w, h, (y, c, 0), (4, 4, 0)),
                          image(0, ow, 0, 0, ow, oh, (out, 0, 0)), 2))
+    packed_shapes = [((640, 480), (640, 480)), ((640, 480), (224, 224)), ((640, 480), (320, 240)),
+                     ((320, 240), (640, 480)), ((1920, 1080), (224, 224)), ((2048, 8), (2048, 8)), ((2048, 64), (16, 8)),
+                     ((2, 2), (1, 1)), ((2, 1), (8192, 8191)), ((640, 8191), (64, 8))]
+    for (w, h), (ow, oh) in packed_shapes:
+        for fmt in PACKED:
+            out_.append((f'packed-{w}x{h}-{ow}x{oh}-{fmt:#x}', image(fmt, w, 0, 0, w, h, (y, 0, 0), (4, 0, 0)),
+                         image(0, ow, 0, 0, ow, oh, (out, 0, 0)), 1 + fmt % 4))
+    out_.append(('packed-offsets', image(0x20, 1280, 64, 37, 640, 480, (y, 0, 0)),
+                 image(3, 900, 12, 9, 224, 224, (0x20000000, 0, 0)), 1))
     out_.append(('offsets', image(0x24, 1280, 64, 37, 640, 480, (y, 0x10400000, 0)),
                  image(3, 900, 12, 9, 224, 224, (0x20000000, 0, 0)), 3))
     out_.append(('aligned-pitches', image(0x24, 650, 2, 1, 600, 400, (y, c, 0), (64, 64, 0)),
@@ -271,7 +314,16 @@ def refusals():
             ('output-stride', with_(output_stride=1276)), ('luma-align', with_(luma=0x10000002)),
             ('chroma-align', with_(chroma=0x10050002)), ('output-align', with_(output=0x10400002)),
             ('stride-align', with_(luma_stride=642, chroma_stride=642)), ('rcq-align', with_(rcq=0x10800040)),
-            ('output-past-4g', with_(output=0xffff0000, dy=200)), ('luma-past-4g', with_(luma=0xffff0000, sy=479))]
+            ('output-past-4g', with_(output=0xffff0000, dy=200)), ('luma-past-4g', with_(luma=0xffff0000, sy=479)),
+            ('packed-0x1f', with_(format=0x1f, chroma=0, chroma_stride=0, luma_stride=1280)),
+            ('packed-chroma', with_(format=0x20, luma_stride=1280)),
+            ('packed-chroma-stride', with_(format=0x20, chroma=0, luma_stride=1280)),
+            ('packed-stride', with_(format=0x20, chroma=0, chroma_stride=0, luma_stride=1276)),
+            ('packed-odd-w', with_(format=0x20, chroma=0, chroma_stride=0, luma_stride=1280, w=639)),
+            ('packed-odd-sx', with_(format=0x20, chroma=0, chroma_stride=0, luma_stride=1280, sx=1, w=638)),
+            ('packed-2050', with_(format=0x21, chroma=0, chroma_stride=0, luma_stride=4100, w=2050)),
+            ('packed-past-4g', with_(format=0x22, chroma=0, chroma_stride=0, luma_stride=1280, luma=0xffff0000,
+                                     sy=479))]
 
 
 def parse(page):
@@ -330,23 +382,51 @@ def main():
                 sums[(bank, phase)] = sum(taps)
     if sums:
         problems.append(f'phases whose taps do not sum to 64: {sorted(sums.items())[:8]}')
+    if linear_bank(ROOT / 'drivers/g2d/a733_g2d_convert.c') != LINEAR:
+        problems.append('the conversion builder\'s linear bank is not g2d_scal.c\'s linearcoefftab32')
     accepted = cases()
     tables = generated_tables()
     rejected = refusals()
     lines = [' '.join(str(x) for x in job(src, dst, csc)) for _, src, dst, csc in accepted]
     lines += [' '.join(str(x) for x in j) for _, j in rejected]
-    done = subprocess.run([str(build(a.output))], input='\n'.join(lines) + '\n', capture_output=True, text=True)
-    if done.returncode:
-        sys.exit(f'harness exited {done.returncode}: {done.stderr}')
-    out = done.stdout.split('\n')
-    for k, (name, src, dst, csc) in enumerate(accepted):
-        if out[k] == 'refused':
-            problems.append(f'{name}: refused')
+    # The stage image's builder: the same jobs, then each packed job with the Lanczos vertical variant, and variants
+    # it must refuse: a semi-planar job with the variant, and an unknown variant bit.
+    packed_jobs = [(name, src, dst, csc) for name, src, dst, csc in accepted if src['format'] in PACKED]
+    variant_lines = lines + [' '.join(str(x) for x in job(src, dst, csc, variant=1)) for _, src, dst, csc in packed_jobs]
+    variant_refused = [('variant-on-nv16', job(*accepted[0][1:], variant=1)),
+                       ('variant-bit-1', job(*packed_jobs[0][1:], variant=2))]
+    variant_lines += [' '.join(str(x) for x in j) for _, j in variant_refused]
+    outputs = []
+    for variants, text in ((False, lines), (True, variant_lines)):
+        done = subprocess.run([str(build(a.output, variants))], input='\n'.join(text) + '\n', capture_output=True,
+                              text=True)
+        if done.returncode:
+            sys.exit(f'harness exited {done.returncode}: {done.stderr}')
+        outputs.append(done.stdout.split('\n'))
+    for tag, out in (('', outputs[0]), ('variants build: ', outputs[1])):
+        for k, (name, src, dst, csc) in enumerate(accepted):
+            if out[k] == 'refused':
+                problems.append(f'{tag}{name}: refused')
+                continue
+            page = bytes.fromhex(out[k])
+            problems += check_page(tag + name, page, vendor_blocks(src, dst, tables[csc], lan2), 0x10800000)
+        for k, (name, _) in enumerate(rejected):
+            if out[len(accepted) + k] != 'refused':
+                problems.append(f'{tag}{name}: accepted')
+    out, at = outputs[1], len(accepted) + len(rejected)
+    for k, (name, src, dst, csc) in enumerate(packed_jobs):
+        if out[at + k] == 'refused':
+            problems.append(f'lanczos-vertical {name}: refused')
             continue
-        page = bytes.fromhex(out[k])
-        problems += check_page(name, page, vendor_blocks(src, dst, tables[csc], lan2), 0x10800000)
-    for k, (name, _) in enumerate(rejected):
-        if out[len(accepted) + k] != 'refused':
+        want = vendor_blocks(src, dst, tables[csc], lan2)
+        vs = want[G2D_VSU]
+        vs[0x00] |= 1 << 16
+        yvstep = ((src['h'] << 19) & M32) // dst['h']
+        for i in range(32):
+            vs[0x300 + 4 * i] = lan2[fir_coef(yvstep) + i]
+        problems += check_page('lanczos-vertical ' + name, bytes.fromhex(out[at + k]), want, 0x10800000)
+    for k, (name, _) in enumerate(variant_refused):
+        if out[at + len(packed_jobs) + k] != 'refused':
             problems.append(f'{name}: accepted')
     (a.output / 'result.json').write_text(json.dumps({'passed': not problems, 'problems': problems,
                                                       'accepted': [c[0] for c in accepted],
@@ -354,7 +434,8 @@ def main():
     if problems:
         sys.exit('FAIL ' + '; '.join(problems[:12]))
     print(f'PASS the conversion builder gives the vendor\'s words, with csc0 and the generated tables, for '
-          f'{len(accepted)} jobs and refuses {len(rejected)}; '
+          f'{len(accepted)} jobs ({len(packed_jobs)} packed, also with the Lanczos vertical variant) and refuses '
+          f'{len(rejected)}; '
           f'its Lanczos bank is a733_g2d.c\'s and every phase sums to 64')
 
 

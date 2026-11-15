@@ -30,6 +30,7 @@
 #include "quiesce.h"
 #include "sunstone_crumb.h"
 #include "sunstone_deadline.h"
+#include "sunstone_notify.h"
 #include "sunstone_g2d.h"
 #include <stdatomic.h>
 #include <string.h>
@@ -132,7 +133,8 @@ static int update(uintptr_t a,uint32_t mask,uint32_t value)
 }
 static int refuse(unsigned step,uint32_t value){return os_device_refuse(&g2d.dev,step,value);}
 static int fail(unsigned step,uint32_t value){return os_device_fail(&g2d.dev,step,value,0);}
-static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner);}
+/* The power row's wake ends the owner's deadline waits (SS_NOTIFY_DEADLINE); the owner's index 0 is for its inputs. */
+static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGiveIndexed(owner,SS_NOTIFY_DEADLINE);}
 static uint64_t owner_us(void){uint64_t t=0;return a733_pmic_now(&providers.shared.pmic,&t)==1?t:0;}
 static unsigned settled_supply;
 
@@ -383,16 +385,18 @@ static int inside_region(const struct large_slot *l,uint64_t offset,uint64_t byt
 {
     return offset<=l->bytes&&bytes<=l->bytes-offset;
 }
+/* Whether a format is one of the four packed 4:2:2 orders. */
+static int packed_format(uint32_t f){return f-SS_G2D_FORMAT_YUYV<=SS_G2D_FORMAT_VYUY-SS_G2D_FORMAT_YUYV;}
 /* The large region holding a surface, or null: ready, writable for an output, and the surface's rows inside it. An
- * output is one of the RGB orders; an NV16 surface's chroma plane must lie in the region too, and an RGB surface names
- * no chroma plane. */
+ * output is one of the RGB orders; an NV16 surface's chroma plane must lie in the region too, and an RGB or packed
+ * surface names no chroma plane. */
 static const struct large_slot *surface_slot(const struct ss_g2d_surface *f,int write)
 {
     const struct large_slot *l=os_large_slot(f->region);
-    const int yuv=f->format==SS_G2D_FORMAT_NV16&&!write;
+    const int yuv=f->format==SS_G2D_FORMAT_NV16&&!write,packed=packed_format(f->format)&&!write;
     if(!l||__atomic_load_n(&l->state,__ATOMIC_ACQUIRE)!=SS_LARGE_READY||(write&&!(l->flags&SS_LARGE_WRITE))||
-       (f->format>7&&!yuv)||f->reserved||f->reserved1||!f->width||!f->height||
-       f->stride<(uint64_t)f->width*(yuv?1u:4u)||(f->stride&3)||(f->offset&3))return NULL;
+       (f->format>7&&!yuv&&!packed)||f->reserved||f->reserved1||!f->width||!f->height||
+       f->stride<(uint64_t)f->width*(yuv?1u:packed?2u:4u)||(f->stride&3)||(f->offset&3))return NULL;
     if(!yuv?f->chroma_offset||f->chroma_stride:
        f->chroma_stride<(((uint64_t)f->width+1)&~UINT64_C(1))||((f->chroma_stride|f->chroma_offset)&3)||
        !inside_region(l,f->chroma_offset,(uint64_t)f->chroma_stride*f->height))return NULL;
@@ -629,7 +633,8 @@ static int mixer_run(struct ss_g2d_done *d,uintptr_t at,size_t bytes)
  * planes' cleaned, then the mixer's launch. */
 _Static_assert(SS_G2D_CSC_BT601_LIMITED==A733_G2D_CSC_BT601_LIMITED&&SS_G2D_CSC_BT601_FULL==A733_G2D_CSC_BT601_FULL&&
     SS_G2D_CSC_BT709_LIMITED==A733_G2D_CSC_BT709_LIMITED&&SS_G2D_CSC_BT709_FULL==A733_G2D_CSC_BT709_FULL&&
-    SS_G2D_FORMAT_NV16==A733_G2D_YUV422_SP_A,"the job's codes are the builder's");
+    SS_G2D_FORMAT_NV16==A733_G2D_YUV422_SP_A&&SS_G2D_FORMAT_YUYV==A733_G2D_YUV422_PACKED_FIRST&&
+    SS_G2D_FORMAT_VYUY==A733_G2D_YUV422_PACKED_LAST,"the job's codes are the builder's");
 static int do_convert(const struct ss_g2d_job *j,struct ss_g2d_done *d,const struct large_slot *l,
                       const struct large_slot *src)
 {
@@ -641,25 +646,39 @@ static int do_convert(const struct ss_g2d_job *j,struct ss_g2d_done *d,const str
     const int same=j->source.region==j->output.region;
     const struct need need[2]={{l,j->output.region,A733_IOMMU_READ|A733_IOMMU_WRITE},{src,j->source.region,A733_IOMMU_READ}};
     if(map_regions(need,same?1:2)!=1)return -1;
+    const int packed=packed_format(j->source.format);
     const uint64_t output_iova=mapped_iova(j->output.region)+j->output.offset;
     const uint64_t luma_iova=mapped_iova(j->source.region)+j->source.offset;
-    const uint64_t chroma_iova=mapped_iova(j->source.region)+j->source.chroma_offset;
+    const uint64_t chroma_iova=packed?0:mapped_iova(j->source.region)+j->source.chroma_offset;
     if((output_iova|luma_iova|chroma_iova)>>32)return run_refuse(G2D_STEP_RUN_GEOMETRY,4);
     d->output_iova=(uint32_t)output_iova;d->source_iova=(uint32_t)luma_iova;
     const struct a733_g2d_convert c={(uint32_t)luma_iova,(uint32_t)chroma_iova,j->source.stride,j->source.chroma_stride,
         j->sx,j->sy,j->w,j->h,j->source.format,(uint32_t)output_iova,j->output.stride,j->dx,j->dy,j->ow,j->oh,
-        j->output.format,j->csc};
+        j->output.format,j->csc
+#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
+        ,j->reserved
+#endif
+    };
     if(!a733_g2d_convert_commands(g2d.rcq,G2D_RCQ_BYTES,&c,(uint32_t)g2d.rcq_iova))return run_refuse(G2D_STEP_RUN_GEOMETRY,3);
-    uintptr_t at,luma_at,chroma_at;size_t bytes,luma_bytes,chroma_bytes;
+    uintptr_t at,luma_at,chroma_at=0;size_t bytes,luma_bytes,chroma_bytes=0;
     surface_lines(l,&j->output,&at,&bytes);
     surface_lines(src,&j->source,&luma_at,&luma_bytes);
-    plane_lines(src,j->source.chroma_offset,j->source.chroma_stride,j->source.height,&chroma_at,&chroma_bytes);
+    if(!packed)
+        plane_lines(src,j->source.chroma_offset,j->source.chroma_stride,j->source.height,&chroma_at,&chroma_bytes);
     if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,bytes))return run_refuse(G2D_STEP_RUN_CACHE,0);
     if(!aarch64_device_cache(AARCH64_CACHE_CLEAN,luma_at,luma_bytes))return run_refuse(G2D_STEP_RUN_CACHE,2);
-    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN,chroma_at,chroma_bytes))return run_refuse(G2D_STEP_RUN_CACHE,3);
+    if(!packed&&!aarch64_device_cache(AARCH64_CACHE_CLEAN,chroma_at,chroma_bytes))
+        return run_refuse(G2D_STEP_RUN_CACHE,3);
     __asm__ volatile("dsb sy":::"memory");
     return mixer_run(d,at,bytes);
 }
+/* A convert's variant (include/a733_g2d_convert.h) travels in the job's reserved word, accepted only in an image built
+ * with SUNSTONE_G2D_CONVERT_VARIANTS. */
+#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
+#define VARIANT_BITS ((uint32_t)A733_G2D_CONVERT_VARIANT_BITS)
+#else
+#define VARIANT_BITS 0u
+#endif
 /* One operation: the job's checks, then a rotate, a convert, or a fill or blit through the native builder. */
 static int do_run(void)
 {
@@ -675,14 +694,16 @@ static int do_run(void)
     atomic_store(&g2d.stray_finishes,0);g2d.stray_word=0;
     /* A fill writes an ARGB8888 output and reads no source. A blit reads a source of the output's geometry (the
      * builder's one width, height and stride) and converts from its format to the output's. A rotate reads a source
-     * of its own geometry in the output's format, through the rotate module. A convert reads an NV16 source of its
-     * own geometry and writes an RGB output. */
+     * of its own geometry in the output's format, through the rotate module. A convert reads an NV16 or packed 4:2:2
+     * source of its own geometry and writes an RGB output; a packed rectangle's width is even and at most 2048. */
     const int blit=j->op==SS_G2D_BLIT,rotate=j->op==SS_G2D_ROTATE,convert=j->op==SS_G2D_CONVERT;
     const int reads=blit||rotate||convert;
-    if((j->op!=SS_G2D_FILL&&!reads)||(!rotate&&(j->degrees||j->flip))||(!convert&&(j->ow|j->oh|j->csc))||j->reserved||
+    if((j->op!=SS_G2D_FILL&&!reads)||(!rotate&&(j->degrees||j->flip))||(!convert&&(j->ow|j->oh|j->csc))||
+       (j->reserved&~(convert&&packed_format(j->source.format)?VARIANT_BITS:0u))||
        (!reads&&(j->sx||j->sy||!zero(&j->source,sizeof(j->source))||j->output.format))||
        (reads&&!convert&&j->source.format>7)||
-       (convert&&(j->color||j->source.format!=SS_G2D_FORMAT_NV16||(j->sx&1)||j->csc-1u>=4u))||
+       (convert&&(j->color||(j->source.format!=SS_G2D_FORMAT_NV16&&!packed_format(j->source.format))||(j->sx&1)||
+                  j->csc-1u>=4u||(packed_format(j->source.format)&&((j->w&1)||j->w>A733_G2D_VSU_MAX_INPUT))))||
        (blit&&(j->color||j->source.width!=j->output.width||j->source.height!=j->output.height||
                j->source.stride!=j->output.stride))||
        (rotate&&(j->color||j->source.format!=j->output.format||j->flip>(SS_G2D_FLIP_H|SS_G2D_FLIP_V)||
@@ -740,14 +761,17 @@ static void serve(void)
 static void os_g2d_task(void *unused)
 {
     (void)unused;
-    if(sunstone_deadline_register()!=1)for(;;)vTaskSuspend(NULL);
+    /* Every deadline wait of this task is on SS_NOTIFY_DEADLINE, which INTID 83 and the row's wake give; index 0 is
+     * given only by the application's request and the quiesce, and only the block below takes it, so an input that
+     * arrives during a close or an operation stays pending until the block. */
+    if(sunstone_deadline_register_index(SS_NOTIFY_DEADLINE)!=1)for(;;)vTaskSuspend(NULL);
     for(;;){
         serve();
         if(atomic_load(&g2d.dev.quiesce_wanted)&&atomic_load(&g2d.request)!=POSTED){
             if(closable())(void)do_close();
             if(atomic_load(&g2d.dev.phase)==OS_DEVICE_CLOSED)atomic_store(&g2d.dev.quiesced,1);
         }
-        (void)sunstone_deadline_wait_until(now_us()+10000000);
+        (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
     }
 }
 
@@ -794,7 +818,7 @@ void os_g2d_irq(void)
         else (void)gicv3_spi_mask(&g2d.gic);
         atomic_store_explicit(&g2d.irq_seen,a.seen==1?1u:2u,memory_order_release);
     }
-    if(owner)vTaskNotifyGiveFromISR(owner,&woken);
+    if(owner)vTaskNotifyGiveIndexedFromISR(owner,SS_NOTIFY_DEADLINE,&woken);
     portYIELD_FROM_ISR(woken);
 }
 

@@ -101,10 +101,12 @@ struct ss_g2d_closed {
 };
 /* A surface: width by height pixels starting offset bytes into one of the application's large regions (manifest.json
  * "large_regions"; ss_large_base gives its address), rows stride bytes apart. The output's region must be writable.
- * format is one of the eight 32-bit RGB orders (0 ARGB8888 to 7 BGRX8888, the vendor's codes), 4 bytes a pixel, or
- * SS_G2D_FORMAT_NV16, a source of SS_G2D_CONVERT only: one byte of luma a pixel at offset, and a second plane of
- * interleaved chroma pairs, one pair for two pixels, chroma_stride bytes a row, at chroma_offset in the same region.
- * chroma_offset and chroma_stride are zero for an RGB surface. Offsets and strides are multiples of 4. */
+ * format is one of the eight 32-bit RGB orders (0 ARGB8888 to 7 BGRX8888, the vendor's codes), 4 bytes a pixel, or a
+ * YUV 4:2:2 format, a source of SS_G2D_CONVERT only. SS_G2D_FORMAT_NV16 has one byte of luma a pixel at offset, and a
+ * second plane of interleaved chroma pairs, one pair for two pixels, chroma_stride bytes a row, at chroma_offset in
+ * the same region. The packed formats (SS_G2D_FORMAT_YUYV to SS_G2D_FORMAT_VYUY) have one plane of 2 bytes a pixel,
+ * each 4 bytes holding two pixels' luma and their chroma pair. chroma_offset and chroma_stride are zero for an RGB or
+ * packed surface. Offsets and strides are multiples of 4. */
 struct ss_g2d_surface {
     uint32_t region, format;
     uint64_t offset;
@@ -117,6 +119,13 @@ struct ss_g2d_surface {
  * chroma plane holds U0, V0, U1, V1 in memory, the NV16 order. Board stage 7 measures the order
  * (docs/g2d-os.md#camera-frame-conversion). */
 #define SS_G2D_FORMAT_NV16 UINT32_C(0x24)
+/* The packed 4:2:2 formats of USB cameras, named by their bytes in memory: the vendor's IYUV422_V0Y1U0Y0 to
+ * IYUV422_Y1U0Y0V0 (sunxi-g2d.h), read from the most significant byte as above. Board stage 10 measures the order
+ * (docs/g2d-os.md#packed-conversion-stage). */
+#define SS_G2D_FORMAT_YUYV UINT32_C(0x20)
+#define SS_G2D_FORMAT_UYVY UINT32_C(0x21)
+#define SS_G2D_FORMAT_YVYU UINT32_C(0x22)
+#define SS_G2D_FORMAT_VYUY UINT32_C(0x23)
 enum { SS_G2D_FILL = 1, SS_G2D_BLIT = 2, SS_G2D_ROTATE = 3, SS_G2D_CONVERT = 4 };
 enum { SS_G2D_FLIP_H = 1, SS_G2D_FLIP_V = 2 };
 /* The colour space of a YUV source: ITU-R BT.601 or BT.709, with luma in 16..235 (limited) or 0..255 (full). The
@@ -138,9 +147,10 @@ enum { SS_G2D_CSC_BT601_LIMITED = 1, SS_G2D_CSC_BT601_FULL = 2, SS_G2D_CSC_BT709
  *   is a multiple of 8 bytes. color is zero, and the result is undefined where the two rectangles share memory.
  *   Every pixel is copied exactly, its alpha byte included: a rotate at 0 degrees is the exact copy, for camera
  *   frames and packed sensor data.
- * - Convert reads the w by h rectangle at sx, sy of an SS_G2D_FORMAT_NV16 source, converts it from the colour space
- *   csc (SS_G2D_CSC_*) to the output's RGB order, and scales it to the ow by oh rectangle at dx, dy of the output
- *   (docs/g2d-os.md#camera-frame-conversion). sx is even. color, degrees and flip are zero.
+ * - Convert reads the w by h rectangle at sx, sy of a YUV 4:2:2 source, converts it from the colour space csc
+ *   (SS_G2D_CSC_*) to the output's RGB order, and scales it to the ow by oh rectangle at dx, dy of the output
+ *   (docs/g2d-os.md#camera-frame-conversion). sx is even. A packed source's w is even and at most 2048. color, degrees
+ *   and flip are zero.
  * degrees and flip are zero for a fill and a blit; ow, oh and csc are zero for every operation but a convert. */
 struct ss_g2d_job {
     uint32_t op, color;

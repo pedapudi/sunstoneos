@@ -1,32 +1,29 @@
 #!/usr/bin/env python3
 """Host side of g2d-convert: the decoder of its result and the models of its six operations
-(docs/g2d-os.md#third-conversion-stage).
+(docs/g2d-os.md#packed-conversion-stage).
 
 tools/board.py loads this module with --decoder. decode() reads the result that ss_finish returns (struct
 g2d_convert_result in apps/g2d-convert/main.c, which embeds struct ss_g2d_info, struct ss_g2d_closed and six struct
 ss_g2d_done from include/sunstone_g2d.h) and names every recorded word.
 
-Frames. frames() rebuilds both NV16 frames from the seed as the application does. The luma-sweep frame's luma is the
-seed's sequence, with every fourth row replaced by (x - 8 + y) mod 256; its chroma is one pair per row in the left half
-and one pair per two pixels in the right half. The scale frame is luma 150 with chroma (90, 170) in the left half and a
-luma ramp from 16 to 235 over chroma (128, 128) in the right half, the same on every row.
+Frames. frames() rebuilds the stage's frames from the seed as the application does. Frame P is stage 9's luma-sweep
+frame from the new seed: random luma with every fourth row replaced by (x - 8 + y) mod 256, one chroma pair per row in
+the left half and one pair per two pixels in the right half; it is stored as YUYV and as UYVY. Frame R is constant
+along each row, with luma 7y, U 64 + 5y and V 200 + 3y (mod 256) in row y; it is scaled to 224 by 250. Frame Q is the
+seed's words.
 
-The conversion model, predicted for all four tables: csc0 converts at pipe 0's input, so luma reaches the table
-unchanged; each channel is (cy Y + cu U + cv V + k) >> 10 with the table of tools/g2d-csc-tables.py (TABLES, whose
-constants include 512 so the shift rounds to nearest), clamped to 0..255, with alpha 0xff and U the first byte of each
-chroma pair. An odd pixel's chroma is the scaler's half phase, taps -4, 36, 36, -4 over pairs k - 1 to k + 2 with the
-edge pairs repeated, rounded to nearest and clamped; the last pixel of a row takes its own pair. The application
-counts two candidate rules in the exact region (pixels 8 to 311 of every row, where no chroma is interpolated): 1 luma
-kept (the model) and 2 luma below 16 raised to 16, the blender-in-YUV behaviour of the second stage. The decoder also
-names a rectangle that equals the vendor's block (VENDOR) under either rule.
-
-Scale model. The scaler applies the vendor's horizontal Lanczos bank (g2d_vsu_calc_fir_coef of the step) at each output
-pixel's position x * step, a number with 20 fraction bits. The position is rounded to the nearest of 32 phases, half a
-phase (2^14) added before the top 5 fraction bits are taken, with the carry going to the integer part; the integer part
-selects taps at positions -1 to +2 with the edges repeated. The chroma pairs use the half step and the bank of the half
-step. The scale frame is the same on every row, so the vertical filter cannot change it. The prediction for each
-scale: the flat region equals the flat colour converted, rows 2 to oh - 3 equal the middle row, the ramp does not
-decrease in any channel, and the middle row equals the scaler model.
+The model. convert_model() reads each 4-byte pair in the order of the format code (0x20 YUYV, 0x21 UYVY, 0x22 YVYU,
+0x23 VYUY: the vendor names read from the most significant byte), scales each component through the scaler and applies
+the BT.601 limited table (tools/g2d-csc-tables.py, TABLES) with luma kept and the result clamped. The scaler: the
+horizontal pass with the vendor's Lanczos banks at each output's position x * step (20 fraction bits) rounded to the
+nearest of 32 phases (stage 9), taps at positions -1 to +2 with the edges repeated, rounded to nearest and clamped;
+the chroma pairs with the half step and the half step's bank; then the vertical pass the same way with the linear bank
+(the vendor's packed setting) or, with the Lanczos vertical variant, the Lanczos bank of the vertical step, for luma
+and chroma alike (the scaler has one vertical bank). An unscaled row's last pixel takes its own chroma pair (stage 7).
+The prediction of every operation is this model's output; the decoder also names which candidate matches: the byte
+order (the application's counts), the chroma interpolation in two sampled rows, the vertical bank and phase rounding
+of the frame-R column, and for frame Q the bank, the pass order (vertical first, or the horizontal sum kept whole) and
+the phase rounding. The edge rows and columns are reported separately.
 
 A failed operation is measured as well: untouched means the rectangle still holds the 0x5a background.
 """
@@ -45,32 +42,39 @@ TRANSITION = ('policy_before', 'status_before', 'policy_written', 'first_word', 
 HEAD = struct.Struct('<12I2Q8I128s')
 INFO = struct.Struct(f'<4I{len(PLATFORM)}I{len(PLATFORM)}I{len(LOCAL)}I4x3Q2Q2I2Q11I4x4Q')
 CLOSED = struct.Struct('<6IQ')
-OP = struct.Struct('<28I')
+OP = struct.Struct('<24I')
 DONE = struct.Struct('<9I8I2I10I5I6I7Q8I')
 OPS = 6
-CONVERSIONS = 4
 FW, FH = 640, 480
+SW, SH = 224, 224
+RH = 250                        # frame R's output height
 ROW = FW * 4
+COLUMN = 112
 ROWS_AT = HEAD.size + INFO.size + CLOSED.size + OPS * (OP.size + DONE.size)
-SIZE = ROWS_AT + CONVERSIONS * 2 * ROW + (320 + 224) * 4
+COLUMNS_AT = ROWS_AT + 2 * 2 * ROW
+SCALED_AT = COLUMNS_AT + 2 * RH * 4
+SIZE = SCALED_AT + 2 * SW * SH * 4
 MAGIC, INFO_MAGIC, DONE_MAGIC = 0x56433247, 0x54443247, 0x44443247
-STATUS = {1: 'done', 2: 'refused', 3: 'close failed', 4: 'run failed', 5: 'no surface', 6: 'missed'}
+STATUS = {1: 'done', 2: 'refused', 3: 'close failed', 4: 'run failed', 5: 'no surface'}
 FAULT = ('bank_status0', 'bank_status1', 'l1_status0', 'l1_status1', 'l2_status0', 'l2_status1',
          'micro_status', 'micro_low', 'micro_high', 'micro_data')
 BANK = ('enable', 'int_status', 'l1_status', 'l2_status')
 TICKS_PER_US = 24
 INTID_BIT = 1 << (83 % 32)
-SEED = 0x6a09e667
+SEED = 0xbb67ae85
 EXACT = (8, 312)
 CONV_ROWS = (100, 333)
 BACKGROUND = 0x5a
-FLAT = (150, 90, 170)
-CSC_NAMES = {1: 'bt601-limited', 2: 'bt601-full', 3: 'bt709-limited', 4: 'bt709-full'}
-# apps/g2d-convert/main.c plan: the table, the output size and stride, the output offset, the frame.
-PLAN = ((4, 640, 480, 2624, 0x000000, 0), (2, 640, 480, 2624, 0x000000, 0), (3, 640, 480, 2624, 0x000000, 0),
-        (1, 640, 480, 2624, 0x000000, 0), (1, 320, 240, 1344, 0x280000, 1), (1, 224, 224, 960, 0x300000, 1))
+CSC = 1                         # SS_G2D_CSC_BT601_LIMITED
+UNSCALED, RAMP, RANDOM = 0, 1, 2
+# apps/g2d-convert/main.c plan: the format, the frame, its kind, the output size, stride and offset, the variant.
+PLAN = ((0x20, 'p', UNSCALED, 640, 480, 2624, 0x000000, 0), (0x21, 'pu', UNSCALED, 640, 480, 2624, 0x000000, 0),
+        (0x20, 'r', RAMP, 224, 250, 960, 0x140000, 0), (0x20, 'r', RAMP, 224, 250, 960, 0x180000, 1),
+        (0x20, 'q', RANDOM, 224, 224, 960, 0x1c0000, 0), (0x20, 'q', RANDOM, 224, 224, 960, 0x200000, 1))
+NAMES = ('P YUYV unscaled', 'P UYVY unscaled', 'R 250 linear', 'R 250 Lanczos', 'Q 224 linear', 'Q 224 Lanczos')
 RULES = ('kept', 'raised')
 PREDICTED_RULE = 'kept'
+
 # tools/g2d-csc-tables.py's tables in A733_G2D_CSC_* order (checks/g2d-csc-tables.py compares this copy with it).
 TABLES = {1: [1192, 0, 1634, -227712, 1192, -401, -832, 139264, 1192, 2066, 0, -283008],
           2: [1024, 0, 1436, -183296, 1024, -352, -731, 139136, 1024, 1815, 0, -231808],
@@ -132,6 +136,7 @@ LAN2_HEX = (
 LAN2 = [int(LAN2_HEX[i:i + 8], 16) for i in range(0, len(LAN2_HEX), 8)]
 
 
+
 def fir_bank(step):
     """g2d_vsu_calc_fir_coef: the bank for a step with 19 fraction bits."""
     ratio = step >> 16
@@ -149,30 +154,6 @@ def xorshift(x):
     x ^= x >> 17
     x ^= (x << 5) & 0xffffffff
     return x
-
-
-def frames(seed=SEED):
-    """Both frames as (luma, chroma) uint8 arrays of 480 by 640, chroma holding the pairs' bytes in memory order."""
-    x = seed
-    words_ = np.empty(FW * FH // 4, dtype='<u4')
-    for i in range(words_.size):
-        x = xorshift(x)
-        words_[i] = x
-    luma_a = words_.view(np.uint8).reshape(FH, FW).copy()
-    i = np.arange(FW)
-    for y in range(0, FH, 4):
-        luma_a[y] = (i - EXACT[0] + y) & 0xff
-    chroma_a = np.empty((FH, FW), dtype=np.uint8)
-    for y in range(FH):
-        x = xorshift(x)
-        chroma_a[y, 0:FW // 2:2], chroma_a[y, 1:FW // 2:2] = x & 0xff, (x >> 8) & 0xff
-        for k in range(FW // 4, FW // 2):
-            x = xorshift(x)
-            chroma_a[y, 2 * k], chroma_a[y, 2 * k + 1] = x & 0xff, (x >> 8) & 0xff
-    right = i >= FW // 2
-    row_luma = np.where(right, 16 + (i - FW // 2) * 219 // (FW // 2 - 1), FLAT[0]).astype(np.uint8)
-    row_chroma = np.where(right, 128, np.where(i & 1, FLAT[2], FLAT[1])).astype(np.uint8)
-    return (luma_a, chroma_a), (np.tile(row_luma, (FH, 1)), np.tile(row_chroma, (FH, 1)))
 
 
 def sx(value, bits):
@@ -210,76 +191,121 @@ def crc(words_):
     return zlib.crc32(np.ascontiguousarray(words_, dtype='<u4').tobytes())
 
 
-def exact_models(frame, c):
-    """{rule: CRC-32} of the exact region under each candidate rule."""
-    luma, chroma = frame
-    y = luma[:, EXACT[0]:EXACT[1]]
-    u = np.repeat(chroma[:, 0:1], EXACT[1] - EXACT[0], axis=1)
-    v = np.repeat(chroma[:, 1:2], EXACT[1] - EXACT[0], axis=1)
-    return {rule: crc(csc(c, y, u, v, rule)) for rule in RULES}
+# Packed frames. frames() rebuilds frame P as stage 9's luma-sweep representation, (luma, chroma) arrays of 480 by
+# 640 with chroma holding each pair's U and V bytes in memory order, and the four stored frames as bytes.
+ORDERS = ('yuyv', 'uyvy', 'yvyu', 'vyuy')
+# The byte positions of Y0, U, Y1 and V in a pair for each order (main.c order_bytes), the order of codes 0x20 to 0x23.
+POSITIONS = ((0, 1, 2, 3), (1, 0, 3, 2), (0, 3, 2, 1), (1, 2, 3, 0))
+# g2d_scal.c linearcoefftab32: phase p has taps 0, 64 - 2p, 2p, 0, lowest byte first.
+LINEAR = [(2 * p) << 16 | (64 - 2 * p) << 8 for p in range(32)]
 
 
-def chroma_row(pairs, chroma_model):
-    """One row's per-pixel chroma (640 values) from its 320 pairs' values under a chroma model."""
-    p = pairs.astype(np.int64)
-    n = p.size
-    k = np.arange(n)
-    at = lambda j: p[np.clip(j, 0, n - 1)]
-    if chroma_model == 'lanczos':
-        odd = np.clip((-4 * at(k - 1) + 36 * p + 36 * at(k + 1) - 4 * at(k + 2) + 32) >> 6, 0, 255)
-        odd[-1] = p[-1]
-    else:
-        odd = p
-    out = np.empty(2 * n, dtype=np.int64)
-    out[0::2], out[1::2] = p, odd
-    return out
+def frames(seed=SEED):
+    """Frame P as (luma, chroma) arrays, and the source region's four frames as 480 by 1280 uint8 arrays: P as YUYV and
+    as UYVY, R and Q."""
+    x = seed
+    words_ = np.empty(FW * FH // 4, dtype='<u4')
+    for i in range(words_.size):
+        x = xorshift(x)
+        words_[i] = x
+    luma = words_.view(np.uint8).reshape(FH, FW).copy()
+    i = np.arange(FW)
+    for y in range(0, FH, 4):
+        luma[y] = (i - EXACT[0] + y) & 0xff
+    chroma = np.empty((FH, FW), dtype=np.uint8)
+    for y in range(FH):
+        x = xorshift(x)
+        chroma[y, 0:FW // 2:2], chroma[y, 1:FW // 2:2] = x & 0xff, (x >> 8) & 0xff
+        for k in range(FW // 4, FW // 2):
+            x = xorshift(x)
+            chroma[y, 2 * k], chroma[y, 2 * k + 1] = x & 0xff, (x >> 8) & 0xff
+    yuyv = np.empty((FH, 2 * FW), dtype=np.uint8)
+    yuyv[:, 0::4], yuyv[:, 1::4], yuyv[:, 2::4], yuyv[:, 3::4] = luma[:, 0::2], chroma[:, 0::2], luma[:, 1::2], \
+        chroma[:, 1::2]
+    uyvy = np.empty_like(yuyv)
+    uyvy[:, 0::4], uyvy[:, 1::4], uyvy[:, 2::4], uyvy[:, 3::4] = yuyv[:, 1::4], yuyv[:, 0::4], yuyv[:, 3::4], \
+        yuyv[:, 2::4]
+    rows = np.arange(FH, dtype=np.int64)
+    ramp = np.empty((FH, 2 * FW), dtype=np.uint8)
+    ramp[:, 0::2] = ((7 * rows) & 255)[:, None]
+    ramp[:, 1::4] = ((64 + 5 * rows) & 255)[:, None]
+    ramp[:, 3::4] = ((200 + 3 * rows) & 255)[:, None]
+    q = np.empty(2 * FW * FH // 4, dtype='<u4')
+    for k in range(q.size):
+        x = xorshift(x)
+        q[k] = x
+    return (luma, chroma), {'p': yuyv, 'pu': uyvy, 'r': ramp, 'q': q.view(np.uint8).reshape(FH, 2 * FW).copy()}
 
 
-def row_inputs(frame, y, chroma_model='lanczos'):
-    luma, chroma = frame
-    return luma[y], chroma_row(chroma[y, 0::2], chroma_model), chroma_row(chroma[y, 1::2], chroma_model)
+def unpack(stored, order):
+    """A stored packed frame's planes read in an order: luma (h by w), U and V (h by w / 2), as int64 arrays."""
+    b = POSITIONS[ORDERS.index(order)]
+    pairs = stored.reshape(stored.shape[0], -1, 4).astype(np.int64)
+    luma = np.empty((stored.shape[0], 2 * pairs.shape[1]), dtype=np.int64)
+    luma[:, 0::2], luma[:, 1::2] = pairs[:, :, b[0]], pairs[:, :, b[2]]
+    return luma, pairs[:, :, b[1]], pairs[:, :, b[3]]
 
 
-def conversion_inputs(frame, chroma_model='lanczos'):
-    """Every pixel's (Y, U, V) at the table's input, as three 480 by 640 arrays."""
-    rows = [row_inputs(frame, y, chroma_model) for y in range(FH)]
-    return tuple(np.stack([r[k] for r in rows]) for k in range(3))
+def resample(a, m, step_reg, bank, phase='nearest', shift=6):
+    """One scaler pass along axis 0 of a: m outputs at positions x * step_reg (20 fraction bits) rounded to the nearest
+    of 32 phases (or truncated), 4 taps at positions -1 to +2 with the edges repeated, the sum rounded to nearest and
+    shifted down by shift bits and clamped, or kept whole when shift is 0."""
+    x = np.arange(m, dtype=np.int64) * step_reg
+    q = (x + (1 << 14)) >> 15 if phase == 'nearest' else x >> 15
+    i, p = q >> 5, q & 31
+    t = np.array([taps(bank[k]) for k in range(32)], dtype=np.int64)[p]
+    n = a.shape[0]
+    acc = sum(t[:, k].reshape((-1,) + (1,) * (a.ndim - 1)) * a[np.clip(i - 1 + k, 0, n - 1)] for k in range(4))
+    return np.clip((acc + (1 << (shift - 1))) >> shift, 0, 255) if shift else acc
 
 
-def conversion_row(frame, y, c, rule=PREDICTED_RULE, chroma_model='lanczos', source='derived'):
-    """One whole output row of a conversion under a model."""
-    return csc(c, *row_inputs(frame, y, chroma_model), rule, source)
+def scale_component(plane, ow, oh, hreg, hbank, vreg, vbank, order='h-then-v', phase='nearest'):
+    """The scaler model for one component: horizontal then vertical, each rounded and clamped; or vertical first; or
+    the horizontal sum kept whole into the vertical pass ('wide')."""
+    if order == 'v-then-h':
+        mid = resample(plane, oh, vreg, vbank, phase)
+        return resample(mid.T, ow, hreg, hbank, phase).T
+    first = 0 if order == 'wide' else 6
+    mid = resample(plane.T, ow, hreg, hbank, phase, first).T
+    return resample(mid, oh, vreg, vbank, phase, 12 if order == 'wide' else 6)
+
+
+def convert_model(stored, fmt_order, ow, oh, c=CSC, vertical='linear', order='h-then-v', phase='nearest'):
+    """A packed frame converted and scaled under the engine's model: oh by ow ARGB8888 words."""
+    luma, u, v = unpack(stored, fmt_order)
+    h, w = luma.shape
+    hstep, vstep = (w << 19) // ow, (h << 19) // oh
+    hbank = LAN2[32 * fir_bank(hstep):][:32]
+    cbank = LAN2[32 * fir_bank(hstep >> 1):][:32]
+    vbank = LINEAR if vertical == 'linear' else LAN2[32 * fir_bank(vstep):][:32]
+    y = scale_component(luma, ow, oh, hstep << 1, hbank, vstep << 1, vbank, order, phase)
+    cu = scale_component(u, ow, oh, hstep, cbank, vstep << 1, vbank, order, phase)
+    cv = scale_component(v, ow, oh, hstep, cbank, vstep << 1, vbank, order, phase)
+    if (ow, oh) == (w, h):
+        # An unscaled row's last pixel takes its own pair (docs/g2d-os.md, the first conversion stage).
+        cu[:, -1], cv[:, -1] = u[:, -1], v[:, -1]
+    return csc(c, y, cu, cv)
 
 
 def conversion_frame(frame, c, rule=PREDICTED_RULE, chroma_model='lanczos', source='derived'):
+    """Frame P's unscaled conversion from its (luma, chroma) arrays (checks/g2d-csc-tables.py uses it)."""
     return csc(c, *conversion_inputs(frame, chroma_model), rule, source)
 
 
-def scale_line(values, ow, w=FW, chroma=False):
-    """One row through the scaler model: values are the row's samples (luma: w; chroma: one component's w / 2)."""
-    step = (w << 19) // ow
-    if chroma:
-        step_reg, bank = step, fir_bank(step >> 1)  # c_hor_step = yhstep: half the luma's 20-bit-fraction register
-    else:
-        step_reg, bank = step << 1, fir_bank(step)
-    v = np.asarray(values, dtype=np.int64)
-    n = v.size
-    out = np.empty(ow, dtype=np.int64)
-    for x in range(ow):
-        # 20 fraction bits, rounded to the nearest of 32 phases (run 1794752244516494656-bd8feb22's 224 by 224 row).
-        q = (x * step_reg + (1 << 14)) >> 15
-        i, phase = q >> 5, q & 31
-        t = taps(LAN2[32 * bank + phase])
-        acc = sum(t[k] * v[min(max(i - 1 + k, 0), n - 1)] for k in range(4))
-        out[x] = min(max((acc + 32) >> 6, 0), 255)
-    return out
-
-
-def scale_model(frame, ow, c, rule=PREDICTED_RULE):
-    """The scaled middle row of the scale frame under the scaler model."""
+def conversion_inputs(frame, chroma_model='lanczos'):
+    """Every pixel's (Y, U, V) at the table's input for frame P unscaled, as three 480 by 640 arrays."""
     luma, chroma = frame
-    return csc(c, scale_line(luma[0], ow), scale_line(chroma[0, 0::2], ow, chroma=True),
-               scale_line(chroma[0, 1::2], ow, chroma=True), rule)
+    def row(pairs):
+        p = pairs.astype(np.int64)
+        n, k = p.shape[1], np.arange(p.shape[1])
+        at = lambda j: p[:, np.clip(j, 0, n - 1)]
+        odd = np.clip((-4 * at(k - 1) + 36 * p + 36 * at(k + 1) - 4 * at(k + 2) + 32) >> 6, 0, 255) \
+            if chroma_model == 'lanczos' else p.copy()
+        odd[:, -1] = p[:, -1]
+        out = np.empty((p.shape[0], 2 * n), dtype=np.int64)
+        out[:, 0::2], out[:, 1::2] = p, odd
+        return out
+    return luma.astype(np.int64), row(chroma[:, 0::2]), row(chroma[:, 1::2])
 
 
 def background_crc(ow, oh):
@@ -290,35 +316,21 @@ def padding_crc(oh, stride, ow):
     return zlib.crc32(bytes([BACKGROUND]) * ((stride - ow * 4) * oh))
 
 
-def candidates(seed=SEED):
-    """For each table of the luma-sweep frame: {model name: (rectangle CRC-32, exact-region CRC-32)}, for the derived
-    table and the vendor block under each rule."""
-    a, _ = frames(seed)
-    out = {}
-    for c in TABLES:
-        models = {}
-        for source in ('derived', 'vendor'):
-            for rule in RULES:
-                whole = conversion_frame(a, c, rule, source=source)
-                models[f'{source}/{rule}'] = (crc(whole), crc(whole[:, EXACT[0]:EXACT[1]]))
-        out[c] = models
-    return out
+def interior(words_):
+    return crc(words_[2:-2, 2:-2])
 
 
 def predicted(seed=SEED):
-    """The predicted CRC-32 values of each conversion's rectangle and exact region, each scale's flat colour and middle
-    row, and every operation's padding."""
-    a, b = frames(seed)
+    """Each operation's predicted output under the engine's model, with its CRC-32 values."""
+    _, stored = frames(seed)
     out = []
-    for c, ow, oh, stride, offset, frame in PLAN:
-        o = {'padding_crc': padding_crc(oh, stride, ow)}
-        if not frame:
-            whole = conversion_frame(a, c)
-            o.update({'rect_crc': crc(whole), 'exact_crc': crc(whole[:, EXACT[0]:EXACT[1]])})
-        else:
-            o['flat_value'] = int(csc(c, FLAT[0], FLAT[1], FLAT[2]))
-            o['middle_row'] = scale_model(b, ow, c)
-            o['middle_row_crc'] = crc(o['middle_row'])
+    for fmt, frame, kind, ow, oh, stride, offset, variant in PLAN:
+        vertical = 'lanczos' if variant else 'linear'
+        model = convert_model(stored[frame], ORDERS[fmt - 0x20], ow, oh, vertical=vertical)
+        o = {'model': model, 'rect_crc': crc(model), 'interior_crc': interior(model),
+             'padding_crc': padding_crc(oh, stride, ow), 'order': ORDERS[fmt - 0x20]}
+        if kind == UNSCALED:
+            o['exact_crc'] = crc(model[:, EXACT[0]:EXACT[1]])
         out.append(o)
     return out
 
@@ -397,25 +409,21 @@ def rate(pixels, us):
     return round(pixels / us, 1) if us else None
 
 
-def conversion(o, raw, frame, rows, models):
-    """A conversion's matches: the exact region's rule, the rectangle's model, the sampled rows' chroma models."""
-    c = o['csc']
-    exact = exact_models(frame, c)
-    o['exact_rule'] = next((rule for rule, value in exact.items() if value == raw['exact_crc']), None)
-    o['board_rule'] = RULES[raw['rule'] - 1] if 1 <= raw['rule'] <= len(RULES) else None
-    o['rule_agrees'] = o['exact_rule'] == o['board_rule']
-    o['mismatch'] = dict(zip(RULES, raw['mismatch']))
+def unscaled(o, raw, rows, want, frame_p):
+    """An unscaled conversion's matches: the board's byte order, the rectangle against the model, the sampled rows'
+    chroma models."""
+    o['mismatch'] = dict(zip(ORDERS, raw['mismatch']))
+    o['board_order'] = ORDERS[raw['order'] - 1] if 1 <= raw['order'] <= 4 else None
+    o['predicted_order'] = want['order']
     o['exact_crc'] = f'0x{raw["exact_crc"]:08x}'
-    o['rect_model'] = next((name for name, (value, _) in models.items() if value == raw['rect_crc']), None)
-    o['predicted'] = o['board_rule'] == PREDICTED_RULE and o['rect_model'] == f'derived/{PREDICTED_RULE}'
-    rule = o['board_rule'] or PREDICTED_RULE
+    o['exact_predicted'] = raw['exact_crc'] == want['exact_crc']
     sampled = []
     for k, y in enumerate(CONV_ROWS):
         got = np.frombuffer(rows[k], dtype='<u4')
         entry = {'row': y}
         for chroma_model in ('lanczos', 'nearest'):
-            want = conversion_row(frame, y, c, rule, chroma_model)
-            bad = np.nonzero(got != want)[0]
+            model = csc(CSC, *(a[y] for a in conversion_inputs(frame_p, chroma_model)))
+            bad = np.nonzero(got != model)[0]
             entry[chroma_model] = {'mismatches': int(bad.size), 'first': int(bad[0]) if bad.size else None}
         entry['chroma_model'] = next((m for m in ('lanczos', 'nearest') if not entry[m]['mismatches']), None)
         sampled.append(entry)
@@ -423,28 +431,50 @@ def conversion(o, raw, frame, rows, models):
     o['chroma_model'] = sampled[0]['chroma_model'] if sampled[0]['chroma_model'] == sampled[1]['chroma_model'] else None
 
 
-def scale(o, raw, frame, row):
-    """A scale's checks: flat region, rows, monotone ramp and the middle row against the scaler model."""
-    c, ow = o['csc'], o['ow']
-    flat = int(csc(c, FLAT[0], FLAT[1], FLAT[2]))
-    got = np.frombuffer(row, dtype='<u4')
-    model = scale_model(frame, ow, c)
-    ramp = slice(ow // 2 + 9, ow - 4)
-    diff = np.abs(got[ramp].view(np.uint8).reshape(-1, 4).astype(int) - model[ramp].view(np.uint8).reshape(-1, 4).astype(int))
+def edges(got, model):
+    """Mismatched words of an output against a model in its two top and bottom rows, its two left and right columns
+    (rows 2 to oh - 3) and its interior."""
+    bad = got != model
+    return {'top_rows': [int(bad[r].sum()) for r in (0, 1)], 'bottom_rows': [int(bad[r].sum()) for r in (-2, -1)],
+            'left_columns': [int(bad[2:-2, c].sum()) for c in (0, 1)],
+            'right_columns': [int(bad[2:-2, c].sum()) for c in (-2, -1)], 'interior': int(bad[2:-2, 2:-2].sum())}
+
+
+def ramp(o, raw, column, want, stored):
+    """A frame-R scale: column 112 against the vertical candidates; its edge rows reported separately."""
+    got = np.frombuffer(column, dtype='<u4')
+    o['nonconstant_rows'] = raw['nonconstant_rows']
+    models = {}
+    for vertical in ('linear', 'lanczos'):
+        for phase in ('nearest', 'trunc'):
+            col = convert_model(stored['r'], 'yuyv', SW, RH, vertical=vertical, phase=phase)[:, COLUMN]
+            models[f'{vertical}/{phase}'] = col
+    o['column_models'] = [name for name, col in models.items() if np.array_equal(col, got)]
+    model = want['model'][:, COLUMN]
     bad = np.nonzero(got != model)[0]
-    o.update({
-        'flat_value': {'board': f'0x{raw["flat_value"]:08x}', 'expected': f'0x{flat:08x}'},
-        'flat_mismatch': raw['flat_mismatch'],
-        'rows_differ': raw['rows_differ'], 'edge_rows_differ': [bool(raw['edge_rows'] >> k & 1) for k in range(4)],
-        'mono_decreases': dict(zip('rgb', raw['mono'])),
-        'ramp_max_difference': int(diff[:, :3].max()), 'ramp_alpha_ok': bool((diff[:, 3] == 0).all()),
-        'middle_row_crc': f'0x{crc(got):08x}', 'middle_row_model_crc': f'0x{crc(model):08x}',
-        'middle_row_mismatches': [int(x) for x in bad[:16]],
-        'middle_row_equals_model': not bad.size,
-    })
-    o['flat_exact'] = raw['flat_mismatch'] == 0 and raw['flat_value'] == flat
-    o['rows_identical'] = raw['rows_differ'] == 0
-    o['monotone'] = not any(raw['mono'])
+    o['column_mismatch_rows'] = [int(r) for r in bad[:16]]
+    o['edge_rows'] = {f'row {r}': {'board': f'0x{int(got[r]):08x}', 'model': f'0x{int(model[r]):08x}',
+                                   'equal': bool(got[r] == model[r])} for r in (0, 1, RH - 2, RH - 1)}
+    o['column_equals_model'] = not bad.size
+
+
+def random_frame(o, raw, scaled, want, stored):
+    """A frame-Q scale: the whole output against the scaler candidates, with the edges reported separately."""
+    got = np.frombuffer(scaled, dtype='<u4').reshape(SH, SW)
+    o['output_crc'] = f'0x{crc(got):08x}'
+    o['output_equals_model'] = bool(np.array_equal(got, want['model']))
+    o['edges'] = edges(got, want['model'])
+    whole, inner = [], []
+    for vertical in ('linear', 'lanczos'):
+        for order in ('h-then-v', 'v-then-h', 'wide'):
+            for phase in ('nearest', 'trunc'):
+                model = convert_model(stored['q'], 'yuyv', SW, SH, vertical=vertical, order=order, phase=phase)
+                name = f'{vertical}/{order}/{phase}'
+                if np.array_equal(model, got):
+                    whole.append(name)
+                if np.array_equal(model[2:-2, 2:-2], got[2:-2, 2:-2]):
+                    inner.append(name)
+    o['output_models'], o['interior_models'] = whole, inner
 
 
 def decode(payload):
@@ -453,51 +483,53 @@ def decode(payload):
         raise ValueError(f'g2d-convert result is {len(payload)} bytes, not {SIZE}.')
     h = HEAD.unpack_from(payload)
     magic, stage, status, open_result, close_result, fault_step, fault_value, ops_run = h[:8]
-    seed, main_core, clock_ready, stopped, start_ticks, clock_ticks = h[8:14]
-    source_before, source_after, cpu0, cpu1, cpu2, cpu_crc, cpu_exact, cpu_rule = h[14:22]
+    seed, main_core, clock_ready, _, start_ticks, clock_ticks = h[8:14]
+    source_before, source_after, cpu0, cpu1, cpu2, cpu_crc, cpu_exact, _ = h[14:22]
     if magic != MAGIC:
         raise ValueError('g2d-convert result has a wrong magic.')
     record = {'stage': stage, 'status': STATUS.get(status, status), 'open_result': signed(open_result),
               'close_result': signed(close_result), 'fault_step': fault_step, 'fault_value': f'0x{fault_value:08x}',
-              'ops_run': ops_run, 'stopped': bool(stopped), 'seed': f'0x{seed:08x}', 'main_core': main_core,
+              'ops_run': ops_run, 'seed': f'0x{seed:08x}', 'main_core': main_core,
               'clock': {'ready': bool(clock_ready), 'line': h[22].split(b'\0', 1)[0].decode('ascii', 'replace'),
                         'ready_after_us': (clock_ticks - start_ticks) / TICKS_PER_US if clock_ticks else None}}
-    a, b = frames(seed)
-    models = candidates(seed)
-    expected_source = zlib.crc32(b''.join(np.ascontiguousarray(p).tobytes() for p in (a[0], a[1], b[0], b[1])))
+    frame_p, stored = frames(seed)
+    want = predicted(seed)
+    expected_source = zlib.crc32(b''.join(stored[k].tobytes() for k in ('p', 'pu', 'r', 'q')))
     record['source'] = {'before_matches': source_before == expected_source,
-                        'unchanged': source_after == source_before if status in (1, 6) else None}
+                        'unchanged': source_after == source_before if status == 1 else None}
     cpu_us = [t / TICKS_PER_US for t in (cpu0, cpu1, cpu2)]
-    record['cpu'] = {'rule': cpu_rule, 'runs_us': cpu_us, 'first_us': cpu_us[0], 'best_us': min(cpu_us) if cpu0 else None,
+    record['cpu'] = {'runs_us': cpu_us, 'first_us': cpu_us[0], 'best_us': min(cpu_us) if cpu0 else None,
                      'mpixel_per_s_best': rate(FW * FH, min(cpu_us)) if cpu0 else None,
                      'mpixel_per_s_first': rate(FW * FH, cpu_us[0]) if cpu0 else None, 'crc': f'0x{cpu_crc:08x}',
-                     'equals_model': (cpu_crc, cpu_exact) == models[PLAN[0][0]][f'derived/{PREDICTED_RULE}']}
-    info, requested = info_record(INFO.unpack_from(payload, HEAD.size))
+                     'equals_model': (cpu_crc, cpu_exact) == (want[0]['rect_crc'], want[0]['exact_crc'])}
+    info, _ = info_record(INFO.unpack_from(payload, HEAD.size))
     record['info'] = info
     cl = CLOSED.unpack_from(payload, HEAD.size + INFO.size)
     record['closed'] = {'g2d_clk': f'0x{cl[0]:08x}', 'g2d_bgr': f'0x{cl[1]:08x}', 'de_sys_bgr': f'0x{cl[2]:08x}',
                         'pck1_status': f'0x{cl[3]:08x}', 'de_di_open': cl[4]} if info else None
     at = HEAD.size + INFO.size + CLOSED.size
-    ops, scale_at = [], ROWS_AT + CONVERSIONS * 2 * ROW
+    ops = []
     for k in range(OPS):
         r = OP.unpack_from(payload, at)
-        raw = dict(zip(('result', 'csc', 'w', 'h', 'ow', 'oh', 'out_offset', 'out_stride', 'rect_crc', 'exact_crc',
-                        'padding_crc', 'alpha_ff', 'alpha_other'), r[:13]))
-        raw.update({'mismatch': list(r[13:15]), 'rule': r[17], 'flat_value': r[18], 'flat_mismatch': r[19],
-                    'rows_differ': r[20], 'edge_rows': r[21], 'mono': list(r[22:25]), 'kind': r[25]})
-        c, ow, oh, stride, offset, frame = PLAN[k]
-        o = {'run': k < ops_run, 'name': CSC_NAMES[c] if not frame else f'scale {ow}x{oh}',
-             'result': signed(raw['result']), 'csc': raw['csc'], 'table': CSC_NAMES.get(raw['csc']),
-             'ow': raw['ow'], 'oh': raw['oh']}
+        raw = dict(zip(('result', 'csc', 'format', 'variant', 'w', 'h', 'ow', 'oh', 'out_offset', 'out_stride',
+                        'rect_crc', 'exact_crc', 'interior_crc', 'padding_crc', 'alpha_ff', 'alpha_other'), r[:16]))
+        raw.update({'mismatch': list(r[16:20]), 'order': r[20], 'nonconstant_rows': r[21], 'kind': r[22]})
+        fmt, frame, kind, ow, oh, stride, offset, variant = PLAN[k]
+        o = {'run': k < ops_run, 'name': NAMES[k], 'result': signed(raw['result']), 'ow': raw['ow'], 'oh': raw['oh'],
+             'format': f'0x{raw["format"]:02x}', 'vertical': 'lanczos' if raw['variant'] else 'linear'}
         o['done'] = done_record(payload, at + OP.size)
         if o['run']:
-            o['plan_matches'] = (raw['csc'], raw['ow'], raw['oh'], raw['out_stride'], raw['out_offset'], raw['kind'],
-                                 raw['w'], raw['h']) == (*PLAN[k], FW, FH)
+            o['plan_matches'] = (raw['csc'], raw['format'], raw['variant'], raw['kind'], raw['ow'], raw['oh'],
+                                 raw['out_stride'], raw['out_offset'], raw['w'], raw['h']) == \
+                (CSC, fmt, variant, kind, ow, oh, stride, offset, FW, FH)
             o['rect_crc'] = f'0x{raw["rect_crc"]:08x}'
+            o['rect_predicted'] = raw['rect_crc'] == want[k]['rect_crc']
+            o['interior_crc'] = f'0x{raw["interior_crc"]:08x}'
+            o['interior_predicted'] = raw['interior_crc'] == want[k]['interior_crc']
             o['untouched'] = raw['rect_crc'] == background_crc(raw['ow'], raw['oh'])
             o['padding_unchanged'] = raw['padding_crc'] == padding_crc(raw['oh'], raw['out_stride'], raw['ow'])
             o['alpha_ff'] = raw['alpha_ff'] == raw['ow'] * raw['oh']
-            o['alpha_other'] = f'0x{raw["alpha_other"]:08x}' if raw['alpha_ff'] != raw['ow'] * raw['oh'] else None
+            o['alpha_other'] = f'0x{raw["alpha_other"]:08x}' if not o['alpha_ff'] else None
             d = o['done']
             us = d['launch_to_irq_us'] if d else None
             o['engine_us'] = us
@@ -505,26 +537,22 @@ def decode(payload):
             if d:
                 # The CPU's share of the operation: the owner's work before the launch and after the interrupt.
                 o['cpu_us'] = (d['submit_to_launch_us'] or 0) + (d['irq_to_done_us'] or 0)
-            if not frame:
+            if kind == UNSCALED:
                 rows = [payload[ROWS_AT + (2 * k + j) * ROW:ROWS_AT + (2 * k + j + 1) * ROW] for j in range(2)]
-                conversion(o, raw, a, rows, models[c])
+                unscaled(o, raw, rows, want[k], frame_p)
+                o['predicted'] = o['rect_predicted'] and o['board_order'] == o['predicted_order']
+            elif kind == RAMP:
+                at_column = COLUMNS_AT + (k - 2) * RH * 4
+                ramp(o, raw, payload[at_column:at_column + RH * 4], want[k], stored)
+                o['predicted'] = o['rect_predicted'] and o['column_equals_model'] and not raw['nonconstant_rows']
             else:
-                row = payload[scale_at:scale_at + raw['ow'] * 4]
-                scale_at += raw['ow'] * 4
-                scale(o, raw, b, row)
+                at_scaled = SCALED_AT + (k - 4) * SW * SH * 4
+                random_frame(o, raw, payload[at_scaled:at_scaled + SW * SH * 4], want[k], stored)
+                o['predicted'] = o['rect_predicted'] and o['output_equals_model']
         ops.append(o)
         at += OP.size + DONE.size
     record['ops'] = ops
-    conversions = [o for o in ops[:CONVERSIONS] if o['run']]
-    record['conversions_predicted'] = len(conversions) == CONVERSIONS and \
-        all(o['result'] == 1 and o['predicted'] for o in conversions)
-    record['conversion_models'] = {o['name']: (o.get('rect_model') or 'unmatched') if o['run'] else 'not run'
-                                   for o in ops[:CONVERSIONS]}
-    scales = [o for o in ops[CONVERSIONS:] if o['run']]
-    record['scales_predicted'] = len(scales) == 2 and all(o['result'] == 1 and o['flat_exact'] and o['rows_identical']
-                                                          and o['monotone'] and o['middle_row_equals_model']
-                                                          for o in scales)
-    record['predicted'] = status == 1 and record['conversions_predicted'] and record['scales_predicted'] and \
-        all(o['padding_unchanged'] and o['alpha_ff'] and o['plan_matches'] for o in ops if o['run']) and \
-        bool(record['source']['before_matches'] and record['source']['unchanged'])
+    record['predicted'] = status == 1 and ops_run == OPS and record['cpu']['equals_model'] and \
+        all(o['result'] == 1 and o['predicted'] and o['padding_unchanged'] and o['alpha_ff'] and o['plan_matches']
+            for o in ops) and bool(record['source']['before_matches'] and record['source']['unchanged'])
     return record

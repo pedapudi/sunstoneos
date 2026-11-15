@@ -26,6 +26,27 @@ Cases, each starting from a service that failed during its open (phase FAULT):
   with a pause after each of its first three loads of them so that its loads can straddle one or more stores
   (harness.TwoCores). No placement may report 0x931; every one must reach DONE with the service CLOSED. An image whose
   quiesce step decides from phase and close_started (bringup at 566574ee3) fails this case.
+Two cases run the owner task without a break at its deadline waits, with each task notification index's pending
+count modeled: a give adds one to the owner's count at its index, a deadline wait returns at once (notified) when its
+index has a count and otherwise at its deadline (expired), and takes its index's count on its way out, and the
+owner's block with no timeout returns when index 0 has a count and otherwise holds the owner until a give. The input
+arrives while the close masks INTID 83. Master 10 is attached, and the close's detach releases the IOMMU's clock
+lease, which finds the clock registry busy once and waits 50 us in the owner's task through the deadline runtime
+(clock_lease, apps/os/iommu.c), so the close pauses in a deadline wait with the input's notification pending:
+- request-during-close: as fault-after-engine-open, with a run posted by the application while the quiesce's close
+  runs (its post tested quiesce_wanted before the quiesce set it). The owner must answer the run (refused, result -1,
+  the service being CLOSED). An owner whose deadline waits take index 0 consumes the post's notification in the
+  pause, then blocks with the run posted and the application's run stranded (bringup at 5d3de101a).
+- quiesce-during-close: the application's close of the FAULT service runs first, and the quiesce arrives during it.
+  The owner answers the close and the registry reaches DONE. The owner tests quiesce_wanted after every request, and
+  the supervisor's quiesce step notifies the owner again on every PENDING pass, so a quiesce notification taken by a
+  deadline wait does not strand the quiesce; the case guards that order.
+- hints-reach-deadline-waits: the power row's wake and INTID 83 (with nothing armed) each give the owner the index
+  its deadline waits take, which is not index 0; an owner whose hints stayed on index 0 would sleep each operation's
+  completion wait and each row wait to its deadline.
+- deadline-waits-on-index-0: request-during-close with the owner's deadline index forced to 0 (the registration hook
+  answers as for sunstone_deadline_register). The case must fail, which shows that request-during-close detects an
+  owner whose deadline waits take its inputs' index.
 An image built before the close of a faulted service (the stage-2 board run 1794711214889069759-0a9ae5d4, the
 stage-1 image) fails the first two cases: its registry reports FAULT on every pass until the bound.
 
@@ -46,6 +67,7 @@ BOUND_US, PASS_US = 3_000_000, 10_000
 QUIESCE = {'PENDING': 0, 'DONE': 1, 'FAULT': 2}
 FAULT_PHASE, CLOSED_PHASE = 4, 0
 SITE_G2D = 0x931
+FAKE_TASK = 0x60200000                                                    # the owner's handle; gives to it are counted
 
 
 class Registers:
@@ -62,7 +84,8 @@ class Registers:
         self.words[offset] = self.stuck.get(offset, value)
 
 
-def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=None, schedule=None, run_after=False):
+def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=None, schedule=None, run_after=False,
+             inject=None, mutant=False, hints=False):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -78,7 +101,9 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
     g2d_regs = Registers(G2D, {0x20: 0x50})
     for regs in (ccu, pck, g2d_regs):
         uc.mmio_map(regs.base, 0x1000, regs.read, None, regs.write, None)
-    state = {'time': 1000, 'requested': 0, 'notes': [], 'slice_done': False}
+    state = {'time': 1000, 'requested': 0, 'notes': [], 'slice_done': False, 'pending': [0, 0, 0],
+             'deadline_index': None, 'blocked': False, 'waits': []}
+    continuous = inject is not None
     g2d = image.address('g2d', UNIT)
 
     def put(address, value, n=4): uc.mem_write(address, int(value).to_bytes(n, 'little'))
@@ -89,6 +114,7 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
     put(board + image.layouts['board_application']['session'] + image.layouts['a733_board_session']['deadline_us'],
         60_000_000, 8)
     put(field('dev.phase'), FAULT_PHASE); put(field('dev.fault_step'), fault_step); put(field('dev.fault_value'), 0)
+    put(image.address('owner', UNIT), FAKE_TASK, 8)
 
     def ret(m, value=None):
         if value is not None:
@@ -109,18 +135,84 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
         uc.mem_write(out, address.to_bytes(8, 'little') + bytes(8))      # physical, Device-nGnRnE, shareability 0
         ret(m, 1)
 
+    def deadline_wait(until):
+        # The deadline wait: notified at once by a count at its index, otherwise expired at its deadline; it takes its
+        # index's count on its way out.
+        index = state['deadline_index']
+        notified = state['pending'][index] > 0
+        if not notified:
+            state['time'] = max(state['time'], until)
+        state['waits'].append({'index': index, 'notified': notified, 'pending': list(state['pending'])})
+        state['pending'][index] = 0
+        return 0 if notified else 1
+
     def wait(m):
+        if continuous:
+            until = m.reg_read(UC_ARM64_REG_X0)
+            if until - state['time'] > BOUND_US and not state['pending'][state['deadline_index']]:
+                # An idle wait past the supervisor's bound (an owner that wakes on a timer between requests): the
+                # owner sleeps through the case.
+                state['blocked'] = True
+                state['slice_done'] = True
+                m.emu_stop()
+                return
+            ret(m, deadline_wait(until))
+            return
         state['slice_done'] = True
         m.emu_stop()
+
+    def detach(m):
+        # The last detach's clock-lease release: the registry busy once, then a 50 us deadline wait, then released.
+        deadline_wait(state['time'] + 50)
+        ret(m, 1)
+
+    def block(m):
+        if not continuous:
+            wait(m)
+            return
+        index = m.reg_read(UC_ARM64_REG_X0)
+        if state['pending'][index]:
+            count, state['pending'][index] = state['pending'][index], 0
+            ret(m, count)
+            return
+        state['blocked'] = True
+        state['slice_done'] = True
+        m.emu_stop()
+
+    def give(m):
+        if m.reg_read(UC_ARM64_REG_X0) == FAKE_TASK:
+            state['pending'][m.reg_read(UC_ARM64_REG_X1)] += 1
+            state.setdefault('gives', []).append(m.reg_read(UC_ARM64_REG_X1))
+        ret(m, 1)
+
+    def register(m, index):
+        if state['deadline_index'] is None:
+            state['deadline_index'] = index
+        ret(m, 1)
+
+    def mask(m):
+        if inject and not state.get('injected'):
+            # The input arrives during the close, with its notification, as ss_g2d_run's post and the quiesce step give.
+            if inject == 'request':
+                put(field('op'), steps['RUN_OP']); put(field('request'), steps['POSTED'])
+            else:
+                put(field('dev.quiesce_wanted'), 1)
+            state['pending'][0] += 1
+            state['injected'] = True
+        ret(m, 1)
+
 
     def note(m):
         state['notes'].append((m.reg_read(UC_ARM64_REG_X0), m.reg_read(UC_ARM64_REG_X1)))
         ret(m)
 
     hooks = {
-        'sunstone_deadline_register': lambda m: ret(m, 1),
+        'sunstone_deadline_register': lambda m: register(m, 0),
         'sunstone_deadline_now_us': now,
         'sunstone_deadline_wait_until': wait,
+        'ulTaskGenericNotifyTake': block,  # the owner task's block with no timeout
+        'xTaskGenericNotify': give,
+        'vTaskGenericNotifyGiveFromISR': give,
         'a733_counter_clock_now': counter_now,
         'ss_counter_ticks': lambda m: ret(m, state['time'] * 24),
         'aarch64_device_translate': translate,
@@ -130,9 +222,14 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
         'os_cpu_return_requested': lambda m: ret(m, state['requested']),
         'os_cpu_return_failing': lambda m: ret(m, 0),
         'os_application_wake_task': lambda m: ret(m),
-        'gicv3_spi_mask': lambda m: ret(m, 1),
+        'gicv3_spi_mask': mask,
         'gicv3_spi_masked': lambda m: ret(m, 1),
     }
+    if continuous:
+        put(field('attached'), 1)
+        hooks['os_iommu_detach'] = detach
+    if image.symbols.get('sunstone_deadline_register_index'):
+        hooks['sunstone_deadline_register_index'] = lambda m: register(m, 0 if mutant else m.reg_read(UC_ARM64_REG_X0))
     for symbol, callback in hooks.items():
         hook_addresses(uc, {image.address(symbol)}, lambda m, a, s, u, c=callback: c(m))
     hook_addresses(uc, {NOTE}, lambda m, a, s, u: note(m))
@@ -154,6 +251,27 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
     assert call(image.address('os_quiesce_register'), quiesce) == 1, (name, 'registration refused')
     state['requested'] = 1
     task = image.address('os_g2d_task', UNIT)
+    if hints:
+        # The row's wake and INTID 83 with nothing armed: the notification index each gives the owner.
+        call(image.address('wake_owner', UNIT), 0)
+        call(image.address('os_g2d_irq'))
+        return {'gives': state.get('gives', [])}
+
+    def owner_pass():
+        # A blocked owner runs again only after a give at index 0; it resumes at its loop's top, which a return from
+        # the block reaches.
+        if state['blocked']:
+            if not state['pending'][0]:
+                state['slice_done'] = True
+                return
+            state['pending'][0], state['blocked'] = 0, False
+        call(task, 0, stack=STACKS + 0x40000)
+
+    if inject == 'quiesce':
+        # The application's close of the FAULT service, served before any quiesce.
+        put(field('op'), steps['CLOSE_OP']); put(field('request'), steps['POSTED'])
+        state['slice_done'] = False
+        owner_pass()
     start, results, events = state['time'], [], None
     while state['time'] - start < BOUND_US:
         result = call(image.address('os_quiesce_step'), NOTE) & 0xffffffff
@@ -176,7 +294,7 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
             if results[-1] == QUIESCE['DONE']:
                 break
         else:
-            call(task, 0, stack=STACKS + 0x40000)
+            owner_pass()
         assert state['slice_done'], (name, 'the owner task did not reach its wait')
         state['time'] += PASS_US
     run = None
@@ -191,7 +309,14 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
         results.append(call(image.address('os_quiesce_step'), NOTE) & 0xffffffff)
         run = {'result': result, 'before': before,
                'after': (get(field('dev.fault_step')), get(field('dev.fault_value')), get(field('dev.phase')))}
+    posted = None
+    if inject:
+        posted = {'injected': bool(state.get('injected')), 'request': get(field('request')),
+                  'op': get(field('op')), 'result': int.from_bytes(uc.mem_read(field('result'), 4), 'little', signed=True),
+                  'deadline_index': state['deadline_index'], 'blocked': state['blocked'],
+                  'waits_with_input_pending': sum(1 for w in state['waits'] if w['pending'][0])}
     return {
+        'posted': posted,
         'run': run,
         'case': name, 'fault_step': fault_step, 'passes': len(results), 'last_result': results[-1],
         'done_within_bound': results[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
@@ -233,9 +358,28 @@ def main():
         ('run-after-failed-close', steps['G2D_STEP_TOP'], opened, {0xa44: 0x00010001}),
     ]
     rows, failures = [], []
+    injected = {'request-during-close': ('request', False), 'quiesce-during-close': ('quiesce', False),
+                'deadline-waits-on-index-0': ('request', True)}
+    for name in injected:
+        cases.append((name, steps['G2D_STEP_TOP'], opened, None))
     for name, step, words, stuck in cases:
-        row = run_case(image, parts, layout, steps, name, step, words, stuck, run_after=name == 'run-after-failed-close')
+        inject, mutant = injected.get(name, (None, False))
+        row = run_case(image, parts, layout, steps, name, step, words, stuck, run_after=name == 'run-after-failed-close',
+                       inject=inject, mutant=mutant)
         problems = []
+        if inject:
+            p = row['posted']
+            want_op = steps['RUN_OP'] if inject == 'request' else steps['CLOSE_OP']
+            want_result = -1 if inject == 'request' else 1
+            if not p['injected'] or not p['waits_with_input_pending']:
+                problems.append('the input did not arrive during a deadline wait of the close')
+            elif p['request'] != steps['DONE'] or p['op'] != want_op or p['result'] != want_result:
+                problems.append(f"the owner left the {inject} unanswered: request {p['request']}, op {p['op']}, "
+                                f"result {p['result']} (expected DONE, {want_op}, {want_result}); deadline index "
+                                f"{p['deadline_index']}, owner blocked {p['blocked']}")
+            if mutant:
+                # The mutant must fail; its row passes when it does.
+                problems = [] if problems else ['an owner whose deadline waits take index 0 was not detected']
         if name == 'run-after-failed-close':
             run = row['run']
             if run['result'] != -1:
@@ -268,6 +412,16 @@ def main():
         if problems:
             failures.append(name)
         rows.append(row)
+    # The producers that end the owner's deadline waits give the index those waits take.
+    index = next(r['posted']['deadline_index'] for r in rows if r['case'] == 'request-during-close')
+    gives = run_case(image, parts, layout, steps, 'hints-reach-deadline-waits', steps['G2D_STEP_TOP'], opened, None,
+                     hints=True)['gives']
+    ok = index not in (None, 0) and gives == [index, index]
+    rows.append({'case': 'hints-reach-deadline-waits', 'deadline_index': index, 'gives': gives, 'passed': ok,
+                 'problems': [] if ok else [f'the row wake and INTID 83 must give the deadline index {index}, not '
+                                            f'index 0: gave {gives}']})
+    if not ok:
+        failures.append('hints-reach-deadline-waits')
     # The quiesce step on the supervisor's core placed at every point among the close's stores to the words it reads,
     # with its loads straddling one or more of them: no placement may report the fault of a close that succeeds.
     base = ('fault-after-engine-open', steps['G2D_STEP_TOP'], opened, None)
@@ -291,7 +445,7 @@ def main():
                            for n in ('apps/os/g2d.c', 'apps/os/quiesce.c', 'checks/os-g2d-fault-return.py')}})
     for row in rows:
         detail = f"{row['schedules']} placements over {row['writer_events']} close stores" if 'schedules' in row else \
-            f"{row['passes']} passes, {row['elapsed_us']} us"
+            f"gives {row['gives']}" if 'gives' in row else f"{row['passes']} passes, {row['elapsed_us']} us"
         print('PASS' if row['passed'] else 'FAIL', row['case'], detail, '; '.join(row['problems']))
     if failures:
         raise SystemExit(f'{len(failures)} of {len(rows)} cases failed')
