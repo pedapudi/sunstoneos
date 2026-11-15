@@ -17,6 +17,8 @@ int os_iommu_unmap(const struct a733_iommu_span *, unsigned count);
 int os_iommu_detach(uint16_t masters);
 /* Read master's fault words into out: 1 none, 0 a fault recorded, -1 failed. */
 int os_iommu_scan(unsigned master, struct a733_iommu_owner_fault *out);
+/* Read both banks' prefetch words (offset 0x2c of each bank) while the IOMMU is active: 1 read, -1 refused. */
+int os_iommu_prefetch(uint32_t words[2]);
 /* The owner's records (state, entry words, fault step), for a service's result; read between calls. */
 const struct a733_iommu_owner *os_iommu_owner(void);
 #endif
