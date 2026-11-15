@@ -42,6 +42,9 @@ static void deliver_kick(void *unused){(void)unused;host_deadline_deliver_kick()
 _Static_assert(SUNSTONE_DEADLINE_SLOTS>=2,"The race fixture uses two initial owners");
 static volatile int admitted[SUNSTONE_DEADLINE_SLOTS-1u];
 static void admit(void *index){admitted[(uintptr_t)index]=sunstone_deadline_register();vTaskSuspend(NULL);}
+/* Another task writes the first owner's task-local pointer, here to the second owner's slot. */
+static void *intruder_value;
+static void intruder(void *unused){(void)unused;vTaskSetThreadLocalStoragePointer(t1,SUNSTONE_DEADLINE_TLS,intruder_value);vTaskSuspend(NULL);}
 
 static void runtime_cases(void *unused)
 {
@@ -102,6 +105,20 @@ static void runtime_cases(void *unused)
      sunstone_deadline_owner_progress(t1);
      assert(sunstone_deadline_owner_record(t1,&record)&&!record.failed);
      assert(sunstone_deadline_wait_until(at)==SUNSTONE_DEADLINE_EXPIRED);}
+    /* Bound once: a second registration keeps the slot the task holds. */
+    {void *mine=pvTaskGetThreadLocalStoragePointer(NULL,SUNSTONE_DEADLINE_TLS);
+     assert(mine&&sunstone_deadline_register()&&pvTaskGetThreadLocalStoragePointer(NULL,SUNSTONE_DEADLINE_TLS)==mine);
+     /* After another task writes this task's pointer, the pointer names a slot this task does not own: registration
+      * and waits are refused, and the other owner's slot is untouched. */
+     intruder_value=pvTaskGetThreadLocalStoragePointer(t2,SUNSTONE_DEADLINE_TLS);
+     assert(intruder_value&&intruder_value!=mine);
+     assert(host_task_create("intruder",intruder,NULL,3));
+     assert(pvTaskGetThreadLocalStoragePointer(NULL,SUNSTONE_DEADLINE_TLS)==intruder_value);
+     assert(!sunstone_deadline_register());
+     assert(sunstone_deadline_wait_until(host_time_us()+100)==SUNSTONE_DEADLINE_ERROR);
+     assert(sunstone_deadline_owner_record(t2,&record)&&!record.failed&&!record.armed);
+     vTaskSetThreadLocalStoragePointer(NULL,SUNSTONE_DEADLINE_TLS,mine);
+     assert(sunstone_deadline_register());}
     /* Fill the selected declaration after the two existing owners, then
      * refuse the next owner. Every attempted task must actually exist. */
     const unsigned available=SUNSTONE_DEADLINE_SLOTS-2u;
@@ -110,7 +127,7 @@ static void runtime_cases(void *unused)
     for(unsigned i=0;i<available;++i)assert(admitted[i]==1);
     assert(admitted[available]==0);
     assert(!host_critical_depth());
-    puts("PASS deadline arm, notification-before-sleep, exact expiry, cancellation, simultaneous owners, task-handle identity, fixed admission and owner progress");
+    puts("PASS deadline arm, notification-before-sleep, exact expiry, cancellation, simultaneous owners, task-handle identity, slot bound once through the task-local pointer, a foreign pointer refused, fixed admission and owner progress");
 }
 
 /* Execute the real service supervisor against the same runtime state. The board

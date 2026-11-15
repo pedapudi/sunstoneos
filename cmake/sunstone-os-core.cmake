@@ -525,6 +525,8 @@ endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_A733_RADIO_IRQ=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   SUNSTONE_A733_OS_HEADSET_IRQ=1
   SUNSTONE_CRUMBS=1
+  # The image's tables hold the deadline slots, sized by the services the image links (include/sunstone_deadline.h).
+  SUNSTONE_DEADLINE_IMAGE_SLOTS=1
   "$<$<BOOL:${os_usb_failure_test}>:SUNSTONE_A733_USB_FAILURE_TEST=1>"
   "$<$<BOOL:${os_return_only}>:SUNSTONE_A733_OS_RETURN_ONLY=1>"
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"

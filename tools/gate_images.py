@@ -166,6 +166,13 @@ IMAGES = {
         'sunstone-a733-jpeg-encode', 'sunstone-a733-monitor', 'sunstone-a733-pcie', 'sunstone-a733-pcie-nvme',
         'sunstone-a733-pcie-test', 'sunstone-a733-pwm', 'sunstone-a733-rtc', 'sunstone-a733-spi', 'sunstone-a733-thermal',
     ], 'elf': 'a733-smp-cached-diagnostic.elf'},
+    # the image that links the services a core option selects: the RAM-copy DMA service, the invalidation task and the
+    # write-capable SD0 owner, whose deadline owners checks/deadline-owners.py derives with the other OS images'. It is
+    # built and read, never run.
+    'os-deadline-owners': {'configure': [
+        '-DSUNSTONE_A733_OS_DMA=ON', '-DSUNSTONE_TLBI_ISSUER=1', '-DSUNSTONE_A733_OS_SD_WRITE=ON',
+        '-DSUNSTONE_APPLICATION=storage-write-test',
+    ], 'target': 'sunstone-a733-os-storage-write-test', 'elf': 'sunstone-a733-os-storage-write-test.elf'},
     # the returning scanning radio image
     'ret-radio-scan': {'configure': [
         '-DSUNSTONE_IRQ_FP_UNSAVED=ON',

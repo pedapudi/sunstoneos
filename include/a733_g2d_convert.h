@@ -6,10 +6,11 @@
  * The page follows the vendor's g2d_bsp_bitblt with flag G2D_BLT_NONE (g2d_mixer.c 304-371 in linux-orangepi
  * 2ac08e8c, bsp/drivers/g2d/g2d_rcq) for a 4:2:2 semi-planar source and a 32-bit RGB output: the video layer V0
  * (g2d_vlayer_set), the coarse decimation (g2d_ovl_v_calc_coarse), the video scaler, enabled for every YUV source
- * (g2d_vsu_para_set), the blender working in YUV with source-over, its output colour-space converter csc2 loaded with a
- * YUV-to-RGB table (bld_cs_set, bld_csc_reg_set), and the write-back (g2d_wb_set). The vendor's other YUV-to-RGB path,
- * csc0 in g2d_bsp_bld, is not reachable for a real size: g2d_mixer.c 202 refuses any nonzero resize height. The block
- * headers and their order are those of a733_g2d_commands_at (drivers/g2d/a733_g2d.c). */
+ * (g2d_vsu_para_set), the blender with source-over, and the write-back (g2d_wb_set). The colour conversion follows the
+ * vendor's other path, g2d_bsp_bld (g2d_mixer.c 216-220 and 287): csc0 converts at pipe 0's input and the blender works
+ * in RGB, which keeps luma below 16 (g2d_mixer.c 202 makes that path unreachable in the vendor driver). The tables are
+ * derived from the BT.601 and BT.709 matrices (tools/g2d-csc-tables.py). The block headers and their order are those
+ * of a733_g2d_commands_at (drivers/g2d/a733_g2d.c). */
 #include <stddef.h>
 #include <stdint.h>
 /* The vendor's YUV422UVC_V1U1V0U0 and YUV422UVC_U1V1U0V0: a luma plane and a plane of interleaved chroma pairs. */
@@ -30,8 +31,9 @@ struct a733_g2d_convert {
     uint32_t output, output_stride, dx, dy, ow, oh, out_format;
     uint32_t csc;
 };
-/* The 12 csc2 words for a table (bld_csc_reg_set's 12-word copy: per output channel R, G, B the Y, U and V
- * coefficients with 10 fraction bits, then the constant scaled by 1024), or null for an unknown table. */
+/* The 12 csc0 words for a table (bld_csc_reg_set's 12-word copy: per output channel R, G, B the Y, U and V
+ * coefficients with 10 fraction bits, then the constant scaled by 1024, tools/g2d-csc-tables.py), or null for an
+ * unknown table. */
 const int32_t *a733_g2d_csc_table(uint32_t csc);
 /* The command page into memory (capacity 4096, 32-byte aligned) for the page at device address rcq_iova (4096-byte
  * aligned). 1, or 0 with nothing written for a job the vendor refuses or the registers cannot hold:

@@ -479,6 +479,13 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
                 'dispatch_ticks': end - begin, 'owner_begin': owner_begin, 'owner_end': owner_end,
                 'owner_ticks': owner_end - owner_begin,
                 'overlaps_wake': end > ready or owner_end > ready})
+        # The IRQ rows are the latest dispatches, and the selection rows the latest selections. When CPU0 selects
+        # rarely, as in the cap image's warm-up, the selection rows reach back past the IRQ rows, and the dispatch a
+        # selection cites has been overwritten. The image's IRQ_PREFIX_LOST covers only the wake's ready stamp
+        # (kernel/scheduler/latency_trace.c:431), so it does not flag this. With the ring full, a cited owner-exit
+        # sequence below the oldest kept row's sequence was overwritten; a missing one inside the kept range is refused.
+        kept = [row['sequence'] for row in irq_rows if row['sequence']]
+        overwritten_below = min(kept) if irq_count == capacity and kept else 0
         for index in range(capacity):
             begin, end, irq_sequence, slot = struct.unpack_from('<4Q', payload, window_offset)
             window_offset += 32
@@ -489,15 +496,18 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
             if (not 0 < begin <= end <= running or slot >= 128 or
                     switch_rows and begin < switch_rows[-1]['end']):
                 raise ValueError('scheduler CPU0 selection timing or task is invalid')
+            kind = 'irq' if irq_sequence else 'svc'
             if irq_sequence:
                 origin = next((row for row in irq_rows if row['sequence'] == irq_sequence), None)
                 if origin:
                     if origin['owner_end'] > begin:
                         raise ValueError('scheduler CPU0 selection precedes its owner exit')
+                elif irq_sequence < overwritten_below:
+                    kind = 'irq_overwritten'
                 elif not window_flags & 13:
                     raise ValueError('scheduler CPU0 selection origin is missing without history loss')
             switch_rows.append({'begin': begin, 'end': end, 'irq_sequence': irq_sequence,
-                'selected_slot': slot, 'origin': 'irq' if irq_sequence else 'svc',
+                'selected_slot': slot, 'origin': kind,
                 'ticks': end - begin, 'overlaps_wake': end > ready})
         if not ready and (irq_count or switch_count or window_flags):
             raise ValueError('scheduler empty CPU0 wake contains an event window')
