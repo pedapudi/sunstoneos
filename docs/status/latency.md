@@ -47,6 +47,8 @@ The figures come from one instrumented run at CPU-L 1794 MHz and 1000 mV, CPU-B 
 
 12. Measure CPU0's wake latency while it runs NPU work. The latency diagnostic samples a core that does not stream only when its release finds it idle (`admitted` in `apps/latency/workload.c`), so in stage 3b the releases that found CPU0 in the NPU producer or owner were not sampled.
 
+13. Land the stage 3b branch, `work/npu-vehicle-1115`: the NPU vehicle image, the placement fix, the owner-placement check and this record (commit 08ba0eae7 and its parking note). Its integration gate on 08ba0eae7 passed every selected step except `checks/radio-result-channel.py`. On the branch's base, bringup at 9f231956e, that check builds access-point entries with SSID bytes, which `tools/radio_result.py` refuses; bringup changed the check in 827822714, and no file of the branch touches the radio. The next steps: merge bringup into the branch, run the integration gate with `--affected bringup..HEAD`, and land the gated tip.
+
 ## Evidence
 
 Board results are records in `docs/evidence/latency.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-latency-20261101.md).
