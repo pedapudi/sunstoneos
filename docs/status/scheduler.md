@@ -84,6 +84,7 @@ Queues, event groups and stream buffers lock their own hashed slot instead of th
       - CPU1 took 583 interrupts per run, 386 of them SGIs, in every run of stages 7b and 7c. The latency-cause benchmark sends them from CPU0 to CPU1 after the measured wakes, so they are part of the measurement. An earlier reading of the stage 7b records that called them a second service load on CPU1 was wrong.
       - CPU0, which is not judged, took 1,392-1,394 interrupts per run in both images, against 1,392-1,394 in T and 1,282-1,283 in D in stage 7b. Its largest timer interrupt was 7.8-11.6 µs in T, against 21.2-21.6 in stage 7b, and 12.3-15.0 µs in D, against 5.8-6.5. Its three-run worst busy wake was 50.0 µs in T and 47.5 µs in D; CPU5's was 69.0 and 58.2 µs.
       - The session granted no NPU and the image links no video decoder, so neither service ran. Whether those services move to CPU0 needs a session that grants them.
+      - D was built without `SUNSTONE_LATENCY_PRECISE`, so its wake tasks wait one tick (`vTaskDelay(1)`) and make no precise wait: the stage 7c D result says nothing about precise waits.
 
 ## Evidence
 
