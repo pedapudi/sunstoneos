@@ -8,7 +8,7 @@ import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECK_INPUTS = ['apps/os/radio.c', 'apps/os/quiesce.c', 'apps/os/quiesce.h',
+CHECK_INPUTS = ['apps/os/radio.c', 'apps/os/ce_probe.c', 'apps/os/quiesce.c', 'apps/os/quiesce.h',
                 'apps/os/radio_scan.c', 'apps/board/main.c', 'apps/os/main.patch',
                 'apps/radio-scan/main.c', 'cmake/a733-os.cmake']
 PRELUDE = r'''
@@ -57,6 +57,10 @@ static enum a733_radio_session_result a733_radio_session_poll(void *s){(void)s;+
 static enum a733_radio_session_result a733_radio_session_retain(void *s){(void)s;++retain_calls;return A733_SESSION_RETAINED;}
 static void os_wifi_credential_poll(void){++wipe_polls;}
 static int os_wifi_credential_wiped(void){return wiped;}
+/* The scanning build: the association stage retires its CE (apps/os/ce_probe.c) before the return completes. */
+static int ce_retire=1;static unsigned ce_calls;static uint64_t ce_deadline;
+static int os_ce_retire_step(uint64_t d){++ce_calls;ce_deadline=d;return ce_retire;}
+static void os_radio_scan_step(struct board_radio *r,int result){(void)r;(void)result;}
 '''
 CASES = r'''
 int os_headset_module_release_ready(void){return release_ready;}
@@ -68,7 +72,7 @@ static void reset(void)
     atomic_store(&radio_quiesce.fault_state,0);
     atomic_store(&armed_classes,1u<<OS_QUIESCE_DEVICES);
     shutdown_started=module_notified=stop_calls=release_calls=poll_calls=retain_calls=0;
-    down_calls=down_proved=peer=wiped=wipe_polls=headset=0;
+    down_calls=down_proved=peer=wiped=wipe_polls=headset=ce_calls=0;ce_retire=1;ce_deadline=0;
     stop_accept=release_accept=1;release_ready=0;failing=1;deadline=2500000;
     session_result=A733_SESSION_PENDING;
 }
@@ -102,8 +106,20 @@ int main(void)
     os_quiesce_complete(&radio_quiesce);assert(os_quiesce_result(&radio_quiesce)==OS_QUIESCE_FAULT);
     reset();r.config.scan_only=0;session_result=A733_SESSION_DOWN;
     assert(os_radio_quiesce_poll(&r,0)==2&&radio_quiesce.value==0x905&&poll_calls==1);
-    reset();r.config.scan_only=1;r.config.associate=1;session_result=A733_SESSION_DOWN;
-    assert(os_radio_quiesce_poll(&r,0)==2&&radio_quiesce.value==0x905);
+    /* Association: the return waits for the CE's retirement, then for the credential wipe, then completes. */
+    reset();r.config.scan_only=1;r.config.associate=1;session_result=A733_SESSION_DOWN;ce_retire=0;wiped=1;
+    assert(os_radio_quiesce_poll(&r,0)==1&&ce_calls==1&&ce_deadline==deadline&&!wipe_polls);
+    assert(os_quiesce_result(&radio_quiesce)==OS_QUIESCE_PENDING);
+    ce_retire=1;assert(os_radio_quiesce_poll(&r,0)==2&&ce_calls==2&&wipe_polls==1);
+    assert(os_quiesce_result(&radio_quiesce)==OS_QUIESCE_DONE&&!fatal);
+    /* A CE that stays retained (here its task failed) keeps the return's fault, with the unmet step. */
+    reset();r.config.associate=1;session_result=A733_SESSION_DOWN;ce_retire=-3;wiped=1;
+    assert(os_radio_quiesce_poll(&r,0)==2&&radio_quiesce.value==(0x905u|3u<<16)&&!wipe_polls);
+    assert(os_quiesce_result(&radio_quiesce)==OS_QUIESCE_FAULT&&!fatal);
+    /* The full station's own entropy source has no retirement: still refused, and its CE is not touched here. */
+    reset();r.config.scan_only=0;r.config.associate=1;session_result=A733_SESSION_DOWN;
+    assert(os_radio_quiesce_poll(&r,0)==2&&radio_quiesce.value==0x905&&!ce_calls);
+    r.config.scan_only=1;
     reset();r.config.associate=0;r.config.entropy_only=1;
     assert(os_radio_quiesce_poll(&r,0)==2&&radio_quiesce.value==0x905&&!stop_calls);
     reset();r.config.entropy_only=0;failing=0;session_result=A733_SESSION_RETAINED;
@@ -177,7 +193,9 @@ enum {RUNNING,SCANNED,DOWN,FAILED};
 enum {BOARD_RADIO_SCANNED,BOARD_RADIO_DOWN,BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID};
 static _Atomic unsigned state,stage_seen;
 static unsigned requested,starts,steps,published,noted;
-struct board_radio {struct {unsigned entropy_only;} config;struct {unsigned fail_line,fail_stage;} platform,session;};
+struct a733_radio_assoc {unsigned stage,link,status,eapol_rx,eapol_tx;};
+struct board_radio {struct {unsigned entropy_only,associate;} config;struct {unsigned fail_line,fail_stage;} platform,session;
+    struct a733_radio_assoc assoc;};
 struct a733_radio_report {struct {unsigned stage;} head;};
 static struct a733_radio_report report={.head.stage=7};
 static int os_radio_quiesce_requested(void){return requested;}
@@ -187,10 +205,11 @@ static int os_ce_probe_done(void){return 0;}
 static int os_ce_probe_failed(void){return 0;}
 static const struct a733_radio_report *board_radio_report(struct board_radio *r){(void)r;return &report;}
 static void publish(struct board_radio *r){(void)r;++published;}
-static int os_radio_quiesce_fault(uint32_t value,const void *caller){(void)value;(void)caller;return requested;}
+static uint32_t fault_value;
+static int os_radio_quiesce_fault(uint32_t value,const void *caller){(void)caller;fault_value=value;return requested;}
 #define SUNSTONE_CRUMB_FAIL_SITE(x) 0
 #define SUNSTONE_CRUMB_FAIL_RETURN 0
-static void board_fail_note(uint32_t site,uint32_t value,const void *caller){(void)site;(void)value;(void)caller;++noted;}
+static void board_fail_note(uint32_t site,uint32_t value,const void *caller){(void)site;(void)caller;fault_value=value;++noted;}
 static unsigned wakes;
 static void os_application_wake_main(void){++wakes;}
 ''' + publisher + body + r'''
@@ -204,6 +223,11 @@ int main(void)
     os_radio_scan_step(&r,BOARD_RADIO_SCANNED);assert(atomic_load(&state)==SCANNED&&atomic_load(&stage_seen)==7&&wakes==2);
     os_radio_scan_step(&r,BOARD_RADIO_SCANNED);assert(wakes==2);
     os_radio_scan_step(&r,BOARD_RADIO_DOWN);assert(atomic_load(&state)==DOWN&&published==1&&wakes==3);
+    /* An association miss names its codes in the first failure record: status 17, link down, one EAPOL frame each way,
+     * stage 5 (securing). */
+    struct board_radio a={.config.associate=1,.assoc={.stage=5,.link=0,.status=17,.eapol_rx=1,.eapol_tx=1}};
+    requested=0;atomic_store(&state,RUNNING);os_radio_scan_step(&a,BOARD_RADIO_RETAINED);
+    assert(atomic_load(&state)==FAILED&&fault_value==(17u<<16|0x8000u|1u<<8|1u<<4|5u));
     return 0;
 }
 ''')
@@ -327,10 +351,12 @@ def main():
     body = source[source.index('static enum os_quiesce_result radio_quiesce_step'):source.index('static struct board_radio_profile profile;')]
     body += source[source.index('int os_radio_start(void)'):]
     marker = '    if(!os_radio_quiesce_requested())return 0;'
+    retire = 'int ce=os_ce_retire_step(os_cpu_return_deadline_us());'
     variants = {'radio': body,
                 'removed-registration': body.replace('os_quiesce_register(&radio_quiesce)', '1'),
-                'exit-in-window': body.replace(marker, marker + '\n    platform_exit(6);')}
-    assert body.count('os_quiesce_register(&radio_quiesce)') == 1 and body.count(marker) == 1
+                'exit-in-window': body.replace(marker, marker + '\n    platform_exit(6);'),
+                'association-without-ce-retirement': body.replace(retire, 'int ce=1;')}
+    assert body.count('os_quiesce_register(&radio_quiesce)') == 1 and body.count(marker) == 1 and body.count(retire) == 1
     compiler = shutil.which('clang-21') or shutil.which('clang')
     results = []
     for name, variant in variants.items():
@@ -338,7 +364,7 @@ def main():
         path.write_text(PRELUDE + variant + CASES)
         binary = out / name
         command = [compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
-                   '-I'+str(ROOT / 'apps/os'), '-I'+str(ROOT / 'include'), str(path), '-o', str(binary)]
+                   '-DSUNSTONE_A733_OS_RADIO_SCAN=1', '-I'+str(ROOT / 'apps/os'), '-I'+str(ROOT / 'include'), str(path), '-o', str(binary)]
         subprocess.run(command, check=True)
         run = subprocess.run([str(binary)], capture_output=True, text=True)
         results.append({'case': name, 'returncode': run.returncode, 'stderr': run.stderr})
@@ -347,7 +373,7 @@ def main():
     application(out, compiler)
     observer(out, compiler)
     owner_loop(out, compiler, args.main_patch.resolve())
-    print('PASS radio return, Bluetooth peer proof, CE fault, three caught mutations, scan injection and actual owner loop')
+    print('PASS radio return, Bluetooth peer proof, association CE retirement and fault, four caught mutations, scan injection and actual owner loop')
 
 
 if __name__ == '__main__':

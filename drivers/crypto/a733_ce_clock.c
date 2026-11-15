@@ -111,3 +111,25 @@ int a733_ce_clock_provision(struct a733_ce_clock *p,const struct a733_ce_config 
     if(!live(p))return failed(p);
     p->state=A733_CE_CLOCK_READY;return 1;
 }
+int a733_ce_clock_retire(struct a733_ce_clock *p)
+{
+    if(!p||p->self!=p||p->state!=A733_CE_CLOCK_READY||p->held)return 0;
+    /* live() admits only an attempt; a refusal before the first write returns to READY (below). */
+    p->state=A733_CE_CLOCK_ATTEMPTING;p->writes=0;
+    if(!live(p)||p->ops.enter(p->cookie,p->config.deadline_us)!=1){p->state=A733_CE_CLOCK_READY;return 0;}
+    p->held=1;
+    uint32_t mbus;
+    if(!read32(p,CCU+0x5e4,&mbus)){p->ops.leave(p->cookie);p->held=0;p->state=A733_CE_CLOCK_READY;return 0;}
+    const uint32_t neighbors=mbus&0x40302;
+    /* Exactly the state provision left: enabled, out of reset, the MBUS gate open. */
+    if(!parents(p)||!bits(p,CCU+0xac0,0x8700001f,0x81000000)||!bits(p,CCU+0xac4,0x30003,0x30003)||!(mbus&4))
+        {p->ops.leave(p->cookie);p->held=0;p->state=A733_CE_CLOCK_READY;return 0;}
+    /* The reverse of the bring-up: bus gate, MBUS gate, clock gate, module gate, both resets, then the source. */
+    if(!update(p,CCU+0xac4,2,0)||!update(p,CCU+0x5e4,4,0)||!update(p,CCU+0xac0,BIT(31),0)||
+       !update(p,CCU+0xac4,1,0)||!update(p,CCU+0xac4,0x30000,0)||
+       !update(p,CCU+0xac0,0x8700001f,0)||
+       !parents(p)||!bits(p,CCU+0xac0,0x8700001f,0)||!bits(p,CCU+0xac4,0x30003,0)||
+       !bits(p,CCU+0x5e4,0x40306,neighbors)||!live(p))return failed(p);
+    p->ops.leave(p->cookie);p->held=0;
+    p->state=A733_CE_CLOCK_RETIRED;return 1;
+}
