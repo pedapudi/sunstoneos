@@ -416,6 +416,25 @@ count restarts, latches, stops or keeps rising when a period ends, and the probe
 phases cannot. The build needs [manifest-counters.json](../../apps/accel-overlap/manifest-counters.json), whose output
 limit holds the 10,088-byte result.
 
+One returning run on port 3-1 (entry `1794721288049775573-7d82471a`) showed that the counts latch:
+
+- **Counted phases.** Every count read 0 in all four counted phases, before and after the disable, because no
+  period ended inside them.
+- **Window probes.** Each count stayed 0 until the first period end, 100.1 ms after enable on port 6 and 101.1 ms on
+  port 18. It then stepped once per period, 100.2 ms and 100.0 ms, to that period's total, and held that value
+  until the next period end.
+- **The period clock.** The NSI clock runs at 600 MHz, as the vendor device tree assigns it to both ports
+  (`master_clks`).
+- **Readbacks and rates.** Every readback matched, open and close returned OK, and the GPU and NPU rates fell in
+  their bands.
+
+A count therefore reports a completed period only. **Every phase that reads the counters needs a period that ends
+inside it, and the owner must sample at the period ends:** each sample comes just after an end and is that period's
+total. A phase shorter than one period reads 0.
+
+The data counts per job came to 1.46-2.00 times the bytes the jobs move divided by 16. The analysis of those ratios
+is in progress, and their calibration is not established.
+
 The two CPU bridges (AXI2HIF, 0x0a030000 and 0x0a040000) have counters too. The vendor driver accesses them behind
 a clock (`cpu_direct`, CCU 0x0c00 and 0x0c0c) and a selector bit (0x08000200) that no capture from port 3-1 has read.
 They are left to a later stage.

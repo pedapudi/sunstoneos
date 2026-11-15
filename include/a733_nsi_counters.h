@@ -13,7 +13,13 @@
  * programs a bank, and ending the phase restores CYCLE, CLR and ENABLE to their reset values with readbacks; a
  * failed readback restores every programmed bank and refuses later writes until the next open. Restore puts one bank
  * back alone, for the power-off of its master's domain (the vendor device tree places port 6 in GPU_TOP and port 18 in
- * the NPU domain). */
+ * the NPU domain).
+ *
+ * The counts latch. On the board, each count stays 0 until the first period end after enable. At each period end it
+ * steps to that period's total and holds that value until the next. A caller therefore gives every measured phase a
+ * CYCLE that ends inside it and samples just after each period end. CYCLE counts the 600 MHz NSI clock, so
+ * 60,000,000 cycles is 100 ms. A phase shorter than one period reads 0
+ * (docs/designs/concurrent-accel.md, "NSI counters"). */
 #define A733_NSI_COUNTER_BASE UINT32_C(0x02020000)
 #define A733_NSI_COUNTER_BANKS 2u   /* ports 6 and 18, the two accelerator ports this diagnostic owns */
 #define A733_NSI_COUNTER_WORDS 9u   /* ENABLE, CLR, CYCLE, RQ_RD, RQ_WR, DT_RD, DT_WR, LA_RD, LA_WR */
