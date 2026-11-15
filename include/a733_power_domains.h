@@ -87,6 +87,10 @@ struct a733_power_domains {
      * A733_POWER_DCDC4_VERIFIED is set, which publishes it. The GPU platform
      * may raise DCDC4 afterwards, so its supply consumer samples it again. */
     struct a733_pmic_snapshot dcdc4;
+    /* The owner's clock, in microseconds, at the step that first publishes
+     * A733_POWER_DCDC2_VERIFIED; written once, before that bit, which
+     * publishes it. Read it only after that bit is seen. */
+    uint64_t verified_at;
     uint64_t verify_at, verify_deadline, last_now;
     unsigned running, supply_stage, supply_verified, failed;
     unsigned settled_supply; /* Before the service runs only; then read-only. */

@@ -255,6 +255,8 @@ static int timely(struct a733_video_unit *u){u->last_now=us();return !u->failed&
 static int lock(struct a733_video_unit *u){u->locked=1;return timely(u);}
 static int unlock(struct a733_video_unit *u){u->locked=0;return timely(u);}
 static int held(struct a733_video_unit *u){(void)u;return 1;}
+/* As drivers/video/a733_video_unit.c: a clean refusal releases the lock. */
+int a733_video_unit_refuse_held(struct a733_video_unit *u){if(!u->failed)(void)unlock(u);return fail(u);}
 int a733_video_unit_identity(struct a733_video_unit *u,uint64_t *v){(void)u;(void)v;assert(0);return 0;}
 static int update(struct a733_video_unit *u,uintptr_t a,uint32_t mask,uint32_t value){
  assert(a==CCU+0xa8c&&mask==BIT(18));

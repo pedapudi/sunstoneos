@@ -113,6 +113,41 @@ static enum a733_power_row_state settle(struct a733_power_domain_row *r,unsigned
     return a733_power_domain_state(r);
 }
 static void setup(void){domains_model_setup(0x28,23);}
+/* verified_at: written once, with the owner's clock at the step that first
+ * publishes DCDC2 as verified. A settled supply publishes DCDC2 at its own
+ * result, before DCDC4; otherwise both rails publish with the done bit. The
+ * value is set before the bit is seen and never changes in later steps. */
+static void supply_time_case(unsigned settled)
+{
+    setup();
+    struct a733_rail_token t={0};struct a733_power_domain_row r={0};
+    assert(a733_power_domain_row_init(&r,&d.owner,1,59,&t));
+    if(settled)assert(a733_power_domains_settled_supply(&d.owner));
+    uint64_t first=0,start=0,end=0,seen=0;unsigned dcdc4_after=0;
+    d.wake_at=0;
+    for(unsigned i=0;i<100000 && !(a733_power_authority_load(&m.rails.authority)&A733_POWER_SUPPLY_DONE);++i) {
+        if(d.wake_at!=UINT64_MAX && d.wake_at>m.now)m.now=d.wake_at;
+        const uint64_t before=m.now;const uint64_t held=d.owner.verified_at;
+        service_step();
+        const unsigned w=a733_power_authority_load(&m.rails.authority);
+        if(!(w&A733_POWER_DCDC2_VERIFIED)) {
+            assert(!d.owner.verified_at);
+            continue;
+        }
+        if(!seen){seen=1;first=d.owner.verified_at;start=before;end=m.now;dcdc4_after=!(w&A733_POWER_DCDC4_VERIFIED);}
+        else assert(d.owner.verified_at==held && held==first);
+    }
+    assert(seen && first>=start && first<=end && first);
+    /* Settled: DCDC2 publishes alone, before DCDC4 and the done bit. */
+    assert(dcdc4_after==settled);
+    for(unsigned i=0;i<20;++i){m.now+=TICK_US;service_step();}
+    assert(d.owner.verified_at==first);
+    const unsigned w=a733_power_authority_load(&m.rails.authority);
+    assert((w&(A733_POWER_SUPPLY_DONE|A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED))==
+        (A733_POWER_SUPPLY_DONE|A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED));
+    printf("verified-at %s %llu step %llu..%llu\n",settled ? "settled" : "boot",
+           (unsigned long long)first,(unsigned long long)start,(unsigned long long)end);
+}
 /* Holds the rail ledger busy from the first time read after the verification
  * request is queued until the provider expires it, so the request cannot be
  * activated: 1 armed, 2 holding, 3 released after the expiry. */
@@ -548,6 +583,7 @@ int main(int argc,char **argv)
     setup();domains_boot();
     assert(!(a733_power_authority_load(&m.rails.authority)&(A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED)));
     assert(!m.trace_count && d.steps==1);
+    supply_time_case(0);supply_time_case(1);
     /* Boot verification: 12 single-register transactions, both rails verified,
      * and the verification token released afterwards. */
     setup();
@@ -666,6 +702,7 @@ int main(int argc,char **argv)
         domains_boot();
         const unsigned verified=a733_power_authority_load(&m.rails.authority)&
             (A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED);
+        assert(rail ? !d.owner.verified_at : d.owner.verified_at!=0);
         assert(rail ? verified==A733_POWER_DCDC4_VERIFIED :
                verified==(A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED) &&
                d.owner.dcdc4.programmed_uv==A733_GPU_SUPPLY_UV);

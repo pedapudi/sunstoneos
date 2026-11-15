@@ -11,7 +11,9 @@ supply verification over modeled PCK600, CCU and R_CCU registers (checks/power-d
 - its access traces of domains 1, 4 and 5 (--domain-traces), which must equal checks/data/power-domains-traces.txt.
   That file is the same output from the owner at bringup 3ab4c296d, before domain 2 was added, so adding domain 2
   changes no access of the other domains;
-- checks/power-domains-service.c, the service task's PMIC and step bounds.
+- checks/power-domains-service.c, the service task's PMIC and step bounds;
+- verified_at, the DCDC2 supply-verification time: written once, at the step that first publishes DCDC2 as verified,
+  both with a settled supply (DCDC2 alone, at its own result) and without (with the done bit).
 
 The five delay words and the policy nibble that the owner writes to domain 2 must equal the SUN60IW2_PCK_VE_DEC row
 of the hash-pinned vendor pck600_domains.c, written at the offsets of its sun60iw2 PMU table (sunxi_pd_init, then
@@ -62,6 +64,14 @@ MUTANTS = [
     ('{return id==1 ? 0 : id==4 ? 1 : id==5 ? 2 : id==2 ? 3 : -1;}', '{return id==1 ? 0 : id==4 ? 1 : id==5 ? 2 : -1;}',
      'domain 2 without a slot'),
     ('slot(domain)<0 || domain==2)return 0;', 'slot(domain)<0)return 0;', 'read-only check admits domain 2'),
+    ('if(!rail4)d->verified_at=now;', 'd->verified_at=now;', 'settled DCDC4 result rewrites verified_at'),
+    ('if(!rail4)d->verified_at=now;', '', 'settled supply leaves verified_at unwritten'),
+    ('if(!d->settled_supply && (d->supply_verified&A733_POWER_DCDC2_VERIFIED))d->verified_at=now;',
+     'if(d->supply_verified&A733_POWER_DCDC2_VERIFIED)d->verified_at=now;', 'done bit rewrites a settled verified_at'),
+    ('if(!d->settled_supply && (d->supply_verified&A733_POWER_DCDC2_VERIFIED))d->verified_at=now;',
+     'if(!d->settled_supply)d->verified_at=now;', 'verified_at written with DCDC2 unverified'),
+    ('if(!d->settled_supply && (d->supply_verified&A733_POWER_DCDC2_VERIFIED))d->verified_at=now;', '',
+     'boot verification leaves verified_at unwritten'),
 ]
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

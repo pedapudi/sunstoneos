@@ -350,6 +350,7 @@ static int verify(struct a733_power_domains *d,uint64_t now)
             /* A settled supply publishes each verified rail at once, so its
              * consumers need not wait for the other rail's snapshot. */
             if(d->settled_supply) {
+                if(!rail4)d->verified_at=now; /* before the release store that publishes DCDC2 */
                 a733_power_authority_set(word(d),rail4 ? A733_POWER_DCDC4_VERIFIED : A733_POWER_DCDC2_VERIFIED);
                 wake_rows(d);
             }
@@ -358,7 +359,11 @@ static int verify(struct a733_power_domains *d,uint64_t now)
         if(r==A733_PMIC_BUSY)return 1;
         if(r!=A733_PMIC_COMPLETE){verified(d,0);d->supply_stage=V_DONE;return 0;}
         d->supply_request=(struct a733_pmic_request){0};
-        if(++d->supply_stage==V_RELEASE)verified(d,1);
+        if(++d->supply_stage==V_RELEASE) {
+            /* Without a settled supply, verified(d,1) first publishes DCDC2. */
+            if(!d->settled_supply && (d->supply_verified&A733_POWER_DCDC2_VERIFIED))d->verified_at=now;
+            verified(d,1);
+        }
         return 1;
     }
     default:verified(d,0);return 0;
