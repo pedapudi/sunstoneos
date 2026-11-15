@@ -27,7 +27,7 @@ The open adds checks that the vendor driver does not make, each read before the 
 - A module clock found gated on already reads 0x80000000.
 - The power-domain owner's read-only domain-1 check passes: both critical gates and the PPU bus clock (R_CCU 0x1ac bit 0) open, and policy and status agreeing at 0 or 8.
 
-A refusal at any of these writes nothing and leaves the engine closed. A failure after the first write marks the service FAULT, keeps every lease and gate as it is, and makes the quiesce step report fault site 0x931 with the failing step and word.
+A refusal at any of these writes nothing and leaves the engine closed. A failure after the first write marks the service FAULT and keeps the fault record (step and word) for `ss_g2d_fault`. The service then gets one close, from `ss_g2d_close` or from its quiesce step: the vendor-order close of the next section, run from the state the fault left. The close touches the engine's registers only while its bus clock and reset read open. When every close step reads back, the service is CLOSED and its quiesce step reports DONE, so the session returns normally with the fault in the application's record. When a close step fails, the service stays FAULT and keeps its leases and gates, and the quiesce step reports fault site 0x931 with the first failing step and word; the failure return then cannot finish and the watchdog ends the session. [os-g2d-fault-return.py](../checks/os-g2d-fault-return.py) runs that return through the image's own quiesce registry.
 
 ## The open record
 
