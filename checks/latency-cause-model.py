@@ -48,6 +48,21 @@ def run_guest(qemu, image, seconds):
     return done.returncode, done.stdout + done.stderr
 
 
+# The peer's report of the planted defect: LATENCY_CAUSE_PING_SEQUENCE is status 5 (apps/latency/cause-ping.h).
+PEER_FAILED = re.compile(r'^latency cause ping failed: pair=[0-9] status=5$', re.M)
+BUDGET_FAILURE = 'FAIL latency phase='
+ATTEMPTS = 3
+
+
+def run_conclusive(qemu, image, seconds, concluded=lambda text: False):
+    """run_guest, again when the guest's own run budget ran out on a loaded host before the run reached the claim being checked."""
+    for _ in range(ATTEMPTS):
+        code, log = run_guest(qemu, image, seconds)
+        if BUDGET_FAILURE not in log or concluded(log):
+            break
+    return code, log
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build', type=Path, required=True)
@@ -58,7 +73,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     seconds = harness.qemu_kill_seconds('latency-cause-model')
     image = build / (TARGET + '.elf')
-    code, log = run_guest(args.qemu, image, seconds)
+    code, log = run_conclusive(args.qemu, image, seconds)
     (out / 'qemu-pass.log').write_text(log)
     assert code == 0 and 'PASS latency cause model' in log and 'FAIL' not in log, ('the cause model did not pass', out / 'qemu-pass.log')
     print('PASS cause ping completes: the model printed its PASS line on the multi-threaded guest')
@@ -87,11 +102,16 @@ def main():
     command = [word.replace(str(build / (TARGET + '.map')), str(out / 'broken.map')) for word in command]
     done = subprocess.run(command, cwd=build, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr[-2000:]
-    code, log = run_guest(args.qemu, broken, seconds)
+    # The planted defect is detected when the model exits non-zero without its PASS line and either the ping assertion fails or the
+    # peer that met the planted sequence error reports it (apps/latency/workload.c, ss_latency_cause_ping_failed). Which FAIL line
+    # comes first is not part of the claim: a host so loaded that the guest's run budget runs out reaches workload.c's budget
+    # failure first, and that run is retried.
+    code, log = run_conclusive(args.qemu, broken, seconds, lambda text: expected in text or PEER_FAILED.search(text))
     (out / 'qemu-broken.log').write_text(log)
-    assert code != 0 and expected in log and 'PASS latency cause model' not in log, ('the broken ping did not fail the model', expected, out / 'qemu-broken.log')
-    (out / 'result.json').write_text(json.dumps({'passed': True, 'expected_failure': expected}, indent=1) + '\n')
-    print('PASS broken ping fails the model: ' + expected)
+    detected = expected in log or PEER_FAILED.search(log)
+    assert code != 0 and detected and 'PASS latency cause model' not in log, ('the broken ping did not fail the model', expected, out / 'qemu-broken.log')
+    (out / 'result.json').write_text(json.dumps({'passed': True, 'expected_failure': expected, 'ping_assertion': expected in log}, indent=1) + '\n')
+    print('PASS broken ping fails the model: ' + ('the ping assertion ' + expected if expected in log else 'the peer reported the planted sequence error'))
 
 
 if __name__ == '__main__':

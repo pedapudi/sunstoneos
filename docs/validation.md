@@ -297,6 +297,29 @@ left the model's functional assertions to "its own checks", of which there were 
   linked with its own link command) and requires the model to fail at its ping assertion. It runs on real threads, so it holds the timing
   lock (`timing_checks` in `tools/gate-slots.json`), and its kill limit is 4 times the slowest loaded run, 23.2 s.
 
+The model failed on 15 to 25 of 96 runs beside eight busy processes on the multi-threaded guest, in four ways, all from the host's
+scheduling of the vCPUs and none from the ping or the scheduler. The check now passes 96 of 96 runs under the same load, and passed four
+whole runs of itself, pass and mutant halves, beside eight busy processes.
+
+- `model.c` asserted that every busy wake lies inside its phase window. The tick hook released a wake for a tick that came due before the
+  phase began whenever the interrupt reached CPU0 late (a host stall of up to 78 ms was measured); the recorder places a sample in the phase
+  that holds its whole interval, so such a wake counted toward the phase without being in its window. The hook now releases only ticks that
+  came due inside the phase. A wake that runs after the end of its phase still fails (a mutant that adds 2^40 counts to the running stamp
+  fails the model).
+- The wake-segment model asserted that all 128 busy wakes of a core link to an interrupt chain. A chain a later interrupt replaces before the
+  woken task finishes its bookkeeping is counted unlinked, by design (`ss_wake_seg_running`), and a stalled core does that to about one wake
+  in a hundred. It now requires every wake to be linked or unlinked and more than half to be linked, so a recorder that links none fails.
+- It asserted that a core CPU0 releases arms no timer. CPU1 and CPU6, the cores of the cause ping, arm timers for the ping's waits while the
+  recorder is still armed, three to seven times on a loaded host; the other cores must still arm none.
+- It asserted two complete busy ticks. A tick is complete only when no core still holds its previous wake, and a loaded host left one in
+  two of 96 runs. It now requires one, and a second exactly when more than one was filed.
+
+The broken-ping half expected `model.c:0x34` to be the first FAIL line. On a host loaded enough that the guest's own run budget (12 s of guest time)
+ran out first, the run ended at `workload.c`'s budget failure and the check reported that the broken ping did not fail the model. The peer
+that meets the planted sequence error now reports it when it happens (`ss_latency_cause_ping_failed`, a weak no-op outside the model), and
+the check accepts a non-zero exit without the PASS line and either that report or the ping assertion. A run that ends at the budget failure
+without either is repeated, up to three times, in both halves.
+
 ### Gate slots and the timing lock
 
 The host runs N gates at once, not one. `tools/gate_slots.py` holds the slots as the files `~/.cache/sunstoneos/gate.lock.0` to
@@ -323,6 +346,23 @@ host load (in one full run of the check beside 24 busy processes, 11 of 71 QEMU 
 `scheduler-partitioned-qemu` takes 905 ticks in nearly every run, 1,600 in about one run in fifty under host load and 1,891 under the
 heaviest perturbation, against a bound of 7,600; each progress wait of `scheduler-objects-qemu` has 4,000 ticks, and how close a run
 comes to that is not recorded.
+The perturbed partitioned models passed at the gate's delays (300, 1,000 and 3,000 turns) and failed at others, on bringup as much as on
+the branch that reported it, and every run of one delay gave the same verdict (20 of 20 runs, one output hash). Three causes, each found
+from a trace of one failing delay, are fixed in the fixture and the storm platform, not in the kernel:
+the controller polls the progress of a lower-priority task (the shielded-event task, the movers) with `vTaskDelay(1)`. With 3,500 turns at
+`owner-drain` the stretch between the controller's block and the switch that follows it took 11 ticks of the shared virtual clock, the shield
+was selected on the same tick that the controller's one-tick delay expired, and it was preempted before it executed an instruction, for
+7,000 polls in a row. Every poll in `checks/scheduler-partitioned-qemu.c` now sleeps `limit(1)` ticks with a fixed count, so the window
+a lower-priority task gets grows with the injected delay and is one tick at none. The `published on SGI 3` assertion of the band phase read
+the SGI count at the moment the band task ran; at some `owner-publish` delays the owner's own tick takes the hint before the doorbell, so
+the count rises one tick later. The check now waits, within the scaled bound, for the count to rise; `band-publication-sgi0`, which drops
+the SGI, still fails it. The storm model's interrupt fires every 33,000 instructions and each interrupt exit runs owner work; once an exit
+costs as much as that period (about 2,800 turns at `owner-drain`) the core runs only exits and the model prints no verdict. The
+storm period (`platform/qemu-smp/platform.c`) grows with the injected turns, and the reply and notification timeouts of the workers
+scale with `limit()`, because a saturated core 0 can leave a worker ready for longer than 2,000 ticks (at 2,500 turns of `owner-drain` in
+the storm model worker 0 stayed ready for 2,000 ticks while core 0 spent most of its samples in the delay loop). The storm model still
+prints no verdict within 15 minutes at 5,000 turns of `owner-drain`, where it finishes in 7 s at 4,750; the sweep's kill limit reports that
+as a timeout.
 The perturbation sweep kills a QEMU run that exceeds eight times the slowest measured point,
 85.7 s, recorded in the same file; the slowest run took 192 s beside 24 busy processes. Other gates' work still runs beside them. A gate that wants the lock writes a ticket in `~/.cache/sunstoneos/gate-timing-queue/` and takes the lock only when its ticket is the first live one, landings before workers and then oldest first, as for the slots; a free lock is not taken past an earlier waiter, and the gate that holds it keeps it until its step ends. A landing therefore waits only for the step that runs, not for the workers queued before it (measured on 2026-11-13: landing gates waited up to 475 s for this lock). The list is `timing_checks` and `timing_steps` in the same file. A check's
 pass criteria do not change. `checks/gate-slots.py` runs two gates at once, the exclusive timing lock, a landing that goes ahead of an

@@ -9,6 +9,7 @@ int os_granted(unsigned mask){return mask&&(adapter_session.granted&mask)==mask;
 const struct ss_application ss_application={.manifest=&adapter_manifest};
 /* The performance service is outside this adapter: a session without perf never reaches it. */
 int os_perf_step(struct a733_cpu_clock *c,const struct a733_thermal_policy *p,int burst){(void)c;(void)p;(void)burst;return -1;}
+uint32_t os_perf_fault_word(int burst){(void)burst;return 0;}
 /* The supervised lifetime: the returning units (apps/os/cpu-return*.c) are outside this adapter, and its branches are
  * not taken. */
 unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}

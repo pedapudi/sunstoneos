@@ -658,6 +658,7 @@ def c_tables(m):
     gpu = m.get('gpu')
     gpu_us = gpu['job_us'] if gpu else 0
     sd_guard = '#if 1' if any(not (r['flags'] & 8) for r in m.get('large_regions', [])) else '#ifdef SUNSTONE_A733_OS_SD_WRITE'
+    declared = m['devices_required'] | m['devices_optional']
     lines = ['/* Fixed image composition from the application manifest. */',
              '#include "os.h"', '#include "application.h"', '#include "irq_table.h"',
              '#include "%s-app.h"' % c,
@@ -711,6 +712,7 @@ def c_tables(m):
              'extern void os_headset_uart_irq(void);', '#endif',
              sd_guard, 'extern void os_sd_irq(void);', '#endif',
              '#ifdef SUNSTONE_A733_RADIO_IRQ', 'extern void os_radio_irq(void);', '#endif',
+             'extern void os_g2d_irq(void);', 'extern void os_video_decode_irq(void);',
              'const struct a733_irq_route a733_irq_routes[] = {', '    {71,0,0xd8,os_thermal_irq},',
              '#ifdef SUNSTONE_BOARD_USB2_IRQ', '    {187,0,0xd8,board_host_irq},', '#endif',
              # The NPU's line, in every image; the hardware-facts probe takes it itself.
@@ -724,7 +726,11 @@ def c_tables(m):
              '#ifndef SUNSTONE_A733_HW_FACTS', '#ifdef SUNSTONE_A733_OS_DMA', '    {143,0,0xd8,os_dma0_irq},', '#else',
              '    {143,0,0xd8,os_audio_irq},', '#endif', '#endif',
              '#ifdef SUNSTONE_A733_OS_GPU', ('    {95,A733_SMP_APPLICATION_CORE,0xd8,os_gpu_queue_irq},' if m.get('cluster', 0) else '    {95,2,0xd8,os_gpu_queue_irq},'), '#endif',
-             ] + ['    {%d,0,0xd8,os_i2c_irq_%s},' % (d['intid'], d['symbol']) for d in m.get('i2c', [])] + (['    {228,0,0xd8,os_rtc_irq},'] if m.get('rtc') else []) + [
+             ] + ['    {%d,0,0xd8,os_i2c_irq_%s},' % (d['intid'], d['symbol']) for d in m.get('i2c', [])] + (['    {228,0,0xd8,os_rtc_irq},'] if m.get('rtc') else []) + (
+             # The G2D (GIC_SPI 51) and video decoder (ve@1c0e000, GIC_SPI 49) lines, for an application that declares
+             # the device; each service enables its INTID in its own start entry (docs/designs/one-os-image.md).
+             ['    {83,0,0xd8,os_g2d_irq},'] if declared & DEVICES['g2d'] else []) + (
+             ['    {81,0,0xd8,os_video_decode_irq},'] if declared & DEVICES['video-decode'] else []) + [
              '#ifdef SUNSTONE_A733_HW_FACTS', '    {97,0,0xd8,os_hw_facts_irq},{143,0,0xd8,os_hw_facts_irq},{95,0,0xd8,os_hw_facts_irq},', '#endif', '};',
              'const unsigned a733_irq_route_count=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);',
              '#include "cpu-return-spi.h"',

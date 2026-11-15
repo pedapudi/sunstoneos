@@ -50,6 +50,9 @@ static struct {
     unsigned npu_sequence;
     uint32_t number;     /* The command running; 0 for the boot switch. */
     uint32_t accepted, completed;
+    /* For the failure record (os_perf_fault_word): the statement that set failed first, the last PMIC and rail ledger
+     * answers and the rail of the last snapshot. */
+    unsigned fail_point, last_pmic, last_rail, last_index;
 } perf;
 /* USB0's command: number<<32 | command<<12 | selection; 0 when empty. */
 static atomic_uint_fast64_t mailbox;
@@ -60,6 +63,13 @@ static _Atomic uint32_t report[OS_PERF_REPORT_BYTES/4];
 static atomic_uint report_sequence;
 
 static int now(void *v,uint64_t *t){return v==&perf && a733_counter_clock_now(&providers.shared.counter,t);}
+/* The failure points that os_perf_fault_word names (bits 27:24). */
+enum { FAIL_NONE, FAIL_TIME, FAIL_RESULT_LATE, FAIL_RESULT, FAIL_REAP, FAIL_RELEASE, FAIL_NPU, FAIL_NPU_LATE, FAIL_GPU };
+static enum a733_perf_status failed_at(unsigned point)
+{
+    if(!perf.failed)perf.fail_point=point;
+    perf.failed=1;return A733_PERF_FAILED;
+}
 static int read_cpu(void *v,uintptr_t a,uint32_t *out)
 {(void)v;if(!a733_cpu_clock_address(a,0))return 0;*out=a733_mmio_read32(a);return 1;}
 /* CCU words of the readback; the thermal start checked the CCU page's
@@ -85,18 +95,22 @@ static enum a733_perf_status map(int r)
 static enum a733_perf_status snapshot(unsigned i,uint64_t deadline)
 {
     uint64_t t;
-    if(perf.failed || !now(&perf,&t)){perf.failed=1;return A733_PERF_FAILED;}
+    if(perf.failed)return A733_PERF_FAILED;
+    if(!now(&perf,&t))return failed_at(FAIL_TIME);
+    perf.last_index=i;
     const uint64_t owner=perf.cpu->config.owner;
     if(!perf.rail.id) {
         if(t>=deadline)return A733_PERF_REFUSED;
         const a733_rail_mask_t shared=A733_RAIL_BIT(rails[i]);
         enum a733_rail_result r=a733_rail_acquire(&providers.shared.rails,owner,shared,0,deadline,&perf.rail);
+        perf.last_rail=r;
         if(r==A733_RAIL_BUSY)return A733_PERF_PENDING;
         if(r!=A733_RAIL_PENDING){perf.rail=(struct a733_rail_token){0};return A733_PERF_REFUSED;}
     }
     if(!perf.requested) {
         if(t>=deadline)return A733_PERF_REFUSED;
         enum a733_pmic_status s=a733_pmic_submit(&providers.shared.pmic,owner,&perf.rail,rails[i],deadline,&perf.request);
+        perf.last_pmic=s;
         if(s==A733_PMIC_BUSY)return A733_PERF_PENDING;
         if(s!=A733_PMIC_PENDING || !perf.request.id)return A733_PERF_REFUSED;
         perf.requested=1;
@@ -104,11 +118,12 @@ static enum a733_perf_status snapshot(unsigned i,uint64_t deadline)
     if(perf.requested==1) {
         struct a733_pmic_snapshot shot={0};
         enum a733_pmic_status s=a733_pmic_result(&providers.shared.pmic,&perf.request,&shot);
+        perf.last_pmic=s;
         if(s==A733_PMIC_PENDING || s==A733_PMIC_BUSY) {
             if(t<deadline)return A733_PERF_PENDING;
-            perf.failed=1;return A733_PERF_FAILED;
+            return failed_at(FAIL_RESULT_LATE);
         }
-        if(s!=A733_PMIC_COMPLETE && s!=A733_PMIC_EXPIRED){perf.failed=1;return A733_PERF_FAILED;}
+        if(s!=A733_PMIC_COMPLETE && s!=A733_PMIC_EXPIRED)return failed_at(FAIL_RESULT);
         perf.snapshot_ok=s==A733_PMIC_COMPLETE && shot.rail==rails[i] && shot.enabled && shot.decoded;
         if(perf.snapshot_ok)perf.rail_mv[i]=shot.programmed_uv/1000u;
         perf.requested=2;
@@ -116,8 +131,9 @@ static enum a733_perf_status snapshot(unsigned i,uint64_t deadline)
     /* Reaping may contend after completion. Keep the result and original
      * deadline; do not submit the same snapshot again. */
     enum a733_pmic_status s=a733_pmic_reap(&providers.shared.pmic,&perf.request);
+    perf.last_pmic=s;
     if(s==A733_PMIC_BUSY && t<deadline)return A733_PERF_PENDING;
-    if(s!=A733_PMIC_COMPLETE){perf.failed=1;return A733_PERF_FAILED;}
+    if(s!=A733_PMIC_COMPLETE)return failed_at(FAIL_REAP);
     perf.requested=0;perf.request=(struct a733_pmic_request){0};
     return perf.snapshot_ok ? A733_PERF_DONE : A733_PERF_REFUSED;
 }
@@ -126,10 +142,11 @@ static enum a733_perf_status release_rail(uint64_t deadline)
     if(!perf.rail.id)return A733_PERF_DONE;
     if(perf.requested)return A733_PERF_FAILED;
     enum a733_rail_result r=a733_rail_release(&providers.shared.rails,&perf.rail,deadline);
+    perf.last_rail=r;
     if(r==A733_RAIL_READY){perf.rail=(struct a733_rail_token){0};return A733_PERF_DONE;}
     uint64_t t;
     if((r==A733_RAIL_BUSY || r==A733_RAIL_PENDING) && now(&perf,&t) && t<deadline)return A733_PERF_PENDING;
-    perf.failed=1;return A733_PERF_FAILED;
+    return failed_at(FAIL_RELEASE);
 }
 static enum a733_perf_status read_block(enum a733_perf_block b,uint64_t deadline,int start,struct a733_perf_point *out)
 {
@@ -139,7 +156,7 @@ static enum a733_perf_status read_block(enum a733_perf_block b,uint64_t deadline
         if(start && (perf.cancelled || perf.cpu_busy || a733_thermal_policy_level(perf.policy)!=A733_THERMAL_NORMAL))
             return A733_PERF_REFUSED;
         enum a733_perf_status r=os_gpu_perf_action(A733_PERF_READ,0,deadline,start,out);
-        if(r==A733_PERF_FAILED)perf.failed=1;
+        if(r==A733_PERF_FAILED)(void)failed_at(FAIL_GPU);
         return r;
     }
 #endif
@@ -192,7 +209,7 @@ static enum a733_perf_status act(void *v,enum a733_perf_action a,enum a733_perf_
 #ifdef SUNSTONE_A733_OS_GPU
     if(b==A733_PERF_GPU && a!=A733_PERF_READ) {
         enum a733_perf_status r=os_gpu_perf_action(a,value,deadline,start,out);
-        if(r==A733_PERF_FAILED)perf.failed=1;
+        if(r==A733_PERF_FAILED)(void)failed_at(FAIL_GPU);
         return r;
     }
 #endif
@@ -228,12 +245,12 @@ static enum a733_perf_status act(void *v,enum a733_perf_action a,enum a733_perf_
         switch(os_npu_perf_answer(perf.npu_sequence)) {
         case 1:return A733_PERF_DONE;
         case 2:return A733_PERF_REFUSED;
-        case 3:perf.failed=1;return A733_PERF_FAILED;
+        case 3:return failed_at(FAIL_NPU);
         default:
             /* The bootstrap answers within its bounded retune; past the
              * deadline the NPU's state is not known. */
             if(now(&perf,&t) && t<deadline)return A733_PERF_PENDING;
-            perf.failed=1;return A733_PERF_FAILED;
+            return failed_at(FAIL_NPU_LATE);
         }
     case A733_PERF_RELEASE:return A733_PERF_DONE; /* The stopped NPU stays stopped. */
     default:return A733_PERF_REFUSED;
@@ -361,6 +378,13 @@ int os_perf_step(struct a733_cpu_clock *cpu,const struct a733_thermal_policy *po
      * rather than queueing a second one. */
     if(taken)atomic_store_explicit(&mailbox,0,memory_order_release);
     return perf.phase==SERVE;
+}
+uint32_t os_perf_fault_word(int burst)
+{
+    return UINT32_C(1)<<31|(uint32_t)(burst&7)|(uint32_t)!!perf.failed<<3|(perf.engine.retained&31u)<<4|
+        (perf.engine.record.failed_block&7u)<<9|(perf.requested&3u)<<12|(perf.phase&3u)<<14|(perf.engine.phase&3u)<<16|
+        (perf.last_pmic&7u)<<18|(perf.last_rail&7u)<<21|(perf.fail_point&15u)<<24|(perf.last_index&3u)<<28|
+        (uint32_t)!!perf.cpu_busy<<30;
 }
 /* USB0 task. A stable copy of the publication, then this request's answer. */
 void os_perf_usb(unsigned command,uint32_t selection,uint64_t epoch,uint8_t out[OS_PERF_REPORT_BYTES])

@@ -41,6 +41,9 @@ struct latency_cause_ping_report {
 _Static_assert(sizeof(struct latency_cause_ping_report) == LATENCY_CAUSE_PING_BYTES,
                "cause ping report layout");
 
+/* Called by a peer, on its own core, when its exchange fails with status. A weak no-op except in the model image. */
+void ss_latency_cause_ping_failed(unsigned pair, unsigned status);
+
 /* Initialize before scheduling. Start once, after memory workers stop and before
  * recorder freeze. The controller polls done with its ordinary one-tick delay.
  * One overall 250ms raw-counter deadline bounds readiness and exchanges. A

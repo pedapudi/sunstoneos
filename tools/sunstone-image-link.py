@@ -266,6 +266,9 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
     header = ''.join((kit / name).read_text() for name in
                      ('sunstone_app.h', 'gpu_queue.h', 'sunstone_latency.h', 'sunstone_dma.h', 'sunstone_storage.h',
                       'sunstone_npu_queue.h', 'sunstone_i2c.h', 'sunstone_rtc.h'))
+    # The G2D and video decoder class headers arrive with their services; each one is read once it exists.
+    header += ''.join((kit / name).read_text() for name in ('sunstone_g2d.h', 'sunstone_video_decode.h')
+                      if (kit / name).exists())
     public_calls = set(re.findall(r'\b((?:ss_|gpu_queue_)[a-z0-9_]+)\s*\([^;{}]*\)\s*;', header))
     # A measurement call, not part of the application kit: an image built with SUNSTONE_TLBI_ISSUER links the issuer's
     # sample copy (include/sunstone_tlbi.h), which the scheduler measurement application reads.
