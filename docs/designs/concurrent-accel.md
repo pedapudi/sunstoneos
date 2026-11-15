@@ -675,6 +675,54 @@ The admission before the run read a composed state file: the latest port 3-1 sta
 the runner read those five words again, read-only over FEL under the port lock, found the NPU on, and used that read.
 The run took 32.9 s, with a 6.0 s reset, against the 39.8 s budget.
 
+### No model of the relu's write units fits the five widths
+
+Host analysis of the five measured widths, with no board run. The counts are per 8 rows of the 1,024-row relu, after
+the fixed 28 read requests and 306 read units of each job are removed. The descriptor fields are those of the graphs
+that ran, decoded with `tools/npu-descriptor-sweep.py`. Each descriptor matches that tool's prediction from the shape
+in all 48 words, so the five graphs differ only in their shape fields.
+
+| Width | Row bytes | Row bytes mod 64 | Write requests | Write units | Read requests | Read units | Tile x by y | Row stride (in, out) | Plane stride | Word 19 bits 26-27 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 128 | 256 | 0 | 16 | 160 | 24 | 192 | 127 x 2 | 256, 256 | 262,144 | set |
+| 144 | 288 | 32 | 18 | 208 | 22 | 232 | 127 x 2 | 288, 288 | 294,912 | set |
+| 176 | 352 | 32 | 21 | 256 | 25 | 280 | 127 x 2 | 352, 352 | 360,448 | set |
+| 192 | 384 | 0 | 24 | 240 | 28 | 288 | 127 x 2 | 384, 384 | 393,216 | set |
+| 256 | 512 | 0 | 32 | 320 | 40 | 352 | 127 x 2 | 512, 512 | 524,288 | set |
+
+- **Word 19 bits 26-27 do not separate the widths.** The bits are clear only when the output's size in bytes is not
+  a multiple of 64. A 1,024-row output of any width is a multiple of 64 bytes, so the bits are set in all five graphs.
+- **The excess write units** are counted against 1.25 units per 16 bytes, which fits the three aligned widths. They
+  are 28 per 8 rows at 144 (3.5 per row) and 36 at 176 (4.5 per row). The two widths share both the bytes past each
+  row's last 64-byte boundary (32) and the row-start offsets modulo 128 (0, 32, 64 and 96). The excess still differs,
+  so neither quantity alone sets it. In the tile layout, the second tile of a row holds 17 values (34 bytes) at 144
+  and 49 values (98 bytes) at 176. Both start 254 bytes into the row, which is not 16-byte aligned.
+- **Read requests** at 144 are 22 per 8 rows, fewer than the 24 at 128. A rule that grows with the row's tiles or
+  bytes cannot give that. The earlier rule (output tiles plus floor(width / 32) / 4 per row) gives 24.
+
+**Models tested.** Each family below was tested against all five points:
+
+- Writes split per row, per 127-value tile segment, or contiguous across rows.
+- Segments taken in row order or in tile order, with time-adjacent contiguous segments merged.
+- Requests split at 64-, 128-, 256- or 512-byte boundaries.
+- Units per request equal to a full burst, the 16-, 32- or 64-byte granules it touches, or its length, plus 0 to 4.
+- Linear fits of one or two terms in the bytes, the segments, the granules touched and the granules partly covered.
+
+No model fits the write units of all five widths within 1%. The best models fit three of them (128, 192 and 256). No model
+fits the read requests or the read units.
+
+One two-term expression reproduces the write requests at all five widths: half the 64-byte granules touched by the
+tile segments, minus a quarter of the 128-byte granules they cover partly. Its coefficients were fitted to these five
+points, and it says nothing about the units, so it is not a model. It would predict 18 requests per 8 rows at 160
+values per row.
+
+**No sixth width follows**, since no model predicts one. The SDK simulator computes outputs only and reports no
+memory traffic, so a descriptor mutation in the simulator cannot separate traffic models. One board measurement would
+separate the two remaining causes. The output row stride is a confirmed field. A 144-value relu whose output rows sit
+at a 320-byte stride keeps the tile layout and moves each row to a 64-byte boundary. If the excess follows the row
+alignment, it falls; if it follows the tile segments, it stays at 28 units per 8 rows. That run would execute a graph changed after
+compilation, so it needs its own approval. The tile planner stays unchanged.
+
 ## Stage 2: DMA completion timing
 
 DMA is a separate later stage. Its known work:
