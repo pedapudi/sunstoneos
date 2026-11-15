@@ -110,7 +110,7 @@ registry and GPU manager that each operation touches. The configurations hold
 | Operation | Instructions (16 leases and full table) |
 | --- | --- |
 | Rail status, one-rail token | 37 / 37; 3 / 3 lines |
-| Clock token status | 45 / 45 |
+| Clock token status | 51 / 51 |
 | Acquire, poll and release | 335 / 335 |
 | Borrow | 153 / 153 |
 | End borrow | 86 / 86 |
@@ -120,8 +120,11 @@ registry and GPU manager that each operation touches. The configurations hold
 Equal costs in the two configurations show that no operation scans holders. The
 ledger holds 31 rail leases. The power-domain row read costs 12 instructions with
 one acquire load and no exclusive access; load/store exclusive instructions and
-ARMv8.1 LSE atomics count as exclusive accesses. With `--limits` the check
-enforces the budgets of `docs/designs/power-authority.md`. The comparison with
+ARMv8.1 LSE atomics count as exclusive accesses. With `--limits`, which the gate passes (`GATE_RUNS`), the check
+enforces the budgets of `docs/designs/power-authority.md`. The clock status budget is the sum of the instructions that the operation must do,
+each with its reason in `CLOCK_STATUS_BUDGET`: the lookup and the registry entry and exit (45, the design measurement) and the retained-token
+test that makes a retained token report FAULT (6, added by `a6124e535`). The cost still does not grow with the holders, which is what the check
+protects; the instruction budget only keeps code from growing unnoticed in the poll that three drivers make against their tokens. The comparison with
 a 128-slot ledger design is in [the evidence file](evidence/rail-leases.jsonl).
 
 ## Checks
