@@ -15,8 +15,8 @@ pinned vendor driver initializes when it registers each domain.
 is the writer of domain 1 (DE_SYS, the display engine and G2D), domain 2
 (VE_DEC, the video decoder), domain 4 (NPU) and domain 5 (GPU_TOP). HDMI and
 DisplayPort write domain 10 themselves, and the video encoder only reads
-domain 3. Until the video decoder moves onto its row, its own cold start
-still writes domain 2. The design and its review are in
+domain 3. The video decoder requests domain 2 through its row and writes no
+PCK600 register. The design and its review are in
 [docs/designs/power-domains.md](designs/power-domains.md).
 
 ## Consumers hold rows
@@ -389,9 +389,10 @@ the cost model.
   modeled core and with two, and the retention of the I2C mutex after a fault
   that a client latches during a transfer.
 - `checks/power-domains-tree.py` checks the source facts: one writer of
-  domains 1 and 5, and five delay-row writers. The GPU controller is the
-  writer of domain 6 (GPU_CORE), and the GPU native adapter is the only
-  native allowlist that admits the delay row, for that domain alone.
+  domains 1, 2 and 5, with the decoder's platform and unit listed as
+  domain-2 readers, and three delay-row writers (the owner, HDMI and
+  DisplayPort). The GPU controller writes no delay row, and no native
+  allowlist admits one.
   It rejects direct NPU delay-row writes alongside a domain-4 row consumer,
   checks the five service tasks and their priorities, and rejects critical
   sections, scheduler suspension or waits in the owner's code.

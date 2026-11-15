@@ -291,35 +291,59 @@ contains a SID read helper at `0x29fc`, addressing `0x03006200 + offset`.
 Neither path establishes a sourced read-only A733 family predicate here.
 The binding therefore does not read or write SYSCTRL or SID.
 
-After ROM admission, the binding requires decoder PCK policy and status OFF,
-external reset asserted, module and local gates disabled, and autonomous module
-gating disabled with effective module status OFF. It also checks the selected
-parents and masked, inactive interrupt. Each poll performs one bounded step:
+The cold start needs the consumer's domain-2 row
+([power-domains.md](power-domains.md)); `a733_video_platform_init` refuses a
+cold configuration without one. The binding writes no PCK600 register: the
+power-domain owner programs the vendor delay row and the ON command, or adopts
+a domain already ON. The sequence has five phases.
 
-| Step | Physical register and operation |
-| --- | --- |
-| Power delays | Write and verify `0x07062170 = 0x1f1f1f`, `0x07062174 = 0x1f1f`, `0x07062c00 = 0x08080808`, `0x07062c04 = 0x0808`, `0x07062c10 = 8` |
-| Request power | Update PCK `0x07062000`, mask `0xf`, value `8` |
-| Wait for power | Poll `0x07062008 & 0xf == 8` under the job deadline; reset remains asserted |
-| Release external reset | Set CCU `0xa8c` bit 18 |
-| Enable local paths | Set CCU `0x5c0` bit 0, `0x5e0` bit 14, `0x5e4` bit 18, then `0xa8c` bit 2 |
-| Enable module | Set CCU `0xa88` bit 31, preserving admitted source/divider |
-| Validate accessible state | Recheck the inherited-state admission conditions, including effective clock status |
-| Cold VCU reset | At decoder `0x01c0e804`, set bits 0 and 4, then clear them, preserving other fields |
+| Phase | Register-lock hold | Accesses |
+| --- | --- | --- |
+| Entry, before the row request | yes | The 15 ROM words; fabric and parent clocks; reset asserted (`0xa8c` bit 18 clear), bus gate and module gate closed; `0x1b10 & 0x30001 == 0x10000`; INTID 81 quiet. `0x5c0`, `0x5e0` and `0x5e4` are read and recorded in any state. No PCK600 read. |
+| Row request and wait | no | `a733_power_domain_request(row, 1)` once; the binding returns pending until the owner answers. REFUSED or FAILED fails the unit with nothing written. |
+| Hold A | yes | Open `0x5e4` bit 18 (below); A1 reads the three critical gates and refuses unless `0x5c0` bit 0, `0x5e0` bit 14 and `0x5e4` bit 18 are set; release reset (`0xa8c` bit 18); open the bus gate (`0xa8c` bit 2); the module selector and divider and the PLL_VE0 table up to lock enable ([video-pll.md](designs/video-pll.md)). |
+| PLL lock wait | no | At most about 420 µs. |
+| Hold B | yes | PLL output gate and module gate (`0xa88` bit 31); the powered baseline, which rereads PCK2 policy and status; the cold VCU pulse at `0x01c0e804`, bits 0 and 4 set and then cleared. |
 
-The timing values and policy transition follow `pck600_domains.c`'s
-`SUN60IW2_PCK_VE_DEC` entry and power-on function. Reset release and gate order
-follow `cedar_ve.c`'s decoder enable path. Register access completes with `dsb sy`.
-The native writer admits only these local masks and the exact timing values.
-There is no rollback or power-down on an uncertain operation; leases remain
-held, and an uncertain register access also retains the mutex.
+From the row's ON answer to a started decoder the three last phases run in one
+acquire call. A busy register lock is effect-free: the call returns pending and
+the next call resumes at the same phase. The baseline's PCK2 reads stay
+although the owner has answered ON, because the encoder, on domain 3, shares
+the baseline and has no row.
 
-The BSP gate macro assigns its “key” register to the gate register itself.
-Its helper ORs `0x010000ff`, `0x41055800` or `0x40302` into the three gate
-registers. Those constants overlap unrelated writable gate fields in manual
-sections 4.1.6.82–84. The native binding follows the manual's owned-bit
-read-modify-write semantics and preserves every other field. Readback verifies
-register values; it does not qualify the physical clock path.
+**The MBUS clock gate.** CCU `0x5c0` bit 0, `0x5e0` bit 14 and `0x5e4` bit 18
+are `CLK_IS_CRITICAL` (`ccu-sun60iw2.c` lines 622, 663 and 688-692). The port
+3-3 FEL dump reads `0x5c0 = 0x110103ff` and `0x5e0 = 0xf1055803`, both bits
+set, and `0x5e4 = 0x4`, bit 18 clear. The binding opens `0x5e4` once, as the
+kernel's critical-clock registration does (`ccu_gate.c`
+`ccu_gate_helper_enable`, lines 213-240): a read-modify-write that ORs in the
+key value `0x40302`, then a readback. The kernel says key bits read as zero;
+the manual (4.1.6.84) documents bits 1, 8 and 9 as the VE encoder, CSI and ISP
+MBUS clock gates, and the FEL words of `0x5c0` and `0x5e0` show their key bits
+set. The readback therefore requires bit 18 set and every bit outside the key
+unchanged, and the binding records the written and read words. A word that
+already holds the whole key is not written. This is the binding's only gate
+write; it never writes `0x5c0` or `0x5e0`.
+
+**Quiesce.** `a733_video_decoder_quiesce` runs under one lock hold, in the
+vendor's order (`cedar_ve.c` `disable_cedar_hw_clk_module` and
+`disable_cedar_hw_clk_reset`, `ccu_gate.c` `ccu_pll_gate_helper_disable`):
+module gate off, bus gate off, reset asserted, then PLL_VE0's output gate,
+lock enable, enable and LDO cleared, which leaves `0x01204d00` with the board's
+bit 24. Domain 2 stays ON and the critical gates stay as they are. That end
+state is an admitted entry state for the next lifetime.
+
+**Write policy.** `a733_video_platform_write_policy` admits `0xa8c` bits 18 and
+2; `0xa88` bit 31 alone while the gate is open, and the selector and divider
+while it is closed; PLL_VE0 with owned bits `0xf870ff02` while none of its
+consumers runs on it; `0x5e4` only for a word that carries the whole key, with
+owned bits `0x40302`; and the decoder registers. It refuses every other CCU
+word, the AHB and MBUS master gates, and every PCK600 word. The read allowlist
+keeps PCK2 policy and status for the baseline and no delay-row word.
+
+**Failures.** A refusal on a value that was read completely releases the
+register lock before the unit fails; an uncertain access retains the lock and
+every token. There is no rollback or power-down.
 
 The A733 kernel performs the cold VCU pulse without inspecting compound identity.
 Its `CONFIG_ARCH_SUN60IW2` path applies before any of the three runtime policies
@@ -335,14 +359,32 @@ extents and cache publication before codec preparation. Cold power-on occurs
 before JPEG parsing because it is part of the executor's acquisition phase.
 It does not trigger decode or grant memory access by itself.
 
-The focused composed check in `checks/a733-video-cold.c` uses the published ROM
-bytes, real clock/PCK ownership managers and the existing JPEG fixture. It
-covers successful completion with an independently pending drain, ROM mismatch,
-missing effective PLL output, power acknowledgement timeout, uncertain write,
-and unsupported compound identity. A focused changed-order case uses identity
-`0x0003331000021320`: the mandatory cold VCU pulse precedes identity reads,
-while its later package reset still uses decoder offset `0x04`.
-The check verifies external reset remains asserted during
-power transition and unrelated gate values survive startup. Sanitizer execution
-and native AArch64 compilation pass. These are source/model results; native
-memory/cache/drain authority and physical decoder output remain unqualified.
+`checks/video-cold.py` runs the composed model `checks/a733-video-cold.c`. It
+joins the binding, the JPEG executor, the clock and PCK ownership managers and
+the actual PMIC provider, rail ledger and power-domain owner
+(`checks/power-domains-model.h`) with the published ROM bytes and the JPEG
+fixture. PCK domain 2 exists only in the owner model. The cases cover:
+
+- a non-vendor point from domain 0/0: completion with a pending drain, a ROM
+  byte changed, PERI0 status clear, a PPU that never acknowledges, an
+  uncertain write, an unlisted identity and the 26 MHz board;
+- the vendor point from the FEL words and fifteen other PLL entry and lock
+  states;
+- domain 2 left ON (adopted with no PCK write), policy and status disagreeing
+  (refused by the owner with no decoder write), reset released at entry
+  (refused with no request), either master gate clear after ON (refused at A1
+  after the `0x5e4` open), `0x5e4` key bits that read zero, and `0x5e4` already
+  open;
+- two lifetimes: the first from 0/0 ends in the quiesce, and the second starts
+  from its words, once with the CCU as the quiesce left it and once at the FEL
+  words. Domain 2 stays 8/8 and is adopted.
+
+The model asserts that the decoder writes nothing before the ON answer, never
+a PCK600 word or a master gate, that A1 precedes the reset release, and that
+the phases from ON to started take one acquire call. Twenty-eight driver
+mutants must each fail it. It prints the accesses of each lock hold; the
+budget in [video-pll.md](designs/video-pll.md) uses them. A focused
+changed-order case uses identity `0x0003331000021320`: the cold VCU pulse
+precedes identity reads, while its later package reset still uses decoder
+offset `0x04`. These are model results; memory, cache and drain authority and
+physical decoder output remain unqualified.

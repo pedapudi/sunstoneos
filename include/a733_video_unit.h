@@ -70,9 +70,10 @@ struct a733_video_unit {
     a733_clock_mask_t shared;
     uint32_t selected_mhz[3];
     unsigned initialized,failed,locked;
-    /* PLL programming: the entry state, bit 24 as read, and progress. */
+    /* PLL programming: the entry state, bit 24 as read, progress, and the
+     * lock wait's PLL reads. */
     uint32_t pll_inherited;
-    unsigned pll_state,pll_started,pll_locked,pll_done;
+    unsigned pll_state,pll_started,pll_locked,pll_done,pll_reads;
 };
 extern const struct a733_video_unit_desc a733_video_decoder_unit,a733_video_encoder_unit;
 
@@ -127,8 +128,16 @@ int a733_video_unit_clocks_entry(struct a733_video_unit *);
 int a733_video_unit_pll_start(struct a733_video_unit *);
 int a733_video_unit_pll_wait(struct a733_video_unit *);
 int a733_video_unit_pll_open(struct a733_video_unit *);
+/* stop, under the held mutex with the module gate closed: the output gate,
+ * lock enable, enable and LDO cleared in that order (ccu_gate.c
+ * ccu_pll_gate_helper_disable), leaving the factors and bit 24. 1 at once
+ * when nothing is programmed or pll_start has not run. */
+int a733_video_unit_pll_stop(struct a733_video_unit *);
 /* Clocks plus PCK ON, module/bus/local gates, autonomous power control and a
- * masked, inactive, level-triggered interrupt. No VE register is read. */
+ * masked, inactive, level-triggered interrupt. No VE register is read. The
+ * PCK policy and status reads stay although the decoder's cold start follows
+ * the owner's ON answer: the encoder, on domain 3, shares this baseline and
+ * has no row. */
 int a733_video_unit_baseline(struct a733_video_unit *);
 /* GIC distributor idle, interrupt masked, not pending or active, level. */
 int a733_video_unit_irq_quiet(struct a733_video_unit *);

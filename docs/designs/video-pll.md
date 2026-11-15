@@ -87,10 +87,11 @@ the decoder programs a PLL, so the code names PLL_VE0 and nothing else.
 
   Every other state refuses before any write. The gate controls and pattern
   words must read as on the board, and the module gate must be closed.
-- **Position.** The table starts after the power domain is on, the reset is
-  released and the bus gates are open, and ends before the module gate opens,
-  matching the vendor's order for the module clock.
-- **Start**, one poll under the register lock. Each write is a
+- **Position.** The table starts after the owner has answered the domain-2
+  row ON, the `0x5e4` gate is open, the reset is released and the bus gate is
+  open, and ends before the module gate opens, matching the vendor's order
+  for the module clock ([video-platform.md](../video-platform.md)).
+- **Start**, at the end of hold A under the register lock. Each write is a
   read-modify-write with readback, built on the previous readback; a field
   that already holds its value is not written. LOCK is written as zero and the
   readback ignores it; bit 24 keeps its read value.
@@ -99,7 +100,7 @@ the decoder programs a PLL, so the code names PLL_VE0 and nothing else.
   2. For a disabled PLL: LDO (bit 30), factors `0x00204d00` into N, P0 and M1,
      enable (bit 31), lock enable (bit 29). For a PLL left enabled: lock
      enable cleared (skipped when already clear), then set.
-- **Wait**, the next poll, without the register lock. The exclusive PLL_VE0
+- **Wait**, in the same acquire call, without the register lock. The exclusive PLL_VE0
   token makes the decoder the only writer of the word, as the PLL_NPU token
   does for the NPU startup. The lock wait is the one the CPU clock and the NPU
   startup use (`include/a733_pll_lock.h`): each read starts at least 3 µs after
@@ -107,13 +108,18 @@ the decoder programs a PLL, so the code names PLL_VE0 and nothing else.
   reads, then 20 µs after the third. Every read must equal the expected word
   apart from LOCK, so a changed field or another writer ends the wait. Times
   are whole microseconds, so each gap is 4 µs on the counter.
-- **Open**, the next poll under the register lock: the word must read enabled
+- **Open**, in the same call, at the start of hold B under the register lock: the word must read enabled
   and locked, the output gate opens, and the readback must be `0xf9204d00` with
   the board's bit 24. The module gate then opens, and every later clock check
   requires that exact PLL word.
 - **Faults.** A refused step, a missing LOCK or a deadline fails the unit and
   retains every token. PLL_VE0 then stays enabled with its output closed and
   the module gate stays closed; the next start admits that state.
+- **Quiesce** (`a733_video_decoder_quiesce`), with the module gate already
+  closed in the same hold: output gate, lock enable, enable, then LDO
+  cleared, as `ccu_pll_gate_helper_disable` (`ccu_gate.c` lines 40-69) does.
+  The word ends at `0x01204d00` with the board's bit 24, a disabled entry
+  state. Only a PLL that this start programmed or adopted is stopped.
 - **Native access.** The decoder's write allowlist is a pure rule,
   `a733_video_platform_write_policy`, which `native_write` applies with native
   reads. It accepts PLL_VE0 with the owned bits `0xf870ff02` only while none of
@@ -126,6 +132,38 @@ the decoder programs a PLL, so the code names PLL_VE0 and nothing else.
 - **Sessions.** The HEVC, H.264 encoder and JPEG encoder session producers
   default to module `0x01000000` at 624,000,000 Hz. The decoder's mux 1 is
   PLL_VE0, and the encoder's is PLL_VE1, the vendor's parent for each.
+
+### Cost of a cold start
+
+The counts come from the composed model (`checks/video-cold.py`, its `holds`
+lines) at the vendor point from the FEL words. A native access adds a mapping
+check of its page and a `DSB SY` before and after. A write adds the native
+writer's read of the old word, and the write policy's reads: three for each
+PLL_VE0 write (the three consumer module words) and up to two for a `0xa88`
+write with bit 31 clear.
+
+| Phase | Model accesses (writes) | Native accesses | Lock |
+| --- | --- | --- | --- |
+| Entry | 37 (0) | 37 | held |
+| Row request and answer | 0 | 0 in the decoder; 6 PPU writes and their reads in the owner if the domain is OFF | none |
+| Hold A | 22 (7) | 40: 22, plus 7 old-word reads, 9 PLL policy reads and 2 `0xa88` policy reads | held |
+| PLL lock wait | 4 to 100 PLL reads | same | none |
+| Hold B | 36 (4) | 43: 36, plus 4 old-word reads and 3 PLL policy reads | held |
+| `prepare`, identity | 3 (0) | 3 | held |
+| `prepare`, each of 18 steps | at most 3 (1) | at most 4 | held, one step per call |
+| Quiesce | 18 (7) | 38: 18, plus 7 old-word reads, 12 PLL policy reads and 1 `0xa88` policy read | held |
+
+The longest register-lock hold is hold B, 43 native accesses. At the 1 µs
+per access that the design assumes, that is about 43 µs, which bounds how long
+a band-2 task that needs the register lock waits behind the decoder; the
+mutex's priority inheritance raises the decoder task while it waits. Stage 1
+on the board measures each hold.
+
+The OS image's decoder task repeats `acquire` and `prepare` calls while they
+advance, rather than one call per tick: `prepare`'s eighteen steps run back to
+back, each in its own hold, so no hold exceeds four accesses there. From the
+ON answer, a cold start therefore takes the entry, hold A, the lock wait and
+hold B, about 120 µs of accesses plus at most about 420 µs of waiting.
 
 ### Shared lock wait
 
@@ -151,7 +189,7 @@ and the `+0xa80` selector and divider in the encoder's write allowlist.
 | Figure | Value | Record |
 | --- | --- | --- |
 | PLL word after open | `0xf9204d00` (N=78, P0=3, 624 MHz) | [video-pll.jsonl](../evidence/video-pll.jsonl) `video-pll-host` (host model) |
-| Cold start accesses, once per power lifetime | 5 writes (6 with the LDO off), at most 109 reads | same |
+| Cold start accesses, once per power lifetime | 95 accesses, 11 of them writes, in three holds, from the FEL words (host model) | `checks/video-cold.py` |
 | Lock wait without the register lock | at most about 420 µs | same |
 | FEL entry words | PLL_VE0 `0x41305a00`, PLL_VE1 `0x41205600`, both disabled | `video-pll-fel-clock-dump` |
 
@@ -161,9 +199,9 @@ no host check (evidence: video-pll-host; video-pll-fel-clock-dump; docs/status/v
 driver, device trees, operating-point table, `cedar_ve.c`, U-Boot and kernel
 device trees and the schematic text and the port 3-3 dump words. The comparison
 includes the order of the vendor's enable, lock wait, lock-enable toggle and
-module clock gates. It builds and runs two models with address and
-undefined-behavior sanitizers and seventeen driver mutants that the cold model
-must refuse. It checks the three session producers' defaults and compiles the
+module clock gates. `checks/video-cold.py` builds and runs the cold model, composed with the
+power-domain owner, with address and undefined-behavior sanitizers, and
+twenty-eight driver mutants that it must refuse. It checks the three session producers' defaults and compiles the
 H.264, HEVC and JPEG applications' `native.c` with their configured flags and
 warnings as errors (`--app-compile-commands` names the configured builds). It
 also compiles the changed drivers for AArch64. `checks/a733-video-cold.c` is

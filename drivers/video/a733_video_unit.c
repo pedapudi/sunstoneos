@@ -266,6 +266,7 @@ int a733_video_unit_pll_start(struct a733_video_unit *u)
 static int unlocked_read(void *v,uint32_t *out)
 {
     struct a733_video_unit *u=v;
+    ++u->pll_reads;
     return !u->locked&&a733_video_unit_timely(u)&&u->ops.read(u->cookie,PLL,out)==1&&a733_video_unit_timely(u);
 }
 static int unit_now(void *v,uint64_t *out)
@@ -284,6 +285,15 @@ int a733_video_unit_pll_open(struct a733_video_unit *u)
     if(!u->pll_locked||a733_video_unit_read(u,PLL,&word)!=1||word!=(PLL_ENABLED|PLL_LOCK|u->pll_inherited)||
        !pll_write(u,&word,BIT(27),BIT(27))||word!=(PLL_OPEN|PLL_LOCK|u->pll_inherited))return 0;
     u->pll_done=1;return 1;
+}
+int a733_video_unit_pll_stop(struct a733_video_unit *u)
+{
+    if(!u->config.program_pll||!u->pll_started)return 1;
+    static const uint32_t disable[4]={BIT(27),BIT(29),BIT(31),BIT(30)};
+    uint32_t word;
+    if(a733_video_unit_read(u,PLL,&word)!=1||(word&PLL_INHERITED)!=u->pll_inherited)return 0;
+    for(unsigned i=0;i<4;++i)if(!pll_write(u,&word,disable[i],0))return 0;
+    return (word&~PLL_LOCK)==(A733_VIDEO_PLL_FACTORS|u->pll_inherited);
 }
 int a733_video_unit_irq_quiet(struct a733_video_unit *u)
 {

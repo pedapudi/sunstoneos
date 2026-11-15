@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Check the source-tree facts that give PCK600 domains 1 and 5 one owner.
+"""Check the source-tree facts that give PCK600 domains 1, 2 and 5 one owner.
 
 docs/power-domains.md makes drivers/power/a733_power_domains.c the only writer
-of PCK600 domains 1 (DE_SYS), 4 (NPU) and 5 (GPU_TOP), and runs every PMIC transaction
+of PCK600 domains 1 (DE_SYS), 2 (VE_DEC), 4 (NPU) and 5 (GPU_TOP), and runs every PMIC transaction
 from one service task per image. This check fails when:
 
-- a source other than the owner and its native adapter names a domain-1 or
-  domain-5 PPU register, unless it is a reader listed for that domain and
-  the line has no write hint (write, store, update or "= value"). The
-  register may be spelled as a 0x0706[15]xxx literal, with or without
+- a source other than the owner and its native adapter names a domain-1,
+  domain-2 or domain-5 PPU register, unless it is a reader listed for that
+  domain and the line has no write hint (write, store, update or "= value").
+  The register may be spelled as a 0x0706[125]xxx literal, with or without
   leading zeros, an upper-case X and a U or L suffix, as
   A733_DE_SYS_PCK_BASE, BB8_DOMAIN1_STATUS (bundle 8's name for the
-  domain-1 status) or A733_PCK_DOMAIN_BASE(1) or (5). An address
+  domain-1 status) or A733_PCK_DOMAIN_BASE(1), (2) or (5). An address
   computed from another base, or a write on a line after the one that names
   the register, is not seen; for bundle 8, checks/board-bundles-apps-model.c
   asserts that the gate phase writes nothing;
 - the set of sources that write the pinned delay row (value 0x1f1f1f) differs
-  from the owner plus the writers of domains the owner does not hold, four
+  from the owner plus the writers of domains the owner does not hold, three
   sources in all, or a native allowlist admits the delay row. The GPU
   controller writes no delay row: the vendor never writes CORE6's
   (docs/designs/gpu-vendor-default.md). Its native adapter must name no PCK
@@ -51,9 +51,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ['drivers', 'platform', 'apps', 'runtime', 'include']
 OWNER = {'drivers/power/a733_power_domains.c', 'drivers/power/a733_power_domains_native.c',
          'include/a733_power_domains.h', 'include/a733_power_domains_native.h'}
-# Readers of domain 1 or 5 that write nothing there: the domain each reads,
-# with the reason.
+# Readers of domain 1, 2 or 5 that write nothing there: the domain each
+# reads, with the reason.
 READERS = {
+    'drivers/video/a733_video_unit.c': ('2', 'names the decoder\'s domain-2 base, whose policy and status the baseline reads'),
+    'drivers/video/a733_video_platform.c': ('2', 'admits the domain-2 policy and status reads in its native allowlist'),
     'apps/deinterlace/native.c': ('1', 'requires domain 1 already ON before its clocks'),
     'apps/gpu-finite/return.c': ('5', 'confirms domain 5 OFF at the finite return'),
     'drivers/gpu/a733_gpu_resources_native.c': ('5', 'reads domain-5 status at the LOCAL lease release'),
@@ -69,15 +71,14 @@ READERS = {
     'apps/gpu-power-id/main.c': ('5', 'reads domain-5 words in its read-only CORE6 prerequisite snapshot'),
 }
 SUFFIX = r'(?:[uU][lL]{0,2}|[lL]{1,2}[uU]?)?'
-DOMAIN_REGISTER = re.compile(r'\b0[xX]0*706(?P<literal>[15])[0-9a-fA-F]{3}' + SUFFIX + r'\b|'
+DOMAIN_REGISTER = re.compile(r'\b0[xX]0*706(?P<literal>[125])[0-9a-fA-F]{3}' + SUFFIX + r'\b|'
                              r'\bA733_DE_SYS_PCK_BASE\b|\bBB8_DOMAIN1_STATUS\b|'
-                             r'\bA733_PCK_DOMAIN_BASE\(\s*(?P<base>[15])' + SUFFIX + r'\s*\)')
+                             r'\bA733_PCK_DOMAIN_BASE\(\s*(?P<base>[125])' + SUFFIX + r'\s*\)')
 WRITE_HINT = re.compile(r'write|store|update|=\s*value', re.I)
-# Writers of the delay row for domains the owner does not hold: video (2, 3),
-# HDMI and DisplayPort (10). The NPU requests domain 4 through its row, and
-# nothing writes the GPU_CORE (6) row.
-DELAY_WRITERS = {'drivers/power/a733_power_domains.c', 'drivers/video/a733_video_platform.c',
-                 'platform/a733/hdmi_native.c', 'apps/displayport/native.c'}
+# Writers of the delay row for domains the owner does not hold: HDMI and
+# DisplayPort (10). The NPU and the video decoder request domains 4 and 2
+# through their rows, and nothing writes the GPU_CORE (6) row.
+DELAY_WRITERS = {'drivers/power/a733_power_domains.c', 'platform/a733/hdmi_native.c', 'apps/displayport/native.c'}
 DELAY_ALLOWLISTS = set()
 # Image: (source, service creation, USB0 creation or priority fact, core-0 placement).
 IMAGES = {
@@ -152,7 +153,7 @@ def main():
             if not domains:
                 continue
             if rel not in READERS or domains != {READERS[rel][0]}:
-                problems.append(f'{rel}:{n}: names a domain-1 or domain-5 PPU register: {line.strip()}')
+                problems.append(f'{rel}:{n}: names a domain-1, domain-2 or domain-5 PPU register: {line.strip()}')
             elif WRITE_HINT.search(line):
                 problems.append(f'{rel}:{n}: may write a domain the owner holds: {line.strip()}')
     assert scanned > 100, f'only {scanned} source files under {root}'
@@ -197,7 +198,7 @@ def main():
     for p in problems:
         print(p)
     assert not problems, f'{len(problems)} problem(s)'
-    print(f'PASS power-domain tree facts in {scanned} sources: domains 1 and 5 written only by the owner; '
+    print(f'PASS power-domain tree facts in {scanned} sources: domains 1, 2 and 5 written only by the owner; '
           f'{len(writers)} delay-row writers and {len(allowlists)} native allowlists, the GPU adapter reaching only '
           f'the CORE6 page and no delay-row word (two seeded mutants refused); {len(domain4_rows)} '
           'domain-4 row sources and no NPU write to domain 4; five images run their PMIC work from one service '

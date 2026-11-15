@@ -5,6 +5,7 @@
 #include "a733_video_h264.h"
 #include "a733_video_hevc.h"
 #include "a733_video_unit.h"
+#include "a733_power_domain_row.h"
 
 /* Privileged immutable configuration. Borrow exact live tokens from the ONE
  * clock registry and PCK resource manager; neither may be released until a
@@ -18,6 +19,11 @@
  * module_hz: a caller-supplied number does not establish electrical validity.
  */
 enum a733_video_start { A733_VIDEO_INHERITED = 0, A733_VIDEO_COLD_NS_ROM = 1 };
+/* A cold start (COLD_NS_ROM) needs row: the consumer's registered domain-2
+ * row (a733_power_domain_row_init in a733_power_domains.h), whose rail token
+ * holds DCDC2. The binding requests ON once after its read-only entry and
+ * returns pending until the owner answers; the caller blocks on the row's
+ * wake and calls again. The binding writes no PCK600 register. */
 struct a733_video_platform_config {
     struct a733_clock_leases *clocks;
     struct a733_clock_token clock;
@@ -27,6 +33,7 @@ struct a733_video_platform_config {
     uint64_t owner, handoff;
     uint32_t module, module_hz, fabric[3], fabric_hz[3];
     enum a733_video_start start;
+    struct a733_power_domain_row *row;
 };
 struct a733_video_platform_ops {
     int (*now_us)(void *,uint64_t *);
@@ -74,6 +81,17 @@ struct a733_video_platform_ops {
  * inherited or cold start, identity, memory and reset/default preparation.
  * Each codec binding passes its own typed job through admit and memory; the
  * job pointer is the binding's object, never another codec's structure. */
+/* What a cold start saw, for the caller's record: the three critical gates
+ * at entry and at A1, the 0x5e4 word written and read back when bit 18 was
+ * opened (zero when no write was needed), the times (binding clock, us) at
+ * the start and end of the entry hold, the row's ON answer, the end of hold
+ * A, the end of the PLL lock wait and the end of hold B, and the lock wait's
+ * PLL reads. */
+struct a733_video_cold_record {
+    uint32_t entry_gates[3], gates[3], mclk_written, mclk_readback;
+    uint64_t entry_at, entered_at, on_at, hold_a_at, locked_at, hold_b_at;
+    unsigned lock_reads;
+};
 struct a733_video_decoder {
     struct a733_video_unit unit;
     struct a733_video_platform_config config;
@@ -81,7 +99,8 @@ struct a733_video_decoder {
     int (*memory)(void *,uint64_t,const void *,uint64_t);
     void *context;
     uint64_t version,reset_until;
-    unsigned admitted,checked,mapped,prepared,step,cold_step;
+    unsigned admitted,checked,mapped,prepared,step,cold_step,requested;
+    struct a733_video_cold_record cold;
 };
 /* JPEG binding. */
 struct a733_video_platform {
@@ -89,6 +108,15 @@ struct a733_video_platform {
     struct a733_video_platform_ops ops;
     void *cookie;
 };
+/* Quiesce after a cold start, under one register-lock hold, in the vendor's
+ * order (cedar_ve.c disable_cedar_hw_clk_module and disable_cedar_hw_clk_reset,
+ * ccu_gate.c ccu_pll_gate_helper_disable): module gate off, bus gate off,
+ * reset asserted, then PLL_VE0's output gate, lock enable, enable and LDO
+ * cleared. Every write is a read-modify-write with readback. Domain 2 stays
+ * ON and the critical gates stay as they are. The caller ensures no job is
+ * outstanding. d is a new deadline for this call. 1 done, 0 effect-free busy
+ * lock, -1 refused or uncertain (a failed unit is never touched). */
+int a733_video_decoder_quiesce(struct a733_video_decoder *,uint64_t d);
 /* Pure scope derivation; requires the exclusive scopes below and the exact
  * shared result.
  * Preparation never releases, powers down, or claims physical qualification.
