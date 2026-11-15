@@ -25,10 +25,8 @@ def record(aps):
     for i in range(aps):
         entry = bytearray(radio_result.AP_BYTES)
         entry[0:6] = bytes([2, 0, 0, 0, i >> 8, i & 255])
-        entry[6] = 2
         entry[7] = (-40 - i % 50) & 255
         struct.pack_into('<H2B', entry, 8, 2412 + 5 * (i % 11), 1 + i % 11, 0)
-        entry[12:14] = b'n0'
         body += bytes(entry)
     return bytes(head) + body
 
@@ -82,4 +80,14 @@ except ValueError:
     pass
 else:
     raise SystemExit('accepted a 96-byte record with the wrong magic')
-print('PASS radio result channel: descriptor, length from the head, records of 0, 3 and 2000 access points read whole, six refusals, and the 96-byte CE entropy record')
+# An access point entry with an SSID length or any SSID byte is refused before any field reaches a result.
+for offset, value in ((6, 2), (12, ord('n')), (radio_result.AP_BYTES - 1, 1)):
+    bad = bytearray(record(3))
+    bad[radio_result.HEAD_BYTES + radio_result.AP_BYTES + offset] = value
+    try:
+        radio_result.decode(bytes(bad))
+    except ValueError as e:
+        assert 'SSID' in str(e), e
+    else:
+        raise SystemExit(f'accepted an access point entry with byte {offset} set')
+print('PASS radio result channel: descriptor, length from the head, records of 0, 3 and 2000 access points read whole, six refusals, three SSID refusals, and the 96-byte CE entropy record')
