@@ -7,7 +7,7 @@ under AArch64 emulation, with the owner task run between supervisor passes as it
 initialized by its own a733_video_decoder_init from a configuration at the vendor point; the decoder is then left as
 the stage-1 board run 1794712072331160946-bd447f26 left it, refused in hold B (cold step 4) with PLL_VE0 running and
 open, the module gate open, and reset and bus gate released. The CCU, RTC, R_CCU, GIC, PCK and decoder pages are
-plain registers, and every register access passes the image's own Device-mapping check. The clock and PCK lease
+plain registers, and every page the binding uses passes the image's own Device-mapping check, made once. The clock and PCK lease
 registries answer that the decoder's leases are held. Time advances 10 ms per supervisor pass; the supervisor's
 shared bound is 3 s (OS_FAILURE_RETURN_US, apps/os/cpu-return.c), after which the image stops at site 0x742 and the
 watchdog reset ends the session.
@@ -34,6 +34,9 @@ words and the published nonsecure boot ROM mapped:
   A733_POWER_SUPPLY_BUDGET_US + one tick, anchored at the PMIC startup deadline or now); once DCDC2 is verified,
   on the PCK600 bound plus two ticks. Past that bound the open is refused with step VD_STEP_ROW_TIMEOUT: the service
   ends CLOSED with no register written and no close.
+- record-layout: every member offset of the board record (struct vdec_check_record, with the binding's cold record
+  and the owner's transition record embedded) in apps/vdec-check/host.py equals the image's DWARF, so the host
+  decodes the bytes the image returns.
 The image of the hold-B run (c1a4e4fc...) fails the first two cases: its quiesce step reports FAULT on every pass
 until the bound. The image of the stage-1 rerun (7d63776e...) fails quiesce-among-close-stores: its quiesce step
 decides from phase and close_started.
@@ -41,6 +44,7 @@ decides from phase and close_started.
 Usage: os-vdec-fault-return.py --image ELF --output DIR"""
 import argparse
 import hashlib
+import importlib.util
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import (UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_X0,
@@ -72,7 +76,8 @@ HOLD_B = {0x220: 0xf9204d00, 0xa88: 0x81000000, 0xa8c: 0x00040004, 0x5e4: 0x0004
 LAYOUTS = {'board_application', 'a733_board_session', 'a733_video_decoder', 'a733_video_unit',
            'a733_video_platform_config', 'a733_clock_token', 'a733_gpu_resource_lease', 'a733_power_domain_row',
            'vdec_check_record', 'board_provider', 'a733_native_usb', 'a733_rail_leases', 'a733_power_domains',
-           'a733_pmic', 'a733_pmic_config', 'a733_rail_token'}
+           'a733_pmic', 'a733_pmic_config', 'a733_rail_token', 'a733_video_cold_record', 'a733_power_transition',
+           'video_decode_check_result'}
 
 
 class Registers:
@@ -372,6 +377,30 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
             'notes': [(hex(s), hex(v)) for s, v in state['notes']]}
 
 
+def record_layout(image):
+    """The board record's offsets in apps/vdec-check/host.py against the image's DWARF: a list of differences."""
+    spec = importlib.util.spec_from_file_location('vdec_check_host', Path(__file__).resolve().parents[1] /
+                                                  'apps/vdec-check/host.py')
+    host = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(host)
+    L, problems = image.layouts, []
+    nested = {'cold': 'a733_video_cold_record', 'transition': 'a733_power_transition'}
+
+    def compare(members, name):
+        offsets = host.layout(members)[0]
+        if set(offsets) != set(L[name]):
+            problems.append(f'{name} members differ: {sorted(set(offsets) ^ set(L[name]))}')
+        for member, kind, _ in members:
+            if L[name].get(member) != offsets[member][0]:
+                problems.append(f'{name}.{member} at {L[name].get(member)} in the image, {offsets[member][0]} in host.py')
+            if isinstance(kind, tuple):
+                compare(kind, nested[member])
+    compare(host.RECORD, 'vdec_check_record')
+    if L['video_decode_check_result']['info'] != host.HEADER.size:
+        problems.append('the record does not follow the 32-byte header')
+    return problems
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image', type=Path, required=True)
@@ -387,6 +416,10 @@ def main():
     cases = [('quiesce-closes', {}), ('application-closes', {'application_close': True}),
              ('close-step-fails', {'stuck': {0xa8c: 0x00040004}}), ('uncertain-access', {'uncertain': True})]
     rows, failures = [], []
+    problems = record_layout(image)
+    rows.append({'case': 'record-layout', 'passed': not problems, 'problems': problems})
+    if problems:
+        failures.append('record-layout')
     row = run_case(image, parts, layout, enums, 'row-wait', row_wait=True)
     rows.append(row)
     if not row['passed']:
@@ -446,7 +479,7 @@ def main():
                                      'drivers/video/a733_video_unit.c', 'checks/os-vdec-fault-return.py')}})
     for row in rows:
         detail = f"{row['schedules']} placements over {row['writer_events']} close stores" if 'schedules' in row else \
-            f"{row['passes']} passes, {row['elapsed_us']} us"
+            f"{row['passes']} passes, {row['elapsed_us']} us" if 'passes' in row else 'host.py offsets match the DWARF'
         print('PASS' if row['passed'] else 'FAIL', row['case'], detail, '; '.join(row['problems']))
     if failures:
         raise SystemExit(f'{len(failures)} of {len(rows)} cases failed')

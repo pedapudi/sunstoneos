@@ -217,25 +217,15 @@ static void copy_record(void)
 {
 #ifdef SUNSTONE_VIDEO_DECODE_MEASURE
     const struct a733_video_decoder *p=&vd.decoder;
-    const struct a733_video_cold_record *r=&p->cold;
     struct vdec_check_record *i=&vd.info;
-    for(unsigned k=0;k<3;++k){i->gates_entry[k]=r->entry_gates[k];i->gates_a1[k]=r->gates[k];}
-    i->mclk_written=r->mclk_written;i->mclk_readback=r->mclk_readback;i->lock_reads=r->lock_reads;
-    i->entry_at=r->entry_at;i->entered_at=r->entered_at;i->on_at=r->on_at;i->hold_a_at=r->hold_a_at;
-    i->locked_at=r->locked_at;i->hold_b_at=r->hold_b_at;
+    i->cold=p->cold;
     i->feature=p->unit.identity[0];i->identity_high=p->unit.identity[1];i->identity_low=p->unit.identity[2];
     i->version_high=(uint32_t)(p->version>>32);i->version_low=(uint32_t)p->version;
     i->cold_phase=p->cold_step;
     i->failed=p->unit.failed|p->unit.locked<<1|p->unit.uncertain<<2|p->unit.late<<3;
-    i->vcu_before=r->vcu[0];i->vcu_set=r->vcu[1];
     i->fault_step=vd.fault_step;i->fault_value=vd.fault_value;
     i->measured=providers.domains.measure_transitions;
-    if(a733_power_domain_state(&vd.row)!=A733_POWER_ROW_PENDING){
-        const struct a733_power_transition *t=&vd.row.transition;
-        i->transition=(struct vdec_check_transition){2,t->policy_before,t->status_before,t->policy_written,
-            t->first_word,t->pending_word,t->reached_word,t->all_and,t->all_or,t->reads,t->spin_reads,t->commands,
-            t->command_at,t->first_at,t->pending_at,t->reached_at};
-    }
+    if(a733_power_domain_state(&vd.row)!=A733_POWER_ROW_PENDING)i->transition=vd.row.transition;
 #endif
 }
 /* A fault after the first write (docs/video-decode-os.md, "Faults after the first write"): the service enters FAULT

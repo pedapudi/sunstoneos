@@ -20,12 +20,55 @@ HEADER = struct.Struct('<8I')
 WORDS = ('pll_ref', 'rtc_osc', 'ahb', 'nsi', 'mbus', 'pll_ve0', 'pll_ve0_p0', 'pll_ve0_p1', 'pll_gates', 'pll_status',
          'auto', 'module', 'bgr', 'ahb_gates', 'mbus_gates', 'mclk_gates', 'rccu_pck', 'gicd_enable', 'gicd_pending',
          'gicd_active')
-INFO = struct.Struct('<2I' + '20I' * 3 + '9I7I4I6I' + '6Q2Q3Q')
-TRANSITION = struct.Struct('<12I4Q')
-TRANSITION_FIELDS = ('domain', 'policy_before', 'status_before', 'policy_written', 'first_word', 'pending_word',
-                     'reached_word', 'all_and', 'all_or', 'reads', 'spin_reads', 'commands', 'command_at', 'first_at',
-                     'pending_at', 'reached_at')
-SIZE = HEADER.size + INFO.size + TRANSITION.size
+# The record's structures as apps/vdec-check/record.h declares them: (member, format, count) in order, a nested
+# structure given by its member list. layout() places them as the AArch64 C ABI does, each member at its natural
+# alignment and each structure padded to its largest; checks/os-vdec-fault-return.py compares the offsets with the
+# image's DWARF.
+COLD = (('entry_gates', 'I', 3), ('gates', 'I', 3), ('mclk_written', 'I', 1), ('mclk_readback', 'I', 1),
+        ('entry_at', 'Q', 1), ('entered_at', 'Q', 1), ('on_at', 'Q', 1), ('hold_a_at', 'Q', 1),
+        ('locked_at', 'Q', 1), ('hold_b_at', 'Q', 1), ('lock_reads', 'I', 1), ('vcu', 'I', 2))
+TRANSITION = (('policy_before', 'I', 1), ('status_before', 'I', 1), ('policy_written', 'I', 1),
+              ('first_word', 'I', 1), ('pending_word', 'I', 1), ('reached_word', 'I', 1), ('all_and', 'I', 1),
+              ('all_or', 'I', 1), ('reads', 'I', 1), ('spin_reads', 'I', 1), ('commands', 'I', 1),
+              ('command_at', 'Q', 1), ('first_at', 'Q', 1), ('pending_at', 'Q', 1), ('reached_at', 'Q', 1))
+RECORD = (('magic', 'I', 1), ('bytes', 'I', 1), ('entry', 'I', 20), ('started', 'I', 20), ('closed', 'I', 20),
+          ('cold', COLD, 1), ('feature', 'I', 1), ('identity_high', 'I', 1), ('identity_low', 'I', 1),
+          ('version_high', 'I', 1), ('version_low', 'I', 1), ('cold_phase', 'I', 1), ('failed', 'I', 1),
+          ('row_state', 'I', 1), ('authority', 'I', 1), ('measured', 'I', 1), ('fault_closed', 'I', 1),
+          ('fault_step', 'I', 1), ('fault_value', 'I', 1), ('refused_address', 'I', 1), ('refused_word', 'I', 1),
+          ('row_request_us', 'Q', 1), ('row_on_us', 'Q', 1), ('requested_ticks', 'Q', 1),
+          ('started_ticks', 'Q', 1), ('closed_ticks', 'Q', 1), ('transition', TRANSITION, 1))
+
+
+def layout(members):
+    """(offsets, size, alignment): each member's byte offset and nested layout, and the padded size."""
+    offsets, at, align = {}, 0, 1
+    for name, kind, count in members:
+        if isinstance(kind, tuple):
+            inner, size, a = layout(kind)
+        else:
+            inner, size, a = None, struct.calcsize('<' + kind), struct.calcsize('<' + kind)
+        at = -(-at // a) * a
+        offsets[name] = (at, inner)
+        at += size * count
+        align = max(align, a)
+    return offsets, -(-at // align) * align, align
+
+
+def unpack(payload, base, members):
+    offsets = layout(members)[0]
+    out = {}
+    for name, kind, count in members:
+        at = offsets[name][0]
+        if isinstance(kind, tuple):
+            out[name] = unpack(payload, base + at, kind)
+        else:
+            v = struct.unpack_from(f'<{count}{kind}', payload, base + at)
+            out[name] = list(v) if count > 1 else v[0]
+    return out
+
+
+SIZE = HEADER.size + layout(RECORD)[1]
 CHECK_MAGIC = 0x4b434456
 INFO_MAGIC = 0x49444556
 STATUS = {1: 'opened-and-closed', 2: 'open-refused', 3: 'close-failed'}
@@ -44,33 +87,31 @@ def decode(payload):
     (magic, stage, status, open_result, close_result, fault_step, fault_value, reserved) = HEADER.unpack_from(payload)
     if magic != CHECK_MAGIC or stage != 1 or reserved:
         raise ValueError('vdec-check result has an unknown header.')
-    v = INFO.unpack_from(payload, HEADER.size)
     signed = lambda x: x - (1 << 32) if x >> 31 else x
     out = {'stage': stage, 'status': STATUS.get(status, status), 'open_result': signed(open_result),
            'close_result': signed(close_result), 'fault_step': STEPS.get(fault_step, fault_step),
-           'fault_value': fault_value, 'info_magic': v[0], 'info_bytes': v[1]}
-    for k, name in enumerate(('entry', 'started', 'closed')):
-        out[name] = dict(zip(WORDS, v[2 + 20 * k:22 + 20 * k]))
-    i = 62
-    out['gates_entry'], out['gates_a1'] = list(v[i:i + 3]), list(v[i + 3:i + 6])
-    out['mclk_written'], out['mclk_readback'], out['lock_reads'] = v[i + 6:i + 9]
-    i += 9
-    (out['feature'], out['identity_high'], out['identity_low'], high, low, out['cold_phase'],
-     out['failed']) = v[i:i + 7]
-    out['version'] = high << 32 | low
-    i += 7
-    row_state, out['authority'], out['measured'], out['fault_closed'] = v[i:i + 4]
-    out['row_state'] = ROW.get(row_state, row_state)
-    i += 4
-    (record_step, out['record_fault_value'], out['refused_address'], out['refused_word'], out['vcu_before'],
-     out['vcu_set']) = v[i:i + 6]
-    out['record_fault_step'] = STEPS.get(record_step, record_step)
+           'fault_value': fault_value}
+    r = unpack(payload, HEADER.size, RECORD)
+    out.update(info_magic=r['magic'], info_bytes=r['bytes'])
+    for name in ('entry', 'started', 'closed'):
+        out[name] = dict(zip(WORDS, r[name]))
+    c = r['cold']
+    out['gates_entry'], out['gates_a1'] = c['entry_gates'], c['gates']
+    out['mclk_written'], out['mclk_readback'], out['lock_reads'] = c['mclk_written'], c['mclk_readback'], c['lock_reads']
+    out['vcu_before'], out['vcu_set'] = c['vcu']
+    for name in ('feature', 'identity_high', 'identity_low', 'cold_phase', 'failed', 'authority', 'measured',
+                 'fault_closed', 'refused_address', 'refused_word'):
+        out[name] = r[name]
+    out['version'] = r['version_high'] << 32 | r['version_low']
+    out['row_state'] = ROW.get(r['row_state'], r['row_state'])
+    out['record_fault_step'] = STEPS.get(r['fault_step'], r['fault_step'])
+    out['record_fault_value'] = r['fault_value']
     out['failed_flags'] = [name for k, name in enumerate(FAILED_FLAGS) if out['failed'] >> k & 1]
-    i += 6
-    times = dict(zip(('entry_at', 'entered_at', 'on_at', 'hold_a_at', 'locked_at', 'hold_b_at', 'row_request_us',
-                      'row_on_us', 'requested_ticks', 'started_ticks', 'closed_ticks'), v[i:i + 11]))
+    times = {k: c[k] for k in ('entry_at', 'entered_at', 'on_at', 'hold_a_at', 'locked_at', 'hold_b_at')}
+    times.update({k: r[k] for k in ('row_request_us', 'row_on_us', 'requested_ticks', 'started_ticks',
+                                    'closed_ticks')})
     out['times'] = times
-    out['transition'] = dict(zip(TRANSITION_FIELDS, TRANSITION.unpack_from(payload, HEADER.size + INFO.size)))
+    out['transition'] = r['transition']
     # Derived durations in microseconds; zero where a phase was not reached.
     span = lambda a, b: times[b] - times[a] if times[a] and times[b] >= times[a] else None
     out['durations_us'] = {
@@ -138,7 +179,7 @@ def failures(d):
              c['mbus_gates'] == e['mbus_gates'], 'critical gates changed by the close')
     want(d['row_state'] == 'on' and d['measured'] == 1, f"row {d['row_state']}, measured {d['measured']}")
     t = d['transition']
-    if t['domain'] != 2:
+    if not any(t.values()):
         out.append('no domain-2 transition record')
     else:
         # The owner judges the low nibble only; bit 8 and the other status bits are reported, not judged.
