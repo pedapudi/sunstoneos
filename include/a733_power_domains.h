@@ -154,7 +154,9 @@ static inline int a733_power_domain_row_init(struct a733_power_domain_row *r, st
  * Before supply verification has ended: verification starts A733_POWER_SUPPLY_SETTLE_US after the service's first
  * step at the latest, ends within A733_POWER_SUPPLY_BUDGET_US once the provider is READY, and READY comes by the
  * provider's startup deadline. The bound is anchored at that deadline or now, whichever is later, plus one tick for
- * the service's wake when it publishes the result. 0 when the clock read fails. */
+ * the service's wake when it publishes the result. 0 when the clock read fails. The OS image sets the startup deadline
+ * to the session deadline (apps/board/main.c), so there the anchor lies past any caller's limit and the caller's limit
+ * is the supply bound: 500 ms for G2D. */
 static inline uint64_t a733_power_supply_deadline(const struct a733_power_domains *d, uint64_t limit)
 {
     uint64_t t;
@@ -167,7 +169,9 @@ static inline uint64_t a733_power_supply_deadline(const struct a733_power_domain
 /* Once supply verification has ended, from now, the time the consumer first saw it ended or made its request: the
  * owner admits the row at its next step and the transition ends within A733_POWER_PCK_BOUND_US of its command. Two
  * ticks: one for the service's wake on the request, one for an admission that a busy rail ledger delays by one retry
- * (admit returns a one-tick retry when a733_rail_pin reports BUSY). */
+ * (admit returns a one-tick retry when a733_rail_pin reports BUSY). They exclude preemption of a rail-ledger holder
+ * and of the PMIC task, which no tick count bounds; a longer delay ends as a row timeout, and each consumer fails
+ * safe on it (the decoder refuses and cancels, G2D faults before its CCU writes, the NPU startup faults). */
 static inline uint64_t a733_power_row_deadline(const struct a733_power_domains *d, uint64_t now, uint64_t limit)
 {
     const uint64_t bound = a733_deadline_after_saturating(now, (uint64_t)A733_POWER_PCK_BOUND_US + 2u * (uint64_t)d->config.tick_us);
