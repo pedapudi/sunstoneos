@@ -297,6 +297,29 @@ left the model's functional assertions to "its own checks", of which there were 
   linked with its own link command) and requires the model to fail at its ping assertion. It runs on real threads, so it holds the timing
   lock (`timing_checks` in `tools/gate-slots.json`), and its kill limit is 4 times the slowest loaded run, 23.2 s.
 
+The model failed on 15 to 25 of 96 runs beside eight busy processes on the multi-threaded guest, in four ways, all from the host's
+scheduling of the vCPUs and none from the ping or the scheduler. The check now passes 96 of 96 runs under the same load, and passed four
+whole runs of itself, pass and mutant halves, beside eight busy processes.
+
+- `model.c` asserted that every busy wake lies inside its phase window. The tick hook released a wake for a tick that came due before the
+  phase began whenever the interrupt reached CPU0 late (a host stall of up to 78 ms was measured); the recorder places a sample in the phase
+  that holds its whole interval, so such a wake counted toward the phase without being in its window. The hook now releases only ticks that
+  came due inside the phase. A wake that runs after the end of its phase still fails (a mutant that adds 2^40 counts to the running stamp
+  fails the model).
+- The wake-segment model asserted that all 128 busy wakes of a core link to an interrupt chain. A chain a later interrupt replaces before the
+  woken task finishes its bookkeeping is counted unlinked, by design (`ss_wake_seg_running`), and a stalled core does that to about one wake
+  in a hundred. It now requires every wake to be linked or unlinked and more than half to be linked, so a recorder that links none fails.
+- It asserted that a core CPU0 releases arms no timer. CPU1 and CPU6, the cores of the cause ping, arm timers for the ping's waits while the
+  recorder is still armed, three to seven times on a loaded host; the other cores must still arm none.
+- It asserted two complete busy ticks. A tick is complete only when no core still holds its previous wake, and a loaded host left one in
+  two of 96 runs. It now requires one, and a second exactly when more than one was filed.
+
+The broken-ping half expected `model.c:0x34` to be the first FAIL line. On a host loaded enough that the guest's own run budget (12 s of guest time)
+ran out first, the run ended at `workload.c`'s budget failure and the check reported that the broken ping did not fail the model. The peer
+that meets the planted sequence error now reports it when it happens (`ss_latency_cause_ping_failed`, a weak no-op outside the model), and
+the check accepts a non-zero exit without the PASS line and either that report or the ping assertion. A run that ends at the budget failure
+without either is repeated, up to three times, in both halves.
+
 ### Gate slots and the timing lock
 
 The host runs N gates at once, not one. `tools/gate_slots.py` holds the slots as the files `~/.cache/sunstoneos/gate.lock.0` to

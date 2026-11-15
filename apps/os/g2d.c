@@ -59,6 +59,8 @@ static struct {
     struct ss_g2d_info info;
     struct ss_g2d_closed closed;
     atomic_uint phase,request,quiesce_wanted,quiesced;
+    /* 1 once a close has started since the last open: a FAULT service gets one close attempt (docs/g2d-os.md). */
+    atomic_uint close_started;
     unsigned op;int result;
     uint32_t fault_step,fault_value;
     uint64_t limit;
@@ -203,6 +205,7 @@ static int ccu(unsigned step,uintptr_t a,uint32_t mask,uint32_t value)
 static int do_open(void)
 {
     atomic_store(&g2d.phase,OPENING);
+    atomic_store(&g2d.close_started,0);
     memset(&g2d.info,0,sizeof(g2d.info));
     g2d.info.magic=SS_G2D_INFO_MAGIC;g2d.info.bytes=sizeof(g2d.info);
     g2d.info.requested_ticks=ss_counter_ticks();
@@ -280,10 +283,16 @@ refused:
  * gated block; asserting the bus reset clears those registers, so they are not written. */
 static int do_close(void)
 {
+    const unsigned faulted=atomic_load(&g2d.phase)==FAULT;
+    atomic_store(&g2d.close_started,1);
     atomic_store(&g2d.phase,CLOSING);
     g2d.limit=lease_now()+G2D_CALL_US;
     if(g2d.limit>session_deadline())g2d.limit=session_deadline();
-    if(!update(G2D+0x20,0x50,0))return fail(G2D_STEP_CLOSE,0);
+    /* After a fault the open may have stopped before the engine's bus clock and reset opened: its registers are
+     * touched only while both read open. The fault record keeps the first failure. */
+    uint32_t bgr=0x10001u;
+    if(faulted&&!rd(CCU+0xa44,&bgr))return fail(G2D_STEP_CLOSE,1);
+    if((bgr&0x10001u)==0x10001u&&!update(G2D+0x20,0x50,0))return fail(G2D_STEP_CLOSE,0);
     if(ccu(G2D_STEP_CLOSE+1,CCU+0xa40,0x80000000,0)<0||ccu(G2D_STEP_CLOSE+2,CCU+0xa44,1u,0)<0||
        ccu(G2D_STEP_CLOSE+3,CCU+0xa44,1u<<16,0)<0)return -1;
     uint32_t de_clk,de_bgr,di_clk,di_bgr;
@@ -297,13 +306,16 @@ static int do_close(void)
     atomic_store(&g2d.phase,CLOSED);
     return 1;
 }
+/* An open service, or a FAULT one whose close has not started: the close then runs the vendor order from the state the
+ * fault left, and on success the service is CLOSED with its fault record kept. */
+static int closable(unsigned phase){return phase==OPEN||(phase==FAULT&&!atomic_load(&g2d.close_started));}
 static void serve(void)
 {
     if(atomic_load_explicit(&g2d.request,memory_order_acquire)!=POSTED)return;
     const unsigned phase=atomic_load(&g2d.phase);
     int r=-1;
     if(g2d.op==OPEN_OP)r=phase==CLOSED?do_open():phase==OPEN?1:-1;
-    else if(g2d.op==CLOSE_OP)r=phase==OPEN?do_close():phase==CLOSED?1:-1;
+    else if(g2d.op==CLOSE_OP)r=closable(phase)?do_close():phase==CLOSED?1:-1;
     g2d.result=r;
     atomic_store_explicit(&g2d.request,DONE,memory_order_release);
     os_application_wake_task(g2d.waiter);
@@ -315,7 +327,7 @@ static void os_g2d_task(void *unused)
     for(;;){
         serve();
         if(atomic_load(&g2d.quiesce_wanted)&&atomic_load(&g2d.request)!=POSTED){
-            if(atomic_load(&g2d.phase)==OPEN)(void)do_close();
+            if(closable(atomic_load(&g2d.phase)))(void)do_close();
             if(atomic_load(&g2d.phase)==CLOSED)atomic_store(&g2d.quiesced,1);
         }
         (void)sunstone_deadline_wait_until(now_us()+10000000);
@@ -327,9 +339,11 @@ void os_g2d_irq(void){}
 
 int os_g2d_task_privileged(void (*entry)(void *),void *context){return !context&&entry==os_g2d_task;}
 int os_g2d_pins(struct a733_pin_handoff *pins){return pins!=NULL;}
+/* A FAULT service first gets its close (docs/designs/failure-return-audit.md, "A faulted device service closes
+ * before it reports"): DONE when every close step read back, FAULT when one failed. */
 static enum os_quiesce_result quiesce_step(struct os_quiesce *q)
 {
-    if(atomic_load(&g2d.phase)==FAULT){
+    if(atomic_load(&g2d.phase)==FAULT&&atomic_load(&g2d.close_started)){
         (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x931,
             g2d.fault_step<<24|(g2d.fault_value&0xffffff),SUNSTONE_CRUMB_HERE());
         return OS_QUIESCE_FAULT;

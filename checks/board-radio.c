@@ -343,8 +343,11 @@ int main(void)
     {
         const struct a733_radio_report *report=board_radio_report(&app);
         assert(report->head.stage==A733_RADIO_STAGE_SCANNED&&!report->head.failed&&report->head.aps_reported==3);
-        assert(report->ap_count==2&&!memcmp(report->aps[0].ssid,"a-2",3)&&report->aps[0].rssi_dbm==-41&&report->aps[0].channel==6);
-        assert(!memcmp(report->aps[1].ssid,"b-5",3)&&report->aps[1].channel==36);
+        /* The scan's record keeps no SSID, though the scan heard both names. */
+        static const uint8_t no_name[32];
+        assert(report->ap_count==2&&!report->aps[0].ssid_bytes&&!memcmp(report->aps[0].ssid,no_name,32)&&
+            report->aps[0].rssi_dbm==-41&&report->aps[0].channel==6);
+        assert(!report->aps[1].ssid_bytes&&!memcmp(report->aps[1].ssid,no_name,32)&&report->aps[1].channel==36);
         uint8_t record[512];size_t bytes=a733_radio_report_encode(report,record,sizeof(record));
         assert(bytes==sizeof(report->head)+2*sizeof(struct a733_radio_result_ap));
     }

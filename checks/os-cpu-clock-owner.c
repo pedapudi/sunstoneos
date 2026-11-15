@@ -12,7 +12,8 @@
 #undef a733_cpu_clock_request
 struct board_application board;
 struct board_provider providers;
-void board_fail_note(uint32_t site,uint32_t value,const void *caller){(void)site;(void)value;(void)caller;}
+static uint32_t fail_site,fail_value;static unsigned fail_notes;
+void board_fail_note(uint32_t site,uint32_t value,const void *caller){(void)caller;fail_site=site;fail_value=value;++fail_notes;}
 static struct os_session session;
 static struct a733_thermal_policy thermal_policy;
 static uint64_t time_us=100;
@@ -22,8 +23,14 @@ static void check(int ok,unsigned code)
 {if(!ok){os_check_result=code;__asm__ volatile("brk #0");for(;;){}}}
 const struct os_session *os_session_admitted(void){return &session;}
 int os_granted(unsigned mask){return mask&&(session.granted&mask)==mask;}
-/* The performance service is not part of this model: a grant without perf never reaches it. */
-int os_perf_step(struct a733_cpu_clock *c,const struct a733_thermal_policy *p,int burst){(void)c;(void)p;(void)burst;check(0,90);return 0;}
+/* The performance service (checks/perf-os-model.c models it): a grant without perf never reaches it, in FOLLOW or
+ * before. With perf its first step answers "not yet" and its second a terminal failure, whose state word the refusal
+ * must record. */
+static unsigned perf_steps;
+#define PERF_WORD (UINT32_C(0x80000000)|UINT32_C(0x2a)<<4)
+int os_perf_step(struct a733_cpu_clock *c,const struct a733_thermal_policy *p,int burst)
+{(void)c;(void)p;(void)burst;check(session.cpu_clock.perf!=0,90);return ++perf_steps==1 ? 0 : -1;}
+uint32_t os_perf_fault_word(int burst){check(session.cpu_clock.perf!=0,92);return PERF_WORD|(uint32_t)(burst&7);}
 /* The supervised lifetime: the returning units (apps/os/cpu-return*.c) are outside this owner model, and the entry guard
  * that the returning lifetime adds is never reached. */
 unsigned board_session_lifetime(void){return A733_LIFETIME_SUPERVISED;}
@@ -68,11 +75,20 @@ void os_cpu_owner_check(unsigned mode)
     g->magic=A733_CPU_CLOCK_GRANT_MAGIC;g->version=1;g->bytes=sizeof(*g);g->owner=10;
     if(mode!=1){g->epoch=1;g->generation=2;g->clusters=3;g->max_mhz[0]=1794;g->max_mhz[1]=2002;
         g->changes=4;}
+    if(mode==3)g->perf=1;
     thermal_policy.initialized=1;atomic_init(&thermal_policy.published_seen,0);
     check(os_cpu_clock_step(&thermal_policy)==1,5);
     check(os_cpu_clock_step(&thermal_policy)==1,6);
     check(os_cpu_clock_step(&thermal_policy)==1&&inspections==2&&!requests,7);
     if(mode==1){check(os_cpu_clock_ready(),8);goto done;}
+    if(mode==3){
+        /* With perf the inspections lead straight to FOLLOW and the service; its failure ends the owner with the
+         * service's word in the record, in phase FOLLOW. */
+        check(os_cpu_clock_step(&thermal_policy)==1&&perf_steps==1&&!requests,20);
+        check(os_cpu_clock_step(&thermal_policy)==-1&&perf_steps==2&&fail_notes==1,21);
+        check(fail_value==(PERF_WORD|A733_CPU_CLOCK_READY)&&(fail_site>>24&3u)==FOLLOW,22);
+        goto done;
+    }
     check(!os_cpu_clock_ready(),9);
     atomic_store_explicit(&thermal_policy.published_seen,1,memory_order_release);
     if(mode==2){check(os_cpu_clock_step(&thermal_policy)==-1&&!os_cpu_clock_ready()&&requests==1,10);goto done;}
@@ -85,6 +101,9 @@ void os_cpu_owner_check(unsigned mode)
     check(domains[0]==A733_CPU_BIG&&domains[1]==A733_CPU_LITTLE&&domains[2]==A733_CPU_DSU,16);
     check(targets[0]==2002&&targets[1]==1794&&targets[2]==1274,17);
     check(owner.count==3,18);
+    /* FOLLOW without perf: later steps follow the driver and never reach the performance service, so a session
+     * without perf makes no readback snapshot (the radio session's board run failed in that service, cpu.c 275). */
+    for(unsigned i=0;i<8;++i)check(os_cpu_clock_step(&thermal_policy)==1&&requests==3&&!perf_steps&&!fail_notes,19);
 done:
     os_check_result=1;__asm__ volatile("brk #0");for(;;){}
 }
