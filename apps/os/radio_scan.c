@@ -85,7 +85,9 @@ void os_radio_scan_step(struct board_radio *r, int result)
             value = (a->status & 0xffffu) << 16 | 0x8000u | (a->link & 7u) << 12 |
                 (a->eapol_tx < 15 ? a->eapol_tx : 15u) << 8 | (a->eapol_rx < 15 ? a->eapol_rx : 15u) << 4 | (a->stage & 15u);
         }
-        if(!os_radio_quiesce_fault(value,__builtin_return_address(0)))
+        /* A failure whose shutdown closed the station (os_radio_failure_closed) returns inside the record: it
+         * publishes no FAULT, so the return completes and the host reads the record from DRAM. */
+        if(!os_radio_failure_closed(r)&&!os_radio_quiesce_fault(value,__builtin_return_address(0)))
             board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD) | SUNSTONE_CRUMB_FAIL_RETURN,
                 value,__builtin_return_address(0));
         publish(r);
