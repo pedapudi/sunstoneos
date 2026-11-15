@@ -13,6 +13,8 @@ struct sunstone_deadline_slot {
     uint64_t sequence,last_deadline,woken_us;
     unsigned failed;
     unsigned index;                  /* the notification index of the wait in progress */
+    unsigned own_index;              /* 1 + the index every wait of this owner uses (sunstone_deadline_register_index),
+                                      * or 0 for the calling task's default (sunstone_deadline_notify_index) */
 };
 _Static_assert(sizeof(struct sunstone_deadline_slot)==SS_CACHE_LINE,"a deadline slot is one cache line");
 #endif

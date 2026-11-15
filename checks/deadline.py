@@ -101,7 +101,11 @@ def main():
         ('supervisor-scan-under-lock','services','apps/os/services.c','int recorded=sunstone_deadline_slot_record(slot,&r);',
          'int recorded=sunstone_deadline_owner_record(owner,&r);'),
         ('blocked-scan-under-lock','services','apps/os/services.c',
-         'int ok=sunstone_deadline_slot_record(slot,&r)&&','int ok=sunstone_deadline_owner_record(owner,&r)&&')):
+         'int ok=sunstone_deadline_slot_record(slot,&r)&&','int ok=sunstone_deadline_owner_record(owner,&r)&&'),
+        # Deadline waits back on the task's default index, so an owner's index-0 input is taken by its waits.
+        ('deadline-waits-on-index-0','runtime','runtime/deadline.c',
+         'const unsigned index=s->own_index?s->own_index-1:sunstone_deadline_notify_index();',
+         'const unsigned index=sunstone_deadline_notify_index();')):
         sources=['checks/deadline-host.c','runtime/deadline.c']
         defines=list(owner_defines)
         if source.startswith('apps/'):

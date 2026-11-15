@@ -3,8 +3,8 @@
   "devices": {"required": ["g2d"], "optional": []},
   "cpu": {"clock_grants": true, "cluster": "a76", "workers": 0, "priority": 2, "stack_bytes": 8192},
   "large_regions": [{"name": "surface", "bytes": 4194304, "access": ["read", "write"]},
-                    {"name": "source", "bytes": 2097152, "access": ["read", "write"]},
+                    {"name": "source", "bytes": 4194304, "access": ["read", "write"]},
                     {"name": "reference", "bytes": 2097152, "access": ["read", "write"]}],
   "deadlines": {"run_us": 5000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
-  "output_limit": 32768
+  "output_limit": 416360
 }

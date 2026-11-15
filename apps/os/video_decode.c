@@ -24,6 +24,7 @@
 #include "quiesce.h"
 #include "sunstone_crumb.h"
 #include "sunstone_deadline.h"
+#include "sunstone_notify.h"
 #include "sunstone_video_decode.h"
 #include <stdatomic.h>
 #include <string.h>
@@ -112,7 +113,8 @@ static int timely(void){uint64_t t=lease_now();return t&&t<vd.limit&&board_live(
 static void pause_us(uint32_t us){const uint64_t t=now_us()+us;while(now_us()<t)(void)sunstone_deadline_wait_until(t);}
 static int refuse(unsigned step,uint32_t value){return os_device_refuse(&vd.dev,step,value);}
 static int fail(unsigned step,uint32_t value){return os_device_fail(&vd.dev,step,value,vd.platform.decoder.unit.uncertain);}
-static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner);}
+/* The power row's wake ends the owner's deadline waits (SS_NOTIFY_DEADLINE); the owner's index 0 is for its inputs. */
+static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGiveIndexed(owner,SS_NOTIFY_DEADLINE);}
 /* The bound on the owner's answer to the row (include/a733_power_domains.h): the supply deadline until verification
  * ends with DCDC2 verified or the done bit, then the row deadline from the first time this task saw verification
  * ended. Each is taken once, when its wait begins, and clipped to the open's deadline. */
@@ -636,14 +638,16 @@ static void serve(void)
 static void os_video_decode_task(void *unused)
 {
     (void)unused;
-    if(sunstone_deadline_register()!=1)for(;;)vTaskSuspend(NULL);
+    /* Every deadline wait of this task is on SS_NOTIFY_DEADLINE, which INTID 81 and the row's wake give; index 0 is
+     * given only by the application's request and the quiesce, and only the block below takes it, so an input that
+     * arrives during a close or a decode stays pending until the block. */
+    if(sunstone_deadline_register_index(SS_NOTIFY_DEADLINE)!=1)for(;;)vTaskSuspend(NULL);
     for(;;){
         serve();
         if(atomic_load(&vd.dev.quiesce_wanted)&&atomic_load(&vd.request)!=POSTED){
             if(closable())(void)do_close();
             if(atomic_load(&vd.dev.phase)==OS_DEVICE_CLOSED)atomic_store(&vd.dev.quiesced,1);
         }
-        /* Every input notifies this task: an application request, the quiesce, the row's wake and INTID 81. */
         (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
     }
 }
@@ -662,7 +666,7 @@ void os_video_decode_irq(void)
         vd.irq_ticks=ss_counter_ticks();
         atomic_store_explicit(&vd.irq_seen,1,memory_order_release);
     } else atomic_fetch_add_explicit(&vd.stray,1,memory_order_relaxed);
-    if(owner)vTaskNotifyGiveFromISR(owner,&woken);
+    if(owner)vTaskNotifyGiveIndexedFromISR(owner,SS_NOTIFY_DEADLINE,&woken);
     portYIELD_FROM_ISR(woken);
 }
 

@@ -39,7 +39,7 @@ static struct sunstone_deadline_slot *find(TaskHandle_t owner)
 }
 /* The calling task's slot through its task-local pointer, or NULL when there is no current task, the task has not
  * registered, or the pointer names a slot that the task does not own. Only the task itself writes the pointer, once, in
- * sunstone_deadline_register, before its first wait, so one read of the current task gives both the task and its
+ * bind (sunstone_deadline_register or sunstone_deadline_register_index), before its first wait, so one read of the current task gives both the task and its
  * pointer (include/sunstone_task_self.h). own sets *self to the calling task, or NULL when there is none. */
 static struct sunstone_deadline_slot *held(TaskHandle_t self,void *local)
 {
@@ -54,19 +54,23 @@ static struct sunstone_deadline_slot *own(TaskHandle_t *self)
     *self=sunstone_task_self_local(SUNSTONE_DEADLINE_TLS,&local);
     return held(*self,local);
 }
-int sunstone_deadline_register(void)
+static int bind(unsigned own_index)
 {
     void *local;
     TaskHandle_t owner=sunstone_task_self_local(SUNSTONE_DEADLINE_TLS,&local);
     if(!owner)return 0;
     /* Bound once. Several owners call this from one task (a service loop, then its retirement callback), so a task that
-     * holds its slot gets 1 at once; a pointer at a slot it does not own is refused. */
-    if(local)return held(owner,local)!=NULL;
+     * holds its slot gets 1 at once; a pointer at a slot it does not own is refused, and so is a second registration
+     * that names another index than the first. */
+    if(local){
+        const struct sunstone_deadline_slot *slot=held(owner,local);
+        return slot&&(!own_index||slot->own_index==own_index);
+    }
     struct sunstone_deadline_slot *s=NULL;
     taskENTER_CRITICAL();
     for(unsigned i=0;i<DEADLINE_SLOTS;++i)
         if(!atomic_load_explicit(&slots[i].owner,memory_order_relaxed)){
-            s=&slots[i];atomic_store_explicit(&s->owner,owner,memory_order_release);break;
+            s=&slots[i];s->own_index=own_index;atomic_store_explicit(&s->owner,owner,memory_order_release);break;
         }
     taskEXIT_CRITICAL();
     if(!s)return 0;
@@ -78,6 +82,12 @@ int sunstone_deadline_register(void)
         return 0;
     }
     return 1;
+}
+int sunstone_deadline_register(void){return bind(0);}
+int sunstone_deadline_register_index(unsigned index)
+{
+    if(index>=configTASK_NOTIFICATION_ARRAY_ENTRIES)return 0;
+    return bind(index+1);
 }
 static uint64_t earliest(void)
 {
@@ -110,7 +120,7 @@ int sunstone_deadline_wait_until(uint64_t until)
         s->failed=1;taskEXIT_CRITICAL();return SUNSTONE_DEADLINE_ERROR;
     }
     ++s->sequence;s->last_deadline=until;s->woken_us=0;
-    const unsigned index=sunstone_deadline_notify_index();
+    const unsigned index=s->own_index?s->own_index-1:sunstone_deadline_notify_index();
     s->index=index;
     uint64_t now=sunstone_deadline_now_us();
     if(now>=until){

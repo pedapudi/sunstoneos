@@ -57,6 +57,11 @@ can latch a fault during a valid transition.
    image linked with 0 from its EL1 vector table and fails on any FP or SIMD
    instruction it reaches, apart from the port's guarded task context save
    and restore, and on any reached unit compiled without the flag.
+   Application sources (`add_sunstone_application`) are built without the
+   flag, so an application task can use NEON; every task has its own FP
+   context. The walk leaves out the application's init hook and main, which
+   only boot code and the application task run, and refuses any other
+   application function it reaches that uses FP or lacks the flag.
 
 Select checks under [the validation policy](validation.md). Keep hardware
 safety checks when consolidating fixtures. Submit eligible physical tests

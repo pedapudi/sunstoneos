@@ -323,4 +323,3 @@ void cpu_npu_load_main(const struct ss_grant *grant)
     receipt.core_mask=0xff;receipt.edge=16;
     ss_finish(&receipt,sizeof(receipt));
 }
-void platform_puts(const char *text){(void)text;ss_fail(0x8d0);}

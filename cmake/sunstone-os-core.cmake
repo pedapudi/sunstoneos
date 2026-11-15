@@ -8,6 +8,10 @@ option(SUNSTONE_A733_OS_USB_JPEG "OS camera MJPEG hardware decoder" OFF)
 option(SUNSTONE_A733_OS_DMA "Adopted DMA0 RAM-copy service with normal retirement" OFF)
 option(SUNSTONE_A733_OS_RADIO_SCAN "Radio station that scans and returns: board workload 3, no USB host, scan-only profile, normal return" OFF)
 option(SUNSTONE_A733_OS_GPU "OS GPU compute queue" OFF)
+option(SUNSTONE_G2D_CONVERT_VARIANTS "G2D convert variants for the g2d-convert board stage only (include/a733_g2d_convert.h)" OFF)
+if(SUNSTONE_G2D_CONVERT_VARIANTS AND NOT SUNSTONE_APPLICATION STREQUAL "g2d-convert")
+  message(FATAL_ERROR "SUNSTONE_G2D_CONVERT_VARIANTS is for the g2d-convert board stage only")
+endif()
 option(SUNSTONE_GPU_TIMING "Capture optional GPU job timing records" OFF)
 option(SUNSTONE_GPU_NSI_PMU "Capture experimental GPU master NSI traffic counters" OFF)
 if(SUNSTONE_GPU_NSI_PMU AND NOT SUNSTONE_GPU_TIMING)
@@ -513,6 +517,9 @@ set_property(TARGET sunstone-a733-os-core PROPERTY COMPILE_DEFINITIONS "${os_def
 if(SUNSTONE_A733_OS_USB_JPEG)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_JPEG=1)
 endif()
+if(SUNSTONE_G2D_CONVERT_VARIANTS)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_G2D_CONVERT_VARIANTS=1)
+endif()
 if(SUNSTONE_A733_OS_USB_CLASSES)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_CLASSES=1 SUNSTONE_USB_HOST_GENERIC=1 SUNSTONE_USB_APP_ALIAS=1 SUNSTONE_USB_LEDGER_MEMORY=1)
   target_compile_definitions(a733-board-usb2-host PRIVATE SUNSTONE_USB_LEDGER_MEMORY=1)
@@ -691,9 +698,26 @@ elseif(SUNSTONE_A733_TABLE_WALKS STREQUAL "uncached")
 elseif(NOT SUNSTONE_A733_TABLE_WALKS STREQUAL "default")
   message(FATAL_ERROR "SUNSTONE_A733_TABLE_WALKS must be default, cached or uncached")
 endif()
-# Publish the exact OS compile configuration to application and device objects.
+# Publish the exact OS compile configuration to application and device objects, except one flag. Application sources
+# (add_sunstone_application, which sets SUNSTONE_APPLICATION_NAME) are built without -mgeneral-regs-only, so that an
+# application task can use NEON: every task has an FP context (configUSE_TASK_FPU_SUPPORT 2). OS units, services and
+# images keep the flag. An application that wants it adds it to its own target. In an image linked with
+# configSS_IRQ_SAVES_FP 0, checks/irq-general-regs.py refuses any unit without the flag that exception code reaches
+# (its rule 2), and any FP instruction there (rule 1).
 foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_FEATURES)
   get_target_property(value sunstone-a733-os-core ${property})
+  if(property STREQUAL "COMPILE_OPTIONS" AND NOT value STREQUAL "value-NOTFOUND")
+    list(FIND value "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>" general)
+    if(general EQUAL -1)
+      message(FATAL_ERROR "the OS core's compile options lack the C-only -mgeneral-regs-only this file publishes per target")
+    endif()
+    list(REMOVE_ITEM value "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")
+    if(value MATCHES "general-regs-only")
+      message(FATAL_ERROR "the OS core's compile options name -mgeneral-regs-only in a form this file does not publish per target")
+    endif()
+    list(INSERT value ${general}
+      "$<$<AND:$<COMPILE_LANGUAGE:C>,$<NOT:$<BOOL:$<TARGET_PROPERTY:SUNSTONE_APPLICATION_NAME>>>>:-mgeneral-regs-only>")
+  endif()
   if(NOT value STREQUAL "value-NOTFOUND")
     set_property(TARGET sunstone-os-settings PROPERTY INTERFACE_${property} "${value}")
   endif()
