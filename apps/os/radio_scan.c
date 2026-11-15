@@ -76,6 +76,15 @@ void os_radio_scan_step(struct board_radio *r, int result)
          * cannot return still says it; the descriptor's record carries the same site. */
         uint32_t value = r->platform.fail_line ? r->platform.fail_line << 16 | (r->platform.fail_stage & 0xffffu) :
             r->session.fail_line << 16 | 0x100u | (r->session.fail_stage & 0xfeffu);
+        /* An association miss (a refusal, a timeout or a handshake that never completes) fails no platform or session
+         * site, and its return ends at the watchdog, which loses the record. The crumb then carries the association
+         * tail's codes instead: bits 31:16 the association status code, bit 15 set, 14:12 the link, 11:8 EAPOL frames
+         * sent and 7:4 received (each at most 15), 3:0 the association stage. No SSID, BSSID or key byte. */
+        if (r->config.associate && !r->platform.fail_line && !r->session.fail_line) {
+            const struct a733_radio_assoc *a = &r->assoc;
+            value = (a->status & 0xffffu) << 16 | 0x8000u | (a->link & 7u) << 12 |
+                (a->eapol_tx < 15 ? a->eapol_tx : 15u) << 8 | (a->eapol_rx < 15 ? a->eapol_rx : 15u) << 4 | (a->stage & 15u);
+        }
         if(!os_radio_quiesce_fault(value,__builtin_return_address(0)))
             board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD) | SUNSTONE_CRUMB_FAIL_RETURN,
                 value,__builtin_return_address(0));

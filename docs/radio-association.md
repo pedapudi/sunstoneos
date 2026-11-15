@@ -7,11 +7,11 @@ unqualified. Neither command acceptance nor successful association establishes
 usable networking.
 
 The initial profiles are open association and WPA2-PSK with CCMP association.
-The WPA2 profile stops at `SECURITY_PENDING`: no supplicant handshake, credentials,
-key installation, or protected data path is implemented by this component.
-Open association also requires the remaining network data path before use.
-Full authentication, encryption, network delivery, roaming, and Bluetooth support
-remain part of the OS objective.
+This worker ends a WPA2 association at `SECURITY_PENDING`. The
+[RSN supplicant](radio-security.md) then runs the four-way handshake, installs
+the keys and opens the controlled port, which makes the link `SECURED`. Open
+association also requires the remaining network data path before use. Roaming,
+WPA3 and Bluetooth support remain part of the OS objective.
 
 ## A connection requires an explicit target and transmission authority
 
@@ -86,6 +86,27 @@ Both association information-element lengths must fit the source's shared
 The complete indication remains available alongside parsed metadata, including
 association ID, station/channel indices, QoS fields, and EDCA parameters.
 ABI padding bytes are retained without invented zero-value constraints.
+
+## The association path against the reference
+
+This table compares the native association path with the pinned vendor driver
+(`aic8800_fdrv` at kernel revision `2ac08e8c7cdc`, `rwnx_msg_tx.c`,
+`rwnx_main.c`, `rwnx_tx.c`, `rwnx_msg_rx.c`, `lmac_msg.h`) and wpa_supplicant
+2.12 (`src/rsn_supp/wpa.c`). The firmware itself is not available as source, so
+its reaction to the differences marked "open" is a board observation.
+
+| Step | Reference | Native | Status |
+| --- | --- | --- | --- |
+| Connect request layout | 320 bytes; SSID at 0, BSSID 34, channel 40, flags 48, ethertype 52, IE length 54, authentication type 56, interface 61, IEs 64 | The same offsets; unwritten fields zero in both | Same |
+| Connect flags | `CONTROL_PORT_HOST` and `WPA_WPA2_IN_USE` (9); `DISABLE_HT` only for WEP or TKIP; `CONTROL_PORT_NO_ENC` only for IEEE 802.1X without WPA | 15: adds `CONTROL_PORT_NO_ENC` and `DISABLE_HT` for the legacy profile | Open. The first handshake is unaffected. With `NO_ENC`, EAPOL stays unencrypted after key installation, which a group or pairwise rekey may need to change |
+| Channel flags and power in the connect request and the channel configuration | `get_chan_flags()` returns 0 in the shipped build (`RADAR_OR_IR_DETECT` off); transmit power 0 in the connect request | `NO_IR` on every channel, and the catalogue's maximum power | Open. A firmware that honours `NO_IR` could withhold authentication frames: the connect would then time out or be refused |
+| UAPSD queues | Voice queue bit set by default | 0 | Cosmetic for association |
+| RSN element | The supplicant's element, copied into the request | 22 bytes: version 1, CCMP group and pairwise, PSK, no capabilities; the same bytes in message 2 | Same for a WPA2-PSK CCMP access point |
+| Connect indication | Uses status, peer, channel and width without checks | Requires the selected BSSID, frequency, band and interface and an access-point index below the station limit; accepts any defined width | Same acceptance for a successful association |
+| EAPOL transmit | Host flags 0; the firmware encrypts by connect flags and key state; the confirmation status is ignored for EAPOL on SDIO | Host flags 0, confirmation requested by host identifier bit 31; a processed frame completes whether or not it was acknowledged | Same |
+| Early message 1 | Delivered to the supplicant by the network stack | Delivered once the supplicant is attached. A frame that arrives between the connect indication and the attachment is consumed as a dispatcher event and dropped; the access point retransmits it after about one second | Open: adds up to one retransmission interval |
+| Key installation | Message 4 first, then the pairwise key (`MM_KEY_ADD_REQ`, key index 0, the access point's station index, CCMP 2), then the group key (key index 1 to 3, station index 0xFF) | The same order; the key add waits for message 4's confirmation | Same |
+| Controlled port | `ME_SET_CONTROL_PORT_REQ` (0x1404) with the station index and open 1, after the supplicant completes | The same request after every queued action completes | Same |
 
 ## Disconnection events preserve ordering and ownership
 

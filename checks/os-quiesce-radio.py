@@ -193,7 +193,9 @@ enum {RUNNING,SCANNED,DOWN,FAILED};
 enum {BOARD_RADIO_SCANNED,BOARD_RADIO_DOWN,BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID};
 static _Atomic unsigned state,stage_seen;
 static unsigned requested,starts,steps,published,noted;
-struct board_radio {struct {unsigned entropy_only;} config;struct {unsigned fail_line,fail_stage;} platform,session;};
+struct a733_radio_assoc {unsigned stage,link,status,eapol_rx,eapol_tx;};
+struct board_radio {struct {unsigned entropy_only,associate;} config;struct {unsigned fail_line,fail_stage;} platform,session;
+    struct a733_radio_assoc assoc;};
 struct a733_radio_report {struct {unsigned stage;} head;};
 static struct a733_radio_report report={.head.stage=7};
 static int os_radio_quiesce_requested(void){return requested;}
@@ -203,10 +205,11 @@ static int os_ce_probe_done(void){return 0;}
 static int os_ce_probe_failed(void){return 0;}
 static const struct a733_radio_report *board_radio_report(struct board_radio *r){(void)r;return &report;}
 static void publish(struct board_radio *r){(void)r;++published;}
-static int os_radio_quiesce_fault(uint32_t value,const void *caller){(void)value;(void)caller;return requested;}
+static uint32_t fault_value;
+static int os_radio_quiesce_fault(uint32_t value,const void *caller){(void)caller;fault_value=value;return requested;}
 #define SUNSTONE_CRUMB_FAIL_SITE(x) 0
 #define SUNSTONE_CRUMB_FAIL_RETURN 0
-static void board_fail_note(uint32_t site,uint32_t value,const void *caller){(void)site;(void)value;(void)caller;++noted;}
+static void board_fail_note(uint32_t site,uint32_t value,const void *caller){(void)site;(void)caller;fault_value=value;++noted;}
 static unsigned wakes;
 static void os_application_wake_main(void){++wakes;}
 ''' + publisher + body + r'''
@@ -220,6 +223,11 @@ int main(void)
     os_radio_scan_step(&r,BOARD_RADIO_SCANNED);assert(atomic_load(&state)==SCANNED&&atomic_load(&stage_seen)==7&&wakes==2);
     os_radio_scan_step(&r,BOARD_RADIO_SCANNED);assert(wakes==2);
     os_radio_scan_step(&r,BOARD_RADIO_DOWN);assert(atomic_load(&state)==DOWN&&published==1&&wakes==3);
+    /* An association miss names its codes in the first failure record: status 17, link down, one EAPOL frame each way,
+     * stage 5 (securing). */
+    struct board_radio a={.config.associate=1,.assoc={.stage=5,.link=0,.status=17,.eapol_rx=1,.eapol_tx=1}};
+    requested=0;atomic_store(&state,RUNNING);os_radio_scan_step(&a,BOARD_RADIO_RETAINED);
+    assert(atomic_load(&state)==FAILED&&fault_value==(17u<<16|0x8000u|1u<<8|1u<<4|5u));
     return 0;
 }
 ''')

@@ -103,6 +103,12 @@ matching scan results, selected frequency and RSSI, and connection and
 authorization times. It holds no SSID, key or credential byte. The access point
 list in this stage also omits SSIDs.
 
+An association miss (a refused association, a timeout or a handshake that never
+completes) retains the radio, so its return ends at the watchdog and the record
+is lost. Its first failure record therefore carries the tail's codes: bits 31:16
+the association status code, bit 15 set, bits 14:12 the link, 11:8 the EAPOL
+frames sent and 7:4 those received (each at most 15), and 3:0 the stage.
+
 ## Entropy and credentials gate association only
 
 Enumeration, firmware loading and the scan need neither entropy qualification
