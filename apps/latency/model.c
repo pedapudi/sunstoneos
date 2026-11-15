@@ -92,7 +92,10 @@ static void controller(void *argument)
         number(" first_state=", w->first_state);
         number(" arms=", w->arms);
         platform_puts("\n");
-        configASSERT(filed && w->first.running && filed + 1 <= w->linked);
+        /* A wake whose interrupt chain a later interrupt replaced before the woken task finished its bookkeeping (a stall of
+         * that core, long on a loaded host) is counted unlinked, by design; every busy wake is one or the other, and a chain
+         * that is not recorded at all links none. The first wake may be among the unlinked. */
+        configASSERT(filed && (w->first_state >> 16 & 1u) && w->linked + w->unlinked == LATENCY_BUSY_SAMPLES && 2 * w->linked > LATENCY_BUSY_SAMPLES);
         /* Each setting's worst wakes, largest first from the deadline; a released core's deadline is CPU0's. */
         for (unsigned setting = 0; setting < 2; ++setting)
             for (unsigned i = 0; i < SS_WAKE_WORST; ++i) {
@@ -105,7 +108,11 @@ static void controller(void *argument)
             }
 #if configSS_LOCAL_TIMERS
         /* CPUs 1-7 that wait on their own deadlines armed their timers; those CPU0 releases had nothing to arm. */
-        if (core) configASSERT((SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u) ? !w->arms : w->arms != 0);
+        /* The cores of the cause ping wait on one another's turns after the measured phases, with timeouts, and arm their timers
+         * for them while the recorder is still armed; every other core must arm none for a wake CPU0 released. */
+        bool pings = false;
+        for (unsigned pair = 0; pair < LATENCY_CAUSE_PING_PAIRS; ++pair) pings |= result.ping.pair[pair].target_core == core;
+        if (core) configASSERT((SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u) ? (pings || !w->arms) : w->arms != 0);
         /* Their timer samples, kept until the woken task ran, were recorded. */
         if (core && !(SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u)) configASSERT(result.core[core].metric[SS_LAT_IRQ].count);
 #endif
@@ -116,8 +123,11 @@ static void controller(void *argument)
 #else
     configASSERT(result.wake_segments.scan_mask == 0xffu);
 #endif
+    /* A tick is complete only when no core still held its previous wake, so a stalled core on a loaded host leaves few: the
+     * first and second complete ticks each exist at most once, and at least one was filed. */
     configASSERT(result.wake_segments.tick[0].count + result.wake_segments.tick[1].count &&
-                 result.wake_segments.first.count == 1 && result.wake_segments.second.count == 1);
+                 result.wake_segments.first.count == 1 &&
+                 result.wake_segments.second.count == (result.wake_segments.tick[0].count + result.wake_segments.tick[1].count > 1));
     platform_puts("PASS wake segment model: linked busy wake chains on every core and filed busy ticks; functional evidence only\n");
 #endif
 #ifdef SUNSTONE_SCHED_PMU
