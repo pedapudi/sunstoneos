@@ -3,7 +3,8 @@
 
 The image's own os_quiesce_register, os_quiesce_step and G2D quiesce step run under AArch64 emulation, with the G2D
 owner task run between supervisor passes as its task would be. The CCU, PCK1 and G2D registers are modeled as
-plain registers, and register access passes the image's own Device-mapping check. Time advances 10 ms per
+plain registers, and register access passes the image's own Device-mapping check. The distributor calls that mask
+INTID 83 (gicv3_spi_mask, gicv3_spi_masked) report the line masked. Time advances 10 ms per
 supervisor pass; the supervisor's shared bound is 3 s (OS_FAILURE_RETURN_US, apps/os/cpu-return.c), after which the
 image stops at site 0x742 and the watchdog reset ends the session.
 
@@ -120,6 +121,8 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
         'os_cpu_return_requested': lambda m: ret(m, state['requested']),
         'os_cpu_return_failing': lambda m: ret(m, 0),
         'os_application_wake_task': lambda m: ret(m),
+        'gicv3_spi_mask': lambda m: ret(m, 1),
+        'gicv3_spi_masked': lambda m: ret(m, 1),
     }
     for symbol, callback in hooks.items():
         hook_addresses(uc, {image.address(symbol)}, lambda m, a, s, u, c=callback: c(m))

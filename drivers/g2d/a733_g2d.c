@@ -181,14 +181,19 @@ static uint32_t coarse(uint32_t in,uint32_t out,uint32_t factor,uint32_t *d0,uin
 }
 struct head { uint32_t low,len,dirty,offset; };
 _Static_assert(sizeof(struct head)==16,"RCQ descriptor");
-static void block(uint8_t *memory,unsigned h,unsigned at,unsigned size,unsigned offset)
+static void block(uint8_t *memory,uint32_t rcq,unsigned h,unsigned at,unsigned size,unsigned offset)
 {
     struct head *head=(void *)memory;
-    head[h]=(struct head){A733_G2D_RCQ_IOVA+at,size,1,offset};
+    head[h]=(struct head){rcq+at,size,1,offset};
 }
 int a733_g2d_commands(void *memory,size_t capacity,const struct a733_g2d_session *s)
 {
-    if(!memory||(uintptr_t)memory%32||capacity!=4096||
+    return a733_g2d_commands_at(memory,capacity,s,A733_G2D_SOURCE_IOVA,A733_G2D_OUTPUT_IOVA,A733_G2D_RCQ_IOVA);
+}
+int a733_g2d_commands_at(void *memory,size_t capacity,const struct a733_g2d_session *s,
+    uint32_t source_iova,uint32_t output_iova,uint32_t rcq_iova)
+{
+    if(!memory||(uintptr_t)memory%32||capacity!=4096||(rcq_iova&4095)||(source_iova&3)||(output_iova&3)||
        a733_ranges_overlap_or_wrap(memory,capacity,s,sizeof(*s))||!a733_g2d_geometry_valid(s))return 0;
     memset(memory,0,capacity);uint8_t *p=memory;
     struct g2d_mixer_ovl_v_reg *v=(void *)(p+128);
@@ -205,7 +210,7 @@ int a733_g2d_commands(void *memory,size_t capacity,const struct a733_g2d_session
     v->ovl_attr.dwval=UINT32_C(0xff000001)|(s->op==1?16:0)|(s->format<<8);
     v->ovl_mem.dwval=source_size;v->ovl_winsize.dwval=source_size;
     v->ovl_mem_pitch0=s->stride;
-    v->ovl_mem_low_addr0=A733_G2D_SOURCE_IOVA+s->sy*s->stride+s->sx*4;
+    v->ovl_mem_low_addr0=source_iova+s->sy*s->stride+s->sx*4;
     v->ovl_fill_color=s->color;
     b->bld_en_ctrl.dwval=0x101;b->mem_size[0].dwval=size;
     b->out_size.dwval=size;b->bld_ctrl.dwval=0x00010001; /* COPY */
@@ -222,7 +227,7 @@ int a733_g2d_commands(void *memory,size_t capacity,const struct a733_g2d_session
              * The background reads its per-pixel alpha from the same upload. */
             v->ovl_attr.dwval=(s->alpha<<24)|4|1;
             u->ovl_attr.dwval=UINT32_C(0xff000001);
-            u->ovl_mem_low_addr0=A733_G2D_SOURCE_IOVA+s->by*s->stride+s->bx*4;
+            u->ovl_mem_low_addr0=source_iova+s->by*s->stride+s->bx*4;
         }
         b->bld_en_ctrl.dwval=0x301;b->mem_size[1].dwval=size;
         b->bld_ctrl.dwval=0x03010301; /* SRCOVER; straight output. */
@@ -247,12 +252,12 @@ int a733_g2d_commands(void *memory,size_t capacity,const struct a733_g2d_session
     }
     w->wb_attr.dwval=s->output_format;
     w->data_size.dwval=size;w->pitch0=s->stride;
-    w->laddr0=A733_G2D_OUTPUT_IOVA+s->dy*s->stride+s->dx*4;
-    block(p,0,128,sizeof(*v),G2D_V0);
-    block(p,1,192,4,G2D_UI0);block(p,2,224,4,G2D_UI1);
-    block(p,3,256,blend?sizeof(*u):4,G2D_UI2);block(p,4,scale?1024:288,
+    w->laddr0=output_iova+s->dy*s->stride+s->dx*4;
+    block(p,rcq_iova,0,128,sizeof(*v),G2D_V0);
+    block(p,rcq_iova,1,192,4,G2D_UI0);block(p,rcq_iova,2,224,4,G2D_UI1);
+    block(p,rcq_iova,3,256,blend?sizeof(*u):4,G2D_UI2);block(p,rcq_iova,4,scale?1024:288,
         scale?sizeof(struct g2d_mixer_video_scaler_reg):4,G2D_VSU);
-    block(p,5,384,sizeof(*b),G2D_BLD);block(p,6,832,sizeof(*w),G2D_WB);
+    block(p,rcq_iova,5,384,sizeof(*b),G2D_BLD);block(p,rcq_iova,6,832,sizeof(*w),G2D_WB);
     /* Eighth header is the required even-count zero-dirty terminator. */
     return 1;
 }
