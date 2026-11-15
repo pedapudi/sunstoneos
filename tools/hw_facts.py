@@ -482,8 +482,13 @@ def source_facts():
 
 
 def annotate(document):
-    """Add the source facts and resolve the raz-in-view entries that our source configures."""
-    document['facts'] = [e for e in document['facts'] if e['status'] not in (FROM_SOURCE, 'derived')] + source_facts()
+    """Add the source facts and resolve the raz-in-view entries that our source configures.
+
+    Only the entries that source_facts() produces are replaced. The raz-in-view entries resolved below also become
+    from-source, and dropping every from-source entry would lose them on the next run."""
+    sources = source_facts()
+    own = {e['name'] for e in sources}
+    document['facts'] = [e for e in document['facts'] if e['name'] not in own] + sources
     routed = {r[0]: r for r in ROUTES}
     # The hw-facts image routes 71, 95, 97 and 143 itself (tools/sunstone-manifest.py SUNSTONE_A733_HW_FACTS).
     image_routes = {71, 95, 97, 143}
@@ -546,11 +551,16 @@ def load_document(path=FACTS_JSON):
 
 
 def merge(document, header, facts, queue_entry, image_sha256, port=None):
-    """Replace unmeasured and observed entries by this run's measured ones. Facts read on the virtual board are refused."""
+    """Replace entries by this run's measured ones. Facts read on the virtual board are refused.
+
+    A slot the run skipped decodes as unmeasured; it adds a missing name but never replaces an entry the file holds."""
     if header['platform_id'] != PLATFORM_A733:
         raise ValueError('only a table read on the A733 board becomes hardware facts')
     index = {(e['name'], e['core']): e for e in document['facts']}
+    held = {e['name'] for e in document['facts']}
     for fact in facts:
+        if fact['status'] == 'unmeasured' and fact['name'] in held:
+            continue
         key = (fact['name'], fact['core'])
         item = dict(fact, queue_entry=queue_entry, image_sha256=image_sha256)
         if port:

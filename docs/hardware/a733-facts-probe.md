@@ -120,8 +120,10 @@ python3 tools/hw_facts.py decode output.bin --merge docs/hardware/a733-facts.jso
   --queue-entry ENTRY_ID --image-sha256 SHA256 --port 3-3
 ```
 
-Merging replaces the unmeasured and observed entries of the facts the table covers, adds the queue entry to
-each, and refuses a table whose header names the virtual board. Record the run with
+Merging replaces the entry of every fact the run read with the new value and adds the queue entry to it. A
+slot the run skipped leaves the file's entry in place. The facts our own source sets are rebuilt, and no other entry
+changes, so merging the same table twice gives the same file. Merging refuses a table whose header names the virtual
+board. Record the run with
 `tools/evidence.py add ENTRY_ID --subsystem hardware-facts ...` afterwards.
 
 ## Measured on the board

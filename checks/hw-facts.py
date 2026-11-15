@@ -66,8 +66,8 @@ def test_layout():
     assert len(names) == len(set(names)), 'a fact name repeats'
 
 
-def synthetic():
-    """A table as the board writes it: every slot read, a few values chosen."""
+def synthetic(skip=()):
+    """A table as the board writes it: every slot read except `skip`, a few values chosen."""
     values = {}
     for core in range(hw.CORES):
         values[('core', core, (0x0002, 0))] = 0x414fd0b1 if core >= 6 else 0x412fd050
@@ -82,7 +82,7 @@ def synthetic():
     values[('shared', 0, (0x0111, 97))] = 2 << 8
     values[('shared', 0, (0x0112, 97))] = 1 << 16 | 0xd8
     values[('shared', 0, (0x0130, 0x070101ac))] = 1
-    skipped = {('shared', 0, (0x0130, 0x07064000)), ('shared', 0, (0x0130, 0x07064008))}
+    skipped = {('shared', 0, (0x0130, 0x07064000)), ('shared', 0, (0x0130, 0x07064008))} | set(skip)
     return hw.encode(values=values, skipped=skipped)
 
 
@@ -213,6 +213,31 @@ def test_document():
     except hw.MissingFact:
         pass
     assert facts.assume('gic.dist.nonexistent', 7, 'test') == 7 and 'gic.dist.nonexistent' in facts.assumed
+
+
+def test_merge_keeps_entries():
+    """Merging a table, then the same table again, loses no entry.
+
+    The table skips the group words of the SPIs that annotate() resolves from source, as a run that does not read
+    them would. A skipped slot leaves the committed entry in place, and annotate() replaces only its own source facts,
+    so every committed entry that is not unmeasured survives both merges unchanged, and the second merge changes
+    nothing."""
+    def entries(document):
+        return {(e['name'], e['core']): e for e in document['facts']}
+    committed = hw.load_document()
+    skip = {('shared', 0, (0x0110, intid)) for intid in (71, 95, 97, 143)}
+    header, facts = hw.decode(synthetic(skip=skip))
+    once = hw.merge(copy.deepcopy(committed), header, facts, 'entry', '0' * 64)
+    twice = hw.merge(copy.deepcopy(once), header, facts, 'entry', '0' * 64)
+    read = {(f['name'], f['core']) for f in facts if f['status'] != 'unmeasured'} | {(f['name'], 'all') for f in facts if f['status'] != 'unmeasured'}
+    kept = {k: e for k, e in entries(committed).items() if e['status'] != 'unmeasured' and k not in read and (k[0], None) not in read}
+    after = entries(once)
+    lost = sorted(k for k, e in kept.items() if after.get(k) != e)
+    assert not lost, 'the first merge dropped or changed %s' % lost[:8]
+    again = entries(twice)
+    changed = sorted(k for k in after.keys() | again.keys() if after.get(k) != again.get(k))
+    assert not changed, 'the second merge dropped or changed %s' % changed[:8]
+    assert entries(hw.annotate(copy.deepcopy(committed))) == entries(committed), 'annotate() changed the committed entries'
 
 
 def variant(readback):
@@ -386,6 +411,7 @@ def main():
     test_layout()
     blob = test_decoder()
     test_document()
+    test_merge_keeps_entries()
     test_models()
     test_no_hardcoded_values()
     test_helper()
