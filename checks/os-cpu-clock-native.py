@@ -228,7 +228,8 @@ steps.command('link-owner-' + hashlib.sha256(owner_obj.read_bytes() + policy_obj
               [LLD, '-Ttext=0x41000000', '--entry=os_cpu_owner_check', '--gc-sections',
                owner_obj, policy_obj, *objects[1:3], objects[-1], '-o', owner_elf])
 owner_image = Image(owner_elf)
-for mode, name in enumerate(('both-clusters-big-little-dsu', 'no-grant-read-only', 'retained-request-not-ready')):
+for mode, name in enumerate(('both-clusters-big-little-dsu-then-follow-without-perf', 'no-grant-read-only',
+                               'retained-request-not-ready', 'perf-service-failure-recorded')):
     cpu = harness_machine()
     cpu.mem_map(0x41000000, 0x400000)
     cpu.mem_map(0x200000, 0x10000)

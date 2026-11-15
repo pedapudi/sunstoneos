@@ -330,6 +330,23 @@ def board_failure(words, defines, elf):
                       status_bits=16)
     elif record['group'] == 'cpu_clock':
         record.update(phase=record['aux'] >> 8 & 3, cluster=record['aux'] & 0xff, status=hex(value), status_bits=32)
+        if record['phase'] == 3 and value >> 31 and not site & defines['CPU_GUARD']:
+            # apps/os/perf.c os_perf_fault_word(): the performance service's state when its step failed in FOLLOW.
+            points = ('none', 'time read', 'snapshot unanswered at its deadline', 'snapshot refused', 'reap', 'rail release',
+                      'NPU retune failed', 'NPU retune unanswered', 'GPU')
+            pmic = ('PENDING', 'READY', 'COMPLETE', 'BUSY', 'EXPIRED', 'INVALID', 'RETAINED')
+            rail = ('READY', 'PENDING', 'BUSY', 'INVALID', 'EXPIRED', 'RETAINED', 'EXHAUSTED')
+            driver = ('READY', 'PENDING', 'COMPLETE', 'BUSY', 'REFUSED', 'INVALID', 'EXPIRED', 'RETAINED')
+            point = value >> 24 & 15
+            record['perf'] = {
+                'driver_result': driver[value & 7], 'failed': bool(value >> 3 & 1),
+                'retained_blocks': value >> 4 & 31, 'failed_block': value >> 9 & 7, 'request_stage': value >> 12 & 3,
+                'service_phase': ('boot wait', 'boot read', 'boot switch', 'serve')[value >> 14 & 3],
+                'engine_phase': ('idle', 'apply', 'release', 'read')[value >> 16 & 3],
+                'last_pmic': pmic[value >> 18 & 7] if (value >> 18 & 7) < len(pmic) else value >> 18 & 7,
+                'last_rail': rail[value >> 21 & 7] if (value >> 21 & 7) < len(rail) else value >> 21 & 7,
+                'fail_point': points[point] if point < len(points) else point,
+                'rail': ('DCDC5', 'DCDC3', 'DCDC4', 'DCDC2')[value >> 28 & 3], 'cpu_busy': bool(value >> 30 & 1)}
         if site & defines['CPU_GUARD']:
             # The entry guard's refusal word: detail << 12 | guard line.
             record['guard_line'], record['guard_detail'] = value & 0xfff, hex(value >> 12)

@@ -320,6 +320,7 @@ int main(void)
     ++cases;
     /* Provider lifecycle failures use the owner's terminal return. Each
      * independent fixture restores host state; no native recovery is tried. */
+    uint32_t words[5]={0};
     for(unsigned failure=0;failure<5;++failure) {
         const __typeof__(perf) saved_perf=perf;const __typeof__(m) saved_m=m;
         if(failure==0)m.rail_busy=1;
@@ -335,6 +336,13 @@ int main(void)
         if(failure==0)assert(status>=0 && !m.leases && !m.outstanding);
         else assert(status==-1 && perf.failed && m.leases &&
             (failure==1 || failure==4 ? !m.outstanding : m.outstanding) && r.reason==A733_PERF_STEP_FAILED);
+        /* The refusal's state word names the statement: a submit refused until the deadline fails at the rail
+         * release after it, an unanswered snapshot at its deadline, a busy reap at the reap, a busy release at the
+         * release; each on DCDC5, the first snapshot. */
+        words[failure]=os_perf_fault_word(A733_CPU_CLOCK_READY);
+        static const unsigned point[5]={0,5,2,4,5},pmic[5]={A733_PMIC_COMPLETE,A733_PMIC_BUSY,A733_PMIC_BUSY,A733_PMIC_BUSY,A733_PMIC_COMPLETE};
+        assert(words[failure]>>31 && (words[failure]>>24&15u)==point[failure] && (words[failure]>>18&7u)==pmic[failure] &&
+            (words[failure]>>3&1u)==(failure!=0) && (failure==0 || ((words[failure]>>4&31u)==1u && !(words[failure]>>28&3u))));
         perf=saved_perf;m=saved_m;atomic_store(&mailbox,0);publish();++cases;
     }
 #ifdef PERF_MODEL_NPU
@@ -355,8 +363,8 @@ int main(void)
     r=usb(OS_PERF_REPORT,0,0);
     assert(r.result==A733_PERF_RESULT_STOPPED && r.reason==A733_PERF_STEP_FAILED && r.completed==completed);
     ++cases;
-    printf("{\"cases\":%u,\"boot_ticks\":%u,\"requests\":%u,\"busy_answers\":%u,\"snapshots\":%u}\n",
-        cases,boot_ticks,m.requests,m.busy_answers,m.snapshots);
+    printf("{\"cases\":%u,\"boot_ticks\":%u,\"requests\":%u,\"busy_answers\":%u,\"snapshots\":%u,\"words\":[%u,%u,%u,%u,%u]}\n",
+        cases,boot_ticks,m.requests,m.busy_answers,m.snapshots,words[0],words[1],words[2],words[3],words[4]);
     puts("PASS OS performance-mode owner: boot switch, USB0 answers and numbers, NPU hold, driver attribution, refusals and the report");
     return 0;
 }
