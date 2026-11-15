@@ -45,6 +45,35 @@ def main():
         assert reads==([0x01c0e000+offset] if expected==1 else [])
         if expected==1:assert int.from_bytes(cpu.mem_read(output,4),'little')==1200
         cases.append(dict(offset=hex(offset),nonnull_output=bool(output),device_mapping=mapped,result=expected,mmio_reads=len(reads)))
+    # The encoder shares the unit core's native read and its one mapping check: its VE window (0x01c10000) and its
+    # PCK600 domain-3 page (0x07063000) are among the checked pages.
+    encoder=a.output/'encoder-access.elf'
+    command=[a.clang,'--target=aarch64-none-elf','-O2','-g','-ffunction-sections','-fdata-sections',
+        '-I'+str(ROOT/'include'),'-nostdlib','-fuse-ld='+a.lld,'-Wl,--gc-sections',
+        '-Wl,-e,a733_encode_native_read','-Wl,-Ttext=0x41000000',
+        str(ROOT/'drivers/video/a733_video_encode_platform.c'),str(ROOT/'drivers/video/a733_video_unit.c'),
+        str(ROOT/'arch/aarch64/device_memory.c'),'-o',str(encoder)]
+    subprocess.run(command,check=True)
+    with encoder.open('rb') as f:
+        elf=ELFFile(f);segments=[(s['p_vaddr'],s.data()) for s in elf.iter_segments() if s['p_type']=='PT_LOAD'];entry=elf.header['e_entry']
+        translate=next(s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols() if s.name=='aarch64_device_translate')
+    for address in (0x01c10000+0x8f0,0x07063000):
+        cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);cpu.mem_map(0x200000,0x1000);cpu.mem_map(0x40ff0000,0x200000)
+        cpu.mem_map(0x50000000,0x10000);cpu.mem_map(address&~0xfff,0x1000)
+        for base,data in segments:cpu.mem_write(base,data)
+        cpu.mem_write(address,(0x5a5a).to_bytes(4,'little'));translations=[]
+        def device(c,where,size,unused,translations=translations):
+            translations.append(c.reg_read(UC_ARM64_REG_X0))
+            c.mem_write(c.reg_read(UC_ARM64_REG_X2),struct.pack('<QII',c.reg_read(UC_ARM64_REG_X0),0,2))
+            c.reg_write(UC_ARM64_REG_X0,1);c.reg_write(UC_ARM64_REG_PC,c.reg_read(UC_ARM64_REG_LR))
+        cpu.hook_add(UC_HOOK_CODE,device,begin=translate,end=translate)
+        cpu.reg_write(UC_ARM64_REG_X0,0);cpu.reg_write(UC_ARM64_REG_X1,address);cpu.reg_write(UC_ARM64_REG_X2,0x50000000)
+        cpu.reg_write(UC_ARM64_REG_SP,0x5000f000);cpu.reg_write(UC_ARM64_REG_LR,0x410f0000);cpu.emu_start(entry,0x410f0000,count=2000)
+        assert cpu.reg_read(UC_ARM64_REG_X0)&0xffffffff==1,hex(address)
+        assert int.from_bytes(cpu.mem_read(0x50000000,4),'little')==0x5a5a
+        assert len(translations)==10 and (address&~0xfff) in translations,(hex(address),translations)
+        cases.append(dict(encoder_address=hex(address),result=1,translations=len(translations)))
     (a.output/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,image_sha256=hashlib.sha256(image.read_bytes()).hexdigest(),cases=cases,scope='Actual native read function, whitelist and Device-mapping check; translation, MMIO and returned register values modeled.'),indent=2)+'\n')
-    print('PASS native decoded-MB read admission and neighboring/null/non-Device refusal')
+    print('PASS native decoded-MB read admission and neighboring/null/non-Device refusal; encoder VE and PCK3 reads on '
+          'the checked pages')
 if __name__=='__main__':main()
