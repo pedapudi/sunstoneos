@@ -19,6 +19,22 @@ Native HDMI, DSI, DisplayPort, immutable scanout and retained G2D paths have hos
 | HDMI, DSI, immutable scanout and retained G2D paths | host-tested | none | [g2d.md](../g2d.md), [displayport-native.md](../displayport-native.md) |
 | Visible sink output and physical pixels | open | none | open work 1 and 2 |
 
+## Display outputs
+
+**Board-qualified scope:** None.
+
+**Software evidence:** host, source.
+
+The display engine's scanout and composition, HDMI, MIPI DSI and DisplayPort have host and model evidence only. No sink output, panel or physical pixel is qualified on either board. See [g2d.md](../g2d.md) and [displayport-native.md](../displayport-native.md).
+
+## G2D
+
+**Board-qualified scope:** the OS-image G2D service on port 3-1: open and close (run `1794705812820143004-c987f8e7`), one ARGB8888 fill through IOMMU master 10 with INTID 83 completion (run `1794714427314630502-a44050c7`), and two copies in one session, one converting ARGB8888 to BGRA8888 (run `1794725199336568290-5c9e9da6`).
+
+**Software evidence:** host, source.
+
+The OS-image service is described in [g2d-os.md](../g2d-os.md). Scaling, blending, rotation, the X-byte formats and the retained native paths are host-tested or open.
+
 ## Open work
 
 1. Show visible sink output and physical pixels; qualify DMA visibility, IRQ delivery, electrical timing and recovery.
