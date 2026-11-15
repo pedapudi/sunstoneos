@@ -106,6 +106,7 @@ set(camera_inputs ${camera_sources} ${camera_headers} ${storage_inputs}
  "${CMAKE_CURRENT_LIST_FILE}" "${camera_root}/apps/camera/CMakeLists.txt" "${camera_root}/platform/a733-smp-supervised/boot.patch")
 list(REMOVE_DUPLICATES camera_inputs)
 set(camera_identity "native-camera-1;${SUNSTONE_CAMERA_SUPERVISED};${SUNSTONE_CAMERA_STREAM};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;board-sensor;${camera_width}x${camera_height};${camera_external};NV16;USB0-sink;retained")
+sunstone_sort_inputs(camera_inputs)
 foreach(input IN LISTS camera_inputs)
  file(SHA256 "${input}" camera_digest)
  string(APPEND camera_identity "${camera_digest}")
