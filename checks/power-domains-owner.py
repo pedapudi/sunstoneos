@@ -5,7 +5,7 @@ checks/power-domains-pck.c composes drivers/power/a733_power_domains.c with the 
 supply verification over modeled PCK600, CCU and R_CCU registers (checks/power-domains-model.h). This check runs:
 
 - the whole model, which covers domains 1, 4 and 5;
-- its domain-2 cases (--domain2): no master-gate read, the read-only check refused with no access, the delay row
+- its domain-2 cases (--domain2): no master-gate read, the delay row
   and ON command, adoption, refusals that set only bit 14, timeout retention, no power-off, the transition record
   and the back-to-back measurement mode;
 - its access traces of domains 1, 4 and 5 (--domain-traces), which must equal checks/data/power-domains-traces.txt.
@@ -63,7 +63,6 @@ MUTANTS = [
      'measurement mode ignored'),
     ('{return id==1 ? 0 : id==4 ? 1 : id==5 ? 2 : id==2 ? 3 : -1;}', '{return id==1 ? 0 : id==4 ? 1 : id==5 ? 2 : -1;}',
      'domain 2 without a slot'),
-    ('slot(domain)<0 || domain==2)return 0;', 'slot(domain)<0)return 0;', 'read-only check admits domain 2'),
     ('if(!rail4)d->verified_at=now;', 'd->verified_at=now;', 'settled DCDC4 result rewrites verified_at'),
     ('if(!rail4)d->verified_at=now;', '', 'settled supply leaves verified_at unwritten'),
     ('if(!d->settled_supply && (d->supply_verified&A733_POWER_DCDC2_VERIFIED))d->verified_at=now;',

@@ -490,9 +490,7 @@ int a733_power_service_ready(const struct a733_power_domains *d)
 int a733_power_domain_check(struct a733_power_domains *d,unsigned domain,unsigned *state)
 {
     uint32_t policy;
-    /* Domain 2 is left out: its consumer, the decoder, writes nothing
-     * before its row request and so has nothing to check. */
-    if(!d || d->self!=d || slot(domain)<0 || domain==2)return 0;
+    if(!d || d->self!=d || slot(domain)<0)return 0;
     const struct profile *f=&profiles[slot(domain)];
     if(!gates(d,f) || !bits(d,R_CCU+0x1ac,1,1))return 0;
     /* Any task may call the check, so it leaves the service's record alone. */

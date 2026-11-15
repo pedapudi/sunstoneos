@@ -65,9 +65,7 @@ Admission of an ON request, in order:
    profile, CCU `0x5c0` and `0x5e0` bits 5 and 11, 6 and 18, 7 and 16 for
    domains 1, 4 and 5. Domain 2 has no gates in its profile: its gates
    (`0x5c0` bit 0, `0x5e0` bit 14, and `0x5e4` bit 18) are `CLK_IS_CRITICAL`
-   (ccu-sun60iw2.c lines 622, 663 and 689), and the decoder handles them. The
-   read-only check `a733_power_domain_check` refuses domain 2 with no
-   access: the decoder writes nothing before its row request. A
+   (ccu-sun60iw2.c lines 622, 663 and 689), and the decoder handles them. A
    domain whose profile sets `gates_after_on`, domain 5 alone, reads the PPU
    clock alone for an ON from OFF: a TOP5 OFF
    closed the GPU AHB master gate on a board, and the GPU controller
@@ -386,7 +384,7 @@ the cost model.
   inherited OFF/ON and repeated transitions, exact first-OFF write/readback order,
   18 initialization failures with retained pins, and preservation of an untouched
   domain-4 register block. `--domain2` selects domain 2: no gate read, the
-  read-only check refused with no access, the delay row and command, adoption, refusals that set bit 14 alone, timeout
+  delay row and command, adoption, refusals that set bit 14 alone, timeout
   retention with domain 4 still admitted, no power-off, the transition record
   and the back-to-back measurement. With an output
   path it writes the GPU power-on and

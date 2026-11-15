@@ -464,10 +464,7 @@ static void domain2_cases(void)
      * no gate read, the delay row and one ON command, a slow acknowledgement
      * past the spin, and the transition record. */
     d2_setup(0,0,0);d.ccu_5c0=d.ccu_5e0=0;d.ppu[2][0]|=0x100;d.ppu[2][2]|=0x100;d.ack_us=120;
-    /* The read-only check leaves domain 2 out and makes no access. */
     unsigned from=d.trace_n;
-    assert(a733_power_domain_check(&d.owner,2,NULL)==0 && d.trace_n==from);
-    from=d.trace_n;
     assert(a733_power_domain_request(&d2_row,1));service_step();
     assert(a733_power_domain_state(&d2_row)==A733_POWER_ROW_PENDING);
     assert(settle(&d2_row,NULL)==A733_POWER_ROW_ON && (d.ppu[2][0]&15)==8);
@@ -535,7 +532,6 @@ static void domain2_cases(void)
         assert(a733_power_domain_row_init(&d2_row,&d.owner,2,81,&d2_token));
         assert(a733_power_domain_row_init(&de,&d.owner,1,82,&de_token));
         domains_boot();d2_token=domains_rail(81,A733_RAIL_DCDC2);de_token=domains_rail(82,A733_RAIL_DCDC2);
-        assert(a733_power_domain_check(&d.owner,2,NULL)==0);
         from=d.trace_n;assert(a733_power_domain_request(&d2_row,1));service_step();
         assert(a733_power_domain_state(&d2_row)==A733_POWER_ROW_REFUSED && !writes_since(from));
         const unsigned w=a733_power_authority_load(&m.rails.authority);
