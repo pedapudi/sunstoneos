@@ -23,7 +23,7 @@ def t(v):
 def decode(p):
     if len(p) != 288:
         raise ValueError(f'rtc-alarm result is {len(p)} bytes, not 288.')
-    magic, version, failed, step, sd, sh, _ = HEAD.unpack_from(p, 0)
+    magic, version, failed, step, sd, sh, service_fault = HEAD.unpack_from(p, 0)
     if magic != MAGIC or version != 1:
         raise ValueError('rtc-alarm result has an unknown header.')
     i = INFO.unpack_from(p, 32)
@@ -34,7 +34,7 @@ def decode(p):
              'arm_ticks': a[18], 'irq_ticks': a[19], 'done_ticks': a[20], 'irq_count': a[21]}
     final = t(TIME.unpack_from(p, 240))
     final_ticks, set_ticks = struct.unpack_from('<QQ', p, 272)
-    out = {'failed': failed, 'step': step, 'initial': t(i[0:7]), 'clock_control': i[7], 'clock_status': i[8], 'prescaler': i[9],
+    out = {'failed': failed, 'step': step, 'service_fault': service_fault, 'initial': t(i[0:7]), 'clock_control': i[7], 'clock_status': i[8], 'prescaler': i[9],
            'calibration': i[10], 'oscillator': i[11], 'source': i[12], 'opened_ticks': i[13], 'after_set': after, 'after_set_ticks': after_ticks,
            'alarm': alarm, 'final': final, 'final_ticks': final_ticks, 'set_done_ticks': set_ticks}
     if alarm['irq_ticks'] > alarm['arm_ticks'] and alarm['status'] == 1:
@@ -54,7 +54,7 @@ def decode(p):
 def failures(d):
     out = []
     if d['failed']:
-        out.append(f"step {d['failed']} failed")
+        out.append(f"step {d['failed']} failed" + (f", RTC service fault step {d['service_fault']}" if d['service_fault'] else ''))
     if d['source'] != 2:
         out.append(f"source {d['source']}, expected the normal RC (2)")
     if d['after_set']['seconds'] - (SET_DAY * 86400 + SET_HMS // 65536 * 3600) not in (0, 1, 2):
