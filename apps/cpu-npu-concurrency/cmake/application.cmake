@@ -3,7 +3,7 @@ if(SUNSTONE_A733_OS_GPU OR
    SUNSTONE_A733_OS_DMA OR SUNSTONE_A733_OS_USB_CLASSES)
   message(FATAL_ERROR "The CPU/NPU diagnostic requires an OS image without the GPU, DMA and USB class services")
 endif()
-set(cpu_npu_sources "${CMAKE_CURRENT_LIST_DIR}/../main.c")
+set(cpu_npu_sources "${CMAKE_CURRENT_LIST_DIR}/../main.c" "${CMAKE_CURRENT_LIST_DIR}/../platform-puts.c")
 # Neither the OS image nor the application links the graph or the input: the runner uploads them as the manifest's two input
 # regions (tools/npu-app-image.py packs them) and the application registers the graph from the first at run time. The artifacts
 # give the application its reference output. With them the application declares the NPU in its manifest, and its session
@@ -37,3 +37,5 @@ endif()
 # features for this source only, after inherited service options.
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/../main.c" PROPERTIES
   COMPILE_OPTIONS "-Xclang;-target-feature;-Xclang;+fp-armv8;-Xclang;-target-feature;-Xclang;+neon")
+# The C library's console hook, which exception code can reach through the C library's stream callbacks.
+set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/../platform-puts.c" PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
