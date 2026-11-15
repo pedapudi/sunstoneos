@@ -74,10 +74,11 @@ static const struct {uint32_t address,word;} rom_identity[]={
  * port 3-3 at FEL and port 3-1 at OS-image entry read 0x20000 with the module
  * gate closed; the powered baseline requires the same word. The three critical gates are recorded in any state. No PCK600
  * register is read: the owner's coherence rules admit the domain. */
+/* The decoder's three critical gates, CCU offset and bit: AHB 0x5c0 bit 0, MBUS 0x5e0 bit 14, MBUS clock 0x5e4 bit 18. */
+static const uint32_t gate[3]={0x5c0,0x5e0,0x5e4},bit[3]={BIT(0),BIT(14),BIT(18)};
 static int cold_entry(struct a733_video_decoder *p)
 {
     struct a733_video_unit *u=&p->unit;
-    static const uint32_t gate[3]={0x5c0,0x5e0,0x5e4};
     for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)
         if(!check(u,rom_identity[i].address,UINT32_MAX,rom_identity[i].word))return 0;
     for(unsigned i=0;i<3;++i)if(rd(u,CCU+gate[i],&p->cold.entry_gates[i])!=1)return 0;
@@ -120,7 +121,6 @@ static int open_mclk(struct a733_video_decoder *p)
 static int hold_a(struct a733_video_decoder *p)
 {
     struct a733_video_unit *u=&p->unit;
-    static const uint32_t gate[3]={0x5c0,0x5e0,0x5e4},bit[3]={BIT(0),BIT(14),BIT(18)};
     if(!open_mclk(p))return 0;
     for(unsigned i=0;i<3;++i)if(rd(u,CCU+gate[i],&p->cold.gates[i])!=1)return 0;
     for(unsigned i=0;i<3;++i)if(!(p->cold.gates[i]&bit[i]))return 0;

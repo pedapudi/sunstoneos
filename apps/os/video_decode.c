@@ -43,7 +43,7 @@
 #define VD_CALL_US 500000u
 #define VD_BUSY_US 500u /* the block after the binding gives up on a busy registry or register lock */
 enum phase {CLOSED,OPENING,OPEN,CLOSING,FAULT};
-enum op {NONE,OPEN_OP,CLOSE_OP};
+enum op {OPEN_OP=1,CLOSE_OP};
 enum {POSTED=1,DONE=2};
 /* Fault steps (ss_video_decode_fault). Steps below VD_STEP_WRITES write nothing, so a refusal there leaves the decoder
  * as it was. */
