@@ -58,6 +58,14 @@ static void window_surround(void)
         window_release=m.now+window_latency;memset(receive,0,sizeof(receive));m.card[1][4]=0;
     }
 }
+/* late-completion: the first clock read after a confirmed key add returns the command's deadline. */
+static int late_completion;
+static int late_now(void *context,uint64_t *out)
+{
+    if(late_completion==1&&security.state==AIC8800_SECURITY_DONE&&security.operation==AIC8800_SECURITY_ADD&&
+        security.completion_deadline){m.now=security.completion_deadline;late_completion=2;}
+    return now_cb(context,out);
+}
 static int entropy(void *ctx,uint8_t *out,size_t bytes)
 {
     assert(ctx==&m&&bytes==32);++entropy_calls;
@@ -294,6 +302,12 @@ int main(int argc,char **argv)
     else if(!strcmp(argv[2],"tx-uncertain")){uncertain_tx=1;inject(5);}
     else if(!strcmp(argv[2],"timeout")){drop_reply=1;inject(5);}
     else if(!strcmp(argv[2],"key-timeout")){inject(5);settled();drop_key_reply=1;inject(7);}
+    else if(!strcmp(argv[2],"late-completion")) {
+        /* The only observation after a key add's confirmation is the clock read that ends the same transport poll
+         * (aic8800_transport_poll's post label). Here that read lands on the command's deadline: the pass that
+         * parsed the confirmation ran late. */
+        inject(5);settled();late_completion=1;host.config.ops.now=late_now;inject(7);
+    }
     else if(!strcmp(argv[2],"key-link")) {
         /* The link leaves security-pending while a key add awaits its confirmation. */
         inject(5);settled();drop_key_reply=1;inject(7);
@@ -307,6 +321,14 @@ int main(int argc,char **argv)
     assert(supplicant.owner==&transport&&security.owner==&transport&&!allzero(supplicant.config.pmk,32));
     /* The record's fault site separates a confirmation that never came from one the firmware refused. */
     struct aic8800_fault_site site;aic8800_fault_site_capture(&site,&transport,&supplicant,1234);
+    if(!strcmp(argv[2],"late-completion")) {
+        fprintf(stderr,"site: transport %#x/%u data %#x security %#x slot %#x cfm %u/%u/%u supplicant %#x actions %#x stop %#x rsn %d eapol %u\n",
+            site.transport_site,site.transport_error,site.data,site.security,site.slot,site.expected_cfm,site.cfm_bytes,
+            site.cfm_status,site.supplicant,site.actions,site.stop_site,supplicant.rsn_state,eapol_tx);
+        assert((site.slot>>4)==AIC8800_SECURITY_STOP_COMPLETION&&(site.security&15u)==AIC8800_SECURITY_DONE&&
+            site.cfm_bytes==4&&!site.cfm_status&&supplicant.rsn_state==9&&eapol_tx==2);
+        printf("fault site: a late observation of a confirmed key add names the completion\n");
+    }
     if(!strcmp(argv[2],"key-timeout")||!strcmp(argv[2],"key-failure")||!strcmp(argv[2],"key-link")) {
         unsigned refused=!strcmp(argv[2],"key-failure"),link=!strcmp(argv[2],"key-link");
         fprintf(stderr,"site: transport %#x/%u data %#x security %#x slot %u cfm %u/%u/%u supplicant %#x actions %#x stop %#x\n",
