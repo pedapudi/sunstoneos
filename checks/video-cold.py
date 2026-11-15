@@ -108,6 +108,8 @@ MUTANTS = [
     ('drivers/video/a733_video_platform.c', '    if(!close_steps(u))return a733_video_unit_refuse_held(u);',
      '    if(!faulted&&!close_steps(u))return a733_video_unit_refuse_held(u);', 'fault close writes nothing'),
     ('drivers/video/a733_video_unit.c', '    u->last_word=*v;\n    return 1;', '    return 1;', 'failing word not kept'),
+    ('drivers/video/a733_video_unit.c', '    u->last_word=*v;\n    return 1;',
+     '    u->last_word=*v;\n    return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);', 'deadline read per access'),
     ('drivers/video/a733_video_platform.c',
      '            uint64_t n;if(a733_video_unit_now(u,&n)!=1)return -1;\n'
      '            p->cold.lock_reads=u->pll_reads;p->cold.locked_at=n;',

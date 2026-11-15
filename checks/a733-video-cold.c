@@ -23,6 +23,9 @@ struct cold_model {
     struct model m;
     uint8_t rom[45056];
     unsigned fault,rom_reads,cold_pulse;
+    /* Binding clock reads inside the current register-lock hold, and whether a fault close continues the hold the
+     * fault kept. */
+    unsigned hold_clock,kept_hold;
     /* PLL_VE0 programming: the scenario, whether the entry word needs only
      * the lock-enable toggle, the position in the expected write sequence,
      * reads since lock enable was last set, consecutive LOCK reads, and the
@@ -117,6 +120,7 @@ static int policy_read(void *v,uintptr_t a,uint32_t *out)
 static int cold_now(void *v,uint64_t *n)
 {
     struct cold_model *c=v;
+    if(c->m.lock)++c->hold_clock;
     if(!c->pll)return now(v,n);
     static unsigned calls;
     if(++calls%64==0)++c->m.now;
@@ -128,7 +132,7 @@ static int cold_enter(void *v,uint64_t dl)
 {
     struct cold_model *c=v;
     if(c->pll&&c->pll_locked==3&&!c->settle_seen){assert(c->m.now>=c->pll_lock_at+21);c->settle_seen=1;}
-    int r=enter(v,dl);++c->enters;
+    int r=enter(v,dl);++c->enters;c->hold_clock=0;
     c->hold_start=c->m.reads+c->m.writes+c->rom_reads;
     if(c->holds<8)c->writes_at_hold[c->holds]=c->m.writes;
     return r;
@@ -136,6 +140,10 @@ static int cold_enter(void *v,uint64_t dl)
 static int cold_leave(void *v)
 {
     struct cold_model *c=v;
+    /* The core reads the clock once after taking the lock and once before releasing it, not per access. A fault
+     * close inside the hold the fault kept adds the failed check and its own start stamp. */
+    assert(c->hold_clock<=(c->kept_hold?4u:2u));
+    c->kept_hold=0;
     if(c->holds<8) {
         c->hold_accesses[c->holds]=c->m.reads+c->m.writes+c->rom_reads-c->hold_start;
         c->hold_writes[c->holds]=c->m.writes-c->writes_at_hold[c->holds];
@@ -423,7 +431,7 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
         o.last_address=(uint32_t)dec->unit.last_address;o.last_word=dec->unit.last_word;
         o.uncertain=dec->unit.uncertain;o.locked=m->lock;o.writes_before_close=m->writes;
         const unsigned accesses=m->reads+m->writes,enters=c->enters;c->quiesced=1;c->stopping=1;c->pll_seq=0;
-        const uint64_t close_start=m->now;
+        const uint64_t close_start=m->now;c->kept_hold=m->lock;
         o.closed=a733_video_decoder_close(dec,run.deadline+200000,1);
         if(o.closed==1)assert(dec->cold.close_at>=close_start&&dec->cold.close_at<=dec->cold.closed_at);
         o.close_accesses=m->reads+m->writes-accesses;o.close_enters=c->enters-enters;

@@ -361,10 +361,11 @@ int a733_video_unit_identity(struct a733_video_unit *u,uint64_t *version)
 #ifdef __aarch64__
 #include "a733_mapping_check.h"
 #include "a733_mmio.h"
-/* Every 4 KiB page a video binding accesses: VE, the two CCU pages, the GIC distributor, R_CCU, PCK600, the RTC
- * page and the boot ROM page that holds the identity words. */
-static const uintptr_t pages[]={0x01c0e000,0x02002000,0x02003000,0x03400000,0x07010000,0x07062000,0x07090000,
-    0x00019000};
+/* Every 4 KiB page a video binding accesses: the decoder's and the encoder's VE windows, the two CCU pages, the GIC
+ * distributor, R_CCU, PCK600 domains 2 (decoder) and 3 (encoder), the RTC page and the boot ROM page that holds the
+ * decoder's identity words. */
+static const uintptr_t pages[]={0x01c0e000,0x01c10000,0x02002000,0x02003000,0x03400000,0x07010000,0x07062000,
+    0x07063000,0x07090000,0x00019000};
 /* 0 not checked, 1 every page identity-mapped Device-nGnRnE outer shareable, -1 one is not. */
 static int mapped;
 int a733_video_unit_native_map(void)

@@ -7,7 +7,8 @@ under AArch64 emulation, with the owner task run between supervisor passes as it
 initialized by its own a733_video_decoder_init from a configuration at the vendor point; the decoder is then left as
 the stage-1 board run 1794712072331160946-bd447f26 left it, refused in hold B (cold step 4) with PLL_VE0 running and
 open, the module gate open, and reset and bus gate released. The CCU, RTC, R_CCU, GIC, PCK and decoder pages are
-plain registers, and every page the binding uses passes the image's own Device-mapping check, made once. The clock and PCK lease
+plain registers, and every page the binding uses passes the image's own Device-mapping check, made once: each case
+that accesses a register translates each of the ten pages once, however many registers it accesses. The clock and PCK lease
 registries answer that the decoder's leases are held. Time advances 10 ms per supervisor pass; the supervisor's
 shared bound is 3 s (OS_FAILURE_RETURN_US, apps/os/cpu-return.c), after which the image stops at site 0x742 and the
 watchdog reset ends the session.
@@ -64,6 +65,9 @@ FEL = {0x220: 0x41305a00, 0x22c: 0x30000000, 0x580: 0x80000000, 0x588: 0x8000000
 SETTLE_US, BUDGET_US, PCK_BOUND_US, TICK_US = 5160, 100000, 10000, 1000
 DCDC2_VERIFIED = 1 << 2
 BOUND_US, PASS_US = 3_000_000, 10_000
+# The pages a733_video_unit_native_map checks, once per boot, each with one write translation (drivers/video/
+# a733_video_unit.c, pages[]). A page walk per access would translate once per register access instead.
+MAPPED_PAGES = 10
 QUIESCE = {'PENDING': 0, 'DONE': 1, 'FAULT': 2}
 SITE_DECODER = 0x941
 VD_OWNER = 0x5645440000000001
@@ -136,7 +140,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     ccu.words[0] = 0xf8675f00
     for regs in (ccu, *others.values()):
         uc.mmio_map(regs.base, regs.size, regs.read, None, regs.write, None)
-    state = {'time': 1000, 'requested': 0, 'notes': [], 'slice_done': False, 'waits': []}
+    state = {'time': 1000, 'requested': 0, 'notes': [], 'slice_done': False, 'waits': [], 'translations': 0}
     L = image.layouts
     vd = image.address('vd', UNIT)
 
@@ -171,6 +175,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
 
     def translate(m):
         address, out = m.reg_read(UC_ARM64_REG_X0), m.reg_read(UC_ARM64_REG_X2)
+        state['translations'] += 1
         # physical, Device-nGnRnE (MAIR attribute 0), outer shareable (PAR_EL1.SH 2)
         uc.mem_write(out, address.to_bytes(8, 'little') + (0).to_bytes(4, 'little') + (2).to_bytes(4, 'little'))
         ret(m, 1)
@@ -319,7 +324,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         'notes': [(hex(s), hex(v)) for s, v in state['notes']],
         'ccu': {hex(k): hex(ccu.words.get(k, 0)) for k in (0x220, 0xa88, 0xa8c, 0x5e4)},
         'ccu_writes': [(hex(a), hex(v)) for a, v in ccu.writes],
-        've_accesses': len(others['ve'].reads) + len(others['ve'].writes),
+        've_accesses': len(others['ve'].reads) + len(others['ve'].writes), 'translations': state['translations'],
     }
 
 
@@ -371,6 +376,8 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
         problems.append('the service must end CLOSED with step VD_STEP_ROW_TIMEOUT')
     if ccu.writes or others['ve'].reads or others['ve'].writes:
         problems.append('an unanswered row leaves nothing written and no close')
+    if state['translations'] != MAPPED_PAGES:
+        problems.append(f"the pages are checked once, {MAPPED_PAGES} translations: {state['translations']}")
     return {'case': 'row-wait', 'waits_us': rows, 'passes': len(state['waits']), 'elapsed_us': state['time'],
             'phase': get(vd + layout['phase']), 'recorded_fault_step': get(vd + layout['fault_step']),
             'ccu_writes': [(hex(a), hex(v)) for a, v in ccu.writes], 'problems': problems, 'passed': not problems,
@@ -450,6 +457,10 @@ def main():
                 problems.append('the application close of a faulted service must be answered -1')
         if row['ve_accesses']:
             problems.append('the close must not touch a decoder register')
+        # An uncertain failure is not touched, so its case makes no access and no translation.
+        pages = 0 if name == 'uncertain-access' else MAPPED_PAGES
+        if row['translations'] != pages:
+            problems.append(f"the pages are checked once, {pages} translations: {row['translations']}")
         row['passed'] = not problems
         row['problems'] = problems
         if problems:
