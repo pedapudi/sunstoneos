@@ -71,7 +71,9 @@ the table on both sides; only the manifest's `output_limit` is written by hand, 
 
 ### What the probe writes
 
-The probe changes no clock, voltage, reset or power domain and runs at the boot operating point. It reads
+The probe changes no clock, voltage, reset or power domain. A returning session must carry the CPU clock grant
+(`os_session_valid`, `apps/os/admission.c`), so the manifest declares `cpu.clock_grants` and the session is built with
+`tools/session.py build --clock-grant`; the OS may then run the clusters at the approved points. The probe reads
 registers and makes these writes, each of a value that every image writes in the same boot, and each restored.
 
 | Register | Value | Why it is allowed |
