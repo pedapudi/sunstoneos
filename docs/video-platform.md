@@ -244,8 +244,8 @@ A host comparison executed the original `libVE.so` `VeReset` instructions with t
 matching policy-table index and compared reference and native preparation traces;
 complete final register images and ordered reset pulses match for all three
 admitted identities, with kernel reset operations modeled from `cedar_ve.c` and
-`ccu_reset.c`. `checks/video-decode-reference.py` repeats it with the pinned
-libraries in the source cache. Its result establishes the composed software
+`ccu_reset.c`. It needs the vendor libraries, which are not in the repository,
+so no retained check repeats it. Its result establishes the composed software
 path; it does not qualify hardware or reconstruct the JPEG
 malformed-input run described in [video codecs](video-codecs.md). Source,
 fixtures, binaries, reference input hashes and results remain outside Git with
