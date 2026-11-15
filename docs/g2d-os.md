@@ -47,7 +47,7 @@ The verifier reads each rail's enable bit and voltage selector, and passes only 
 
 ## Operations
 
-`ss_g2d_run` runs one operation on the open engine. The application names its surfaces by large region, offset, width, height, stride and format; the owner maps each region an operation names for IOMMU master 10. Two operations are implemented:
+`ss_g2d_run` runs one operation on the open engine. The application names its surfaces by large region, offset, width, height, stride and format; the owner maps each region an operation names for IOMMU master 10. Three operations are implemented:
 
 - **Fill** writes a color into a rectangle of an ARGB8888 output.
 - **Blit** copies a rectangle of a source surface into the output, converting from the source's format to the output's. The source and the output have the same width, height and stride, as the native builder (drivers/g2d/a733_g2d.c) requires; they may be the same region. A source pixel whose alpha byte is 0 is written as 0x00000000, and every other pixel is copied exactly (run `445859c1`). The vendor's `g2d_bsp_bitblt` programs the same alpha path:
@@ -58,6 +58,7 @@ The verifier reads each rail's enable bit and voltage selector, and passes only 
   The blend function is the only difference: the vendor's SRCOVER (0x03010301) against the native COPY (0x00010001). With per-pixel alpha (layer alpha mode 0, as both drivers program it), pipe 1 is off in both, so neither blends with the destination. What a conversion writes to an X byte (formats 4 to 7) is not established on the board yet.
 
   The blit therefore treats alpha as coverage: a fully transparent pixel loses its colour. It suits composition and display, not data in which the alpha byte is a channel, such as camera frames or packed sensor words. No blender configuration tried copies such data exactly ([Copy paths](#copy-paths)), so an exact copy stays on the CPU until the rotate module qualifies.
+- **Rotate** (`SS_G2D_ROTATE`) copies a rectangle of a source surface into the output, rotated by 0, 90, 180 or 270 degrees and optionally flipped (`SS_G2D_FLIP_H`, `SS_G2D_FLIP_V`), through the rotate module ([Rotate module](#rotate-module)), not the mixer. The source has its own width, height and stride, and the output has the source's format; the rotated rectangle (w and h swapped for 90 and 270) must lie inside the output. A fill or blit that names a degree or flip, and a rotate with a colour, a format change, another degree or a flip above 3, is refused before any mapping. The board has not run a rotate yet.
 
 Before each launch the owner cleans and invalidates the whole 64-byte lines of the output and cleans those of a blit's source. After the interrupt it cleans and invalidates the output's lines again. [g2d-check-host.py](../checks/g2d-check-host.py) builds the g2d-check application on the host with a CPU model of the copies, and checks that its plan, samples and CRC-32 values equal the decoder's reference. Its two mutant engines copy without converting and copy alpha-0 pixels exactly. The decoder names each outcome, and the second fails both operations' alpha-0 samples.
 
@@ -84,7 +85,7 @@ When every step reads back, the service is CLOSED, its quiesce step reports DONE
 
 INTID 83 is enabled at the end of the open and disabled, and observed disabled, at the start of the close. The close then detaches master 10 before it gates the engine; the last detach disables both IOMMU banks and returns the IOMMU clock lease. The CPU caches are cleaned and invalidated over the 64-byte lines that the output surface touches before the operation, and again after it, so the application reads the engine's writes through its own mapping.
 
-`ss_g2d_run` returns a `struct ss_g2d_done`: the 0x24 word the handler read before its acknowledgment, the 0x08 word it read before the reset pulse, the 0x24 word after, the 0x24 word the owner read before the launch, the IOMMU entry words of the first attach (also when it refused), master 10's fault words after the operation, the IOMMU owner's failure step, register offset and read-back value, the count of interrupts taken with no operation armed, the surface's and directory's physical addresses, and the system-counter times of the submission, the update bit, the interrupt and the end.
+`ss_g2d_run` returns a `struct ss_g2d_done`: the 0x24 word the handler read before its acknowledgment, the 0x08 word it read before the reset pulse, the 0x24 word after, the 0x24 word the owner read before the launch, the IOMMU entry words of the first attach (also when it refused), master 10's fault words after the operation, the IOMMU owner's failure step, register offset and read-back value, the count of interrupts taken with no operation armed, the surface's and directory's physical addresses, and the system-counter times of the submission, the update bit, the interrupt and the end. A rotate adds the rotate module's words: ROT_CTL after the register writes and after the finish, the ROT_INT word the handler read, ROT_INT after its write-back, and ROT_TIMEOUT. Every operation records the stray finishes its handler masked ([Rotate module](#rotate-module)) and the first stray's status word.
 
 ## Copy paths
 
@@ -106,7 +107,7 @@ The candidates are removed. The rotate module (`g2d_rotate_set_para`, reached by
 
 ## Rotate module
 
-The G2D's rotate module copies a rectangle with a rotation of 0, 90, 180 or 270 degrees and optional horizontal and vertical flips, without the blender. It is not used by the OS image yet. The reference is `g2d_rotate_set_para` in g2d_rotate.c (linux-orangepi 2ac08e8c, bsp/drivers/g2d/g2d_rcq; the board kernel builds it, CONFIG_G2D_ROTATE=y). The vendor reaches it from a blit whose flag sets any of bits 8-15 (`g2d_blit_h`, g2d.c 717-728), under the same mutex as the mixer.
+The G2D's rotate module copies a rectangle with a rotation of 0, 90, 180 or 270 degrees and optional horizontal and vertical flips, without the blender. The service runs it as the rotate operation ([Operations](#operations)). The reference is `g2d_rotate_set_para` in g2d_rotate.c (linux-orangepi 2ac08e8c, bsp/drivers/g2d/g2d_rcq; the board kernel builds it, CONFIG_G2D_ROTATE=y). The vendor reaches it from a blit whose flag sets any of bits 8-15 (`g2d_blit_h`, g2d.c 717-728), under the same mutex as the mixer.
 
 The vendor programs the module by direct register writes at G2D + 0x28000 (0x05468000), not through the mixer's RCQ command page. The image maps that address as Device-nGnRnE: the first gigabyte is one device block in the kernel's level-1 table (platform/a733/platform.c), and every task's table copies it. [a733_g2d_rotate_words](../drivers/g2d/a733_g2d_rotate.c) gives a job's 24 words in the vendor's order:
 - the control word: mode 1, the degree field in bits 4-5 (0 to 3 for 0 to 270), the vertical flip in bit 6 and the horizontal flip in bit 7;
@@ -127,3 +128,16 @@ The service runs one operation at a time, so its handler dispatches by the kind 
 [g2d-irq-dispatch.py](../checks/g2d-irq-dispatch.py) checks the dispatch in two ways:
 - for every armed kind, both finish bits, both enables and the status words' other bits;
 - in a level-triggered model of the line that counts handler entries, with a stray before, at and after the armed finish. A stray costs one entry. With the stray's enable left on, the model re-enters the handler at every step until the finish, and the check fails.
+
+A rotate runs as follows. The owner refuses a rectangle that leaves its surface, maps the regions as for a blit (the source read-only), builds the 24 words and does the cache maintenance of a blit. It then writes ROT_INT = 1, which clears the finish status and leaves the enable off, and requires bit 0 to read clear. It writes the first 22 words and requires ROT_CTL to read back the control word. Then it arms the handler for a rotate, writes the enable and the start word, and waits for the finish as for the mixer, 100 ms. The handler writes the finish word back. The owner then requires ROT_INT bit 0 to read clear, and records ROT_CTL, ROT_TIMEOUT and 0x24. It touches no mixer register, so the mixer's reset is not pulsed.
+
+[os-g2d-operation.py](../checks/os-g2d-operation.py) runs the image's own rotate path and handler against a register model of the rotate module and the shared line. It checks:
+- the four degrees into disjoint rectangles, as the first board stage draws them, and each flip setting: each must write the status clear, then exactly the vendor's words at the service's device addresses, then the handler's write-back, and no mixer register;
+- a fill, a rotate, a blit and a rotate in one session;
+- a mixer stray during a rotate and a rotator stray during a fill: each is masked, counted once with its word, and costs one handler entry;
+- a rotate that never finishes, which faults at step 62 with the ROT_INT word and then closes;
+- each refusal, which must touch no register, mapping or cache line.
+
+Images with the stray's enable left on, with no write-back of the finish, or with a rotate armed as a mixer operation fail it.
+
+The first board stage measures what the vendor source does not settle: which way degree field 1 turns, whether ROT_CTL bit 31 clears itself, whether a rotate sets anything in 0x24, and whether clearing ROT_INT bit 16 lowers the rotator's part of the line.
