@@ -23,9 +23,9 @@ struct cold_model {
     struct model m;
     uint8_t rom[45056];
     unsigned fault,rom_reads,cold_pulse;
-    /* Binding clock reads inside the current register-lock hold, and whether a fault close continues the hold the
-     * fault kept. */
-    unsigned hold_clock,kept_hold;
+    /* Binding clock reads inside the current register-lock hold, whether a fault close continues the hold the
+     * fault kept, and whether the hold asserted the decoder reset. */
+    unsigned hold_clock,kept_hold,reset_hold;
     /* PLL_VE0 programming: the scenario, whether the entry word needs only
      * the lock-enable toggle, the position in the expected write sequence,
      * reads since lock enable was last set, consecutive LOCK reads, and the
@@ -141,9 +141,10 @@ static int cold_leave(void *v)
 {
     struct cold_model *c=v;
     /* The core reads the clock once after taking the lock and once before releasing it, not per access. A fault
-     * close inside the hold the fault kept adds the failed check and its own start stamp. */
-    assert(c->hold_clock<=(c->kept_hold?4u:2u));
-    c->kept_hold=0;
+     * close inside the hold the fault kept adds the failed check and its own start stamp; the hold that asserts the
+     * reset adds the pulse's anchor, read after the write. */
+    assert(c->hold_clock<=(c->kept_hold?4u:2u+c->reset_hold));
+    c->kept_hold=c->reset_hold=0;
     if(c->holds<8) {
         c->hold_accesses[c->holds]=c->m.reads+c->m.writes+c->rom_reads-c->hold_start;
         c->hold_writes[c->holds]=c->m.writes-c->writes_at_hold[c->holds];
@@ -230,6 +231,7 @@ static int cold_write(void *v,uintptr_t a,unsigned width,uint32_t value)
             assert(c->gate_reads==7);
             for(unsigned i=0;i<3;++i)assert(m->ccu[gate_bits[i][0]/4]&gate_bits[i][1]);
         }
+        if(a==CCU+0xa8c&&!(value&(1u<<18))&&(cur&(1u<<18)))c->reset_hold=1;
         if(a==CCU+0xa88&&(value&0x80000000)&&c->pll)assert((m->ccu[0x220/4]&0xf8000000u)==0xf8000000u);
         if(a==CCU+0xa88&&c->stuck==STUCK_MODULE)value&=~0x80000000u;
         if(a==CCU+0xa8c&&c->stuck==STUCK_BUS&&c->quiesced)value|=cur&4u;

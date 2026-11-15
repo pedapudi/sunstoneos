@@ -314,7 +314,10 @@ static int prep_step(struct a733_video_decoder *p,unsigned codec)
     case 0:return update(u,VE,15,7);
     case 1:
         if(!update(u,local?VE+4:CCU+0xa8c,local?BIT(16):BIT(18),local?BIT(16):0))return 0;
-        if(!local&&!a733_deadline_after(u->last_now,11,&p->reset_until))return 0;
+        if(local)return 1;
+        /* The pulse is anchored on a clock read after the assert's write, so the release (case 2, at least 11 µs
+         * later) gives a pulse of at least 10 µs however long the write took. */
+        {uint64_t n;if(a733_video_unit_now(u,&n)!=1||!a733_deadline_after(n,11,&p->reset_until))return 0;}
         return 1;
     case 2:return update(u,local?VE+4:CCU+0xa8c,local?BIT(16):BIT(18),local?0:BIT(18));
     case 3:return local?1:a733_video_unit_rmw(u,VE+0x804,0x11,0x11,NULL);

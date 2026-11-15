@@ -260,12 +260,15 @@ int a733_video_unit_refuse_held(struct a733_video_unit *u){if(!u->failed)(void)u
 int a733_video_unit_rmw(struct a733_video_unit *u,uintptr_t a,uint32_t mask,uint32_t value,uint32_t *before)
 {(void)u;(void)a;(void)mask;(void)value;(void)before;assert(0);return 0;}
 int a733_video_unit_identity(struct a733_video_unit *u,uint64_t *v){(void)u;(void)v;assert(0);return 0;}
+/* As drivers/video/a733_video_unit.c: an access reads no clock, so last_now stays at the hold's lock unless the
+ * caller reads the clock after the write. The write lands after its cost; a pulse anchored before it is short. */
 static int update(struct a733_video_unit *u,uintptr_t a,uint32_t mask,uint32_t value){
  assert(a==CCU+0xa8c&&mask==BIT(18));
  if(!value){write_cost();reset_ticks=ticks;}
  else {assert(reset_ticks&&ticks-reset_ticks>=10*24);++releases;}
- ticks+=41;u->last_now=us();return timely(u);
+ ticks+=41;return !u->failed;
 }
+int a733_video_unit_now(struct a733_video_unit *u,uint64_t *out){*out=us();u->last_now=*out;return 1;}
 '''+extract('drivers/video/a733_video_platform.c','prep_step')+extract('drivers/video/a733_video_platform.c','prepare')+r'''
 int main(void){
  for(unsigned phase=0;phase<3;phase++)for(unsigned costly=0;costly<2;costly++)for(unsigned expire=0;expire<2;expire++){
