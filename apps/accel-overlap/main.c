@@ -13,7 +13,12 @@
  * outputs checked as above, under a different set of streaming workers: none, core 2, cores 2-4, cores 2-5 and 7, and core 7
  * alone. A chase task on core 0 times dependent loads through the chase region during every phase, so each phase gives the
  * loaded DRAM latency beside the accelerators' job rates and the streaming bandwidth (docs/designs/concurrent-accel.md,
- * "Stage 1b"). */
+ * "Stage 1b").
+ *
+ * Built with ACCEL_OVERLAP_COUNTERS (the GPU-width build plus the NSI port 6 and 18 traffic counters), four phases run:
+ * idle for 100 ms, the GPU alone, the NPU alone and the core-2 stream alone, one second each. The OS counter owner
+ * (include/a733_nsi_counters.h) counts each phase on both ports, with a sample at half the phase, so the bytes of jobs
+ * whose traffic is known calibrate the counters and the GPU port's requests per job are measured. */
 #include "accel_overlap-app.h"
 #include "sunstone_app.h"
 #include "sunstone_npu_queue.h"
@@ -27,6 +32,12 @@
 #define GPU_LANE_ELEMENTS 1u
 #endif
 #include "result.h"
+#ifdef ACCEL_OVERLAP_COUNTERS
+#include "a733_nsi_counters.h"
+static void counters_poll(void);
+#else
+#define counters_poll() ((void)0)
+#endif
 #include "FreeRTOS.h"
 #include "task.h"
 #include <stdatomic.h>
@@ -74,10 +85,19 @@ static const uint32_t phase_streams[ACCEL_OVERLAP_PHASES] = {0x00, 0x01, 0x07, A
  * 7, and core 2 and core 7 each streaming over three interleaved areas. */
 #define SWEEP_PHASES ACCEL_OVERLAP_LARGE_PHASES
 #define BOTH (ACCEL_OVERLAP_GPU | ACCEL_OVERLAP_NPU)
+#ifndef ACCEL_OVERLAP_COUNTERS
 static const uint32_t large_devices[SWEEP_PHASES] = {ACCEL_OVERLAP_GPU, ACCEL_OVERLAP_NPU, BOTH, BOTH, BOTH, BOTH, BOTH, BOTH, BOTH};
 static const uint32_t large_streams[SWEEP_PHASES] = {0, 0, 0, 0x01, 0x10, 0x07, ALL_STREAMS,
                                                      0x01 | ACCEL_OVERLAP_INTERLEAVED, 0x10 | ACCEL_OVERLAP_INTERLEAVED};
+#endif
 static struct accel_overlap_large_result large_result;
+#ifdef ACCEL_OVERLAP_COUNTERS
+/* The counter calibration: idle (100 ms), the GPU alone, the NPU alone and the core-2 stream alone (one second each). */
+static const uint32_t counter_devices[ACCEL_OVERLAP_COUNTER_PHASES] = {0, ACCEL_OVERLAP_GPU, ACCEL_OVERLAP_NPU, 0};
+static const uint32_t counter_streams[ACCEL_OVERLAP_COUNTER_PHASES] = {0, 0, 0, 0x01};
+static const uint32_t counter_ticks[ACCEL_OVERLAP_COUNTER_PHASES] = {2400000u, 24000000u, 24000000u, 24000000u};
+static struct accel_overlap_counter_result counter_result;
+#endif
 #define CHASE_LINES_FIELD large_result.chase_lines
 #else
 static struct accel_overlap_sweep_result sweep_result;  /* its base is copied from result at the end */
@@ -464,6 +484,7 @@ static void npu_end(unsigned command)
     const uint64_t began = now();
     while (atomic_load_explicit(&npu_done, memory_order_acquire) != command) {
         live();
+        counters_poll();
         if (now() - began > 120000000u) fail(0x037, atomic_load(&npu_done));
         (void)ulTaskNotifyTake(pdTRUE, 10);
     }
@@ -475,6 +496,77 @@ static uint32_t *gpu_in;
 static const volatile uint32_t *gpu_out;
 static struct gpu_queue_job gpu_job;
 static uint32_t gpu_sequence;
+
+#ifdef ACCEL_OVERLAP_COUNTERS
+/* The counter calls, from the main task through the GPU call gateway. A status other than OK stops the run after the phase
+ * it happened in; the record keeps the phase's status and the owner's first failing address. */
+static struct accel_overlap_counter_phase *counter_phase;   /* the phase being counted, or none */
+static uint64_t counter_live_due;
+static int counters_ok;
+static uint32_t counters_call(uint32_t op, uint32_t bank, struct a733_nsi_counter_call *c)
+{
+    *c = (struct a733_nsi_counter_call){.op = op, .bank = bank};
+    const int r = gpu_queue_nsi_counters(context, c);
+    const uint32_t status = r != GPU_QUEUE_OK ? 0x100u | ((uint32_t)r & 0xffu) : c->status;
+    if (status && counters_ok) {
+        counters_ok = 0;
+        counter_result.fail_address = c->fail_address; counter_result.fail_value = c->fail_value;
+    }
+    return status;
+}
+static void counters_note(struct accel_overlap_counter_phase *p, uint32_t status)
+{ if (status && !p->status) p->status = status; }
+static void counters_open(void)
+{
+    struct a733_nsi_counter_call c;
+    counters_ok = 1;
+    counter_result.open_status = counters_call(A733_NSI_OPEN, 0, &c);
+    memcpy(counter_result.reset, c.reset, sizeof(counter_result.reset));
+}
+static void counters_begin(struct accel_overlap_counter_phase *p, uint32_t ticks)
+{
+    struct a733_nsi_counter_call c;
+    for (unsigned b = 0; b < A733_NSI_COUNTER_BANKS; ++b) {
+        counters_note(p, counters_call(A733_NSI_BEGIN, b, &c));
+        p->clear[b] = c.clear;
+    }
+    p->begin = now();
+    counter_live_due = p->begin + ticks / 2u;
+    counter_phase = p;
+}
+/* The sample at half the phase, with counting on. */
+static void counters_poll(void)
+{
+    struct accel_overlap_counter_phase *p = counter_phase;
+    if (!p || p->live_at || now() < counter_live_due) return;
+    struct a733_nsi_counter_call c;
+    p->live_at = now();
+    for (unsigned b = 0; b < A733_NSI_COUNTER_BANKS; ++b) {
+        counters_note(p, counters_call(A733_NSI_SAMPLE, b, &c));
+        memcpy(p->live[b], c.value, sizeof(p->live[b]));
+    }
+}
+static void counters_end(struct accel_overlap_counter_phase *p)
+{
+    struct a733_nsi_counter_call c;
+    counter_phase = NULL;
+    p->end = now();
+    for (unsigned b = 0; b < A733_NSI_COUNTER_BANKS; ++b) {
+        counters_note(p, counters_call(A733_NSI_END, b, &c));
+        memcpy(p->value[b], c.value, sizeof(p->value[b]));
+        memcpy(p->held[b], c.held, sizeof(p->held[b]));
+    }
+}
+/* A phase with no accelerator job: the main task waits out the phase, sampling at its half. */
+static void counters_idle(void)
+{
+    while (now() < atomic_load_explicit(&pipeline_end, memory_order_acquire)) {
+        live();
+        counters_poll();
+        vTaskDelay(1);
+    }
+}
+#endif
 
 static void gpu_inputs(uint32_t rotation)
 {
@@ -607,6 +699,7 @@ static void gpu_pipelined(struct accel_overlap_device *d)
         gpu_collect(first + collected);
         ++collected;
         live_paced();
+        counters_poll();
     }
     d->pipelined_ticks = now() - began;
     d->pipelined_jobs = collected;
@@ -739,7 +832,10 @@ void accel_overlap_main(const struct ss_grant *grant)
         if (now() - began > 240000000u) fail(0x078, 0);
         (void)ulTaskNotifyTake(pdTRUE, 10);
     }
-#ifdef ACCEL_OVERLAP_WIDTH
+#if defined(ACCEL_OVERLAP_COUNTERS)
+    counters_open();
+    for (phase_index = 0; phase_index < ACCEL_OVERLAP_COUNTER_PHASES && counters_ok; ++phase_index) {
+#elif defined(ACCEL_OVERLAP_WIDTH)
     for (phase_index = 0; phase_index < 1u; ++phase_index) {   /* the GPU-alone phase only */
 #else
     for (phase_index = 0; phase_index < SWEEP_PHASES; ++phase_index) {
@@ -749,27 +845,45 @@ void accel_overlap_main(const struct ss_grant *grant)
         struct accel_overlap_phase *p = &l->run;
         struct accel_overlap_sweep *c = &l->sweep;
         large_phase = l;
+#ifdef ACCEL_OVERLAP_COUNTERS
+        l->stream_mode = counter_streams[phase_index];
+        const uint32_t devices = counter_devices[phase_index], mode = l->stream_mode;
+        const uint32_t phase_ticks = counter_ticks[phase_index];
+        struct accel_overlap_counter_phase *k = &counter_result.phase[phase_index];
+#else
         l->stream_mode = large_streams[phase_index];
         const uint32_t devices = large_devices[phase_index], mode = l->stream_mode;
+        const uint32_t phase_ticks = PIPELINE_TICKS;
+#endif
 #else
         struct accel_overlap_phase *p = &result.phase[phase_index];
         struct accel_overlap_sweep *c = &sweep_result.sweep[phase_index];
         const uint32_t devices = ACCEL_OVERLAP_GPU | ACCEL_OVERLAP_NPU, mode = phase_streams[phase_index];
+        const uint32_t phase_ticks = PIPELINE_TICKS;
 #endif
         current = p;
         c->stream_mask = mode & 0xffu;
         p->devices = devices | (c->stream_mask ? ACCEL_OVERLAP_STREAM : 0u);
         const int gpu = devices & ACCEL_OVERLAP_GPU, npu = devices & ACCEL_OVERLAP_NPU;
         const uint64_t start = now();
+#ifdef ACCEL_OVERLAP_COUNTERS
+        counters_begin(k, phase_ticks);
+#endif
         chase_begin(c);
         if (c->stream_mask) stream_start(mode);
         atomic_store_explicit(&npu_stop, 1, memory_order_release);
-        atomic_store_explicit(&pipeline_end, now() + PIPELINE_TICKS, memory_order_release);
+        atomic_store_explicit(&pipeline_end, now() + phase_ticks, memory_order_release);
         if (npu) npu_begin(NPU_PIPELINED);
         if (gpu) gpu_pipelined(&p->gpu);
         if (npu) npu_end(NPU_PIPELINED);
+#ifdef ACCEL_OVERLAP_COUNTERS
+        if (!gpu && !npu) counters_idle();
+#endif
         if (c->stream_mask) { stream_stop(); p->stream_ticks = now() - start; }
         chase_end();
+#ifdef ACCEL_OVERLAP_COUNTERS
+        counters_end(k);
+#endif
         p->ticks = now() - start;
         p->throttled = (uint32_t)ss_throttled();
         if (p->throttled) fail(0x076, p->throttled);
@@ -814,6 +928,12 @@ void accel_overlap_main(const struct ss_grant *grant)
     }
 #endif
     phase_index = SWEEP_PHASES;
+#ifdef ACCEL_OVERLAP_COUNTERS
+    {
+        struct a733_nsi_counter_call c;
+        if (counter_result.open_status == A733_NSI_C_OK) counter_result.close_status = counters_call(A733_NSI_CLOSE, 0, &c);
+    }
+#endif
     npu_begin(NPU_EXIT);
     for (unsigned w = 0; w < STREAM_WORKERS; ++w) xTaskNotifyGive(stream_task[w]);
 #ifdef ACCEL_OVERLAP_SWEEP
@@ -826,7 +946,9 @@ void accel_overlap_main(const struct ss_grant *grant)
     result.phases = ACCEL_OVERLAP_PHASES;
 #ifdef ACCEL_OVERLAP_LARGE
     struct accel_overlap_large_result *r = &large_result;
-#ifdef ACCEL_OVERLAP_WIDTH
+#if defined(ACCEL_OVERLAP_COUNTERS)
+    r->magic = ACCEL_OVERLAP_MAGIC; r->version = ACCEL_OVERLAP_COUNTERS_VERSION; r->bytes = sizeof(counter_result);
+#elif defined(ACCEL_OVERLAP_WIDTH)
     r->magic = ACCEL_OVERLAP_MAGIC; r->version = ACCEL_OVERLAP_WIDTH_VERSION; r->bytes = sizeof(*r);
 #else
     r->magic = ACCEL_OVERLAP_MAGIC; r->version = ACCEL_OVERLAP_LARGE_VERSION; r->bytes = sizeof(*r);
@@ -837,7 +959,13 @@ void accel_overlap_main(const struct ss_grant *grant)
     r->stream_workers = result.stream_workers; r->stream_bytes_per_worker = result.stream_bytes_per_worker;
     r->pll = result.pll;
     r->gpu_elements = GPU_ELEMENTS; r->npu_tensor_bytes = (uint32_t)npu_reference_bytes;
+#ifdef ACCEL_OVERLAP_COUNTERS
+    r->phases = ACCEL_OVERLAP_COUNTER_PHASES;
+    counter_result.large = *r;
+    ss_finish(&counter_result, sizeof(counter_result));
+#else
     ss_finish(r, sizeof(*r));
+#endif
 #elif defined(ACCEL_OVERLAP_SWEEP)
     result.version = ACCEL_OVERLAP_SWEEP_VERSION;
     sweep_result.base = result;

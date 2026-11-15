@@ -371,6 +371,33 @@ the request count per job of the GPU's NSI port can.
 Mapping the leases without SLC bypass, so that GPU misses can use the system-level cache, is a separate candidate. It
 needs its own hypothesis after the NSI counters are shown to count.
 
+### NSI counters
+
+The request count per job on the GPU's interconnect port separates the two explanations. The A733 interconnect (NSI)
+gives each initiator port a bank of traffic counters at 0x02020000 + 0x200 × port + 0xc0: an enable word, a clear
+word, a period word, and read-only counts of read and write requests, data (16-byte units) and latency. Port 6 is the
+GPU and port 18 the NPU (vendor sunxi-nsi.h lines 377-385; sun60iw2p1.dtsi ia_pmu_data_unit).
+
+The counter owner ([drivers/dram/a733_nsi_counters.c](../../drivers/dram/a733_nsi_counters.c), OS option
+`SUNSTONE_ACCEL_NSI_COUNTERS`, off by default) holds only these two banks. It reads all eighteen words before any
+write and keeps them as reset values, and refuses a bank whose enable bit is already set. A phase follows the vendor's
+sequence (`__nsi_pmu_timer_store_v2`): period, disable, clear, enable, then 10 µs. Each written word is read back. The
+end of a phase disables the bank, reads the counts twice 10 µs apart, and restores the period, clear and enable words
+to their reset values. A failed readback restores every programmed bank and refuses later writes. A failed session's
+GPU quiesce restores any bank left programmed. The owner writes six words in all, three per bank, and no QoS,
+priority, mode or limit word. [checks/nsi-counters.c](../../checks/nsi-counters.c) runs the sequence against a
+register model, with a failing or corrupt access injected at every read, write and readback.
+
+The application reaches the owner through the GPU call gateway, from the GPU owner task only. The counter build of
+accel-overlap (`SUNSTONE_ACCEL_OVERLAP_COUNTERS`) runs four counted phases: idle for 100 ms, the GPU alone, the NPU
+alone and the core-2 stream alone, one second each, with a sample at half of each phase. The GPU and NPU jobs move
+known bytes, so their data counts calibrate the counters. The core-2 stream reaches DRAM through the CPU ports, so
+ports 6 and 18 should count almost nothing in that phase.
+
+The two CPU bridges (AXI2HIF, 0x0a030000 and 0x0a040000) have counters too. The vendor driver accesses them behind
+a clock (`cpu_direct`, CCU 0x0c00 and 0x0c0c) and a selector bit (0x08000200) that no capture from port 3-1 has read.
+They are left to a later stage.
+
 ## Stage 2: DMA completion timing
 
 DMA is a separate later stage. Its known work:

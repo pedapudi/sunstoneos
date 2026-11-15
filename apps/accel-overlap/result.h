@@ -80,6 +80,10 @@ _Static_assert(sizeof(struct accel_overlap_sweep) == 56 && sizeof(struct accel_o
 /* The four-elements-per-lane GPU run (ACCEL_OVERLAP_WIDTH): the larger-job layout; only phase 0, the GPU alone, runs, and the
  * other phases stay zero. */
 #define ACCEL_OVERLAP_WIDTH_VERSION 4u
+/* The NSI counter calibration (ACCEL_OVERLAP_COUNTERS): the width build with four phases (idle, the GPU alone, the NPU alone,
+ * core 2 streaming), NSI ports 6 and 18 counted in each; the larger-job header and phases, then the counter record. */
+#define ACCEL_OVERLAP_COUNTERS_VERSION 5u
+#define ACCEL_OVERLAP_COUNTER_PHASES 4u
 #define ACCEL_OVERLAP_INTERLEAVED 0x100u
 struct accel_overlap_large_phase {
     struct accel_overlap_phase run;
@@ -102,4 +106,19 @@ _Static_assert(sizeof(struct accel_overlap_large_phase) == 312 && sizeof(struct 
 _Static_assert(sizeof(struct accel_overlap_distribution) == 32 && sizeof(struct accel_overlap_device) == 88 &&
                sizeof(struct accel_overlap_phase) == 216 && sizeof(struct accel_overlap_pll) == 72 &&
                sizeof(struct accel_overlap_result) == 1200, "host.py decodes this layout");
+/* One phase: per bank (0 port 6, 1 port 18) the CLR readback, the six counters (requests, data, latency; read then write)
+ * at half the phase with counting on, just after the disable, and 10 us later. */
+struct accel_overlap_counter_phase {
+    uint32_t status, clear[2], reserved;
+    uint32_t live[2][6], value[2][6], held[2][6];
+    uint64_t begin, live_at, end;
+};
+struct accel_overlap_counter_result {
+    struct accel_overlap_large_result large;
+    uint32_t open_status, close_status, fail_address, fail_value;
+    uint32_t reset[2][9];                         /* every bank word read before any write */
+    struct accel_overlap_counter_phase phase[ACCEL_OVERLAP_COUNTER_PHASES];
+};
+_Static_assert(sizeof(struct accel_overlap_counter_phase) == 184 && sizeof(struct accel_overlap_counter_result) == 3768,
+               "host.py decodes this layout");
 #endif

@@ -13,6 +13,16 @@ LARGE_VERSION = 3
 # The four-elements-per-lane GPU run (ACCEL_OVERLAP_WIDTH): the larger-job layout with only phase 0, the GPU alone.
 WIDTH_VERSION = 4
 LARGE_BYTES = 2944
+# The NSI counter calibration (ACCEL_OVERLAP_COUNTERS): the larger-job layout with four phases, followed by the counter
+# record (result.h: struct accel_overlap_counter_result).
+COUNTERS_VERSION = 5
+COUNTERS_BYTES = 3768
+COUNTER_NAMES = ('idle', 'gpu-alone', 'npu-alone', 'core-2')
+COUNTER_DEVICES = (0, 1, 2, 4)
+COUNTER_MODES = (0, 0, 0, 0x01)
+COUNTER_WORDS = ('rq_rd', 'rq_wr', 'dt_rd', 'dt_wr', 'la_rd', 'la_wr')
+COUNTER_PORTS = (6, 18)
+DATA_UNIT = 16           # bytes per data count of an initiator port (sun60iw2p1.dtsi ia_pmu_data_unit)
 LARGE_PHASES = 9
 LARGE_NAMES = ('gpu-alone', 'npu-alone', 'none', 'core-2', 'core-7', 'cores-2-4', 'cores-2-5-7', 'core-2-x3', 'core-7-x3')
 LARGE_DEVICES = (1, 2, 3, 7, 7, 7, 7, 7, 7)
@@ -53,6 +63,8 @@ def device(raw, at):
 def decode(raw):
     if len(raw) == LARGE_BYTES:
         return decode_large(raw)
+    if len(raw) == COUNTERS_BYTES:
+        return decode_counters(raw)
     if len(raw) not in (BYTES, SWEEP_BYTES):
         raise ValueError('The result must hold exactly %d or %d bytes (a failure record, or another image).' %
                          (BYTES, SWEEP_BYTES))
@@ -194,12 +206,17 @@ def sweep_decision(r):
             'ceiling_gb_per_second': CEILING_GB_PER_SECOND}
 
 
-def decode_large(raw):
-    """The larger-job sweep (struct accel_overlap_large_result)."""
+def decode_large(raw, counters=False):
+    """The larger-job sweep (struct accel_overlap_large_result), or the first part of the counter calibration."""
     magic, version, size, phases, clock0, clock1 = struct.unpack_from('<4I2Q', raw, 0)
-    if (magic, size, phases) != (MAGIC, LARGE_BYTES, LARGE_PHASES) or version not in (LARGE_VERSION, WIDTH_VERSION):
+    if counters:
+        if (magic, version, size, phases) != (MAGIC, COUNTERS_VERSION, COUNTERS_BYTES, len(COUNTER_NAMES)):
+            raise ValueError('The result header differs (a failure record, or another image).')
+    elif (magic, size, phases) != (MAGIC, LARGE_BYTES, LARGE_PHASES) or version not in (LARGE_VERSION, WIDTH_VERSION):
         raise ValueError('The result header differs (a failure record, or another image).')
     width = version == WIDTH_VERSION
+    names, devices_expected, modes_expected = ((COUNTER_NAMES, COUNTER_DEVICES, COUNTER_MODES) if counters else
+                                               (LARGE_NAMES, LARGE_DEVICES, LARGE_MODES))
     initial_top, final_top, workers, worker_bytes = struct.unpack_from('<4I', raw, 32)
     (reference, diff, last, unlocked, writes, in_flight, completions, first_site, first_word, cycles, cycle_mismatches,
      close_ticks, open_ticks) = struct.unpack_from('<4I3Q4I2Q', raw, 48)
@@ -212,7 +229,7 @@ def decode_large(raw):
          'npu_tensor_bytes': npu_bytes,
          'pll': {'reference': '0x%08x' % reference, 'last': '0x%08x' % last, 'unlocked': unlocked, 'writes': writes,
                  'first_site': first_site, 'first_word': '0x%08x' % first_word}, 'phases': []}
-    for i in range(1 if width else LARGE_PHASES):
+    for i in range(1 if width else len(names)):
         at = 136 + 312 * i
         devices, throttled = struct.unpack_from('<2I', raw, at)
         overlap, ticks, sweeps, stream_ticks = struct.unpack_from('<4Q', raw, at + 184)
@@ -220,12 +237,12 @@ def decode_large(raw):
         loads, chase_ticks = struct.unpack_from('<2Q', raw, at + 256)
         mode, slot_jobs = struct.unpack_from('<2I', raw, at + 272)
         plain_sum, plain_max, synced_sum, synced_max = struct.unpack_from('<4Q', raw, at + 280)
-        if devices != LARGE_DEVICES[i] or mode != LARGE_MODES[i] or mask != (mode & 0xff):
+        if devices != devices_expected[i] or mode != modes_expected[i] or mask != (mode & 0xff):
             raise ValueError('Phase %d ran devices 0x%x with streaming 0x%x, not 0x%x with 0x%x.' %
-                             (i, devices, mode, LARGE_DEVICES[i], LARGE_MODES[i]))
+                             (i, devices, mode, devices_expected[i], modes_expected[i]))
         chase = distribution(raw, at + 224)
         ns = lambda k: None if chase[k] is None or not per_sample else round(chase[k] * 1000 / per_sample, 1)
-        phase = {'name': LARGE_NAMES[i], 'devices': devices, 'stream_mode': mode, 'throttled': throttled,
+        phase = {'name': names[i], 'devices': devices, 'stream_mode': mode, 'throttled': throttled,
                  'gpu': device(raw, at + 8), 'npu': device(raw, at + 96), 'overlap': overlap,
                  'ms': round(ticks / TICKS_PER_US / 1000, 3), 'stream_sweeps': sweeps,
                  'stream_gb_per_second': round(sweeps * worker_bytes * 2 * TICKS_PER_US * 1e6 / stream_ticks / 1e9, 2)
@@ -239,6 +256,10 @@ def decode_large(raw):
             phase['gpu_output_maintenance_us'] = round((synced_sum - plain_sum) / slot_jobs / TICKS_PER_US, 1)
             phase['gpu_output_maintenance_max_us'] = round((synced_max - plain_max) / TICKS_PER_US, 1)
         r['phases'].append(phase)
+    if counters:
+        if any(raw[136 + 312 * len(names):LARGE_BYTES]):
+            raise ValueError('The counter run wrote larger-job phases after its fourth.')
+        return r
     if width:
         if any(raw[136 + 312:]):
             raise ValueError('The width run wrote phases after the GPU-alone phase.')
@@ -250,6 +271,114 @@ def decode_large(raw):
     r['in_range'] = all(c['ok'] for c in r['checks'])
     r['decision'] = large_decision(r)
     return r
+
+
+def decode_counters(raw):
+    """The NSI counter calibration (struct accel_overlap_counter_result)."""
+    r = decode_large(raw, counters=True)
+    at = LARGE_BYTES
+    open_status, close_status, fail_address, fail_value = struct.unpack_from('<4I', raw, at)
+    reset = struct.unpack_from('<18I', raw, at + 16)
+    r['counters'] = {'open_status': open_status, 'close_status': close_status, 'fail_address': '0x%08x' % fail_address,
+                     'fail_value': '0x%08x' % fail_value,
+                     'reset': {'port_%d' % port: ['0x%08x' % w for w in reset[9 * b:9 * b + 9]]
+                               for b, port in enumerate(COUNTER_PORTS)}}
+    for i, phase in enumerate(r['phases']):
+        base = at + 16 + 72 + 184 * i
+        status, clear0, clear1, _ = struct.unpack_from('<4I', raw, base)
+        live = struct.unpack_from('<12I', raw, base + 16)
+        value = struct.unpack_from('<12I', raw, base + 64)
+        held = struct.unpack_from('<12I', raw, base + 112)
+        begin, live_at, end = struct.unpack_from('<3Q', raw, base + 160)
+        c = {'status': status, 'clear_readback': ['0x%08x' % clear0, '0x%08x' % clear1],
+             'ms': round((end - begin) / TICKS_PER_US / 1000, 3) if end > begin else None,
+             'live_at_fraction': round((live_at - begin) / (end - begin), 3) if live_at and end > begin else None}
+        for b, port in enumerate(COUNTER_PORTS):
+            c['port_%d' % port] = {
+                'value': dict(zip(COUNTER_WORDS, value[6 * b:6 * b + 6])),
+                'live': dict(zip(COUNTER_WORDS, live[6 * b:6 * b + 6])),
+                'held': dict(zip(COUNTER_WORDS, held[6 * b:6 * b + 6]))}
+        phase['counters'] = c
+    gpu, npu = r['phases'][1], r['phases'][2]
+    gpu_jobs = gpu['gpu']['pipelined_jobs'] + 2 * gpu['slot_jobs']   # each slot ran a plain and a synced job
+    npu_jobs = npu['npu']['pipelined_jobs']
+    g, n = gpu['counters']['port_6']['value'], npu['counters']['port_18']['value']
+    per = lambda v, jobs: round(v / jobs, 1) if jobs else None
+    r['calibration'] = {
+        'gpu_jobs': gpu_jobs, 'npu_jobs': npu_jobs,
+        'gpu_known_read_units_per_job': r['gpu_elements'] * 8 // DATA_UNIT,
+        'gpu_known_write_units_per_job': r['gpu_elements'] * 4 // DATA_UNIT,
+        'npu_known_units_per_job': r['npu_tensor_bytes'] // DATA_UNIT,
+        'gpu_dt_rd_per_job': per(g['dt_rd'], gpu_jobs), 'gpu_dt_wr_per_job': per(g['dt_wr'], gpu_jobs),
+        'gpu_requests_per_job': per(g['rq_rd'] + g['rq_wr'], gpu_jobs),
+        'gpu_rq_rd_per_job': per(g['rq_rd'], gpu_jobs), 'gpu_rq_wr_per_job': per(g['rq_wr'], gpu_jobs),
+        'npu_dt_rd_per_job': per(n['dt_rd'], npu_jobs), 'npu_dt_wr_per_job': per(n['dt_wr'], npu_jobs),
+        'npu_requests_per_job': per(n['rq_rd'] + n['rq_wr'], npu_jobs),
+        'gpu_la_rd_per_request': round(g['la_rd'] / g['rq_rd'], 2) if g['rq_rd'] else None,
+        'npu_la_rd_per_request': round(n['la_rd'] / n['rq_rd'], 2) if n['rq_rd'] else None}
+    q = r['calibration']['gpu_requests_per_job']
+    r['calibration']['gpu_discriminator'] = (None if q is None else 'line requests: few resident tasks' if q < 100000 else
+                                            'per-lane requests: a per-request limit' if q > 200000 else 'undecided')
+    r['checks'] = counter_checks(r)
+    r['in_range'] = all(c['ok'] for c in r['checks'])
+    return r
+
+
+def counter_checks(r):
+    """The ranges of the NSI counter hypothesis (docs/designs/concurrent-accel.md, "NSI counters")."""
+    out = []
+
+    def check(name, value, low=None, high=None):
+        ok = value is not None and (low is None or value >= low) and (high is None or value <= high)
+        out.append({'name': name, 'value': value, 'low': low, 'high': high, 'ok': ok})
+
+    k, p, cal = r['counters'], r['phases'], r['calibration']
+    check('counter open status', k['open_status'], 0, 0)
+    check('counter close status', k['close_status'], 0, 0)
+    check('counter phase status', sum(1 for ph in p if ph['counters']['status']), 0, 0)
+    check('reset enable bits set', sum(int(k['reset']['port_%d' % port][0], 16) & 1 for port in COUNTER_PORTS), 0, 0)
+    # The counters hold after the disable.
+    check('counts that moved after the disable', sum(
+        1 for ph in p for port in COUNTER_PORTS for w in COUNTER_WORDS
+        if ph['counters']['port_%d' % port]['held'][w] != ph['counters']['port_%d' % port]['value'][w]), 0, 0)
+    # Live counting: the data sample at half the phase, on the port of the phase's device.
+    for i, port in ((1, 6), (2, 18)):
+        c = p[i]['counters']['port_%d' % port]
+        total = c['value']['dt_rd'] + c['value']['dt_wr']
+        check('%s port %d live share at half' % (p[i]['name'], port),
+              round((c['live']['dt_rd'] + c['live']['dt_wr']) / total, 3) if total else None, 0.35, 0.65)
+    # Controls: no accelerator job, or only the core-2 stream, moves under 1,000 data units on either port.
+    for i in (0, 3):
+        for port in COUNTER_PORTS:
+            v = p[i]['counters']['port_%d' % port]['value']
+            check('%s port %d data units' % (p[i]['name'], port), v['dt_rd'] + v['dt_wr'], 0, 999)
+    # Each accelerator's traffic stays off the other's port: below 1% of its own count.
+    g6 = p[1]['counters']['port_6']['value']; g18 = p[1]['counters']['port_18']['value']
+    n6 = p[2]['counters']['port_6']['value']; n18 = p[2]['counters']['port_18']['value']
+    check('gpu-alone port 18 share', round((g18['dt_rd'] + g18['dt_wr']) / max(1, g6['dt_rd'] + g6['dt_wr']), 4), 0, 0.01)
+    check('npu-alone port 6 share', round((n6['dt_rd'] + n6['dt_wr']) / max(1, n18['dt_rd'] + n18['dt_wr']), 4), 0, 0.01)
+    # Calibration on the known bytes per job (16-byte units).
+    rd, wr, nb = cal['gpu_known_read_units_per_job'], cal['gpu_known_write_units_per_job'], cal['npu_known_units_per_job']
+    check('gpu dt_rd per job', cal['gpu_dt_rd_per_job'], rd, round(rd * 1.04))
+    check('gpu dt_wr per job', cal['gpu_dt_wr_per_job'], wr, round(2 * wr * 1.04))
+    check('gpu requests per job decide', cal['gpu_discriminator'] in ('line requests: few resident tasks',
+                                                                      'per-lane requests: a per-request limit') or None)
+    check('npu dt_rd per job', cal['npu_dt_rd_per_job'], nb, round(nb * 1.05))
+    check('npu dt_wr per job', cal['npu_dt_wr_per_job'], nb, round(nb * 1.02))
+    # The counted phases end well inside the 7.16 s period of CYCLE 0xffffffff at the 600 MHz NSI clock.
+    check('counted phase longest ms', max(ph['counters']['ms'] or 0 for ph in p), None, 1200)
+    # The accelerators run as in the width run (675.9 jobs/s) and stage 1c (10,183.9 jobs/s), within 10%.
+    check('gpu alone jobs/s', p[1]['gpu']['jobs_per_second'], 608, 744)
+    check('npu alone jobs/s', p[2]['npu']['jobs_per_second'], 9165, 11202)
+    check('gpu checked slot jobs', p[1]['slot_jobs'], 4, 4)
+    check('core-2 stream sweeps', p[3]['stream_sweeps'], 1)
+    check('mismatches', sum(ph[d]['mismatches'] for ph in p for d in ('gpu', 'npu')), 0, 0)
+    check('chase overflow', sum(ph['chase']['overflow'] for ph in p), 0, 0)
+    check('pll_npu unlocked reads', r['pll']['unlocked'], 0, 0)
+    check('pll_npu first differing site', r['pll']['first_site'], 0, 0)
+    check('throttled phases', sum(1 for ph in p if ph['throttled']), 0, 0)
+    check('top point at start and end', r['initial_top'] + r['final_top'], 2, 2)
+    return out
 
 
 def width_checks(r):

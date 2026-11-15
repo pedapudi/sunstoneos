@@ -22,7 +22,19 @@ option(SUNSTONE_ACCEL_OVERLAP_LARGE "Build accel-overlap as the larger-job strea
 # The GPU-width run (ACCEL_OVERLAP_WIDTH): the larger-job build with the four-elements-per-lane add (add4/) and only the
 # GPU-alone phase. It needs manifest-large.json, as the larger-job sweep does.
 option(SUNSTONE_ACCEL_OVERLAP_WIDTH "Build accel-overlap as the GPU-alone run of the four-elements-per-lane add" OFF)
-if(SUNSTONE_ACCEL_OVERLAP_WIDTH)
+# The NSI counter calibration (ACCEL_OVERLAP_COUNTERS): the GPU-width build with four phases (idle, the GPU alone, the NPU
+# alone, the core-2 stream alone), each counted on NSI ports 6 and 18 by the OS counter owner. It needs manifest-large.json
+# and the OS built with SUNSTONE_ACCEL_NSI_COUNTERS.
+option(SUNSTONE_ACCEL_OVERLAP_COUNTERS "Build accel-overlap as the NSI port 6 and 18 counter calibration" OFF)
+if(SUNSTONE_ACCEL_OVERLAP_COUNTERS)
+  if(NOT SUNSTONE_ACCEL_NSI_COUNTERS)
+    message(FATAL_ERROR "SUNSTONE_ACCEL_OVERLAP_COUNTERS needs the OS counter owner (SUNSTONE_ACCEL_NSI_COUNTERS)")
+  endif()
+  target_compile_definitions(accel-overlap PRIVATE ACCEL_OVERLAP_SWEEP=1 ACCEL_OVERLAP_LARGE=1 ACCEL_OVERLAP_WIDTH=1
+                             ACCEL_OVERLAP_COUNTERS=1 SUNSTONE_ACCEL_NSI_COUNTERS=1)
+  set_property(TARGET accel-overlap APPEND PROPERTY SUNSTONE_APPLICATION_INPUTS
+               "${SUNSTONE_SOURCE_ROOT}/include/a733_nsi_counters.h")
+elseif(SUNSTONE_ACCEL_OVERLAP_WIDTH)
   target_compile_definitions(accel-overlap PRIVATE ACCEL_OVERLAP_SWEEP=1 ACCEL_OVERLAP_LARGE=1 ACCEL_OVERLAP_WIDTH=1)
 elseif(SUNSTONE_ACCEL_OVERLAP_LARGE)
   target_compile_definitions(accel-overlap PRIVATE ACCEL_OVERLAP_SWEEP=1 ACCEL_OVERLAP_LARGE=1)

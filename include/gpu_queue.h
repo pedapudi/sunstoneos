@@ -258,6 +258,12 @@ int gpu_queue_wait(struct gpu_queue_context, struct gpu_queue_record *, uint32_t
  * Pages, leases and per-client sequence numbers stay retained. An uncollected
  * peer record returns BUSY so its task can collect it before close. */
 int gpu_queue_close(struct gpu_queue_context, uint32_t wait_ticks);
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+/* The NSI counter diagnostic (include/a733_nsi_counters.h), owner task only. OK means the call reached the counter
+ * owner; the call's status gives its result. */
+struct a733_nsi_counter_call;
+int gpu_queue_nsi_counters(struct gpu_queue_context, struct a733_nsi_counter_call *);
+#endif
 /* Owner only: reopen a healthy closed device, preserving the context. */
 int gpu_queue_open(struct gpu_queue_context, uint32_t wait_ticks);
 /* Owner only: wait for bounded worker recovery after a fault. An owed fault

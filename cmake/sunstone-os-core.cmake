@@ -23,6 +23,12 @@ set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
 option(SUNSTONE_GPU_FAST_TIMING "Capture optional GPU IRQ-entry counter timestamps" OFF)
 option(SUNSTONE_NPU_WAKE_TIMING "Capture the NPU interrupt entry and producer resume counters in the EL0 ring" OFF)
 option(SUNSTONE_ACCEL_PLL_WATCH "Read PLL_NPU around every PLL_GPU0 write and at the next NPU completion" OFF)
+# The NSI port 6 and 18 traffic counters (include/a733_nsi_counters.h), reached by the GPU owner task through the GPU call
+# gateway. A diagnostic: off by default.
+option(SUNSTONE_ACCEL_NSI_COUNTERS "Give the GPU owner task the NSI port 6 and 18 traffic counters" OFF)
+if(SUNSTONE_ACCEL_NSI_COUNTERS AND NOT SUNSTONE_A733_OS_GPU)
+  message(FATAL_ERROR "SUNSTONE_ACCEL_NSI_COUNTERS requires SUNSTONE_A733_OS_GPU")
+endif()
 if(SUNSTONE_ACCEL_PLL_WATCH AND NOT SUNSTONE_A733_OS_GPU)
   message(FATAL_ERROR "SUNSTONE_ACCEL_PLL_WATCH requires SUNSTONE_A733_OS_GPU")
 endif()
@@ -298,6 +304,10 @@ if(SUNSTONE_A733_OS_GPU)
     drivers/gpu/pvr_gpu_events.c)
   # The GPU service's performance-mode hooks, which the OS performance service drives.
   list(APPEND os_added drivers/gpu/a733_gpu_performance.c drivers/gpu/pvr_gpu_clock.c)
+  if(SUNSTONE_ACCEL_NSI_COUNTERS)
+    list(APPEND os_added drivers/dram/a733_nsi_counters.c platform/a733/nsi_counters_os.c)
+    list(APPEND os_external_inputs "${os_root}/include/a733_nsi_counters.h")
+  endif()
   file(WRITE "${os_build}/gpu-firmware.S"
     ".section .rodata.gpu_firmware,\"a\"\n.balign 16\n.global gpu_firmware\ngpu_firmware:\n.incbin \"${SUNSTONE_GPU_FIRMWARE}\"\n.global gpu_firmware_end\ngpu_firmware_end:\n")
   list(APPEND os_sources "${os_build}/gpu-firmware.S")
@@ -443,6 +453,9 @@ foreach(service audio headset gpu npu radio)
   endif()
 endforeach()
 add_library(sunstone-a733-os-core OBJECT EXCLUDE_FROM_ALL ${os_sources})
+if(SUNSTONE_ACCEL_NSI_COUNTERS)
+  target_compile_definitions(sunstone-a733-os-gpu PRIVATE SUNSTONE_ACCEL_NSI_COUNTERS=1)
+endif()
 # The loader's SD0 binding (apps/os/large_sd.c) holds three 128 KiB transfer buffers, so an image links it only when
 # it reads or writes the card in large pieces: SUNSTONE_A733_OS_SD_WRITE, or an application whose manifest declares large
 # regions (add_sunstone_image decides). Without it the loader's weak stubs report no device and authorize no pins.
@@ -491,6 +504,7 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
   "$<$<BOOL:${SUNSTONE_NPU_WAKE_TIMING}>:SUNSTONE_NPU_WAKE_TIMING=1>"
   "$<$<BOOL:${SUNSTONE_ACCEL_PLL_WATCH}>:SUNSTONE_ACCEL_PLL_WATCH=1>"
+  "$<$<BOOL:${SUNSTONE_ACCEL_NSI_COUNTERS}>:SUNSTONE_ACCEL_NSI_COUNTERS=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>")
 # The EL0 ring is linked too; the application's declaration selects it (apps/os/npu-session.h, os_npu_session_queued).
 target_sources(sunstone-a733-os-core PRIVATE "${os_root}/runtime/npu_app_queue.c" "${os_root}/apps/os/npu-queue.c")
