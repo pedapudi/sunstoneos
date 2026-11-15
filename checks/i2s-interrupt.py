@@ -7,6 +7,7 @@ import os
 import subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
+import harness  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [
@@ -66,8 +67,8 @@ set_target_properties(i2s-interrupt-model PROPERTIES SUFFIX ".elf"
 
     def run(name, command, timeout=None):
         commands.append(command)
-        result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, timeout=timeout, env=environment)
+        result = harness.until_booted(lambda: subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, timeout=timeout, env=environment), lambda done: (done.stdout or '') + (done.stderr or ''))
         (out / (name + '.log')).write_text(result.stdout)
         return result
 

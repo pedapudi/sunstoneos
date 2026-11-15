@@ -30,6 +30,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import harness
 from harness import CACHE, CLANG, LLD, environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,7 +77,7 @@ CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mge
 # OS and board sources that run unmodified.
 OS_SOURCES = ['apps/os/quiesce.c', 'apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c', 'drivers/storage/fat32_ro.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'kernel/umem/umem.c', 'apps/os/services.c', 'apps/os/capture.c', 'apps/os/usb-service.c', 'apps/os/session.c', 'apps/os/grants.c', 'apps/os/start.c',
               'kernel/umem/umem_policy.c', 'arch/aarch64/umem_cpu.c',
-              'apps/os/thermal.c', 'apps/os/i2c.c', 'drivers/i2c/a733_i2c_bus.c', 'apps/os/rtc.c', 'apps/os/g2d.c', 'apps/os/video_decode.c', 'drivers/rtc/a733_rtc.c', 'drivers/board/orangepi_zero3w.c', 'apps/os/cpu.c', 'apps/os/perf.c', 'drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_perf_mode.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/os/sealed.c',
+              'apps/os/thermal.c', 'apps/os/i2c.c', 'drivers/i2c/a733_i2c_bus.c', 'apps/os/rtc.c', 'apps/os/g2d.c', 'drivers/g2d/a733_g2d.c', 'apps/os/iommu.c', 'drivers/iommu/a733_iommu_owner.c', 'apps/os/video_decode.c', 'drivers/rtc/a733_rtc.c', 'drivers/board/orangepi_zero3w.c', 'apps/os/cpu.c', 'apps/os/perf.c', 'drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_perf_mode.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/os/sealed.c',
               'runtime/deadline.c', 'runtime/deadline-a733.c', 'platform/a733-smp-cached/irq_table.c',
               # The I2S capture service is in every image; an ungranted session never opens its stream.
               'apps/os/audio.c', 'platform/a733/dma_pool_session.c', 'platform/a733/dma_startup.c', 'platform/a733/dma_native.c',
@@ -423,12 +424,8 @@ def boot(elf, raw_session, contract, scenario_bytes, inputs, log, timeout=60, me
                '-cpu', 'cortex-a76', '-smp', '8', '-m', memory, '-nographic', '-monitor', 'none',
                '-semihosting-config', 'enable=on,target=native', '-kernel', elf, *loaders]
     start = time.monotonic()
-    try:
-        done = subprocess.run([str(c) for c in command], capture_output=True, text=True, timeout=timeout)
-        output, status = done.stdout + done.stderr, done.returncode
-    except subprocess.TimeoutExpired as error:
-        output = ((error.stdout or b'') + (error.stderr or b'')).decode(errors='replace')
-        status = 124
+    done = harness.run_qemu([str(c) for c in command], timeout)      # a kill twice is inconclusive (harness.KillInconclusive)
+    output, status = done.stdout + done.stderr, done.returncode
     seconds = time.monotonic() - start
     Path(log).write_text(output)
     return output, status, seconds

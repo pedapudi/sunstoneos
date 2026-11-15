@@ -47,7 +47,16 @@ prefetch value `0x3007f`, and range-invalidation mode 1 for both caches.
 The effective vendor parser zero-initializes its platform data and never reads
 the prefetch property. Its setup therefore writes zero to both prefetch controls.
 The recorded ISP profile, which translates CSI master 1 and ISP master 2,
-uses that effective zero value. Other SunstoneOS profiles retain `0x3007f`.
+uses that effective zero value. Other profiles of drivers/iommu/a733_iommu.c
+retain `0x3007f`; the OS-image owner's words are described below.
+
+Each bank has its own prefetch control at offset `0x2c` (bank 1's at
+`0x1002c`). Bits 0-6 enable prefetch for one master each, numbered by the
+master's local ID in its bank; bits 16 and 17 are mode bits for the whole bank.
+The vendor's older platform tables show the per-master bits: sun8iw20 uses
+`0x30016` and sun8iw21 uses `0x30077`, and each clears exactly the bits of the
+masters whose prefetch it disables, such as G2D. The vendor writes one value to
+both banks; no vendor code writes them differently.
 The source is `a733-iommu-v2-c` in [the source lock](../sources.lock.json),
 functions `__init_plat_data_from_ofnode()` and `sunxi_iommu_hw_init()`.
 The version value comes from source configuration, not a physical register read.
@@ -238,10 +247,19 @@ OS-image wiring serializes them.
   already enabled or any nonzero status word refuses the attach with no
   register write, and the lease is returned. Otherwise the owner allocates one
   16 KiB directory, writes the spans' entries, and programs both banks in the
-  order of the Linux `sunxi_iommu_hw_init`: directory base, prefetch `0x3007f`,
+  order of the Linux `sunxi_iommu_hw_init`: directory base, prefetch,
   range invalidation modes, interrupt enables (0), bypass (0 for the new
   masters, 1 for USB), a flush held for 10 microseconds, automatic clock
   gating, and enable. Every write except the flush requests is read back.
+- **Prefetch.** The first attach writes bank 0's prefetch control `0x30079`,
+  which is `0x3007f` with the CSI and ISP bits (1 and 2) clear, and bank 1's
+  `0x3007f`, the value G2D (bank 1, local ID 4) passed its board runs with. It
+  then reads bank 0's word again, so a board where the two offsets name one
+  register fails the attach at that readback. No later attach writes either
+  word, so G2D and the camera masters attach in either order. The CSI and ISP
+  masters run without prefetch, as in the recorded ISP profile. That profile
+  also had bank 0's mode bits clear, which only affect masters whose prefetch
+  is enabled.
 - **USB stays bypassed.** The device tree lists USB as an IOMMU master with no
   power domain, and the Linux setup writes its bypass to 1. The OS image's USB
   controllers run DMA throughout a session, so the first attach sets USB's
@@ -255,13 +273,18 @@ OS-image wiring serializes them.
   the span touches, in both banks, as `sunxi_zap_tlb` does for version 0x16.
   An attach then sets the new masters' interrupt enable to 0 and bypass to 0,
   as `sunxi_enable_device_iommu` does. Neither writes a bank's directory base,
-  enable or global flush, which other attached masters depend on.
+  enable or global flush, which other attached masters depend on. The new
+  masters count as attached before their first micro write, so a failure
+  among those writes still lets a detach return them to bypass.
 - **Unmap.** The owner clears the entries, then invalidates the TLB and the
   page-walk cache over each span. Linux invalidates before clearing; clearing
   first means no walk can cache a cleared entry after the invalidation.
   Second-level tables stay allocated until the last detach.
-- **Detach.** Each detached master returns to bypass; Linux's detach changes no
-  register. After the last master, the owner flushes, disables both banks,
+- **Detach.** The owner reads each detached master's fault words into its
+  fault record, then returns the master to bypass; Linux's detach changes no
+  register. After the last master, the owner flushes every master whose micro
+  registers it wrote in the lifetime, including masters detached earlier and
+  USB, then disables both banks,
   releases every table and returns the clock lease. Linux has no disable path;
   its suspend only gates the clocks. If a bank does not read back disabled,
   the owner keeps the tables and the lease, because the bank may still walk them.
@@ -269,7 +292,15 @@ OS-image wiring serializes them.
   and walk words and one master's micro status, address and data words into
   that master's fault record. Any failed register access or table allocation
   leaves the owner in its fault state for the lifetime; later attaches are
-  refused, and detach still runs.
+  refused, and detach still runs. The owner keeps the first failure's step and
+  register offset, and for a register that does not read back its write, the
+  value read.
+
+The owner is the only IOMMU programmer in an OS image. The OS build refuses
+`SUNSTONE_A733_OS_USB_JPEG`, whose decoder still programs the banks through
+drivers/iommu/a733_iommu.c, until that decoder attaches through the owner. The
+two files also define one symbol, `a733_iommu_programmer`, so a link of both
+fails.
 
 Table memory comes from the caller through an allocation callback; the OS image
 supplies non-cacheable pages from the unified allocator. The owner never writes
@@ -284,7 +315,15 @@ own bank's directory base through table memory. The test checks the
 first-attach register sequence, that the second attach writes no directory base
 or enable, that every page of both devices' spans walks to its physical page
 with its permissions, refusals with no register access, fault recording, unmap,
-a map across a 4 MiB boundary, and the release of every table and the lease. A
+a map across a 4 MiB boundary, the release of every table and the lease, and a
+register that reads back a different value, which records the readback step,
+offset and value and still detaches cleanly. It also checks that the last detach
+flushes a master detached earlier, that a detach records the master's fault words
+first, that a later attach failing among its micro writes leaves every master
+detachable, that G2D and the camera masters attach in either order with the same
+two prefetch words written once, that a model whose two prefetch offsets name one
+register fails the first attach at bank 0's second readback, and that a link of the owner with drivers/iommu/a733_iommu.c
+fails. A
 mutant that installs a second directory for the decoder's attach fails the
 test, because G2D's pages no longer walk from bank 1. No board run has used the
 owner yet; the later-attach, map, unmap and partial-detach sequences follow the
