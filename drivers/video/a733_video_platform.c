@@ -80,7 +80,7 @@ static const struct {uint32_t address,word;} rom_identity[]={
 static int rom_matches(struct a733_video_decoder *p)
 {
     struct a733_video_unit *u=&p->unit;
-    if(u->failed||u->locked||!a733_video_unit_timely(u))return 0;
+    if(!a733_video_unit_timely(u))return 0;
     for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i) {
         uint32_t w;
         if(a733_video_unit_read_unlocked(u,rom_identity[i].address,&w)!=1||w!=rom_identity[i].word)return 0;
