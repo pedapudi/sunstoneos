@@ -23,23 +23,22 @@ Cases, each starting from a service that failed in hold B (phase FAULT, step VD_
   with site 0x941 once per pass, and the registry never reaches DONE: the session fails at the bound.
 - uncertain-access: the binding's failure was an access with an unknown effect. The close touches nothing and the
   registry reports FAULT (site 0x941).
-- quiesce-interleaved: the quiesce step runs on another core while the owner task closes. The owner's close is run
-  once to record the phase and close_started words after each of its stores. The quiesce step is then run once for
-  every pair of those states (i <= j), with its first load of the two words served from state i and its later loads
-  from state j, as when the owner stores between the step's loads. No pair may report FAULT: the close succeeds.
+- quiesce-among-close-stores: as quiesce-closes, but the quiesce step that runs during the close is placed at every
+  point among the close's stores to the words the step reads (phase, close_started, reported and quiesced), with a
+  pause after each of its first three loads of them so that its loads can straddle one or more stores
+  (harness.TwoCores). No placement may report 0x941; every one must reach DONE with the service CLOSED.
 The image of the hold-B run (c1a4e4fc...) fails the first two cases: its quiesce step reports FAULT on every pass
-until the bound. The image of the stage-1 rerun (7d63776e...) fails quiesce-interleaved: its close stored
-close_started before CLOSING and its quiesce step loaded phase first.
+until the bound. The image of the stage-1 rerun (7d63776e...) fails quiesce-among-close-stores: its quiesce step
+decides from phase and close_started.
 
 Usage: os-vdec-fault-return.py --image ELF --output DIR"""
 import argparse
 import hashlib
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
-from unicorn import UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import (UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_X0,
                                  UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3)
-from harness import machine as harness_machine, Image, hook_addresses, save, skip_crumbs
+from harness import machine as harness_machine, Image, hook_addresses, save, skip_crumbs, TwoCores
 
 GATE_RUNS = [['--image', '{elf:ret-vdec}', '--output', '{output}']]
 UNIT = '/apps/os/video_decode.c'
@@ -92,7 +91,7 @@ def members(image):
     return layout, enums
 
 
-def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, application_close=False, interleave=False):
+def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, application_close=False, schedule=None):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -181,11 +180,15 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     hook_addresses(uc, {NOTE}, lambda m, a, s, u: note(m))
     hook_addresses(uc, {SENTINEL}, lambda m, a, s, u: m.emu_stop())
 
-    def call(function, *args, stack=STACKS + 0x80000):
+    def enter(function, *args, stack=STACKS + 0x80000):
         for register, value in zip((UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3), args):
             uc.reg_write(register, value)
         uc.reg_write(UC_ARM64_REG_SP, stack)
         uc.reg_write(UC_ARM64_REG_LR, SENTINEL)
+        uc.reg_write(UC_ARM64_REG_PC, function)
+
+    def call(function, *args, stack=STACKS + 0x80000):
+        enter(function, *args, stack=stack)
         uc.emu_start(function, SENTINEL, count=5_000_000)
         return uc.reg_read(UC_ARM64_REG_X0)
 
@@ -236,49 +239,39 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         assert state['slice_done'], (name, 'the owner task did not reach its wait')
 
     close_answer = None
-    words = {vd + layout['phase']: 'phase', vd + layout['close_started']: 'close_started'}
-    states, interleavings = [], []
-    if interleave:
-        # The owner's stores to the two words, each state as the store leaves it.
-        states.append({k: get(a) for a, k in words.items()})
-        def stored(m, access, address, size, value, data):
-            if address in words:
-                states.append({**states[-1], words[address]: value & 0xffffffff})
-        writes = uc.hook_add(UC_HOOK_MEM_WRITE, stored, begin=min(words), end=max(words) + 3)
-    if application_close or interleave:
+    if application_close:
         put(vd + layout['op'], enums['CLOSE_OP']); put(vd + layout['request'], enums['POSTED'])
         owner_slice()
         if get(vd + layout['request']) == enums['DONE']:
             close_answer = get(vd + layout['result']) - (1 << 32) if get(vd + layout['result']) >> 31 else \
                 get(vd + layout['result'])
     quiesce = image.address('video_decode_quiesce', UNIT)
-    if interleave:
-        uc.hook_del(writes)
-        after = {a: get(a) for a in words}
-        for i in range(len(states)):
-            for j in range(i, len(states)):
-                loads = []
-                def serve(m, access, address, size, value, data, i=i, j=j):
-                    if address in words:
-                        # A read hook runs before the load: the word it loads is the one written here.
-                        put(address, states[i if not loads else j][words[address]])
-                        loads.append(words[address])
-                reads = uc.hook_add(UC_HOOK_MEM_READ, serve, begin=min(words), end=max(words) + 3)
-                result = call(image.address('quiesce_step', UNIT), quiesce) & 0xffffffff
-                uc.hook_del(reads)
-                for a, v in after.items():
-                    put(a, v)
-                interleavings.append({'first': states[i], 'later': states[j], 'loads': loads, 'result': result})
-        state['notes'].clear()
     assert call(image.address('os_quiesce_register'), quiesce) == 1, (name, 'registration refused')
     state['requested'] = 1
-    start, results = state['time'], []
+    start, results, events = state['time'], [], None
     while state['time'] - start < BOUND_US:
         result = call(image.address('os_quiesce_step'), NOTE) & 0xffffffff
         results.append(result)
         if result == QUIESCE['DONE']:
             break
-        owner_slice()
+        if schedule and events is None:
+            # The owner's close, with one more quiesce step on the supervisor's core placed among its stores.
+            shared = [(vd + layout[n], 4) for n in ('phase', 'close_started', 'reported', 'quiesced') if n in layout]
+            cores = TwoCores(uc, shared, SENTINEL)
+            state['slice_done'] = False
+            enter(task, 0, stack=STACKS + 0x40000)
+            writer = uc.context_save()
+            enter(image.address('os_quiesce_step'), NOTE)
+            reader = uc.context_save()
+            events = cores.run(writer, reader, schedule, lambda: state['slice_done'],
+                               lambda: uc.reg_read(UC_ARM64_REG_PC) == SENTINEL)
+            results.append(uc.reg_read(UC_ARM64_REG_X0) & 0xffffffff)
+            cores.close()
+            assert state['slice_done'], (name, 'the owner task did not reach its wait')
+            if results[-1] == QUIESCE['DONE']:
+                break
+        else:
+            owner_slice()
         state['time'] += PASS_US
     record = {}
     if 'info' in layout and 'fault_closed' in L['vdec_check_record']:
@@ -287,7 +280,8 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         'case': name, 'passes': len(results), 'last_result': results[-1],
         'done_within_bound': results[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
         'phase': get(vd + layout['phase']), 'recorded_fault_step': get(vd + layout['fault_step']),
-        'close_answer': close_answer, 'record': record, 'store_states': states, 'interleavings': interleavings,
+        'close_answer': close_answer, 'record': record, 'schedule': schedule, 'events': events,
+        'any_fault': QUIESCE['FAULT'] in results,
         'notes': [(hex(s), hex(v)) for s, v in state['notes']],
         'ccu': {hex(k): hex(ccu.words.get(k, 0)) for k in (0x220, 0xa88, 0xa8c, 0x5e4)},
         'ccu_writes': [(hex(a), hex(v)) for a, v in ccu.writes],
@@ -308,8 +302,7 @@ def main():
                  for s in ELFFile(stream).iter_segments() if s['p_type'] == 'PT_LOAD']
     assert layout and enums['CLOSED'] == 0 and enums['FAULT'] == 4
     cases = [('quiesce-closes', {}), ('application-closes', {'application_close': True}),
-             ('close-step-fails', {'stuck': {0xa8c: 0x00040004}}), ('uncertain-access', {'uncertain': True}),
-             ('quiesce-interleaved', {'interleave': True})]
+             ('close-step-fails', {'stuck': {0xa8c: 0x00040004}}), ('uncertain-access', {'uncertain': True})]
     rows, failures = [], []
     for name, options in cases:
         row = run_case(image, parts, layout, enums, name, **options)
@@ -335,12 +328,6 @@ def main():
                 problems.append('the record must say the fault was closed')
             if name == 'application-closes' and row['close_answer'] != -1:
                 problems.append('the application close of a faulted service must be answered -1')
-            if name == 'quiesce-interleaved':
-                if len(row['store_states']) < 3 or not row['interleavings']:
-                    problems.append('the close must store phase and close_started')
-                faults = [x for x in row['interleavings'] if x['result'] == QUIESCE['FAULT']]
-                if faults:
-                    problems.append(f'the quiesce reported FAULT while a close that succeeds ran: {faults[0]}')
         if row['ve_accesses']:
             problems.append('the close must not touch a decoder register')
         row['passed'] = not problems
@@ -348,6 +335,21 @@ def main():
         if problems:
             failures.append(name)
         rows.append(row)
+    # The quiesce step on the supervisor's core placed at every point among the close's stores to the words it reads,
+    # with its loads straddling one or more of them: no placement may report the fault of a close that succeeds.
+    writer_events = run_case(image, parts, layout, enums, 'quiesce-closes', schedule=(0, 0, 0))['events']['writer']
+    sweep = [(w, k, b) for w in range(writer_events + 1) for k in range(4) for b in range(w, writer_events + 1)]
+    races = []
+    for schedule in sweep:
+        row = run_case(image, parts, layout, enums, 'quiesce-closes', schedule=schedule)
+        if row['any_fault'] or row['notes'] or not row['done_within_bound'] or row['phase'] != enums['CLOSED']:
+            races.append({'schedule': schedule, 'events': row['events'], 'notes': row['notes'], 'phase': row['phase']})
+    rows.append({'case': 'quiesce-among-close-stores', 'writer_events': writer_events, 'schedules': len(sweep),
+                 'reported': races[:8], 'passed': not races and writer_events >= 2,
+                 'problems': [f'{len(races)} of {len(sweep)} placements reported 0x941 during a close that succeeds']
+                 if races else [] if writer_events >= 2 else ['the close must store at least two shared words']})
+    if not rows[-1]['passed']:
+        failures.append('quiesce-among-close-stores')
     root = Path(__file__).resolve().parents[1]
     save(a.output / 'result.json', {
         'passed': not failures, 'physical_access': False, 'image': str(a.image),
@@ -356,8 +358,9 @@ def main():
                            for n in ('apps/os/video_decode.c', 'apps/os/quiesce.c', 'drivers/video/a733_video_platform.c',
                                      'drivers/video/a733_video_unit.c', 'checks/os-vdec-fault-return.py')}})
     for row in rows:
-        print('PASS' if row['passed'] else 'FAIL', row['case'], f"{row['passes']} passes, {row['elapsed_us']} us",
-              '; '.join(row['problems']))
+        detail = f"{row['schedules']} placements over {row['writer_events']} close stores" if 'schedules' in row else \
+            f"{row['passes']} passes, {row['elapsed_us']} us"
+        print('PASS' if row['passed'] else 'FAIL', row['case'], detail, '; '.join(row['problems']))
     if failures:
         raise SystemExit(f'{len(failures)} of {len(rows)} cases failed')
     print('PASS faulted video decoder service: closes and returns within the bound; a failed or uncertain close stays '

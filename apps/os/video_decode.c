@@ -60,7 +60,12 @@ static struct {
     unsigned pck_client,initialized,closed; /* closed: the decoder is closed for this power lifetime */
     RECORD(struct vdec_check_record info;)
     atomic_uint phase,request,quiesce_wanted,quiesced;
-    atomic_uint close_started; /* 1 once a close has started since the last open: a FAULT service gets one close */
+    atomic_uint close_started; /* 1 once a close has started since the last open: a FAULT service gets one close. Only
+                                * the owner task reads it. */
+    /* 1 once the fault must be reported: a close step failed, or the unit's failure was uncertain, which no close
+     * settles. The owner task stores it after the fault fields; quiesce_step loads it and nothing else, see there. A
+     * reported service stays FAULT, so it is never cleared. */
+    atomic_uint reported;
     unsigned op;int result;
     uint32_t fault_step,fault_value;
     uint64_t limit;
@@ -80,7 +85,9 @@ static int refuse(unsigned step,uint32_t value){vd.fault_step=step;vd.fault_valu
 static int fail(unsigned step,uint32_t value)
 {
     if(!vd.fault_step){vd.fault_step=step;vd.fault_value=value;}
-    atomic_store(&vd.phase,FAULT);return -1;
+    atomic_store(&vd.phase,FAULT);
+    if(atomic_load(&vd.close_started)||vd.decoder.unit.uncertain)atomic_store_explicit(&vd.reported,1,memory_order_release);
+    return -1;
 }
 static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner);}
 
@@ -272,10 +279,8 @@ refused:
 static int do_close(void)
 {
     const unsigned faulted=atomic_load(&vd.phase)==FAULT;
-    /* CLOSING before close_started: a quiesce step that loads close_started 1 then loads CLOSING or a later phase,
-     * never the FAULT this close started from (quiesce_step). */
-    atomic_store(&vd.phase,CLOSING);
     atomic_store(&vd.close_started,1);
+    atomic_store(&vd.phase,CLOSING);
     vd.limit=lease_now()+VD_CALL_US;
     if(vd.limit>session_deadline())vd.limit=session_deadline();
     RECORD(const uint32_t at_fault=vd.info.failed;)
@@ -330,12 +335,16 @@ void os_video_decode_irq(void){}
 
 int os_video_decode_task_privileged(void (*entry)(void *),void *context){return !context&&entry==os_video_decode_task;}
 int os_video_decode_pins(struct a733_pin_handoff *pins){return pins!=NULL;}
-/* A FAULT service first gets its close: DONE once it is CLOSED, FAULT (site 0x941) when a close step failed. The step
- * runs on another core while the owner closes, so it loads close_started before phase: do_close stores them in the
- * opposite order, so FAULT seen after close_started 1 is the close's own failure, not the phase it started from. */
+/* A FAULT service first gets its close (docs/designs/failure-return-audit.md, "A faulted device service closes before
+ * it reports"): DONE once it is CLOSED, FAULT (site 0x941) when a close step failed or the failure was uncertain.
+ *
+ * This step runs on the supervisor's core while the owner task closes, so it decides from the one word the owner
+ * publishes, reported, and from quiesced. Deciding from phase and close_started together is racy in either load
+ * order: two loads can fall on either side of the close's stores, and the step then reports 0x941 while a close that
+ * will succeed is running; the sticky report ends the session at 0x742. */
 static enum os_quiesce_result quiesce_step(struct os_quiesce *q)
 {
-    if(atomic_load(&vd.close_started)&&atomic_load(&vd.phase)==FAULT){
+    if(atomic_load_explicit(&vd.reported,memory_order_acquire)){
         (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x941,
             vd.fault_step<<24|(vd.fault_value&0xffffff),SUNSTONE_CRUMB_HERE());
         return OS_QUIESCE_FAULT;
