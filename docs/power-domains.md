@@ -227,7 +227,11 @@ The GPU's DCDC4 consumer ([docs/pmic-consumers.md](pmic-consumers.md))
 completes from the boot reading of DCDC4 (`dcdc4` in the owner), which the
 DCDC4 verified bit publishes, with no bus transaction and no PMIC request
 slot. The DCDC2 reading is not kept: domain-1 and domain-4 admission needs
-only its verified bit. Only
+only its verified bit. The owner does keep the time of that bit,
+`verified_at`: its clock, in microseconds, at the step that first publishes
+DCDC2 as verified, which is the DCDC2 result for a settled supply and the done
+step otherwise. It is written once, before the bit, which publishes it; G2D
+copies it into its info record. Only
 selector writes to DCDC3 and DCDC5 are accepted; that no firmware writes DCDC2
 or DCDC4 after boot is established only by board evidence.
 
@@ -367,11 +371,12 @@ the cost model.
   (`--domain-traces`) to equal `checks/data/power-domains-traces.txt`, the
   same output from the owner at bringup 3ab4c296d before domain 2 was added,
   and the domain-2 delay row and ON command to equal the
-  `SUN60IW2_PCK_VE_DEC` row of the hash-pinned `pck600_domains.c`. Eleven
-  owner mutants must each fail a model run.
+  `SUN60IW2_PCK_VE_DEC` row of the hash-pinned `pck600_domains.c`. Sixteen
+  owner mutants must each fail a model run, five of them on `verified_at`.
 - `checks/power-domains-pck.c` composes the actual provider, ledger and owner
   over modeled PPU, CCU and R_CCU words: the delay row and command, adoption,
-  incoherent and domain-level refusals, verified supplies, the verification
+  incoherent and domain-level refusals, verified supplies and `verified_at` on
+  both publication paths, the verification
   budget started at provider READY, an expired verification request reaped
   with its token released, the slow acknowledgement bound with retention,
   domain-5 power-off and reopen, a failed unpin answered FAILED, and the NPU
