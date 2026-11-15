@@ -176,6 +176,7 @@ static unsigned valid(struct pvr_compute_queue *q,unsigned client,const struct g
     struct pvr_compute_queue_client_view v;
     if (!job || !pvr_compute_queue_client_view(q,client,&v) || !job->bindings ||
         job->bindings>GPU_QUEUE_BINDINGS || job->reserved || job->argument_bytes>GPU_QUEUE_ARGUMENT_BYTES ||
+        (q->abi==GPU_QUEUE_ABI_GRID_INLINE && 8u*(job->bindings-1u)+job->argument_bytes>GPU_QUEUE_INLINE_BYTES) ||
         !job->groups[0] || !job->groups[1] || !job->groups[2] || !job->sequence ||
         job->sequence==UINT32_MAX || job->sequence<=atomic_load(v.sequence) || q->timeline_serial==UINT32_MAX) return 0;
     for (unsigned i=0;i<job->bindings;++i) {
@@ -215,18 +216,28 @@ int pvr_compute_fast_submit(struct pvr_compute_queue *q,unsigned client,const st
         for (unsigned i=0;i<3;++i) *(uint32_t *)(page+48+4*i)=job->groups[i];
         memcpy(q->fast.payload[index].groups,job->groups,sizeof(job->groups));
     }
-    unsigned char *args=page+PVR_COMPUTE_QUEUE_ARGUMENTS;
-    for (unsigned i=1;i<job->bindings;++i) {
-        uint64_t address=q->lease[job->binding[i].lease].address+job->binding[i].address;
-        memcpy(args+8*(i-1),&address,8);
+    const int inline_block=q->abi==GPU_QUEUE_ABI_GRID_INLINE;
+    unsigned bytes=0;
+    if (inline_block) {
+        /* The block goes into the PDS data line at bytes 64-127, every job;
+         * valid() refused a longer block. */
+        (void)pvr_compute_job_grid_inline(page,q->lease,job);
+    } else {
+        unsigned char *args=page+PVR_COMPUTE_QUEUE_ARGUMENTS;
+        for (unsigned i=1;i<job->bindings;++i) {
+            uint64_t address=q->lease[job->binding[i].lease].address+job->binding[i].address;
+            memcpy(args+8*(i-1),&address,8);
+        }
+        memcpy(args+8*(job->bindings-1),job->arguments,job->argument_bytes);
+        bytes=8*(job->bindings-1)+job->argument_bytes;
     }
-    memcpy(args+8*(job->bindings-1),job->arguments,job->argument_bytes);
+    const int line1=pointer_changed || inline_block;
     uint32_t pds=(uint32_t)(gpu-UINT64_C(0xda00000000));
-    pvr_compute_job_grid_cdm(page+PVR_COMPUTE_QUEUE_CDM,pds,pds+PVR_COMPUTE_QUEUE_FENCE,job->groups);
-    unsigned bytes=8*(job->bindings-1)+job->argument_bytes;
+    (void)pvr_compute_job_grid_cdm_data(page+PVR_COMPUTE_QUEUE_CDM,pds,pds+PVR_COMPUTE_QUEUE_FENCE,job->groups,7,
+        pvr_compute_job_pds_data_units(q->abi));
     if (!maintenance(q,job,0) || (!q->payload_cache &&
-            (((pointer_changed || groups_changed) && !aarch64_device_cache(AARCH64_CACHE_CLEAN,
-                (uintptr_t)page+(groups_changed?0:64),groups_changed && pointer_changed?128:64)) ||
+            (((line1 || groups_changed) && !aarch64_device_cache(AARCH64_CACHE_CLEAN,
+                (uintptr_t)page+(groups_changed?0:64),groups_changed && line1?128:64)) ||
              !aarch64_device_cache(AARCH64_CACHE_CLEAN,(uintptr_t)page+PVR_COMPUTE_QUEUE_CDM,
                 (PVR_COMPUTE_QUEUE_ARGUMENTS-PVR_COMPUTE_QUEUE_CDM+bytes+63)&~63u)))) {
         result=FAILED(q,GPU_QUEUE_MAINTENANCE,job->sequence);goto out;

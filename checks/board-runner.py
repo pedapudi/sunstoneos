@@ -2406,7 +2406,8 @@ def removed_cases(out):
     image_head=subprocess.run(['git','-C',str(tree),'rev-parse','HEAD'],capture_output=True,text=True,check=True).stdout.strip()
     assert image_head!=daemon
     from_tree=board.source_revisions(tree)
-    assert from_tree=={'git_revision':image_head,'git_revision_source':'host-tree','git_revision_dirty':False,'daemon_git_revision':daemon},from_tree
+    assert from_tree=={'git_revision':image_head,'git_revision_source':'host-tree','git_revision_dirty':False,'host_tree_git_revision':image_head,
+                       'git_revision_host_tree_mismatch':None,'daemon_git_revision':daemon},from_tree
     (tree/'tracked').write_text('x\n')
     subprocess.run(['git','-C',str(tree),'add','tracked'],check=True,capture_output=True)
     assert board.source_revisions(tree)['git_revision_dirty'] is True

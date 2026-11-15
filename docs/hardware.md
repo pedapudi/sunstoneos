@@ -38,11 +38,11 @@ An implementation or a host model alone establishes no physical operation.
 | CSI receivers and PHYs | Camera capture, modes, synchronization, errors, frame buffers | Schematic routes four lanes each to CAM1/MCSIA and CAM2/MCSIB; qualify sensors, DMA, and clocks; [State](status/camera-isp.md) |
 | OV5640 | Sensor control, supported MIPI modes, exposure and frame delivery | No module connected; confirm wiring when available; upstream sensor reference; [State](status/camera-isp.md) |
 | Image processing | Pixel conversion, ISP controls, scaling, exposure/white-balance integration | Sensor tuning, buffer formats, documented dimensions; [State](status/camera-isp.md) |
-| Display engine | Scanout, composition, synchronization and supported formats | Buffer sharing, display clocks, bandwidth; [State](status/display-g2d.md) |
-| HDMI | Output modes, detection, applicable audio | Monitor and cable; controller and PHY; [State](status/display-g2d.md) |
-| MIPI DSI | Host operation, panel commands, scanout, backlight integration | Schematic routes four DSI1 lanes to LCD; no display connected, panel undecided; timings, power sequence, touch separate; [State](status/display-g2d.md) |
-| DisplayPort | DP output through documented V1.2 TYPEC24 lanes/AUX and Type-C alternate mode | Qualify actual revision, negotiation/orientation, HPD handling, COMB0 exclusion, link training and sink output; [State](status/display-g2d.md) |
-| G2D | Native 2D fill/copy, scaling, blending, rotation and format conversion | Shared DE_SYS power/clocks, RCQ, IOMMU master 10, memory ownership and physical output correctness; [State](status/display-g2d.md) |
+| Display engine | Scanout, composition, synchronization and supported formats | Buffer sharing, display clocks, bandwidth; [State](status/display-g2d.md#display-outputs) |
+| HDMI | Output modes, detection, applicable audio | Monitor and cable; controller and PHY; [State](status/display-g2d.md#display-outputs) |
+| MIPI DSI | Host operation, panel commands, scanout, backlight integration | Schematic routes four DSI1 lanes to LCD; no display connected, panel undecided; timings, power sequence, touch separate; [State](status/display-g2d.md#display-outputs) |
+| DisplayPort | DP output through documented V1.2 TYPEC24 lanes/AUX and Type-C alternate mode | Qualify actual revision, negotiation/orientation, HPD handling, COMB0 exclusion, link training and sink output; [State](status/display-g2d.md#display-outputs) |
+| G2D | Native 2D fill/copy, scaling, blending, rotation and format conversion | Shared DE_SYS power/clocks, RCQ, IOMMU master 10, memory ownership and physical output correctness; [State](status/display-g2d.md#g2d) |
 | GPU | Memory management, submissions, graphics/compute runtime, recovery | Exact BVNC, firmware, compiler/runtime, power and synchronization; [State](status/gpu.md) |
 | NPU | Model loading, inference, compiler/runtime interface, recovery | Operator/shape support, numerical behavior, buffer ownership; [State](status/npu.md) |
 | Video and image codecs | Supported encode/decode operations through application APIs | Firmware/runtime, formats, dimensions, shared memory bandwidth; [State](status/video.md) |
