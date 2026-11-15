@@ -127,6 +127,21 @@ static void invalid_records(void)
     put16(p + 10, 7); unchanged(p, 24, AIC8800_CODEC_MALFORMED);
     put16(p + 10, 1025); unchanged(p, 24, AIC8800_CODEC_MALFORMED);
     put16(p, 0); unchanged(p, 4, AIC8800_CODEC_END);
+    /* DBG_MEM_READ_CFM and DBG_MEM_WRITE_CFM: memaddr and memdata are the 8 bytes read. A longer confirmation is
+     * read for those fields, as the reference's command manager copies param_len as sent (rwnx_cmds.c); 7 bytes
+     * is refused above. */
+    {
+        struct aic8800_sdio_response longer;
+        confirmation(p, AIC8800_SDIO_CHIP_ADDRESS, 0x1234); put16(p, 24); put16(p + 10, 12);
+        assert(aic8800_sdio_decode_identity_response(p, 28, AIC8800_IDENTITY_CHIP, &longer) == AIC8800_CODEC_OK);
+        assert(longer.parameter_bytes == 12 && longer.is_memory_read && longer.value == 0x1234);
+        put16(p + 4, AIC8800_SDIO_WRITE_CONFIRM_ID);
+        assert(aic8800_sdio_decode_bootstrap_setup_response(p, 28, &longer) == AIC8800_CODEC_OK);
+        assert(longer.is_memory_write && longer.address == AIC8800_SDIO_CHIP_ADDRESS && longer.value == 0x1234);
+        put16(p + 10, 7);
+        assert(aic8800_sdio_decode_bootstrap_setup_response(p, 28, &longer) == AIC8800_CODEC_MALFORMED);
+        confirmation(p, AIC8800_SDIO_CHIP_ADDRESS, 0);
+    }
     put16(p, 20); p[2] = 1; unchanged(p, 24, AIC8800_CODEC_UNSUPPORTED);
     union {
         struct aic8800_sdio_response output;

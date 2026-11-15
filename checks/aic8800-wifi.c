@@ -2,6 +2,7 @@
 #include "aic8800-runtime.c"
 #undef AIC8800_RUNTIME_FIXTURE_MAIN
 #include "aic8800_wifi.h"
+#include "aic8800_security.h"
 static struct aic8800_wifi wifi, ready_wifi;
 static struct aic8800_sdio_transport ready_transport;
 static struct aic8800_runtime ready_runtime;
@@ -93,6 +94,86 @@ static void run_scan(void)
     }
     if(!corrupt_result)assert(seen==1);
 }
+/* Confirmation lengths, as the reference's command manager reads them (rwnx_cmds.c copies param_len as sent and the
+ * handlers read only their fields): each message is accepted at the bytes this driver reads and refused one byte
+ * shorter. Longer messages keep the bytes read; the station payload and the security copy stay within their storage. */
+static struct aic8800_wifi_config length_config={.rf_profile_record=1,.channel_policy_record=2,.command_timeout=100,
+    .profile=1,.channel_count=1,.channels={{2412,0,1,17}}};
+static enum aic8800_codec_result length_case(struct aic8800_wifi *w,unsigned phase,uint16_t id,const uint8_t *p,unsigned n)
+{
+    memset(w,0,sizeof(*w));assert(aic8800_wifi_init(w,&length_config));assert(aic8800_wifi_claim(w,&transport,1,100000));
+    w->state=AIC8800_WIFI_WAITING;w->phase=phase;w->expected_cfm=phase==9?0x1009:(phase==10?0x1801:id);
+    w->vif=1;w->max_vifs=4;w->max_stations=8;w->command_deadline=100000;w->link=AIC8800_WIFI_CONNECTING;
+    struct aic8800_sdio_response r={.has_message=1,.message_id=id,.parameter_bytes=n,.parameters=p};
+    return aic8800_wifi_response(w,&transport,&r,2);
+}
+static void length_refused(struct aic8800_wifi *w,unsigned phase,uint16_t id,const uint8_t *p,unsigned n)
+{
+    assert(length_case(w,phase,id,p,n)==AIC8800_CODEC_MALFORMED);
+    assert(w->state==AIC8800_WIFI_FAULT&&w->error==AIC8800_WIFI_MESSAGE_ERROR);
+}
+static void confirmation_lengths(void)
+{
+    static struct aic8800_wifi w;static uint8_t p[1024];
+    /* MM_SET_RF_CALIB_CFM: four 32-bit addresses. */
+    memset(p,0,sizeof(p));for(unsigned i=0;i<4;++i)put32(p+4*i,0x200000+i*0x1000);
+    assert(length_case(&w,1,0x6a,p,16)==AIC8800_CODEC_OK&&w.state==AIC8800_WIFI_PREPARING&&w.calibration_addresses[3]==0x203000);
+    length_refused(&w,1,0x6a,p,15);
+    /* MM_GET_MAC_ADDR_CFM: six address bytes. */
+    memset(p,0,sizeof(p));p[0]=2;for(unsigned i=1;i<6;++i)p[i]=(uint8_t)i;
+    assert(length_case(&w,2,0x74,p,6)==AIC8800_CODEC_OK&&w.state==AIC8800_WIFI_PREPARING&&w.mac[5]==5);
+    length_refused(&w,2,0x74,p,5);
+    /* MM_VERSION_CFM: read through max_vif_nb (byte 26); the 28th byte is padding. */
+    memset(p,0,sizeof(p));put32(p,0x06090101);put32(p+20,1u<<8);p[24]=8;p[26]=4;
+    assert(length_case(&w,4,0x05,p,27)==AIC8800_CODEC_OK&&w.state==AIC8800_WIFI_PREPARING&&w.max_vifs==4&&w.max_stations==8);
+    length_refused(&w,4,0x05,p,26);
+    /* MM_ADD_IF_CFM: status and inst_nbr. */
+    memset(p,0,sizeof(p));p[1]=1;
+    assert(length_case(&w,8,0x07,p,2)==AIC8800_CODEC_OK&&w.state==AIC8800_WIFI_READY&&w.vif==1);
+    length_refused(&w,8,0x07,p,1);
+    /* SCANU_START_CFM: vif_idx, status and result_cnt. */
+    memset(p,0,sizeof(p));p[0]=1;p[2]=3;
+    assert(length_case(&w,9,0x1001,p,3)==AIC8800_CODEC_OK&&w.scan_done&&w.summary.reported_results==3);
+    length_refused(&w,9,0x1001,p,2);
+    /* SM_CONNECT_CFM: status. */
+    memset(p,0,sizeof(p));
+    assert(length_case(&w,10,0x1801,p,1)==AIC8800_CODEC_OK&&w.station_accepted);
+    length_refused(&w,10,0x1801,p,0);
+    /* SM_CONNECT_IND: read through ac_param, which ends at byte 852. A refused association (status 1) is
+     * judged without the target checks; a longer indication is held at the 852 bytes read. */
+    memset(p,0,sizeof(p));p[0]=1;p[9]=1;
+    assert(length_case(&w,10,0x1802,p,852)==AIC8800_CODEC_UNRELATED&&w.station_held&&w.station_event.bytes==852);
+    assert(w.link==AIC8800_WIFI_LINK_DOWN&&w.state!=AIC8800_WIFI_FAULT);
+    assert(length_case(&w,10,0x1802,p,900)==AIC8800_CODEC_UNRELATED&&w.station_held&&w.station_event.bytes==852);
+    length_refused(&w,10,0x1802,p,851);
+    /* SM_DISCONNECT_IND: reason, vif_idx, ft_over_ds and reassoc; the sixth byte is padding. */
+    memset(p,0,sizeof(p));p[2]=1;
+    assert(length_case(&w,10,0x1805,p,5)==AIC8800_CODEC_UNRELATED&&w.station_held&&w.link==AIC8800_WIFI_LINK_DOWN);
+    length_refused(&w,10,0x1805,p,4);
+
+    /* MM_KEY_ADD_CFM: status and hw_key_idx. The board's firmware sends these two bytes alone (run 6, entry
+     * 1794745255109339882-f869332f); the reference struct's two alignment bytes are not read. */
+    static struct aic8800_security s;static const uint8_t key[16]={1},rsc[6]={0};static uint8_t supplicant_stub;
+    for(unsigned n=1;n<=70;++n) {
+        if(n>2&&n!=4&&n!=70)continue;
+        memset(&w,0,sizeof(w));assert(aic8800_wifi_init(&w,&length_config));assert(aic8800_wifi_claim(&w,&transport,1,100000));
+        w.state=AIC8800_WIFI_READY;w.link=AIC8800_WIFI_SECURITY_PENDING;w.target.security=AIC8800_WIFI_WPA2_PSK_CCMP;
+        w.association_generation=1;w.vif=1;w.ap_index=0;
+        memset(&s,0,sizeof(s));assert(aic8800_security_init(&s));
+        assert(aic8800_security_claim(&s,&transport,&w,(struct aic8800_supplicant *)(void *)&supplicant_stub,1));
+        assert(aic8800_security_add(&s,&transport,1,0,key,rsc,2,100000)&&aic8800_security_sent(&s,&transport));
+        memset(p,0,sizeof(p));p[1]=10;
+        struct aic8800_sdio_response r={.has_message=1,.message_id=37,.parameter_bytes=n,.parameters=p};
+        enum aic8800_codec_result result=aic8800_security_response(&s,&transport,&r,3);
+        if(n<2) {
+            assert(result==AIC8800_CODEC_MALFORMED&&s.state==AIC8800_SECURITY_FAULT&&
+                s.stop_reason==AIC8800_SECURITY_STOP_CONFIRMATION&&s.seen_cfm_bytes==1);
+        } else {
+            assert(result==AIC8800_CODEC_OK&&s.state==AIC8800_SECURITY_DONE&&s.keys[0].valid&&s.keys[0].hardware_index==10);
+            assert(s.last_cfm_bytes==(n>sizeof(s.last_cfm)?sizeof(s.last_cfm):n)&&s.seen_cfm_bytes==n);
+        }
+    }
+}
 int main(int argc,char **argv)
 {
     assert(argc==3||(argc==4&&!strcmp(argv[3],"completion-deadline")));FILE *f=fopen(argv[1],"rb");assert(f);
@@ -121,6 +202,7 @@ int main(int argc,char **argv)
         assert(wifi.state==AIC8800_WIFI_FAULT&&wifi.error==AIC8800_WIFI_TIME_ERROR);
         puts("AIC Wi-Fi: final and intermediate confirmation deadlines survive state changes");return 0;
     }
+    confirmation_lengths();
     begin(AIC8800_PAD_KEEP);setup();identity(2000);
     while(transport.state==AIC8800_TRANSPORT_IDENTITY)step();
     base_transport=transport;base_host=host;base_card=card;base_model=m;
@@ -153,6 +235,6 @@ int main(int argc,char **argv)
     restore_ready();fail_scan_tx=1;assert(aic8800_transport_scan(&transport,m.now+2000));
     for(unsigned i=0;i<500&&wifi.state!=AIC8800_WIFI_FAULT;++i)step();
     assert(m.position==4&&host.request.data==transport.tx&&wifi.request[9]==0x10);wifi_fault();
-    puts("AIC Wi-Fi: source ABI/sequence, calibration, management, binding serialization, passive scan and retained failures passed");
+    puts("AIC Wi-Fi: source ABI/sequence, calibration, management, binding serialization, passive scan, retained failures and confirmation lengths passed");
     return 0;
 }

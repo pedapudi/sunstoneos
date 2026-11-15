@@ -121,11 +121,11 @@ enum aic8800_codec_result aic8800_runtime_response(struct aic8800_runtime *r,
         input,available,AIC8800_IDENTITY_CHIP,&v);
     if(result!=AIC8800_CODEC_OK&&result!=AIC8800_CODEC_UNRELATED)return result;
     if(v.has_message&&v.message_id==0x0417) {
-        if(v.parameter_bytes!=16)return AIC8800_CODEC_MALFORMED;
+        if(v.parameter_bytes<16)return AIC8800_CODEC_MALFORMED;
         if(challenge(r,v.parameters,now)) { *out=v;return AIC8800_CODEC_OK; }
     } else if(v.has_message&&v.message_id==0x0416&&r->state==AIC8800_RUNTIME_WAITING) {
         /* The published sender passes a one-byte destination; nonzero fails. */
-        if(v.parameter_bytes!=1)return AIC8800_CODEC_MALFORMED;
+        if(v.parameter_bytes<1)return AIC8800_CODEC_MALFORMED;
         r->binding_status=v.parameters[0];
         if(r->binding_status)aic8800_runtime_stop(r,owner,AIC8800_RUNTIME_BINDING_REJECTED);
         else {r->binding_confirmed=1;r->state=AIC8800_RUNTIME_RECEIVING;}

@@ -39,7 +39,7 @@ INFO = struct.Struct(f'<4I{len(PLATFORM)}I{len(PLATFORM)}I{len(LOCAL)}I4x3Q2Q2I2
 CLOSED = struct.Struct('<6IQ')
 PLAN = struct.Struct('<8I')
 OP = struct.Struct('<18I')
-DONE = struct.Struct('<9I8I2I10I5I6I7Q')
+DONE = struct.Struct('<9I8I2I10I5I6I7Q8I')
 OPS = 2
 SIZE = HEAD.size + INFO.size + CLOSED.size + PLAN.size + OPS * (OP.size + DONE.size)
 CHECK_MAGIC, INFO_MAGIC, DONE_MAGIC = 0x4b433247, 0x54443247, 0x44443247
@@ -264,6 +264,9 @@ def done_record(payload, at):
     fault_step, fault_word, fault_read, refused, stray = d[29:34]
     update_after, mixer_after, prefetch0, prefetch1, source_iova, status_launch = d[34:40]
     submit, launch, irq, done, attach_us, surface, directory = d[40:47]
+    rot_ctl, rot_ctl_after, rot_int, rot_int_after, rot_timeout, stray_finishes, stray_word, reserved = d[47:55]
+    if reserved:
+        raise ValueError('ss_g2d_done has a nonzero reserved word.')
     return {
         'rcq_status': f'0x{rcq_status:08x}', 'frame_cnt': rcq_status >> 8 & 255, 'reset_word': f'0x{reset_word:08x}',
         'status_after': f'0x{status_after:08x}', 'status_launch': f'0x{status_launch:08x}', 'update_after': f'0x{update_after:08x}',
@@ -275,7 +278,9 @@ def done_record(payload, at):
         'iommu_fault': words(FAULT, fault), 'attach_us': attach_us,
         'iommu_owner': {'fault_step': fault_step, 'fault_word': f'0x{fault_word:08x}',
                         'fault_read': f'0x{fault_read:08x}', 'refused_word': refused},
-        'stray_interrupts': stray,
+        'stray_interrupts': stray, 'stray_finishes': stray_finishes, 'stray_word': f'0x{stray_word:08x}',
+        'rotate': {'ctl': f'0x{rot_ctl:08x}', 'ctl_after': f'0x{rot_ctl_after:08x}', 'int': f'0x{rot_int:08x}',
+                   'int_after': f'0x{rot_int_after:08x}', 'timeout': f'0x{rot_timeout:08x}'},
         'surface_physical': f'0x{surface:x}', 'directory_physical': f'0x{directory:x}',
         'submit_to_launch_us': (launch - submit) / TICKS_PER_US if launch else None,
         'launch_to_irq_us': (irq - launch) / TICKS_PER_US if irq and launch else None,

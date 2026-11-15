@@ -13,6 +13,9 @@ static uint8_t *artifact[5], *transcript;
 static size_t artifact_size[5], transcript_size, transcript_at, saved_transcript_at;
 static unsigned firmware_commands, fw_block_commands, held_events;
 static int drop_firmware_cfm, fail_firmware_tx;
+/* Confirmation lengths (rwnx_cmds.c copies param_len as sent; the handlers read their fields): cfm_extra pads every
+ * confirmation and indication with zero bytes the driver does not read; cfm_short sends the first one a byte short. */
+static unsigned cfm_extra, cfm_short;
 static uint64_t power_record_time;
 /* Radio memory written by firmware commands, kept per run to compare the
  * per-word and block-write table modes. Writes outside the RAM window, the
@@ -75,13 +78,15 @@ static void fw_tx_done(void)
     if (firmware_commands == 1) {
         confirmation(receive, 0x76543210, 0x98765432); pos = 24;
     }
-    receive[pos] = (uint8_t)(12 + n); receive[pos + 2] = 0x11;
+    unsigned sent = n + cfm_extra;
+    if (cfm_short && n) { sent = n - 1; cfm_short = 0; }
+    receive[pos] = (uint8_t)(12 + sent); receive[pos + 2] = 0x11;
     receive[pos + 4] = (uint8_t)response_id; receive[pos + 5] = (uint8_t)(response_id >> 8);
-    receive[pos + 10] = (uint8_t)n;
-    memcpy(receive + pos + 16, entry + 20 + bytes, n); pos += 16 + n;
+    receive[pos + 10] = (uint8_t)sent;
+    memcpy(receive + pos + 16, entry + 20 + bytes, sent < n ? sent : n); pos += (16 + sent + 3) & ~3u;
     if (response_id == 0x040e) {
-        receive[pos] = 28; receive[pos + 2] = 0x11;
-        receive[pos + 4] = 0x17; receive[pos + 5] = 4; receive[pos + 10] = 16;
+        receive[pos] = (uint8_t)(28 + cfm_extra); receive[pos + 2] = 0x11;
+        receive[pos + 4] = 0x17; receive[pos + 5] = 4; receive[pos + 10] = (uint8_t)(16 + cfm_extra);
         for (unsigned i = 0; i < 16; ++i) receive[pos + 16 + i] = (uint8_t)(0xa0 + i);
     }
     m.card[1][4] = drop_firmware_cfm ? 0 : 1;
@@ -128,7 +133,7 @@ static void restore(void)
     m = saved_model; host = saved_host; card = saved_card;
     transport = saved_transport; firmware = saved_firmware; transcript_at = saved_transcript_at;
     firmware_commands = fw_block_commands = held_events = 0;
-    drop_firmware_cfm = fail_firmware_tx = 0; power_record_time = 0;
+    drop_firmware_cfm = fail_firmware_tx = 0; cfm_extra = cfm_short = 0; power_record_time = 0;
 }
 static void run_firmware(void)
 {
@@ -151,7 +156,7 @@ static void run_firmware(void)
             unsigned before = m.command_count; uint8_t bytes[4096]; memcpy(bytes, transport.rx, sizeof(bytes));
             aic8800_transport_poll(&transport);
             assert(m.command_count == before && !memcmp(bytes, transport.rx, sizeof(bytes)));
-            if (event.message_id == 0x0417) assert(firmware.binding_required && event.parameter_bytes == 16);
+            if (event.message_id == 0x0417) assert(firmware.binding_required && event.parameter_bytes == 16 + cfm_extra);
             else assert(event.address == 0x76543210);
             ++held_events; assert(aic8800_transport_consume(&transport));
         }
@@ -258,6 +263,17 @@ int main(int argc, char **argv)
     assert(firmware.pairs_done > 2000 && firmware.pairs_done <= 2888 && firmware.last_confirm);
     assert(firmware.binding_challenge[0] == 0xa0 && firmware.binding_challenge[15] == 0xaf);
     assert(firmware.bootstatus == 0xa501 && firmware.first_nonzero_block_status == 0x80000003);
+
+    restore(); cfm_extra = 4;
+    run_firmware();
+    assert(transport.state == AIC8800_TRANSPORT_START_CONFIRMED && firmware.state == AIC8800_FW_START_CONFIRMED);
+    assert(firmware.binding_required && firmware.binding_challenge[15] == 0xaf && firmware.bootstatus == 0xa501);
+    restore(); cfm_short = 1;
+    while (transport.state == AIC8800_TRANSPORT_FIRMWARE) {
+        step(); if (transport.held) assert(aic8800_transport_consume(&transport));
+    }
+    assert(transport.state == AIC8800_TRANSPORT_FAULT && firmware.state == AIC8800_FW_FAULT);
+    assert(firmware.error == AIC8800_FW_PROTOCOL_ERROR && firmware_commands == 1);
 
     restore(); drop_firmware_cfm = 1;
     while (!firmware_commands && transport.state == AIC8800_TRANSPORT_FIRMWARE) step();

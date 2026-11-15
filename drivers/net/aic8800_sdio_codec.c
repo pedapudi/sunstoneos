@@ -124,7 +124,7 @@ enum aic8800_codec_result aic8800_sdio_decode_identity_response(
         *output = result;
         return AIC8800_CODEC_UNRELATED;
     }
-    if (result.parameter_bytes != 8)
+    if (result.parameter_bytes < 8)
         return AIC8800_CODEC_MALFORMED;
     result.is_memory_read = 1;
     result.address = le32(result.parameters);
@@ -159,7 +159,7 @@ enum aic8800_codec_result aic8800_sdio_decode_bootstrap_setup_response(
         input, available, AIC8800_IDENTITY_CHIP, &r);
     if (result != AIC8800_CODEC_OK && result != AIC8800_CODEC_UNRELATED) return result;
     if (r.has_message && r.message_id == AIC8800_SDIO_WRITE_CONFIRM_ID) {
-        if (r.parameter_bytes != 8) return AIC8800_CODEC_MALFORMED;
+        if (r.parameter_bytes < 8) return AIC8800_CODEC_MALFORMED;
         r.is_memory_write = 1; r.address = le32(r.parameters); r.value = le32(r.parameters + 4);
         *output = r; return AIC8800_CODEC_OK;
     }
