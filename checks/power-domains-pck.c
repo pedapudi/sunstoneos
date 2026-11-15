@@ -579,12 +579,15 @@ static void domain2_cases(void)
 }
 /* The owner's two row deadlines (include/a733_power_domains.h), for domains 1, 2, 4 and 5 on the actual owner: supply
  * verification ends by the supply deadline taken before the first step, and the ON answer comes by the row deadline
- * taken at the request, also when a busy rail ledger delays the admission by one retry. */
+ * taken at the request, also when a busy rail ledger delays the admission by one retry. The worst case acknowledges
+ * one tick before the owner's own A733_POWER_PCK_BOUND_US bound, after the retry: the latest ON the owner still
+ * answers, which the two ticks must cover. */
 static void row_deadline_cases(void)
 {
     static const unsigned ids[]={1,2,4,5};
-    for(unsigned k=0;k<4;++k)for(unsigned busy=0;busy<2;++busy) {
-        setup();d.ack_us=120;
+    for(unsigned k=0;k<4;++k)for(unsigned busy=0;busy<3;++busy) {
+        const unsigned worst=busy==2;
+        setup();d.ack_us=worst ? A733_POWER_PCK_BOUND_US-TICK_US : 120;
         struct a733_rail_token t={0};struct a733_power_domain_row r={0};
         assert(a733_power_domain_row_init(&r,&d.owner,ids[k],61,&t));
         const uint64_t supply_bound=a733_power_supply_deadline(&d.owner,UINT64_MAX);
@@ -607,11 +610,12 @@ static void row_deadline_cases(void)
             m.now=d.wake_at;
         }
         assert(a733_power_domain_state(&r)==A733_POWER_ROW_ON && m.now<=bound);
+        if(worst)assert(m.now-requested>=A733_POWER_PCK_BOUND_US);
         printf("row-deadline domain %u%s: verified by %llu of %llu, ON %llu us after the request of %llu\n",ids[k],
-               busy ? " busy ledger" : "",(unsigned long long)verified,(unsigned long long)supply_bound,
+               worst ? " busy ledger, acknowledged at the owner's last check" : busy ? " busy ledger" : "",(unsigned long long)verified,(unsigned long long)supply_bound,
                (unsigned long long)(m.now-requested),(unsigned long long)(bound-requested));
     }
-    puts("PASS row deadlines: domains 1, 2, 4 and 5, with and without a busy-ledger retry");
+    puts("PASS row deadlines: domains 1, 2, 4 and 5, with and without a busy-ledger retry, and at the worst case");
 }
 int main(int argc,char **argv)
 {
