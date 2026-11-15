@@ -207,7 +207,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         put(at + slot['base'], base, 8); put(at + slot['bytes'], REGION_BYTES, 8)
         put(at + slot['flags'], 1); put(at + slot['state'], 2)
     # The open service with one posted fill.
-    put(field('phase'), OPEN); put(field('op'), RUN_OP); put(field('request'), POSTED)
+    put(field('dev.phase'), OPEN); put(field('op'), RUN_OP); put(field('request'), POSTED)
     job = field('job')
     jl, sl = image.layouts['ss_g2d_job'], image.layouts['ss_g2d_surface']
     w, h = 1 + width // 3, 1 + height // 5
@@ -405,7 +405,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         dl = image.layouts['ss_g2d_done']
         done = field('done')
         record = {'result': struct.unpack('<i', uc.mem_read(field('result'), 4))[0],
-                  'fault_step': get(field('fault_step')), 'fault_value': get(field('fault_value')),
+                  'fault_step': get(field('dev.fault_step')), 'fault_value': get(field('dev.fault_value')),
                   'page': bytes(uc.mem_read(RCQ, 4096)), 'writes': list(engine.writes)}
         for k in ('irq_count', 'status_after', 'rcq_status', 'iommu_attached', 'output_iova'):
             record[k] = get(done + dl[k])
@@ -427,8 +427,8 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
             post_blit(op)
             serve('operation %d' % (len(ops) + 1))
             ops.append(op_record())
-    run = {'result': struct.unpack('<i', uc.mem_read(field('result'), 4))[0], 'phase': get(field('phase')),
-           'fault_step': get(field('fault_step'))}
+    run = {'result': struct.unpack('<i', uc.mem_read(field('result'), 4))[0], 'phase': get(field('dev.phase')),
+           'fault_step': get(field('dev.fault_step'))}
     if close:
         # The application takes the operation's result, then posts its close.
         state['events'].clear()
@@ -439,8 +439,8 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
     record = {
         'case': name, 'width': width, 'height': height, 'stride': stride, 'offset': offset,
         'result': struct.unpack('<i', uc.mem_read(field('result'), 4))[0],
-        'request': get(field('request')), 'phase': get(field('phase')),
-        'fault_step': get(field('fault_step')), 'fault_value': get(field('fault_value')),
+        'request': get(field('request')), 'phase': get(field('dev.phase')),
+        'fault_step': get(field('dev.fault_step')), 'fault_value': get(field('dev.fault_value')),
         'irq_count': get(done + dl['irq_count']), 'stray': get(done + dl['stray_interrupts']),
         'rcq_status': get(done + dl['rcq_status']), 'status_after': get(done + dl['status_after']),
         'cache': [(op, hex(at), n) for op, at, n in state['cache']],

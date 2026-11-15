@@ -13,8 +13,8 @@ reset, INTID 83 quiet); they are not a board measurement. The open is stopped at
 after the row's ON answer.
 
 Bounds, with T the time the open starts and limit the open's deadline, min(T + 500,000 us, the session end - 10 ms):
-- the supply wait ends at min(max(startup deadline, T) + 5,160 + 100,000 + 1,000 us, limit). The startup deadline is
-  the session deadline, so this is limit;
+- the supply wait ends at limit: the startup deadline the supply deadline is anchored at is the session deadline,
+  which lies past limit;
 - the row wait ends at min(request time + 10,000 + 2,000 us, limit).
 No register is written before the row's ON answer: a refusal and a row timeout leave every modeled register as the
 open found it.
@@ -35,6 +35,8 @@ Cases:
   inside the 12,000 us row deadline. The open proceeds.
 - row-timeout: DCDC2 is verified before the open and the row is never answered. The row wait targets the row deadline
   and the open fails there with G2D_STEP_ROW_TIMEOUT, the service FAULT.
+- row-deadline-clipped: as row-timeout, with the session ending 18 ms after T: the row wait targets the open's
+  deadline, T + 8,000 us, not T + 12,000 us, and the open fails there.
 
 Mutants, each g2d.c compiled with one text changed and linked with the image's own link command into the output
 directory (the build directory is only read):
@@ -68,7 +70,7 @@ STUBS, STACK = 0x60100000, 0x60800000
 PMIC_NOW, NOTIFY = STUBS, STUBS + 0x100
 T0 = 2_000_000
 CALL_US = 500_000                      # G2D_CALL_US
-SETTLE_US, BUDGET_US, PCK_BOUND_US, TICK_US = 5160, 100_000, 10_000, 1000
+PCK_BOUND_US, TICK_US = 10_000, 1000
 DCDC2_VERIFIED = 1 << 2                # A733_POWER_DCDC2_VERIFIED
 GENERATION_MASK = 0xffffffff >> 3      # A733_POWER_ROW_GENERATION_MASK
 # Entry words that g2d.c's entry checks (peri0_ready and the engine and INTID checks) accept, not a board measurement:
@@ -95,6 +97,7 @@ CASES = {
     'clock-read-fails': dict(clock_fails=True),
     'row-answer-after-supply': dict(verified=T0 + 3000, answer=11_000),
     'row-timeout': dict(verified=0),
+    'row-deadline-clipped': dict(verified=0, session=T0 + 18_000),
 }
 
 
@@ -161,7 +164,7 @@ def run_case(image, parts, fields, enums, name, verified=None, answer=None, sess
     row = field('row')
     RL = L['a733_power_domain_row']
     put(row + RL['domains'], domains, 8); put(row + RL['notify'], NOTIFY, 8); put(row + RL['domain'], 1)
-    put(field('phase'), enums['OS_DEVICE_CLOSED']); put(field('op'), enums['OPEN_OP']); put(field('request'), enums['POSTED'])
+    put(field('dev.phase'), enums['OS_DEVICE_CLOSED']); put(field('op'), enums['OPEN_OP']); put(field('request'), enums['POSTED'])
 
     state = {'time': T0, 'waits': [], 'request_at': None, 'answer_at': None, 'stopped': None, 'unmapped': None,
              'writes': []}
@@ -267,9 +270,9 @@ def run_case(image, parts, fields, enums, name, verified=None, answer=None, sess
     info = field('info')
     IL, XL = L['ss_g2d_info'], L['ss_g2d_transition']
     record = {'case': name, 'stopped': state['stopped'], 'waits': state['waits'], 'request_at': state['request_at'],
-              'answer_at': state['answer_at'], 'end': state['time'], 'phase': get(field('phase')),
+              'answer_at': state['answer_at'], 'end': state['time'], 'phase': get(field('dev.phase')),
               'register_writes': state['writes'],
-              'fault_step': get(field('fault_step')),
+              'fault_step': get(field('dev.fault_step')),
               'result': int.from_bytes(uc.mem_read(field('result'), 4), 'little', signed=True),
               'transition': {k: get(info + IL['transition'] + XL[k], 8 if k.endswith('_at') else 4)
                              for k in XL}}
@@ -280,7 +283,7 @@ def expect(record, enums, verified=None, answer=None, session=60_000_000, clock_
     """The bounds and outcome the case must show; an empty list when it does."""
     problems = []
     limit = min(T0 + CALL_US, session - 10_000)
-    supply = 0 if clock_fails else min(max(session, T0) + SETTLE_US + BUDGET_US + TICK_US, limit)
+    supply = 0 if clock_fails else limit
     if record['register_writes']:
         problems.append(f"no register may be written before the row's ON answer: {record['register_writes'][:6]}")
     supply_waits = [w for w in record['waits'] if w[0] == 'supply']

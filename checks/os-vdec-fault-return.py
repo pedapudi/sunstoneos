@@ -272,7 +272,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     for field, value in (('admitted', 1), ('requested', 1), ('cold_step', 4)):
         put(decoder + L['a733_video_decoder'][field], value)
     put(vd + layout['initialized'], 1)
-    put(vd + layout['phase'], enums['OS_DEVICE_FAULT'])
+    put(vd + layout['dev.phase'], enums['OS_DEVICE_FAULT'])
     put(vd + layout['dev.fault_step'], enums['VD_STEP_COLD']); put(vd + layout['dev.fault_value'], 0x204)
     if 'info' in layout:
         info = vd + layout['info']
@@ -302,7 +302,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
             break
         if schedule and events is None:
             # The owner's close, with one more quiesce step on the supervisor's core placed among its stores.
-            shared = [(vd + layout[n], 4) for n in ('phase', 'close_started', 'reported', 'quiesced') if n in layout]
+            shared = [(vd + layout['dev.' + n], 4) for n in ('phase', 'close_started', 'reported', 'quiesced')]
             cores = TwoCores(uc, shared, SENTINEL)
             state['slice_done'] = False
             enter(task, 0, stack=STACKS + 0x40000)
@@ -325,7 +325,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     return {
         'case': name, 'passes': len(results), 'last_result': results[-1],
         'done_within_bound': results[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
-        'phase': get(vd + layout['phase']), 'recorded_fault_step': get(vd + layout['dev.fault_step']),
+        'phase': get(vd + layout['dev.phase']), 'recorded_fault_step': get(vd + layout['dev.fault_step']),
         'close_answer': close_answer, 'record': record, 'schedule': schedule, 'events': events,
         'any_fault': QUIESCE['FAULT'] in results,
         'notes': [(hex(s), hex(v)) for s, v in state['notes']],
@@ -387,7 +387,7 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
         problems.append(f'after verification the wait must be the PCK600 bound plus two ticks, {verified} us: {rows[1]} us')
     if get(vd + layout['request']) != enums['DONE'] or get(vd + layout['result']) != 0xffffffff:
         problems.append('the open must be answered -1')
-    if get(vd + layout['phase']) != enums['OS_DEVICE_CLOSED'] or get(vd + layout['dev.fault_step']) != enums['VD_STEP_ROW_TIMEOUT']:
+    if get(vd + layout['dev.phase']) != enums['OS_DEVICE_CLOSED'] or get(vd + layout['dev.fault_step']) != enums['VD_STEP_ROW_TIMEOUT']:
         problems.append('the service must end CLOSED with step VD_STEP_ROW_TIMEOUT')
     if ccu.writes or others['ve'].reads or others['ve'].writes:
         problems.append('an unanswered row leaves nothing written and no close')
@@ -397,7 +397,7 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
     if get(unit + L['a733_video_unit']['deadline'], 8) or get(unit + L['a733_video_unit']['failed']):
         problems.append('the refused open must leave the binding with no deadline and not failed, so a reopen runs')
     return {'case': 'row-wait-deadline' if at_deadline else 'row-wait', 'waits_us': rows, 'passes': len(state['waits']), 'elapsed_us': state['time'],
-            'phase': get(vd + layout['phase']), 'recorded_fault_step': get(vd + layout['dev.fault_step']),
+            'phase': get(vd + layout['dev.phase']), 'recorded_fault_step': get(vd + layout['dev.fault_step']),
             'ccu_writes': [(hex(a), hex(v)) for a, v in ccu.writes], 'problems': problems, 'passed': not problems,
             'notes': [(hex(s), hex(v)) for s, v in state['notes']]}
 

@@ -193,9 +193,9 @@ def run_case(image, parts, layout, enums, name, request, rtc_words, stuck=(), ti
     results['sequence'] = []
     for op, a, b, ticking, words in sequence:
         rtc_regs.ticking, rtc_regs.stuck = ticking, set(words)
-        results['sequence'].append((op, serve(op, a, b), get(field('fault_step')), get(field('phase'))))
-    fault_after_request = get(field('fault_step'))
-    phase_after_request = get(field('phase'))
+        results['sequence'].append((op, serve(op, a, b), get(field('dev.fault_step')), get(field('dev.phase'))))
+    fault_after_request = get(field('dev.fault_step'))
+    phase_after_request = get(field('dev.phase'))
     driver_after_request = get(driver + layout['a733_rtc']['state'])
     state['requested'] = 1
     state['closing'] = True
@@ -207,7 +207,7 @@ def run_case(image, parts, layout, enums, name, request, rtc_words, stuck=(), ti
             break
         if schedule and events is None:
             # The owner's close, with one more quiesce step on the supervisor's core placed among its stores.
-            shared = [(field(n), 4) for n in ('phase', 'close_started', 'reported', 'quiesced') if n in layout['rtc']]
+            shared = [(field('dev.' + n), 4) for n in ('phase', 'close_started', 'reported', 'quiesced')]
             cores = TwoCores(uc, shared, SENTINEL)
             state['slice_done'] = False
             enter(task, 0, stack=STACKS + 0x40000)
@@ -230,7 +230,7 @@ def run_case(image, parts, layout, enums, name, request, rtc_words, stuck=(), ti
         'alarm_enabled': any(o == 0x28 and v & 1 for o, v in rtc_regs.writes), 'passes': len(passes), 'last_result': passes[-1],
         'schedule': schedule, 'events': events, 'any_fault': QUIESCE['FAULT'] in passes,
         'done_within_bound': passes[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
-        'phase': get(field('phase')), 'fault': get(field('fault_step')),
+        'phase': get(field('dev.phase')), 'fault': get(field('dev.fault_step')),
         'driver_state': get(driver + layout['a733_rtc']['state']),
         'notes': [(hex(s), hex(v)) for s, v in state['notes']], 'clock_releases': state['released'],
         'rtc': {hex(k): hex(v) for k, v in sorted(rtc_regs.words.items())},
