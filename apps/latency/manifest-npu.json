@@ -1,0 +1,60 @@
+{
+  "name": "latency",
+  "devices": {
+    "required": [],
+    "optional": []
+  },
+  "cpu": {
+    "clock_grants": true,
+    "cluster": "a76",
+    "workers": 7,
+    "priority": 2,
+    "stack_bytes": 8192
+  },
+  "regions": [
+    {
+      "name": "traffic",
+      "kind": "work",
+      "access": [
+        "read",
+        "write"
+      ],
+      "bytes": 8388608
+    },
+    {
+      "name": "models",
+      "kind": "input",
+      "access": [
+        "read"
+      ],
+      "bytes": 12288,
+      "address": "0x44000000",
+      "sha256": "8f2a8424f4abe4cfb3e2bdaade79e656188a558d293109ae1a05494a163413db"
+    },
+    {
+      "name": "vectors",
+      "kind": "input",
+      "access": [
+        "read"
+      ],
+      "bytes": 20480,
+      "address": "0x45200000",
+      "sha256": "f377403dbb3b4405afee11b5a2beff3ed384ae008378c4f12af02fa3e35a7fae"
+    }
+  ],
+  "deadlines": {
+    "run_us": 8000000,
+    "return_reserve_us": 5000000,
+    "progress_window_us": 1000000
+  },
+  "npu": {
+    "in_flight": 8,
+    "links": 0,
+    "graph_region": "models",
+    "slots": 1,
+    "graphs": 1,
+    "graph_bytes": 8192,
+    "tensor_bytes": 8192
+  },
+  "output_limit": 65536
+}

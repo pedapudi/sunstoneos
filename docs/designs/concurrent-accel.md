@@ -1021,3 +1021,127 @@ DMA is a separate later stage. Its known work:
   is the cyclic DMA0 I2S0 loopback ([memory-dma.md](../status/memory-dma.md)).
 - **The grants table still refuses the NPU beside the RAM-copy service** in the returning lifetime, for the same reason the
   GPU row existed. A host check that composes the DMA and NPU retirements must come first.
+
+## Stage 3b: NPU jobs on the service core add no wake time on cores 1-7
+
+A cap on CPU bandwidth did not change the wake time of cores 1-7, so queueing in the DRAM controller from CPU traffic does
+not set their wake tail. Stage 3b runs the NPU instead, with the NPU's interrupt (INTID 97), its owner tasks and the task
+that submits its jobs all on CPU0, the service core. It measures two things in one run: whether NPU traffic beside CPU
+streams lengthens the wakes of cores 1-7, and how many NPU jobs per second survive the streams. Status: measured on the
+board in three runs.
+
+### Image
+
+The `ret-latency-npu` recipe of `tools/gate_images.py` is the cores 1-7 bar image (CPU0's tick releases CPUs 0 and 5,
+CPUs 4-7 stream, the cause, wake-segment and scheduler traces) with `SUNSTONE_LATENCY_NPU`:
+
+- **Placement.** The option compiles the OS with `OS_NPU_CORE=0` (`cmake/a733-os.cmake`). The route table then sends
+  INTID 97 to CPU0, and the NPU's boot, client and runtime tasks take the interrupt core's affinity
+  (`apps/os/npu.c`). Without the option the core stays 1 and the OS object code is unchanged except for line numbers.
+  The definition goes to three targets: the OS core, the application and `sunstone-a733-os-npu`, the object library
+  that builds `apps/os/npu*.c`. The first board run of the image (queue entry `1794766775350069931-da297888`) left out
+  the third. The route table sent INTID 97 to CPU0 while the owner tasks ran on CPU1, and `os_npu_irq_bind` refused
+  at startup (value `0xb09`, wrong route); the board returned through the failure return. `checks/latency-npu.py` now
+  reads, from the linked image, the affinity that `os_npu_start` passes and the route that `os_npu_irq_bind` requires,
+  and refuses a mutant relinked without that definition.
+- **Graph.** Stage 1b's relu: 16 rows of 176 int16 values (`tools/npu-fixtures.json`), 5,632 bytes in and out per job, eight jobs in flight. The input
+  regions are those of the stage 1b run, byte for byte; `apps/latency/manifest-npu.json` pins their addresses and
+  SHA-256 digests, and `checks/latency-npu.py` repacks them from the `npu-graphs` fixture and compares.
+- **Producer.** `apps/latency/npu.c` runs at EL0 on CPU0 at priority 2, below the wake tasks. It opens the queue and
+  registers the graph before the idle phase, and closes it after the busy phase, so neither cost falls in a measured window.
+  After each run of jobs it waits for the last job, then compares that job's output with the simulator reference.
+
+### Phases
+
+1. The idle phase, with the NPU open and idle.
+2. The NPU-alone window: 200 ms of continuous jobs with no stream running, opened after 64 completions.
+3. The streams start on cores 4-7.
+4. The busy phase in four sub-phases of 32 wakes per core: NPU off, on, on, off. One run of jobs spans both on
+   sub-phases. It reaches 64 completions before the first opens, and its last job completes before the second off
+   sub-phase begins.
+
+Each window records its start and end, the completed-job count and every core's stream sweeps at both edges. The NPU
+section follows every other section of the result, with its own footer (`apps/latency/npu.h`), and `apps/latency/host.py`
+refuses a section in which an off sub-phase ran a job, a run outlasted its windows, a stream moved in the NPU-alone
+window or an output differed.
+
+Nested deadlines, inside the 8 s run budget: open and registration 2 s, one job 1 s, warm-up 100 ms, drain 100 ms, one
+busy sub-phase 250 ms, close 1 s. Each is several times its expected time: the open of the 96-graph encoder took 285 ms,
+64 jobs take 0.4 ms at stage 1's NPU-alone rate of 177,768 jobs/s, and a sub-phase holds 32 wakes at 1 ms. With every
+deadline reached the run takes about 5 s. A miss stops the session with a failure detail from `0xd01` to `0xd0e`.
+
+### Predictions and judgement
+
+`apps/latency/npu-judge.py` judges the runs. For each of cores 1-3, the verdict is each run's mean wake in the on
+sub-phases minus its mean wake in the off sub-phase after them, averaged over three runs, against 0.5 µs and 2 µs, as in
+stage 3a.
+
+- **Cores 1-3.** The on-minus-off mean stays under 0.5 µs. A difference of 2 µs or more would mean contention between NPU
+  and CPU traffic in the DRAM controller lengthens the wakes.
+- **Cores 4, 6 and 7.** The difference stays inside the in-run null, the second off sub-phase minus the first.
+- **Largest wakes.** The maximum wake in the on sub-phases exceeds the maximum in the off sub-phase after them by at most
+  3 µs on each core.
+- **NPU alone.** 160,000-195,000 jobs/s, within 10% of stage 1's 177,768 jobs/s with the producer on CPU1. A rate
+  outside that range would mean the NPU ran at another clock point or CPU0 delays its completions.
+- **NPU loss.** The job rate in the on sub-phases falls 45-60% below the NPU-alone rate. Stage 1b measured 53% with five
+  streams and 29% with one; the loss is a measurement and does not decide the stage.
+- **CPU0 and CPU5.** CPU0's own largest busy wake in the on and off sub-phases is the cost of placing the NPU there.
+  CPU0's tick releases CPU5's wakes, so CPU5 is reported apart and is not judged.
+
+### Results
+
+**Conditions.** Three returning runs on port 3-1 (queue entries `1794768349005512237-d9663a1e`,
+`1794768381004364085-1649bff4` and `1794768411282102304-ff080e61`), image `9e1db0391c1b` built from commit f9523c0dd.
+The clocks are the approved points: CPU-L 1794 MHz, CPU-B 2002 MHz, DRAM 2040 MHz and the NPU at 852 MHz and 800 mV.
+Each run took 24.9 to 26.2 s on the runner, 6.5 s of it in the launch and upload.
+
+**Wakes.** On-minus-off is each run's mean wake in the on sub-phases (P1 and P2) minus its mean in the off sub-phase
+after them (N3). The values are the mean of three runs, with the per-run range in brackets.
+
+| Core | On minus off, mean of wakes (µs) | Zone | Largest on wake minus largest off wake (µs) | In-run null N3 minus N0 (µs) |
+| --- | --- | --- | --- | --- |
+| CPU1 | -0.84 (-1.00 to -0.67) | under 0.5 | +1.83 | -0.59 |
+| CPU2 | -0.66 (-0.87 to -0.37) | under 0.5 | +1.08 | -0.63 |
+| CPU3 | -0.53 (-0.66 to -0.37) | under 0.5 | +1.92 | -0.69 |
+| CPU4 | +0.77 (+0.62 to +0.88) | inside the null | -0.17 | +0.02 (-1.59 to +1.17) |
+| CPU6 | -0.10 (-0.59 to +0.35) | inside the null | +3.17 | -0.54 (-1.36 to +0.30) |
+| CPU7 | -0.36 (-0.60 to -0.22) | inside the null | +0.67 | -0.26 (-1.08 to +0.39) |
+| CPU5, released by CPU0's tick, not judged | +0.61 (+0.04 to +1.41) | outside the null | +7.71 | -1.56 (-2.33 to -1.17) |
+
+The mean wake on cores 1-3 is shorter with the NPU running than without it in every run, so NPU traffic beside the CPU
+streams does not lengthen their wakes. On CPU2, leaving out the wakes at the thermal service's 25 ms period gives -0.66 µs
+as well. The largest wakes of the on sub-phases exceed those of N3 by at most 1.92 µs on cores 1-3 and 3.17 µs on CPU6.
+
+**NPU throughput.**
+
+- **Alone**, with no stream running: 142,975 to 143,020 jobs/s in the three runs. The prediction of 160,000 to
+  195,000 jobs/s missed; stage 1 measured 177,768 jobs/s with the owner on CPU1 and without the latency diagnostic. The
+  spread is 0.03%, so the rate is set by a fixed cost per job: 6.99 µs, against 5.63 µs in stage 1. These runs do not
+  separate the candidates, which are CPU0's other work (its tick releases two cores, and the OS services run on it)
+  and the diagnostic's scheduler and wake-segment traces, which record each interrupt.
+- **Beside the streams** of cores 4-7: 77,228 to 78,377 jobs/s, 45.2 to 46.0% below the rate alone (predicted 45 to
+  60%).
+- **Streams.** The off sub-phases ran at 7.56 to 7.82 GB/s and the on sub-phases at 6.88 to 7.07 GB/s. The NPU's
+  77,000 jobs/s move about 0.87 GB/s, so the streams lost about as much bandwidth as the NPU used.
+- **Setup.** The queue opened in 107.6 ms and closed in 1.0 ms, both outside the measured windows. Every compared
+  output matched the reference, and the off sub-phases ran no job.
+
+**CPU0.** CPU0's largest busy wake was 44.96 µs in the on sub-phases and 50.79 µs in the off ones (maximum over three
+runs), against a prediction of 45 to 60 µs off and 2 to 15 µs more on. That figure covers only part of CPU0's wakes. CPU0
+does not stream, so a release counts as a sample only when CPU0 is idle (`admitted` in `apps/latency/workload.c`). With
+the NPU on, the releases that found CPU0 running the producer or the owner were not sampled. CPU0's 32 samples then
+took 87 to 138 ms instead of 33 ms, with gaps of up to 15 ticks between them, while CPU5 kept its 1 ms period. The wake
+latency of a CPU0 task that preempts NPU work is unmeasured.
+
+**Conclusion.** NPU work placed on CPU0 at 77,000 jobs/s does not lengthen the wakes of cores 1-7. Interference between
+NPU and CPU traffic in the DRAM controller is therefore not what sets their wake tail. The NPU keeps 54% of its alone
+rate beside four streaming cores. Two questions stay open: the 20% lower NPU-alone rate with the owner on CPU0, and
+CPU0's own wake latency while it runs NPU work.
+
+### Host evidence
+
+`checks/latency-npu.py` runs the `latency-npu-model` recipe on QEMU's multi-threaded TCG. In the model the NPU is a
+stand-in device whose jobs complete one at a time on CPU0's virtual timer interrupt. The model prints its whole result,
+and the board decoder takes it with every section; only the cause events, which QEMU does not implement, are not decoded.
+The check also reads the route of INTID 97 in both images and runs the judge on the decoded model result. QEMU's times are
+not the board's, so the model is functional evidence only.
