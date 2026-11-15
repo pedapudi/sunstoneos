@@ -25,6 +25,10 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import harness  # noqa: E402
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("output", type=Path)
@@ -120,10 +124,14 @@ def record(result):
 
 
 def run(binary, arguments, log_name, env=None):
-    with (output / log_name).open("w") as log:
-        done = subprocess.run([str(output / binary), *map(str, arguments)], cwd=root, stdout=log,
-                              stderr=subprocess.STDOUT, env=env)
-    return done.returncode, (output / log_name).read_text()
+    """The binary's exit status and log. A threaded model that the host did not schedule exits with the inconclusive status (its own hang
+    guard); it is run once more and a second stop is inconclusive (harness.KillInconclusive), not a failure."""
+    def once():
+        with (output / log_name).open("w") as log:
+            done = subprocess.run([str(output / binary), *map(str, arguments)], cwd=root, stdout=log,
+                                  stderr=subprocess.STDOUT, env=env, timeout=harness.host_kill_seconds("accelerator-shared-owner"))
+        return done.returncode, (output / log_name).read_text()
+    return harness.until_booted(once, lambda result: result[1], lambda result: result[0])
 
 
 for case in serial_cases:
@@ -153,3 +161,22 @@ for case in threaded_cases:
             f"mutant {name} failed for another reason; see {log_name}"
         record({"mutant": name, "case": 8, "exit": code, "run": violations[0]["run"],
                 "violation": violations[0]["violation"], "value": violations[0]["value"], "failed": True})
+
+# The claim "the retirement starts during the NPU job" is stated in the model's progress. A host that runs the whole GPU retirement between
+# two looks of the NPU thread leaves the GPU thread's active flag clear again; the NPU thread waits, beating, until the retirement is done,
+# which is that interleaving on purpose. The model must pass, and the model with the old wait on the active flag alone, built beside it,
+# must fail with the violation of that wait.
+if 9 in threaded_cases:
+    hold = [9, 4, args.seed, 0, "hold-npu"]
+    code, text = run("threads-asan", hold, "claim-hold-npu.log")
+    assert code == 0, "the claim failed with the NPU thread held until the GPU retirement was done; see claim-hold-npu.log"
+    old_build = common + ASAN + THREADS + ["-DSS_OLD_CLAIM_DEADLINE"] + sources
+    log = (output / "compile-claim-old-deadline.log").open("w")
+    subprocess.run(old_build + ["-o", str(output / "claim-old-deadline")], cwd=root, stdout=log, stderr=subprocess.STDOUT, check=True)
+    log.close()
+    code, text = run("claim-old-deadline", hold, "claim-old-deadline.log")
+    violations = [json.loads(line) for line in text.splitlines() if line.startswith('{"case":9,"run":')]
+    assert code != 0 and len(violations) == 1 and \
+        violations[0]["violation"] == "deadline: the GPU retirement did not start during the NPU job", \
+        "the old wait on the active flag did not fail the held run; see claim-old-deadline.log"
+    record({"claim": "retirement starts during the NPU job", "held_run": "passes", "old_wait": "fails", "violation": violations[0]["violation"]})
