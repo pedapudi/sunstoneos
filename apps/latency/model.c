@@ -12,6 +12,16 @@ void *ss_task_create_static_affinity_set(void (*entry)(void *), const char *name
                                         (StaticTask_t *)tcb, (UBaseType_t)affinity);
 }
 
+#ifdef SUNSTONE_LATENCY_AXI_CAP
+/* The board image's failure exit: the model prints the detail and value and stops. */
+void ss_fail_value(uint32_t detail, uint32_t value)
+{
+    platform_puts("FAIL latency axi detail="); platform_hex(detail);
+    platform_puts(" value="); platform_hex(value); platform_puts("\n");
+    configASSERT(0);
+    for (;;) {}
+}
+#endif
 #ifdef SUNSTONE_LATENCY_CPU_ONLY
 /* The CPU control has no DMA client; these hooks stand for the board image's absence of one. */
 void latency_dma_model_tick(void) {}
@@ -136,6 +146,21 @@ static void controller(void *argument)
                  result.wake_segments.first.count == 1 &&
                  result.wake_segments.second.count == (result.wake_segments.tick[0].count + result.wake_segments.tick[1].count > 1));
     platform_puts("PASS wake segment model: linked busy wake chains on every core and filed busy ticks; functional evidence only\n");
+#endif
+#ifdef SUNSTONE_LATENCY_AXI_CAP
+    /* Stage 3a: the warm-up and the U B B U sub-phases ran in order, every operation succeeded, and each sub-phase ended at
+     * its quota of busy wakes on every core. */
+    configASSERT(result.axi_cap.magic == LATENCY_AXI_MAGIC && result.axi_cap.complete && result.axi_footer[0] == LATENCY_AXI_FOOTER_MAGIC);
+    configASSERT(result.axi_cap.switch_count == 8);
+    for (unsigned i = 0; i < result.axi_cap.switch_count; ++i) configASSERT(result.axi_cap.switches[i].status == LATENCY_AXI_OK);
+    for (unsigned k = 0; k < LATENCY_AXI_SUBPHASES; ++k) {
+        const struct latency_axi_window *w = &result.axi_cap.sub[k];
+        number("axi subphase=", k);
+        number(" ticks=", w->end - w->start);
+        platform_puts("\n");
+        configASSERT(w->start < w->end && (!k || result.axi_cap.sub[k - 1].end <= w->start));
+    }
+    platform_puts("PASS axi cap model: warm-up, U B B U sub-phases and every cap operation completed; functional evidence only\n");
 #endif
 #ifdef SUNSTONE_SCHED_PMU
     configASSERT(result.pmu_windows.magic == SS_SCHED_PMU_MAGIC);

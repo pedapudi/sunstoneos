@@ -28,6 +28,15 @@ _Static_assert(SUNSTONE_LATENCY_STREAM_MASK > 0 && SUNSTONE_LATENCY_STREAM_MASK 
 #endif
 _Static_assert(SUNSTONE_LATENCY_RELEASE_MASK <= 0xff, "a core mask");
 #define LATENCY_RELEASED(c) ((SUNSTONE_LATENCY_RELEASE_MASK >> (c)) & 1u)
+#ifdef SUNSTONE_LATENCY_AXI_CAP
+/* Stage 3a splits the busy phase into sub-phases of LATENCY_AXI_SUBPHASE_WAKES samples per core. Each core stops at
+ * the current quota, so the cap changes only while every core is between samples. */
+_Static_assert(LATENCY_AXI_SUBPHASES * LATENCY_AXI_SUBPHASE_WAKES == LATENCY_BUSY_SAMPLES, "the sub-phases fill the busy phase");
+static atomic_uint busy_quota;
+#define LATENCY_BUSY_LIMIT() (LATENCY_IDLE_SAMPLES + atomic_load_explicit(&busy_quota, memory_order_acquire))
+#else
+#define LATENCY_BUSY_LIMIT() (LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES)
+#endif
 enum phase { QUIET, IDLE, BUSY, STOP };
 /* One line per core: only that core and CPU0's tick share it. The core
  * also publishes here the task it last switched to, so that CPU0's release
@@ -269,7 +278,7 @@ static void wait_own(unsigned c)
     for (;;) {
         unsigned p = atomic_load_explicit(&phase, memory_order_acquire);
         if (p == STOP) return;
-        unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : p == BUSY ? LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES : 0;
+        unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : p == BUSY ? LATENCY_BUSY_LIMIT() : 0;
         if (atomic_load_explicit(&wake[c].completed, memory_order_acquire) < limit) {
             wake[c].metric = SS_LAT_METRICS;
             atomic_store_explicit(&wake[c].pending, 1, memory_order_release);
@@ -338,7 +347,7 @@ void ss_latency_tick_hook(uint64_t due)
      * releases rather than masking this diagnostic's whole eight-task loop. */
     __asm__ volatile("msr daifclr, #2" ::: "memory");
 #endif
-    unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES;
+    unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : LATENCY_BUSY_LIMIT();
     BaseType_t woken = pdFALSE;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
 #ifdef SUNSTONE_LATENCY_MODEL
@@ -530,6 +539,42 @@ static void wait_samples(unsigned expected)
         while (atomic_load_explicit(&wake[c].completed, memory_order_acquire) < expected ||
                atomic_load_explicit(&wake[c].pending, memory_order_acquire)) wait_tick();
 }
+#ifdef SUNSTONE_LATENCY_AXI_CAP
+/* Stop the run on a cap failure. Every path but a closed gate or the entry check first restores the reset values. */
+static void axi_stop(uint32_t detail, int status)
+{
+    if (status != LATENCY_AXI_GATE_CLOSED) (void)latency_axi_request(LATENCY_AXI_RESTORE);
+    ss_fail_value(detail, (uint32_t)status);
+}
+static void axi_snapshot(uint64_t *at, uint64_t sweeps[LATENCY_CORES])
+{
+    *at = ss_latency_now();
+    for (unsigned c = 0; c < LATENCY_CORES; ++c) sweeps[c] = atomic_load_explicit(&load[c].sweeps, memory_order_acquire);
+}
+/* One warm-up window: the sweeps that every streaming core completes in LATENCY_AXI_WARM_MS. */
+static uint64_t axi_window(struct latency_axi_window *window)
+{
+    axi_snapshot(&window->start, window->sweeps_start);
+    const uint64_t span = ss_latency_counter_frequency() / 1000u * LATENCY_AXI_WARM_MS;
+    while (ss_latency_now() - window->start < span) wait_tick();
+    axi_snapshot(&window->end, window->sweeps_end);
+    uint64_t total = 0;
+    for (unsigned c = 0; c < LATENCY_CORES; ++c) total += window->sweeps_end[c] - window->sweeps_start[c];
+    return total;
+}
+/* wait_samples with the sub-phase deadline: a sub-phase longer than LATENCY_AXI_SUBPHASE_US restores the bridges and
+ * stops the run. */
+static void axi_wait_subphase(unsigned expected, uint64_t start, unsigned subphase)
+{
+    const uint64_t limit = ss_latency_counter_frequency() / 1000000u * LATENCY_AXI_SUBPHASE_US;
+    for (unsigned c = 0; c < LATENCY_CORES; ++c)
+        while (atomic_load_explicit(&wake[c].completed, memory_order_acquire) < expected ||
+               atomic_load_explicit(&wake[c].pending, memory_order_acquire)) {
+            if (ss_latency_now() - start > limit) axi_stop(0xb96, (int)subphase);
+            wait_tick();
+        }
+}
+#endif
 void latency_workload_init(void)
 {
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
@@ -541,6 +586,9 @@ void latency_workload_init(void)
     }
 #ifdef SUNSTONE_LATENCY_CAUSE
     latency_cause_ping_init();
+#endif
+#ifdef SUNSTONE_LATENCY_AXI_CAP
+    latency_axi_init();
 #endif
 #ifdef SUNSTONE_LATENCY_BAND_SWITCH
     for (unsigned i = 0; i < LATENCY_BAND_PROBES; ++i) {
@@ -559,6 +607,13 @@ void latency_workload_run(struct latency_result *out)
     while (atomic_load_explicit(&ready_mask, memory_order_acquire) != 0xff) wait_tick();
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (!atomic_load_explicit(&load[c].ready, memory_order_acquire)) wait_tick();
+#ifdef SUNSTONE_LATENCY_AXI_CAP
+    /* Every run reads the bridges first; a word set at entry has been zeroed and stops the run. */
+    {
+        const int status = latency_axi_request(LATENCY_AXI_ENTRY);
+        if (status) ss_fail_value(0xb91, (uint32_t)status);
+    }
+#endif
     ss_latency_phase_set(SS_LAT_IDLE);
     atomic_store_explicit(&phase, IDLE, memory_order_release);
     start_own();
@@ -569,10 +624,52 @@ void latency_workload_run(struct latency_result *out)
     /* Require a full sweep on every core before taking loaded samples. */
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (LATENCY_STREAMS(c) && !atomic_load_explicit(&load[c].sweeps, memory_order_acquire)) wait_tick();
+#ifdef SUNSTONE_LATENCY_AXI_CAP
+    /* Unmeasured warm-up: the streams uncapped, then under the non-binding word, which must read back and keep the
+     * stream rate within 5% before any binding level is written. */
+    {
+        const uint64_t uncapped = axi_window(&latency_axi.warm[0]);
+        int status = latency_axi_request(LATENCY_AXI_SET_NONBINDING);
+        if (status) axi_stop(0xb92, status);
+        const uint64_t capped = axi_window(&latency_axi.warm[1]);
+        status = latency_axi_request(LATENCY_AXI_CLEAR);
+        if (status) axi_stop(0xb95, status);
+        const uint64_t t0 = latency_axi.warm[0].end - latency_axi.warm[0].start;
+        const uint64_t t1 = latency_axi.warm[1].end - latency_axi.warm[1].start;
+        if (!uncapped || capped * t0 * 100u < uncapped * t1 * LATENCY_AXI_WARM_PERCENT)
+            axi_stop(0xb93, (int)(uncapped ? capped * t0 * 100u / (uncapped * t1) : 0));
+    }
+#endif
     latency_dma_model_start();
     ss_latency_phase_set(SS_LAT_BUSY);
+#ifdef SUNSTONE_LATENCY_AXI_CAP
+    for (unsigned k = 0; k < LATENCY_AXI_SUBPHASES; ++k) {
+        const bool capped = (LATENCY_AXI_CAPPED_MASK >> k) & 1u;
+        if (capped) {
+            const int status = latency_axi_request(LATENCY_AXI_SET_B);
+            if (status) axi_stop(0xb94, status);
+        }
+        struct latency_axi_window *window = &latency_axi.sub[k];
+        axi_snapshot(&window->start, window->sweeps_start);
+        atomic_store_explicit(&busy_quota, LATENCY_AXI_SUBPHASE_WAKES * (k + 1u), memory_order_release);
+        if (!k) atomic_store_explicit(&phase, BUSY, memory_order_release);
+        start_own();
+        axi_wait_subphase(LATENCY_IDLE_SAMPLES + LATENCY_AXI_SUBPHASE_WAKES * (k + 1u), window->start, k);
+        axi_snapshot(&window->end, window->sweeps_end);
+        if (capped) {
+            const int status = latency_axi_request(LATENCY_AXI_CLEAR);
+            if (status) axi_stop(0xb95, status);
+        }
+    }
+    {
+        const int status = latency_axi_request(LATENCY_AXI_RESTORE);
+        if (status) axi_stop(0xb97, status);
+    }
+    latency_axi.complete = 1;
+#else
     atomic_store_explicit(&phase, BUSY, memory_order_release);
     start_own();
+#endif
     wait_samples(LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES);
 #ifdef SUNSTONE_LATENCY_CONTROL
     atomic_store_explicit(&phase, QUIET, memory_order_release);
@@ -688,5 +785,12 @@ void latency_workload_run(struct latency_result *out)
     const uint64_t wake_footer[8] = {SS_WAKE_SEG_FOOTER_MAGIC, 1, sizeof(*out),
         offsetof(struct latency_result, wake_segments), sizeof(out->wake_segments), 0, 0, 0};
     for (unsigned word = 0; word < 8; ++word) out->wake_footer[word] = wake_footer[word];
+#endif
+#ifdef SUNSTONE_LATENCY_AXI_CAP
+    /* Last, after every other section. */
+    out->axi_cap = latency_axi;
+    const uint64_t axi_footer[8] = {LATENCY_AXI_FOOTER_MAGIC, LATENCY_AXI_VERSION, sizeof(*out),
+        offsetof(struct latency_result, axi_cap), sizeof(out->axi_cap), 0, 0, 0};
+    for (unsigned word = 0; word < 8; ++word) out->axi_footer[word] = axi_footer[word];
 #endif
 }
