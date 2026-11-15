@@ -138,11 +138,11 @@ static int status(struct a733_power_domains *d,struct a733_power_domain *m,uint6
     struct a733_power_transition *t=&d->transition[slot(m->id)];
     if(!t->reads++){t->first_at=now;t->first_word=v;t->all_and=t->all_or=v;}
     t->spin_reads+=spin!=0;t->all_and&=v;t->all_or|=v;
-    if((v&15)==target || (v&15)!=(8-target)){t->reached_at=now;t->reached_word=v;}
+    const int r=(v&15)==target ? 1 : (v&15)==(8-target) ? 0 : -1;
+    /* A read that ends the transition, at the target or failed, is its last. */
+    if(r){t->reached_at=now;t->reached_word=v;}
     else {t->pending_at=now;t->pending_word=v;}
-    if((v&15)==target)return 1;
-    if((v&15)!=(8-target))return -1;
-    return 0;
+    return r;
 }
 /* Spin on status for up to A733_POWER_PCK_SPIN_US after the command; the
  * spin bound is timed from the command, which the write accessor has
