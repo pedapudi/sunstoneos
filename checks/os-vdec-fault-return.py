@@ -86,7 +86,7 @@ LAYOUTS = {'board_application', 'a733_board_session', 'a733_video_decoder', 'a73
            'a733_video_platform_config', 'a733_clock_token', 'a733_gpu_resource_lease', 'a733_power_domain_row',
            'vdec_check_record', 'board_provider', 'a733_native_usb', 'a733_rail_leases', 'a733_power_domains',
            'a733_pmic', 'a733_pmic_config', 'a733_rail_token', 'a733_video_cold_record', 'a733_power_transition',
-           'video_decode_check_result'}
+           'a733_power_service_config', 'video_decode_check_result'}
 
 
 class Registers:
@@ -348,7 +348,10 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
     providers = image.address('providers')
     shared = providers + L['board_provider']['shared']
     pmic = shared + L['a733_native_usb']['pmic']
-    put(providers + L['board_provider']['domains'] + L['a733_power_domains']['pmic'], pmic, 8)
+    domains = providers + L['board_provider']['domains']
+    put(domains + L['a733_power_domains']['pmic'], pmic, 8)
+    # The owner's configured tick, as apps/board/main.c sets it (1000000 / configTICK_RATE_HZ): the row deadlines read it.
+    put(domains + L['a733_power_domains']['config'] + L['a733_power_service_config']['tick_us'], TICK_US)
     put(pmic + L['a733_pmic']['pmic_bus_ops'], PMIC_NOW, 8)  # its first member, now
     put(pmic + L['a733_pmic']['config'] + L['a733_pmic_config']['startup_deadline'], 0, 8)  # the provider started
     authority = shared + L['a733_native_usb']['rails'] + L['a733_rail_leases']['authority']
