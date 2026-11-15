@@ -110,6 +110,9 @@ INCLUDE = re.compile(r"""^\s*#\s*include\s+"([^"]+)\"""", re.M)
 # project for that image, so the CMake files the configure step reads are inputs of the check.
 IMAGE_RUN = re.compile(r"""\{(?:elf|build|session|bundle):""")
 CMAKE_READ = re.compile(r"""^[ \t]*(include|add_subdirectory)[ \t]*\([ \t]*"?([^\s")]+)""", re.M | re.I)
+# A script that a configure or a build runs with cmake -P (cmake/source-revision-write.cmake writes into every image): its text decides the
+# image like an included file does.
+CMAKE_SCRIPT = re.compile(r"""-P[ \t]+"?([^\s")]+\.cmake)""")
 # The files a configure starts from: the project and the toolchain file that ~/.cache/sunstoneos/bin/cfg.sh passes.
 CONFIGURE_ROOTS = ('CMakeLists.txt', 'cmake/aarch64-clang.cmake')
 # Variables that name the checkout in include() and add_subdirectory() arguments.
@@ -408,7 +411,7 @@ def configure_inputs(revision=None, roots=None):
             continue
         found.add(path)
         text = revision.text(path) if revision else path.read_text(errors='replace')
-        for command, argument in CMAKE_READ.findall(text):
+        for command, argument in [*CMAKE_READ.findall(text), *(('include', name) for name in CMAKE_SCRIPT.findall(text))]:
             value = argument.replace('${CMAKE_CURRENT_LIST_DIR}', str(path.parent))
             value = value.replace('${CMAKE_CURRENT_SOURCE_DIR}', str(source_dir))
             for name in SOURCE_ROOT_VARIABLES:

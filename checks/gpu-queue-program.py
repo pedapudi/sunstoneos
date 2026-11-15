@@ -58,6 +58,25 @@ for size,coeff in [(8128,3),(4,7)]:
 other=copy.deepcopy(m)
 binary=bytes([10,5,3,0,0])+struct.pack('<H',2033)+bytes(1)+bytes(8132)
 other['program_sha256']=c.digest(binary);refused('reject-over-two-pages',binary,other)
+# The inline-argument add (GPU_QUEUE_ABI_GRID_INLINE): the descriptor reproduces
+# from its record, and a record whose registers do not fit its ABI is refused.
+mi=json.loads((ROOT/'apps/accel-overlap/add4inline/sources.json').read_text())
+hi=(ROOT/'apps/accel-overlap/add4inline/program.h').read_text()
+wi=[int(w,16) for w in re.findall(r'0x([0-9a-f]{8})u',hi)]
+blobi=bytes(mi['metadata'][:2]+[3,0,0])+struct.pack('<H',len(wi))+bytes(1)+struct.pack('<'+'I'*len(wi),*wi)
+assert hashlib.sha256((ROOT/'apps/accel-overlap/add4inline/vector_add4_inline.cl').read_bytes()).hexdigest()==mi['source_sha256']
+assert mi['queue_abi']=='grid_inline' and '.abi = GPU_QUEUE_ABI_GRID_INLINE,' in hi
+assert c.emit_queue_program(blobi,mi)==hi
+cases.append('reproducible-inline-descriptor')
+for field,value in [('queue_abi','grid'),('queue_abi','local'),('abi_vtxins',5),('sysval_ranges',[4,1,0,3,0,0]),
+                    ('explicit_vtxin_mask',64),('explicit_vtxin_mask',0),('profile',4)]:
+    other=copy.deepcopy(mi);other[field]=value;refused('reject-inline-'+field+'-'+str(value),blobi,other)
+other=copy.deepcopy(mi);other['metadata'][1]=5;refused('reject-inline-metadata-1',blobi,other)
+other=copy.deepcopy(m);other['queue_abi']='grid_inline';refused('reject-grid-record-as-inline',blob,other)
+for mask in (1,15,63):
+    other=copy.deepcopy(mi);other['explicit_vtxin_mask']=mask
+    assert '.abi = GPU_QUEUE_ABI_GRID_INLINE,' in c.emit_queue_program(blobi,other)
+    cases.append('accept-inline-mask-%d'%mask)
 (a.build/'descriptor.c').write_text(header+'\nconst void *descriptor(void);\nconst void *descriptor(void) { return &gpu_queue_program; }\n')
 for flags,suffix in [([], 'host'),(['--target=aarch64-none-elf','-ffreestanding'],'aarch64')]:
     subprocess.run([a.cc,*flags,'-std=c11','-Wall','-Wextra','-Werror','-Wpedantic',

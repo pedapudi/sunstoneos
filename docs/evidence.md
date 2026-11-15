@@ -10,7 +10,7 @@ Each board run is one line of machine-readable JSON. Status and design files des
 | --- | --- |
 | `id`, `entry_id`, `port` | The queue entry ID, which doubles as the record ID, and the board port. A result without a queue entry has a short lowercase slug as its `id` and no `entry_id`. |
 | `date` | The date of the run. |
-| `image_sha256`, `git_revision` | The image hash and the revision of the source the image ran from (the `--host-tree` it was prepared from, else the board-queue checkout), copied from `result.json`; the daemon's own revision is `daemon_git_revision` there. |
+| `image_sha256`, `git_revision` | The image hash and the revision of the source the image was built from (embedded in the image; the `--host-tree` HEAD, else the board-queue checkout, for an older image), copied from `result.json`; the host tree's HEAD, a mismatch flag and the daemon's own revision are separate fields there. |
 | `image` | The image name or build target, for a run whose hash is not recorded. |
 | `design` | The path of the design or status document that describes the feature the run tested. |
 | `hypothesis` | What the run tests, copied from the entry. |
