@@ -77,6 +77,7 @@ def main():
             'if(limit&&until>limit)until=limit;', 'if(until<=a733_smp_counter()/24)ss_fail(0x757);\n    if(limit&&until>limit)until=limit;'), 16),
         ('now-deadline-armed', app, producer_unit, runtime_unit.replace(
             'if(application_wait_until(until)==', 'if(application_wait_until(until+1)=='), 17),
+        ('association-miss-unnamed', app, producer_unit.replace('if (r->config.associate &&', 'if (0 &&'), runtime_unit, 9),
         ('tick-rounded-deadline', app, producer_unit, runtime_unit.replace(
             'if(application_wait_until(until)==', 'if(application_wait_until((until/1000+1)*1000)=='), 18),
     ]

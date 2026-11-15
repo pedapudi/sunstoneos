@@ -36,9 +36,13 @@ _Noreturn void ss_fail(uint32_t code)
 #undef ss_usb_wait
 
 struct a733_radio_report {struct {uint32_t stage;} head;};
+struct a733_radio_assoc {
+    uint32_t stage,link,status,supplicant,rsn,eapol_rx,eapol_tx,flags,candidates,frequency_rssi,ms_connect,ms_authorized;
+};
 struct board_radio {
-    struct {unsigned entropy_only;} config;
+    struct {unsigned entropy_only,associate;} config;
     struct {uint32_t fail_line,fail_stage;} platform,session;
+    struct a733_radio_assoc assoc;
 };
 static struct board_radio radio;
 static struct a733_radio_report report;
@@ -47,8 +51,9 @@ static const struct a733_radio_report *board_radio_report(struct board_radio *r)
 {assert(r==&radio);return &report;}
 static void publish(struct board_radio *r){assert(r==&radio);++publications;}
 static int os_radio_quiesce_requested(void){return quiescing;}
+static uint32_t fault_value;
 static int os_radio_quiesce_fault(uint32_t value,const void *here)
-{(void)value;(void)here;++faults;return 1;}
+{(void)here;fault_value=value;++faults;return 1;}
 static void board_fail_note(uint32_t site,uint32_t value,const void *here)
 {(void)site;(void)value;(void)here;assert(0);}
 static void os_ce_probe_start(void){}
@@ -125,8 +130,18 @@ static void producer_cases(void)
     os_radio_scan_step(&radio,BOARD_RADIO_DOWN);assert(!atomic_load(&main_wake_pending));
     atomic_store(&state,RUNNING);radio.platform.fail_line=3;
     os_radio_scan_step(&radio,BOARD_RADIO_RETAINED);ss_radio_status(&status);
-    assert(status.failed&&status.done&&faults==1&&atomic_exchange(&main_wake_pending,0));
+    assert(status.failed&&status.done&&faults==1&&fault_value==3u<<16&&atomic_exchange(&main_wake_pending,0));
     os_radio_scan_step(&radio,BOARD_RADIO_RETAINED);assert(!atomic_load(&main_wake_pending)&&faults==1);
+    /* An association miss with no platform or session site names the association tail's codes; a platform site
+     * still wins when one exists. Frame counts above 15 saturate. */
+    radio.config.associate=1;radio.assoc=(struct a733_radio_assoc){.stage=5,.link=1,.status=17,.eapol_rx=1,.eapol_tx=40};
+    atomic_store(&state,RUNNING);
+    os_radio_scan_step(&radio,BOARD_RADIO_RETAINED);
+    assert(faults==2&&fault_value==(3u<<16)&&atomic_exchange(&main_wake_pending,0));
+    atomic_store(&state,RUNNING);radio.platform.fail_line=0;
+    os_radio_scan_step(&radio,BOARD_RADIO_RETAINED);
+    assert(faults==3&&fault_value==(17u<<16|0x8000u|1u<<12|15u<<8|1u<<4|5u)&&atomic_exchange(&main_wake_pending,0));
+    radio.config.associate=0;radio.assoc=(struct a733_radio_assoc){0};
     radio.config.entropy_only=1;entropy_done=1;
     for(unsigned failed=0;failed<2;++failed){
         atomic_store(&state,RUNNING);entropy_failed=failed;
