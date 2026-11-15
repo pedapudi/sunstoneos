@@ -189,12 +189,22 @@ pending completion, preparation failure, unknown identity, stale interrupt
 status, device error, late trigger, write failure, completion failure,
 unexpected read result, backward time and invalid span. Unknown identity never
 calls preparation, successful output requires the completion callback, and
-failures retain the ownership token. The comparison needs the vendor shared
-libraries, which are not in the repository, so no retained check repeats it; the
-original malformed-input run cannot be reconstructed because its script was not
-archived. Artifacts, hashes and the limitation are in
-[the evidence file](evidence/video-codecs.jsonl). No board or device was
-accessed.
+failures retain the ownership token. The original malformed-input run cannot
+be reconstructed because its script was not archived. Artifacts, hashes and
+that limitation are in [the evidence file](evidence/video-codecs.jsonl).
+
+`checks/video-decode-reference.py` repeats the comparison for the 48-by-32
+nonconstant fixture that the board decodes (`apps/jpeg/fixture.py`). It reads
+the pinned libraries from
+`~/.cache/sunstoneos/sources/video-codecs/runtime/usr/lib/aarch64-linux-gnu`
+and checks their SHA-256 values against the table above. It compares the
+tables, geometry, restart settings, the complete register image before the
+trigger and the trigger byte with the native executor's trace of 661 writes.
+It also compares `VeReset` for the three admitted identities and the register
+routing; the comparison scripts are in `checks/video-reference/`. The trace
+is the programming reference for the board decode; the pixel reference is the
+fixture's decoded output ([JPEG application](jpeg-application.md)). No board
+or device is accessed.
 
 ## Full codec support remains required
 
