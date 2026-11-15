@@ -330,18 +330,23 @@ dispatch, as host analysis of the program and the queue shows:
   argument words, `a[i]` and `b[i]`, and stores the sum, each through one DMA access of 4 bytes per lane (12 for the
   arguments). The pinned compiler's scheduler (`pco_schedule.c`) puts a data-fence wait after every DMA access and an
   extra fence after the store, so a task waits on memory four times in series. Only other resident tasks overlap
-  those waits.
+  those waits. No host source determines whether the hardware merges the 32 lanes' accesses into line requests.
 - **GPU mapping.** Both leases use 256 KiB pages with the SLC-bypass bit set and the cache-coherent bit clear
   (`platform/a733/gpu_queue.c`), so every load that misses the GPU's own cache and every write-through store goes to
   DRAM. The mapping is ordinary memory, not device memory.
 - **Clock.** Power-on programs PLL_GPU0 to 1008 MHz and the GPU clock to that source with divider 1, and checks both
-  by readback. The session held no performance grant, so nothing changed the rate, and the GPU supply read 960 mV,
-  the 1008 MHz point, at return. The run recorded no per-phase clock.
+  by readback. The manifest declares no `cpu.perf`, so session admission refuses a performance grant and the GPU
+  performance service, the only path that changes the rate, does not start. The GPU supply read 960 mV, the
+  1008 MHz point, at return. The run recorded no per-phase clock.
 
-If the waits bound the task, 535 ns equals four memory round trips divided by the resident tasks, 134 ns per round
-trip per resident task. Neither factor is measured. The NSI counters of the GPU port give the round trip and the
-request size. No vendor figure for this GPU's buffer bandwidth exists in the datasheet, the manual or the pinned GPU
-sources.
+If the waits bound the task, 535 ns equals four memory round trips divided by the resident tasks, so the round trip
+is 134 ns times the resident tasks. The unified-store sizing of [the GPU recognizer design](gpu-mimus-compute.md)
+allows 89 tasks at 10 temps, so the 64 USC slots would bound residency, and the round trip would be 8.6 µs, against a
+205 ns CPU chase in the same phase. The waits therefore do not explain the time at full residency. Either few tasks
+are resident (2-4 tasks give a 270-540 ns round trip), or a per-request limit binds: one request per lane access
+gives 1,048,576 requests per job, 4.2 ns each. A wider program cannot separate the two, because both predict the
+same gain. The request count of the GPU's NSI port can, if those counters count live on the board, which is not yet
+shown. No vendor figure for this GPU's buffer bandwidth exists in the datasheet, the manual or the pinned GPU sources.
 
 ## Stage 2: DMA completion timing
 
