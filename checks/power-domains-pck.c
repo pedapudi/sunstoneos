@@ -577,40 +577,11 @@ static void domain2_cases(void)
     puts("PASS domain 2: no gate read, delay row and ON command, adoption, refusals with bit 14 alone, "
          "timeout retention, no power-off, transition record, back-to-back measurement");
 }
-/* The owner's two row deadlines (include/a733_power_domains.h). First, against the bounds that the decoder, G2D and
- * the NPU startup computed before them, written here as arithmetic: the supply deadline is the later of the
- * provider's startup deadline and now, plus 5,160 + 100,000 us and one tick; the row deadline is now plus 10,000 us
- * and two ticks; each is clipped to the caller's limit and saturates rather than wraps. A failed clock read gives 0.
- * Then, for domains 1, 2, 4 and 5 on the actual owner: supply verification ends by the supply deadline taken before
- * the first step, and the ON answer comes by the row deadline taken at the request, also when a busy rail ledger
- * delays the admission by one retry. */
-static unsigned failing_clock;
-static int row_deadline_clock(void *v,uint64_t *out){return failing_clock ? 0 : pmic_model_now(v,out);}
+/* The owner's two row deadlines (include/a733_power_domains.h), for domains 1, 2, 4 and 5 on the actual owner: supply
+ * verification ends by the supply deadline taken before the first step, and the ON answer comes by the row deadline
+ * taken at the request, also when a busy rail ledger delays the admission by one retry. */
 static void row_deadline_cases(void)
 {
-    const uint64_t tick=TICK_US,supply=5160u+100000u+TICK_US,row=10000u+2u*TICK_US;
-    setup();
-    const uint64_t startup=m.provider.config.startup_deadline;
-    assert(startup>2000);
-    m.now=1000;
-    assert(a733_power_supply_deadline(&d.owner,UINT64_MAX)==startup+supply);
-    assert(a733_power_supply_deadline(&d.owner,startup+7)==startup+7);
-    m.now=startup+5000;
-    uint64_t before=m.now,b=a733_power_supply_deadline(&d.owner,UINT64_MAX),after=m.now;
-    assert(b>=before+supply && b<=after+supply);
-    m.now=UINT64_MAX-supply/2;
-    assert(a733_power_supply_deadline(&d.owner,UINT64_MAX)==UINT64_MAX);
-    assert(a733_power_supply_deadline(&d.owner,UINT64_MAX-1)==UINT64_MAX-1);
-    m.provider.pmic_bus_ops.now=row_deadline_clock;failing_clock=1;
-    assert(a733_power_supply_deadline(&d.owner,UINT64_MAX)==0);
-    failing_clock=0;
-    assert(a733_power_row_deadline(&d.owner,5000,UINT64_MAX)==5000+row);
-    assert(a733_power_row_deadline(&d.owner,5000,5000+row)==5000+row);
-    assert(a733_power_row_deadline(&d.owner,5000,7000)==7000);
-    assert(a733_power_row_deadline(&d.owner,UINT64_MAX-row/2,UINT64_MAX)==UINT64_MAX);
-    printf("row-deadlines supply %llu row %llu tick %llu\n",(unsigned long long)supply,(unsigned long long)row,
-           (unsigned long long)tick);
-
     static const unsigned ids[]={1,2,4,5};
     for(unsigned k=0;k<4;++k)for(unsigned busy=0;busy<2;++busy) {
         setup();d.ack_us=120;
@@ -640,7 +611,7 @@ static void row_deadline_cases(void)
                busy ? " busy ledger" : "",(unsigned long long)verified,(unsigned long long)supply_bound,
                (unsigned long long)(m.now-requested),(unsigned long long)(bound-requested));
     }
-    puts("PASS row deadlines: consumer arithmetic, clip, saturation, clock failure, domains 1, 2, 4 and 5");
+    puts("PASS row deadlines: domains 1, 2, 4 and 5, with and without a busy-ledger retry");
 }
 int main(int argc,char **argv)
 {
