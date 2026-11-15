@@ -299,7 +299,7 @@ a domain already ON. The sequence has five phases.
 
 | Phase | Register-lock hold | Accesses |
 | --- | --- | --- |
-| Entry, before the row request | yes | The 15 ROM words; fabric and parent clocks; reset asserted (`0xa8c` bit 18 clear), bus gate and module gate closed; `0x1b10 & 0x30001 == 0x10000`; INTID 81 quiet. `0x5c0`, `0x5e0` and `0x5e4` are read and recorded in any state. No PCK600 read. |
+| Entry, before the row request | yes | The 15 ROM words; fabric and parent clocks; reset asserted (`0xa8c` bit 18 clear), bus gate and module gate closed; `0x1b10 & 0x30001 == 0x20000`; INTID 81 quiet. `0x5c0`, `0x5e0` and `0x5e4` are read and recorded in any state. No PCK600 read. |
 | Row request and wait | no | `a733_power_domain_request(row, 1)` once; the binding returns pending until the owner answers. REFUSED or FAILED fails the unit with nothing written. |
 | Hold A | yes | Open `0x5e4` bit 18 (below); A1 reads the three critical gates and refuses unless `0x5c0` bit 0, `0x5e0` bit 14 and `0x5e4` bit 18 are set; release reset (`0xa8c` bit 18); open the bus gate (`0xa8c` bit 2); the module selector and divider and the PLL_VE0 table up to lock enable ([video-pll.md](designs/video-pll.md)). |
 | PLL lock wait | no | At most about 420 µs. |
@@ -331,7 +331,9 @@ vendor's order (`cedar_ve.c` `disable_cedar_hw_clk_module` and
 module gate off, bus gate off, reset asserted, then PLL_VE0's output gate,
 lock enable, enable and LDO cleared, which leaves `0x01204d00` with the board's
 bit 24. Domain 2 stays ON and the critical gates stay as they are. That end
-state is an admitted entry state for the next lifetime.
+state is an admitted entry state for the next power lifetime. Within one
+lifetime the quiesced decoder stays closed: every later acquire returns -1
+with no register access.
 
 **Write policy.** `a733_video_platform_write_policy` admits `0xa8c` bits 18 and
 2; `0xa88` bit 31 alone while the gate is open, and the selector and divider
@@ -343,7 +345,8 @@ keeps PCK2 policy and status for the baseline and no delay-row word.
 
 **Failures.** A refusal on a value that was read completely releases the
 register lock before the unit fails; an uncertain access retains the lock and
-every token. There is no rollback or power-down.
+every token. Every failure inside a hold goes through one helper,
+`a733_video_unit_refuse_held`, which the encoder binding also uses. There is no rollback or power-down.
 
 The A733 kernel performs the cold VCU pulse without inspecting compound identity.
 Its `CONFIG_ARCH_SUN60IW2` path applies before any of the three runtime policies

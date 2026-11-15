@@ -71,8 +71,8 @@ def decode(payload):
         'hold_b': span('locked_at', 'hold_b_at'), 'owner_row_wait': span('row_request_us', 'row_on_us'),
         'open': (times['started_ticks'] - times['requested_ticks']) / TICKS_PER_US if times['started_ticks'] else None,
         'close': (times['closed_ticks'] - times['started_ticks']) / TICKS_PER_US if times['closed_ticks'] else None}
-    # Reported, not judged: the host model assumes the close leaves 0x1b10 & 0x30001 at 0x10000.
-    out['auto_closed_as_modeled'] = out['closed']['auto'] & 0x30001 == 0x10000
+    # Reported, not judged: no reading shows 0x1b10 move, so the close is predicted to leave it at 0x20000.
+    out['auto_closed_as_entry'] = out['closed']['auto'] & 0x30001 == 0x20000
     domain2 = [t for t in out['transitions'] if t['domain'] == 2]
     if domain2 and domain2[0]['commands'] and domain2[0]['reached_at'] >= domain2[0]['command_at']:
         out['durations_us']['domain2_to_on'] = domain2[0]['reached_at'] - domain2[0]['command_at']
@@ -94,7 +94,7 @@ def failures(d):
     e, s, c = d['entry'], d['started'], d['closed']
     want(e['pll_ve0'] == 0x41305a00, f"PLL_VE0 at entry {e['pll_ve0']:#010x}, predicted 0x41305a00 (FEL)")
     want(e['module'] == 0 and e['bgr'] & 0x40004 == 0, f"module {e['module']:#x} or reset/bus {e['bgr']:#x} at entry")
-    want(e['auto'] & 0x30001 == 0x10000, f"0x1b10 at entry {e['auto']:#x}")
+    want(e['auto'] & 0x30001 == 0x20000, f"0x1b10 at entry {e['auto']:#x}, predicted 0x20000")
     want(e['ahb_gates'] & 1 and e['mbus_gates'] & 1 << 14, f"master gates at entry {e['ahb_gates']:#x} "
          f"{e['mbus_gates']:#x}")
     want(e['mclk_gates'] == 0x4, f"0x5e4 at entry {e['mclk_gates']:#x}, predicted 0x4 (FEL)")

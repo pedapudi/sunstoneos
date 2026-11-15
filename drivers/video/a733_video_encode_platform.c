@@ -55,7 +55,7 @@ static int acquire(struct a733_video_encoder *p,const void *j,int same,uint64_t 
     if(p->checked)return held(u);
     r=lock(u);if(r!=1)return r;
     uint64_t version;
-    if(!a733_video_unit_baseline(u)||!a733_video_unit_identity(u,&version))return fail(u);
+    if(!a733_video_unit_baseline(u)||!a733_video_unit_identity(u,&version))return a733_video_unit_refuse_held(u);
     if(unlock(u)!=1)return -1;
     p->checked=1;return 1;
 }

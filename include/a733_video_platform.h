@@ -99,7 +99,7 @@ struct a733_video_decoder {
     int (*memory)(void *,uint64_t,const void *,uint64_t);
     void *context;
     uint64_t version,reset_until;
-    unsigned admitted,checked,mapped,prepared,step,cold_step,requested;
+    unsigned admitted,checked,mapped,prepared,step,cold_step,requested,quiesced;
     struct a733_video_cold_record cold;
 };
 /* JPEG binding. */
@@ -115,7 +115,9 @@ struct a733_video_platform {
  * cleared. Every write is a read-modify-write with readback. Domain 2 stays
  * ON and the critical gates stay as they are. The caller ensures no job is
  * outstanding. d is a new deadline for this call. 1 done, 0 effect-free busy
- * lock, -1 refused or uncertain (a failed unit is never touched). */
+ * lock, -1 refused or uncertain (a failed unit is never touched). A quiesced
+ * decoder is closed for the rest of its power lifetime: every later acquire
+ * returns -1 with no register access. */
 int a733_video_decoder_quiesce(struct a733_video_decoder *,uint64_t d);
 /* Pure scope derivation; requires the exclusive scopes below and the exact
  * shared result.

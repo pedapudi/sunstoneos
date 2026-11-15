@@ -75,6 +75,8 @@ DOMAIN_REGISTER = re.compile(r'\b0[xX]0*706(?P<literal>[125])[0-9a-fA-F]{3}' + S
                              r'\bA733_DE_SYS_PCK_BASE\b|\bBB8_DOMAIN1_STATUS\b|'
                              r'\bA733_PCK_DOMAIN_BASE\(\s*(?P<base>[125])' + SUFFIX + r'\s*\)')
 WRITE_HINT = re.compile(r'write|store|update|=\s*value', re.I)
+# A macro whose definition names one of those registers: its later uses name the same domain.
+MACRO = re.compile(r'^\s*#\s*define\s+(?P<name>[A-Za-z_]\w*)\b(?P<body>.*)$')
 # Writers of the delay row for domains the owner does not hold: HDMI and
 # DisplayPort (10). The NPU and the video decoder request domains 4 and 2
 # through their rows, and nothing writes the GPU_CORE (6) row.
@@ -123,6 +125,30 @@ def gpu_native_problems(text):
     return problems
 
 
+def domain_problems(rel, text):
+    """The lines of one source that name a domain-1, -2 or -5 PPU register, directly or through a macro defined
+    in the same source, and are not a listed reader's read."""
+    problems, aliases = [], {}
+    for line in text.splitlines():
+        m = MACRO.match(line)
+        if m:
+            named = {d['literal'] or d['base'] or '1' for d in DOMAIN_REGISTER.finditer(m['body'])}
+            if len(named) == 1:
+                aliases[m['name']] = named.pop()
+    alias = re.compile(r'\b(' + '|'.join(map(re.escape, aliases)) + r')\b') if aliases else None
+    for n, line in enumerate(text.splitlines(), 1):
+        domains = {m['literal'] or m['base'] or '1' for m in DOMAIN_REGISTER.finditer(line)}
+        if alias and not MACRO.match(line):
+            domains |= {aliases[m[1]] for m in alias.finditer(line)}
+        if not domains:
+            continue
+        if rel not in READERS or domains != {READERS[rel][0]}:
+            problems.append(f'{rel}:{n}: names a domain-1, domain-2 or domain-5 PPU register: {line.strip()}')
+        elif WRITE_HINT.search(line):
+            problems.append(f'{rel}:{n}: may write a domain the owner holds: {line.strip()}')
+    return problems
+
+
 def files(root):
     for d in SOURCES:
         base = root / d
@@ -148,14 +174,7 @@ def main():
             continue
         if DOMAIN4_ROW.search(re.sub(r'/\*.*?\*/', '', text, flags=re.S)):
             domain4_rows.add(rel)
-        for n, line in enumerate(text.splitlines(), 1):
-            domains = {m['literal'] or m['base'] or '1' for m in DOMAIN_REGISTER.finditer(line)}
-            if not domains:
-                continue
-            if rel not in READERS or domains != {READERS[rel][0]}:
-                problems.append(f'{rel}:{n}: names a domain-1, domain-2 or domain-5 PPU register: {line.strip()}')
-            elif WRITE_HINT.search(line):
-                problems.append(f'{rel}:{n}: may write a domain the owner holds: {line.strip()}')
+        problems += domain_problems(rel, text)
     assert scanned > 100, f'only {scanned} source files under {root}'
     if not (root / 'drivers/power/a733_power_domains.c').exists():
         # A tree before the owner, such as the merge base (--root): report the
@@ -179,6 +198,14 @@ def main():
             problems.append(f'{GPU_NATIVE}: the {name} mutant has no unique site')
         elif not gpu_native_problems(native.replace(old, new)):
             problems.append(f'{GPU_NATIVE}: the {name} mutant was not detected')
+    # Seeded mutant: a decoder write through its PCK macro must be reported.
+    video = 'drivers/video/a733_video_platform.c'
+    video_text = (root / video).read_text()
+    anchor = '    p->checked=p->prepared=0;p->quiesced=1;'
+    if video_text.count(anchor) != 1:
+        problems.append(f'{video}: the PCK-macro write mutant has no unique site')
+    elif not domain_problems(video, video_text.replace(anchor, '    (void)update(u,PCK,15,8);\n' + anchor)):
+        problems.append(f'{video}: a write through its PCK macro was not detected')
     if domain4_rows and 'drivers/npu/a733_npu_platform.c' in writers:
         problems.append(f'domain-4 rows {sorted(domain4_rows)} while drivers/npu/a733_npu_platform.c still '
                         'writes domain 4; move the NPU onto its row first (docs/power-domains.md)')
@@ -200,7 +227,7 @@ def main():
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS power-domain tree facts in {scanned} sources: domains 1, 2 and 5 written only by the owner; '
           f'{len(writers)} delay-row writers and {len(allowlists)} native allowlists, the GPU adapter reaching only '
-          f'the CORE6 page and no delay-row word (two seeded mutants refused); {len(domain4_rows)} '
+          f'the CORE6 page and no delay-row word (two seeded mutants refused), a decoder write through its PCK macro refused; {len(domain4_rows)} '
           'domain-4 row sources and no NPU write to domain 4; five images run their PMIC work from one service '
           'task below USB0 on core 0; '
           'no critical section, scheduler suspension or wait in the owner')

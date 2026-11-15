@@ -50,7 +50,7 @@ static struct {
     struct a733_video_platform_config config;
     struct a733_video_platform platform;
     uint64_t pck_token,token;
-    unsigned pck_client,initialized;
+    unsigned pck_client,initialized,closed; /* closed: the decoder is closed for this power lifetime */
     struct ss_video_decode_info info;
     atomic_uint phase,request,quiesce_wanted,quiesced;
     unsigned op;int result;
@@ -274,6 +274,7 @@ static int do_close(void)
     if(!read_words(vd.info.closed)){copy_record();return fail(VD_STEP_CLOSED_WORDS,0);}
     vd.info.closed_ticks=ss_counter_ticks();
     copy_record();
+    vd.closed=1;
     atomic_store(&vd.phase,CLOSED);
     return 1;
 }
@@ -282,7 +283,7 @@ static void serve(void)
     if(atomic_load_explicit(&vd.request,memory_order_acquire)!=POSTED)return;
     const unsigned phase=atomic_load(&vd.phase);
     int r=-1;
-    if(vd.op==OPEN_OP)r=phase==CLOSED?do_open():phase==OPEN?1:-1;
+    if(vd.op==OPEN_OP)r=phase==CLOSED&&!vd.closed?do_open():phase==OPEN?1:-1;
     else if(vd.op==CLOSE_OP)r=phase==OPEN?do_close():phase==CLOSED?1:-1;
     vd.result=r;
     atomic_store_explicit(&vd.request,DONE,memory_order_release);

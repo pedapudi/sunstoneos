@@ -20,7 +20,7 @@ The reference is the vendor VE driver `cedar_ve.c` and the clock framework (`ccu
 | Cold VCU pulse at `0x01c0e804`, bits 0 and 4 set then cleared | `set_vcu_en_regmode_to1_to0`, `cedar_ve.c` 388-405 (`CONFIG_ARCH_SUN60IW2`) | Same, then the identity words at `+0xf0`, `+0xe0` and `+0xe4`. |
 | Close: module gate, bus gate, reset, then PLL_VE0 output gate, lock enable, enable and LDO | `disable_cedar_hw_clk_module`, `disable_cedar_hw_clk_reset`; `ccu_pll_gate_helper_disable`, `ccu_gate.c` 40-69 | Same order in one register-lock hold. PLL_VE0 ends at `0x01204d00`. Domain 2 stays ON and the critical gates stay as they are. |
 
-The open adds checks that the vendor driver does not make, each read before the first write: reset asserted and bus and module gates closed, `0x1b10 & 0x30001 == 0x10000`, the fabric and parent clocks, the 15 boot ROM words, and INTID 81 neither enabled, pending nor active. A refusal at any of these writes nothing. A failure after the first write marks the service FAULT, keeps every token and gate as it is, and makes the session quiesce report fault site `0x941` with the failing step in bits 31:24 and its value in bits 23:0.
+The open adds checks that the vendor driver does not make, each read before the first write: reset asserted and bus and module gates closed, `0x1b10 & 0x30001 == 0x20000` (CM_VE_DEC_CFG with its module mode disabled and its status field at POWER_ON), the fabric and parent clocks, the 15 boot ROM words, and INTID 81 neither enabled, pending nor active. A refusal at any of these writes nothing. A failure after the first write marks the service FAULT, keeps every token and gate as it is, and makes the session quiesce report fault site `0x941` with the failing step in bits 31:24 and its value in bits 23:0.
 
 ## The open record
 
@@ -55,5 +55,5 @@ The stage-1 prediction, from the port 3-3 FEL dump and the host model:
 | PLL lock reads | 3 to 100 |
 | Identity | one of `0x0003332100021321`, `0x0003331000021320`, `0x0003052000012011`, with `+0xf0` reading `0` or `0x16670040` |
 | Domain 2 | row ON; either adopted at policy and status 8, or one command from 0 to 8 measured within 10,000 µs |
-| `0x1b10 & 0x30001` after the close | `0x10000` (a host-model assumption; recorded, not judged) |
+| `0x1b10` at entry and after the close | `0x20000`: module mode disabled, status POWER_ON (recorded after the close, not judged) |
 | `0x5e4` bits 1, 8 and 9 (encoder, CSI and ISP MBUS clock gates) | set by the open and still set after the close |

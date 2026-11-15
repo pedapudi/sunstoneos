@@ -63,6 +63,7 @@ static int write_reg(void*v,uintptr_t a,unsigned width,uint32_t value)
         assert(a>=VE&&a<VE+sizeof(m->ve));
         /* Status bits at 0x11c are write-one-to-clear. */
         if(a==VE+0x11c){assert(width==4);m->ve[0x11c/4]&=~value;if(value&1)m->acked=1;}
+        else if(a==VE&&m->fail==18){} /* the mode write does not take: prepare refuses on its readback */
         else if(width==4)m->ve[(a-VE)/4]=value;
         else ((uint8_t*)m->ve)[a-VE]=(uint8_t)value;
         if(a==VE+0x118){m->trigger=1;m->acked=0;}
@@ -111,7 +112,7 @@ int main(int argc,char**argv)
     uint8_t *bytes=calloc(1,65536);assert(bytes);size_t n=fread(bytes,1,65536,f);assert(n&&n<65536&&!ferror(f));fclose(f);
     const uint64_t ids[]={UINT64_C(0x3332100021321),UINT64_C(0x3331000021320),UINT64_C(0x3052000012011)};
     static struct event nominal[800];unsigned nominal_writes=0;
-    for(unsigned test=0;test<23;++test) {
+    for(unsigned test=0;test<24;++test) {
         if(argc==4&&test>0&&test<12)continue;
         /* Test17 is the 26MHz board; test18 meets transient registry contention. */
         unsigned fail=(test<3||test==16||test==17||test==18)?0:test<16?test-2:test-5;
@@ -176,6 +177,10 @@ int main(int argc,char**argv)
             if(fail==6||fail==7)assert(m.lock&&p.decoder.unit.locked&&!m.trigger);
             if(fail==8)assert(m.trigger&&m.drain==1);
             if(fail==9)assert(m.reads==before);
+            /* A refusal on a value read completely releases the register lock: the baseline, identity and
+             * preparation refusals. An uncertain access (6, 7) or persistent contention (17) retains it. */
+            if(fail<=4||(fail>=9&&fail<17)||fail==18)assert(!m.lock&&!p.decoder.unit.locked);
+            if(fail==18)assert(m.memory&&m.writes);
             unsigned accesses=m.reads+m.writes;
             assert(a733_video_jpeg_poll(&run)==-1&&m.reads+m.writes==accesses);
         }

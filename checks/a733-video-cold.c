@@ -199,10 +199,6 @@ static int cold_write(void *v,uintptr_t a,unsigned width,uint32_t value)
         }
         if(a==CCU+0xa88&&(value&0x80000000)&&c->pll)assert((m->ccu[0x220/4]&0xf8000000u)==0xf8000000u);
         m->ccu[(a-CCU)/4]=value;
-        /* Autonomous VE power: the module clock moves 0x1b10 to its powered
-         * value. Its value after the module gate closes again has no board
-         * reading; the model assumes it returns to the entry value. */
-        if(a==CCU+0xa88)m->ccu[0x1b10/4]=(value&0x80000000)?0x20000:0x10000;
     }
     return 1;
 }
@@ -274,8 +270,10 @@ static uint8_t jpeg_bytes[65536];static size_t jpeg_n;static uint8_t rom_bytes[4
 static void fel_words(struct cold_model *c,const struct lifetime *l)
 {
     struct model *m=&c->m;
-    m->ccu[0xa88/4]&=~0x80000000u;m->ccu[0xa8c/4]=0x10001;
-    m->ccu[0x5c0/4]=FEL_5C0;m->ccu[0x5e0/4]=FEL_5E0;m->ccu[0x5e4/4]=FEL_5E4;m->ccu[0x1b10/4]=0x10000;
+    /* FEL (port 3-3) and OS entry (port 3-1) read 0xa8c = 0 and 0x1b10 = 0x20000 with the module gate closed; the
+     * model keeps 0x1b10 constant, as no reading shows it move. */
+    m->ccu[0xa88/4]&=~0x80000000u;m->ccu[0xa8c/4]=0;
+    m->ccu[0x5c0/4]=FEL_5C0;m->ccu[0x5e0/4]=FEL_5E0;m->ccu[0x5e4/4]=FEL_5E4;m->ccu[0x1b10/4]=0x20000;
     if(l->pll) {
         m->ccu[0x220/4]=l->pll_entry;m->ccu[0x228/4]=0;m->ccu[0x22c/4]=0x30000000;m->ccu[0x230/4]=0x000b0000;
         m->ccu[0x1918/4]=0x00030003u;m->ccu[0x1998/4]=0x00030000;m->ccu[0xa88/4]=0;
@@ -369,6 +367,12 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
         const unsigned before=m->writes;c->quiesced=1;c->stopping=1;c->pll_seq=0;
         assert(a733_video_decoder_quiesce(&p.decoder,run.deadline+200000)==1);
         assert(!m->lock&&m->writes>before);
+        /* Closed for the rest of the power lifetime: a later open is refused with no access. */
+        {
+            const unsigned accesses=m->reads+m->writes;uint64_t t=0;
+            assert(a733_video_platform_jpeg_ops()->acquire(&p,&no_job,run.deadline+200000,&t)==-1&&
+                m->reads+m->writes==accesses&&!p.decoder.unit.failed&&!m->lock);
+        }
         /* The quiesce leaves the entry state and domain 2 ON. */
         assert(!(m->ccu[0xa88/4]&0x80000000)&&!(m->ccu[0xa8c/4]&0x40004)&&domain_on());
         if(vendor)assert(m->ccu[0x220/4]==((A733_VIDEO_PLL_FACTORS)|(m->ccu[0x220/4]&(1u<<24))));
@@ -413,8 +417,8 @@ int main(int argc,char **argv)
             assert(o.result==1&&vm->drain==2&&vm->trigger&&!vm->lock&&c.cold_pulse==2);
             assert(o.owner_ppu_writes==6&&o.owner_commands==1&&o.decoder_pck_reads==2);
             assert(vm->events[0].address==CCU+0x5e4&&vm->events[0].value==0x40306);
-            assert(vm->events[1].address==CCU+0xa8c&&vm->events[1].value==0x50001);
-            assert(vm->events[2].address==CCU+0xa8c&&vm->events[2].value==0x50005);
+            assert(vm->events[1].address==CCU+0xa8c&&vm->events[1].value==0x40000);
+            assert(vm->events[2].address==CCU+0xa8c&&vm->events[2].value==0x40004);
             assert(vm->events[3].address==CCU+0xa88&&vm->events[3].value==0x80000001);
             assert(vm->events[4].address==VE+0x804&&vm->events[4].value==0x11);
             assert(vm->events[5].address==VE+0x804&&vm->events[5].value==0);

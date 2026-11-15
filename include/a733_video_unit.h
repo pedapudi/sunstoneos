@@ -99,6 +99,11 @@ int a733_video_unit_timely(struct a733_video_unit *);
 int a733_video_unit_held(struct a733_video_unit *);
 int a733_video_unit_lock(struct a733_video_unit *);
 int a733_video_unit_unlock(struct a733_video_unit *);
+/* Fail the unit from inside a register-lock hold. A refusal on a value read
+ * completely (the unit is not yet failed) releases the mutex first; an
+ * uncertain access, which the core has already marked failed, retains it.
+ * Every failure inside a hold goes through here. */
+int a733_video_unit_refuse_held(struct a733_video_unit *);
 /* Accesses require the held mutex and fail the unit on any uncertainty. */
 int a733_video_unit_read(struct a733_video_unit *,uintptr_t,uint32_t *);
 int a733_video_unit_write(struct a733_video_unit *,uintptr_t,unsigned,uint32_t);

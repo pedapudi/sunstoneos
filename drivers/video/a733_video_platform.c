@@ -68,8 +68,11 @@ static const struct {uint32_t address,word;} rom_identity[]={
 };
 /* Entry, under one register-lock hold, before the domain-2 row request:
  * the ROM identity, the fabric and parent clocks, reset asserted, bus and
- * module gates closed, autonomous VE power off with effective status ON, and
- * IRQ81 quiet. The three critical gates are recorded in any state. No PCK600
+ * module gates closed, IRQ81 quiet, and CM_VE_DEC_CFG (0x1b10) with its
+ * module mode disabled (bit 0) and its status field (bits 17:16) at 0b10,
+ * POWER_ON (U-Boot plat-sun60iw2p1/clock_autogen.h lines 4760-4768). Both
+ * port 3-3 at FEL and port 3-1 at OS-image entry read 0x20000 with the module
+ * gate closed; the powered baseline requires the same word. The three critical gates are recorded in any state. No PCK600
  * register is read: the owner's coherence rules admit the domain. */
 static int cold_entry(struct a733_video_decoder *p)
 {
@@ -82,7 +85,7 @@ static int cold_entry(struct a733_video_decoder *p)
      * divider are then written later; the module gate must be closed. */
     return a733_video_unit_clocks_entry(u)&&
         (u->config.program_pll?check(u,CCU+0xa88,BIT(31),0):check(u,CCU+0xa88,0x8700001f,p->config.module&~BIT(31)))&&
-        check(u,CCU+0xa8c,BIT(18)|BIT(2),0)&&check(u,CCU+0x1b10,0x30001,0x10000)&&
+        check(u,CCU+0xa8c,BIT(18)|BIT(2),0)&&check(u,CCU+0x1b10,0x30001,0x20000)&&
         a733_video_unit_irq_quiet(u);
 }
 /* The decoder's MBUS clock gate, 0x5e4 bit 18, is CLK_IS_CRITICAL
@@ -148,10 +151,7 @@ static int held_phase(struct a733_video_decoder *p,int (*phase)(struct a733_vide
     struct a733_video_unit *u=&p->unit;
     int r=lock(u);if(r!=1)return r;
     if(p->cold_step==COLD_ENTRY)p->cold.entry_at=u->last_now;
-    if(!phase(p)) {
-        if(!u->failed)(void)unlock(u);
-        return fail(u);
-    }
+    if(!phase(p))return a733_video_unit_refuse_held(u);
     if(unlock(u)!=1)return -1;
     *at=u->last_now;++p->cold_step;return 1;
 }
@@ -186,7 +186,8 @@ static int cold(struct a733_video_decoder *p)
 static int acquire(struct a733_video_decoder *p,const void *j,uint64_t d,uint64_t *token)
 {
     struct a733_video_unit *u=&p->unit;
-    if(!u->initialized||u->failed||!token||!d||(u->deadline&&u->deadline!=d))return -1;
+    /* A quiesced decoder stays closed for the rest of its power lifetime. */
+    if(!u->initialized||u->failed||p->quiesced||!token||!d||(u->deadline&&u->deadline!=d))return -1;
     u->deadline=d;
     if(!timely(u))return fail(u);
     if(!p->admitted) {
@@ -203,7 +204,7 @@ static int acquire(struct a733_video_decoder *p,const void *j,uint64_t d,uint64_
         int r=cold(p);if(r!=1)return r;
     }else {
         int r=lock(u);if(r!=1)return r;
-        if(!a733_video_unit_baseline(u))return fail(u);
+        if(!a733_video_unit_baseline(u))return a733_video_unit_refuse_held(u);
         if(unlock(u)!=1)return -1;
     }
     p->checked=1;return 1;
@@ -216,12 +217,9 @@ int a733_video_decoder_quiesce(struct a733_video_decoder *p,uint64_t d)
     u->deadline=d;
     int r=lock(u);if(r!=1)return r;
     if(!update(u,CCU+0xa88,BIT(31),0)||!update(u,CCU+0xa8c,BIT(2),0)||!update(u,CCU+0xa8c,BIT(18),0)||
-       !a733_video_unit_pll_stop(u)) {
-        if(!u->failed)(void)unlock(u);
-        return fail(u);
-    }
+       !a733_video_unit_pll_stop(u))return a733_video_unit_refuse_held(u);
     if(unlock(u)!=1)return -1;
-    p->checked=p->prepared=0;
+    p->checked=p->prepared=0;p->quiesced=1;
     return 1;
 }
 /* VeReset policy45/52 delegates external reset; policy51 uses top+4 bit16.
@@ -264,8 +262,7 @@ static int prepare(struct a733_video_decoder *p,uint64_t token,const void *j,uin
     if(p->prepared)return 1;
     if(!p->version) {
         int r=lock(u);if(r!=1)return r;
-        /* An identity read completely but not listed releases the mutex. */
-        if(!a733_video_unit_identity(u,&p->version)){if(!u->failed)(void)unlock(u);return fail(u);}
+        if(!a733_video_unit_identity(u,&p->version))return a733_video_unit_refuse_held(u);
         if(unlock(u)!=1)return -1;
         return 0;
     }
@@ -278,7 +275,7 @@ static int prepare(struct a733_video_decoder *p,uint64_t token,const void *j,uin
     }
     if(p->step==2&&u->last_now<p->reset_until)return 0;
     int r=lock(u);if(r!=1)return r;
-    if(!prep_step(p,codec))return fail(u);
+    if(!prep_step(p,codec))return a733_video_unit_refuse_held(u);
     ++p->step;
     if(unlock(u)!=1)return -1;
     if(p->step==18)p->prepared=1;

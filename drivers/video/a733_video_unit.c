@@ -118,6 +118,11 @@ int a733_video_unit_unlock(struct a733_video_unit *u)
     u->locked=0;
     return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);
 }
+int a733_video_unit_refuse_held(struct a733_video_unit *u)
+{
+    if(!u->failed)(void)a733_video_unit_unlock(u);
+    return a733_video_unit_fail(u);
+}
 int a733_video_unit_read(struct a733_video_unit *u,uintptr_t a,uint32_t *v)
 {
     if(!u->locked||!a733_video_unit_timely(u)||u->ops.read(u->cookie,a,v)!=1||

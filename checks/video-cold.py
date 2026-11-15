@@ -39,6 +39,12 @@ CHECK_INPUTS = ['drivers/video/a733_video_platform.c', 'drivers/video/a733_video
                 'include/a733_power_domains.h', 'include/a733_power_domain_row.h', 'apps/jpeg/fixture.py',
                 'apps/jpeg/fixtures.json']
 MUTANTS = [
+    ('drivers/video/a733_video_platform.c', 'check(u,CCU+0x1b10,0x30001,0x20000)', 'check(u,CCU+0x1b10,0x30001,0x10000)',
+     'entry requires 0x1b10 at POWER_OFF'),
+    ('drivers/video/a733_video_platform.c', 'p->checked=p->prepared=0;p->quiesced=1;', 'p->checked=p->prepared=0;',
+     'reopen after the quiesce'),
+    ('drivers/video/a733_video_unit.c', '    if(!u->failed)(void)a733_video_unit_unlock(u);\n    return a733_video_unit_fail(u);',
+     '    return a733_video_unit_fail(u);', 'refusal inside a hold keeps the mutex'),
     ('drivers/video/a733_video_unit.c', '!(w&UINT32_C(0xb8000000))', '!(w&UINT32_C(0x38000000))', 'entry with enable set'),
     ('drivers/video/a733_video_unit.c', '!(w&UINT32_C(0xb8000000))', '!(w&UINT32_C(0x98000000))', 'entry with lock enable set'),
     ('drivers/video/a733_video_unit.c', '#define PLL_FIELDS UINT32_C(0xf870ff02)', '#define PLL_FIELDS UINT32_C(0xf870ffe2)',
@@ -82,13 +88,11 @@ MUTANTS = [
      '    return actual==p->cold.mclk_written;', 'exact 0x5e4 readback'),
     ('drivers/video/a733_video_platform.c', '            if((m^value)!=BIT(31))return 0;\n', '', 'module word change with the gate open'),
     ('drivers/video/a733_video_platform.c',
-     "    if(!update(u,CCU+0xa88,BIT(31),0)||!update(u,CCU+0xa8c,BIT(2),0)||!update(u,CCU+0xa8c,BIT(18),0)||\n       !a733_video_unit_pll_stop(u)) {",
-     "    if(!a733_video_unit_pll_stop(u)||!update(u,CCU+0xa88,BIT(31),0)||!update(u,CCU+0xa8c,BIT(2),0)||\n       !update(u,CCU+0xa8c,BIT(18),0)) {",
+     "    if(!update(u,CCU+0xa88,BIT(31),0)||!update(u,CCU+0xa8c,BIT(2),0)||!update(u,CCU+0xa8c,BIT(18),0)||\n       !a733_video_unit_pll_stop(u))return",
+     "    if(!a733_video_unit_pll_stop(u)||!update(u,CCU+0xa88,BIT(31),0)||!update(u,CCU+0xa8c,BIT(2),0)||\n       !update(u,CCU+0xa8c,BIT(18),0))return",
      'PLL stopped before the module gate closes'),
     ('drivers/video/a733_video_unit.c', '    static const uint32_t disable[4]={BIT(27),BIT(29),BIT(31),BIT(30)};',
      '    static const uint32_t disable[4]={BIT(31),BIT(27),BIT(29),BIT(30)};', 'PLL disabled before its output gate'),
-    ('drivers/video/a733_video_platform.c', '        if(!u->failed)(void)unlock(u);\n        return fail(u);\n    }\n    if(unlock(u)!=1)return -1;\n    *at',
-     '        return fail(u);\n    }\n    if(unlock(u)!=1)return -1;\n    *at', 'register mutex kept after a clean refusal'),
 ]
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
