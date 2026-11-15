@@ -171,7 +171,7 @@ The open and close words equal stage 5's (run `1794732202569746479-c9b5e324`). T
 
 ## Camera-frame conversion
 
-A camera delivers YUV frames, and a model takes RGB input at a fixed size. The convert operation does both steps in one G2D job: it reads a 4:2:2 semi-planar frame, scales it with the video scaler and converts it to RGB in the blender.
+A camera delivers YUV frames, and a model takes RGB input at a fixed size. The convert operation does both steps in one G2D job: it reads a 4:2:2 semi-planar or packed frame, scales it with the video scaler and converts it to RGB in the blender. USB cameras deliver packed 4:2:2 (YUYV) or MJPEG, not NV16.
 
 ### Source format and the job
 
@@ -179,12 +179,14 @@ An NV16 surface (`SS_G2D_FORMAT_NV16`) has two planes in one large region:
 - the luma plane at `offset`, one byte a pixel, `stride` bytes a row (at least `width`);
 - the chroma plane at `chroma_offset`, one U and V pair for every two pixels of each row, `chroma_stride` bytes a row (at least `width` rounded up to even).
 
-Both planes start 4-byte aligned, and both strides are multiples of 4. An RGB surface leaves `chroma_offset` and `chroma_stride` 0. The convert reads the `w` by `h` rectangle at (`sx`, `sy`) and writes the `ow` by `oh` rectangle at (`dx`, `dy`); `sx` is even, so no chroma pair is split. Every size is 1 to 8192. The service refuses before any mapping:
-- at step 48: a table outside 1 to 4, an odd `sx`, a source other than NV16, a degree, flip or colour, `ow`, `oh` or `csc` set on any other operation, and a nonzero `reserved` word;
-- at step 49: an NV16 output, chroma fields on an RGB surface, and a chroma plane outside its region or narrower than the frame;
+A packed surface (`SS_G2D_FORMAT_YUYV`, `SS_G2D_FORMAT_UYVY`, `SS_G2D_FORMAT_YVYU` or `SS_G2D_FORMAT_VYUY`, codes 0x20 to 0x23) has one plane at `offset`, 2 bytes a pixel, `stride` bytes a row (at least twice `width`): each 4 bytes hold two pixels' luma and their chroma pair, in the order the name gives.
+
+Both planes start 4-byte aligned, and both strides are multiples of 4. An RGB or packed surface leaves `chroma_offset` and `chroma_stride` 0. The convert reads the `w` by `h` rectangle at (`sx`, `sy`) and writes the `ow` by `oh` rectangle at (`dx`, `dy`); `sx` is even, so no chroma pair is split. Every size is 1 to 8192. The service refuses before any mapping:
+- at step 48: a table outside 1 to 4, an odd `sx`, a source other than NV16 or packed, a packed rectangle whose `w` is odd or above 2048, a degree, flip or colour, `ow`, `oh` or `csc` set on any other operation, and a nonzero `reserved` word;
+- at step 49: an NV16 or packed output, chroma fields on an RGB or packed surface, a chroma plane outside its region or narrower than the frame, and a packed stride below 2 bytes a pixel;
 - at step 50: a rectangle that leaves its surface.
 
-The vendor's format code 0x24, G2D_FORMAT_YUV422UVC_V1U1V0U0, names the bytes of a chroma word from the most significant, as its NV24 code 0x31 (V1U1V0U0) does. In memory the pairs are then U0 V0 U1 V1, which is NV16; code 0x25 is NV61. The first conversion stage measures the byte order.
+The vendor's format code 0x24, G2D_FORMAT_YUV422UVC_V1U1V0U0, names the bytes of a chroma word from the most significant, as its NV24 code 0x31 (V1U1V0U0) does. In memory the pairs are then U0 V0 U1 V1, which is NV16; code 0x25 is NV61. The first conversion stage measured that order. Read the same way, the packed codes 0x20 to 0x23 (G2D_FORMAT_IYUV422_V0Y1U0Y0, \_Y1V0Y0U0, \_U0Y1V0Y0 and \_Y1U0Y0V0, sunxi-g2d.h) hold Y0 U0 Y1 V0 (YUYV), U0 Y0 V0 Y1 (UYVY), Y0 V0 Y1 U0 (YVYU) and V0 Y0 U0 Y1 (VYUY) in memory. Mainline Linux numbers the display engine's video-layer formats in the same order (sun8i_mixer.h: YUYV 0, UYVY 1, YVYU 2, VYUY 3, NV16 4, NV61 5). The vendor's newer display BSP names code 0 VYUY (de_channel.h, de_ovl.c 315-331), which agrees if its names also read from the most significant byte. The [packed conversion stage](#packed-conversion-stage) measures the order.
 
 The four tables (`SS_G2D_CSC_*`) name the source's colour space, and the RGB output is full range:
 
@@ -201,10 +203,12 @@ The converter computes each channel as (cy Y + cu U + cv V + k) >> 10, clamped t
 
 The reference is `g2d_bsp_bitblt` with flag G2D_BLT_NONE (g2d_mixer.c 304-371 in linux-orangepi 2ac08e8c, bsp/drivers/g2d/g2d_rcq) for a YUV source and an RGB output. [a733_g2d_convert_commands](../drivers/g2d/a733_g2d_convert.c) writes the same register images into the mixer's command page, with the block headers and their order of `a733_g2d_commands_at`:
 - **Video layer V0** (`g2d_vlayer_set`, g2d_ovl_v.c 244-335): the format code, both plane addresses and pitches, and the rectangle.
-- **Coarse decimation** (`g2d_ovl_v_calc_coarse`): applied when `w` is at least 8 times `ow` or `h` at least 4 times `oh`, with the scaler's input width capped at 2048.
+- **Coarse decimation** (`g2d_ovl_v_calc_coarse`): applied when `w` is at least 8 times `ow` or `h` at least 4 times `oh`, with the scaler's input width capped at 2048. The packed case (g2d_ovl_v.c 88-95) decimates nothing, so a packed rectangle is at most 2048 pixels wide.
 - **Video scaler** (`g2d_vsu_para_set`, g2d_scal.c), enabled for every YUV source, also unscaled: control word 0x10101; luma steps at full rate; the chroma horizontal step half the luma's and the chroma vertical step the luma's. The filter banks come from `lan2coefftab32_full` through `fir_coef` (g2d_scal.c 248-268) for the luma horizontal, chroma horizontal and luma vertical steps, and every phase starts at 0.
 - **Blender**: source-over (0x03010301), ROP 0xf0, `ch3_index0` 0x41000, pipe 0 on (0x101). The colour conversion follows the vendor's other path, `g2d_bsp_bld` (g2d_mixer.c 216-220 and 287): `bld_csc_reg_set(0, ...)` loads the pipe-0 input converter csc0 (control 1, fill colours 0x00108080, the table's 12 words at blender + 0x110), and `bld_cs_set` with an RGB format sets `out_color` 0, so the blender works in RGB. When the blender works in YUV and csc2 converts its output, as `g2d_bsp_bitblt` sets it, luma below 16 reaches the table as 16 ([second conversion stage](#second-conversion-stage)).
 - **Write-back** (`g2d_wb_set`): the output's format, address, pitch and size.
+
+A packed source differs from NV16 in five words or groups: one plane, with pitch 1 and address 1 zero (`g2d_byte_cal` gives 2 bytes a pixel, g2d.c 368-370); no coarse decimation; control word 0x101, since `filter_type` is 1 only for codes above 0x23 (g2d_scal.c 287-290); and the vertical luma bank, `linearcoefftab32` (g2d_scal.c 19-26, phase p with taps 64 - 2p and 2p) instead of the Lanczos bank (g2d_scal.c 339-360). The chroma steps, sizes and horizontal bank are NV16's. The scaler has banks for the luma horizontal, chroma horizontal and luma vertical filters only, so the chroma's vertical filter uses the luma's bank.
 
 In the vendor driver the csc0 path never runs for a real frame: g2d_mixer.c 202 reads `if (src->resize.w == 0 || src->resize.h)`, which refuses every job with a nonzero height. The builder takes only its conversion order; the scaler words come from g2d_scal.c, which the vendor's bitblt path reaches.
 
@@ -220,14 +224,15 @@ The vendor's YUV-to-RGB blocks (`Ycbcr2rgb_601` and `Ycbcr2rgb_709`, g2d_bld.c 3
 The vendor's BT.709 full block subtracts 16 from luma: its constants are 16 times 1024 lower than its chroma coefficients cancel, so full-range BT.709 frames lose luma 0 to 16 and every value above 239. Its other blocks have no rounding term, so the truncating shift lowers most outputs by up to 1; the BT.601 full block's constant is also 1 lower than its chroma coefficients cancel, so grey Y becomes Y - 1. The derived and vendor tables differ in the constants of all four tables and in the BT.601 full table's G coefficients (-352 and -731 against the vendor's -353 and -732).
 
 The builder writes nothing for a job that the vendor refuses or that the registers cannot hold:
-- a format other than 0x24 and 0x25, an output format above 7, or an unknown table;
+- a format other than 0x20 to 0x25, an output format above 7, or an unknown table;
 - a size of 0 or above 8192, or an odd `sx`;
+- a packed source with an odd `w`, a `w` above 2048, or a chroma address or stride;
 - a stride narrower than its rectangle, or an address that is not 4-byte aligned;
 - a rectangle whose first byte is at or above 2^32.
 
-[g2d-convert-words.py](../checks/g2d-convert-words.py) compares the builder with a Python transcription of the vendor functions and the derived tables, word for word, over 46 jobs: the stage's geometries, both coarse-decimation boundaries, the 2048 limit, odd widths, offsets, both format codes, the eight output formats and the four tables. It also checks 22 refusals, that the bank equals a733_g2d.c's, and that every phase's four taps sum to 64.
+[g2d-convert-words.py](../checks/g2d-convert-words.py) compares the builder with a Python transcription of the vendor functions and the derived tables, word for word, over 87 jobs: the stage's geometries, both coarse-decimation boundaries, the 2048 limit, odd widths, offsets, both semi-planar codes, 41 packed jobs over the four packed codes, the eight output formats and the four tables. It also checks 30 refusals, that the Lanczos bank equals a733_g2d.c's and the linear bank g2d_scal.c's, and that every phase's four taps sum to 64. It builds the builder a second time as the stage image does, with `SUNSTONE_G2D_CONVERT_VARIANTS`: there every job gives the same words, and each packed job with the Lanczos vertical variant gives the vendor's words with control word 0x10101 and the Lanczos bank of the vertical step.
 
-The service runs a convert as a blit. It maps the output read-write and the source read-only, builds the page at the planes' device addresses, cleans and invalidates the output's lines, and cleans the luma plane's and then the chroma plane's lines. It launches the mixer with the blit's sequence and, after the interrupt, cleans and invalidates the output's lines again. A builder refusal after the mapping fails at step 50 with value 3, and a plane at or above 4 GiB in device space at step 50 with value 4. [os-g2d-operation.py](../checks/os-g2d-operation.py) runs the image's convert path with three converts in one session (unscaled, 224 by 224, and an offset window scaled 2:1 into a BGRA output). Each command page must equal the transcription's words at the device addresses the service used, with the plane maintenance in that order. It also runs 15 refusals of jobs with their own surfaces, each of which must touch nothing, among them a convert and a blit with a nonzero `reserved` word.
+The service runs a convert as a blit. It maps the output read-write and the source read-only, builds the page at the planes' device addresses, cleans and invalidates the output's lines, and cleans the luma plane's and then the chroma plane's lines (a packed source has only the one plane). It launches the mixer with the blit's sequence and, after the interrupt, cleans and invalidates the output's lines again. A builder refusal after the mapping fails at step 50 with value 3, and a plane at or above 4 GiB in device space at step 50 with value 4. [os-g2d-operation.py](../checks/os-g2d-operation.py) runs the image's convert path with three converts in one session (unscaled, 224 by 224, and an offset window scaled 2:1 into a BGRA output). Each command page must equal the transcription's words at the device addresses the service used, with the plane maintenance in that order. It runs the same three jobs from packed sources in the YUYV, UYVY and YVYU orders, and a 2048 by 64 VYUY frame scaled to 224 by 64. It also runs 22 refusals of jobs with their own surfaces, each of which must touch nothing, among them a convert and a blit with a nonzero `reserved` word, and for a packed source an odd width or `sx`, a width above 2048, the Lanczos vertical variant, a chroma plane, a narrow stride and a packed output.
 
 ### First conversion stage
 
@@ -369,3 +374,29 @@ Run `1794754244027087094-2256ed85` (port 3-1, image 5157921030ce, built at f2bc0
 Each conversion followed luma kept at all 145,920 exact-region pixels and differed from luma raised at 9,078. Every rectangle word had alpha 0xff, the padding and the source were unchanged, and the sampled rows matched the half-phase chroma model. Both scales' middle rows equal the scaler model with phase rounding, every row equals the middle row, and no ramp channel decreases.
 
 The engine converted 640 by 480 pixels in 1049 to 1051 µs, 292 Mpixel/s at a module clock of 300 MHz, with every table. One A76 core at 2002 MHz took 2478, 2493 and 2486 µs (124 Mpixel/s) in scalar C without NEON, and its output equalled the BT.709 full conversion. That is a lower bound on the CPU's rate: the engine is 2.4 times faster than scalar C. The open and the close returned 1, the close gated the engine, and the session returned normally in 28.6 s.
+
+### Packed conversion stage
+
+The tenth G2D stage converts packed 4:2:2 frames, the format of USB cameras, and tests the scaler's vertical pass. Every scale before it had constant columns (each row the same), so the vertical filter, its phase rounding and its edges were never measured.
+
+The model for a packed source is the third stage's with the byte order of the format code ([Source format and the job](#source-format-and-the-job)) and the vendor's vertical bank. The scaler's horizontal pass runs first, rounded to nearest and clamped; then the vertical pass at each output row's position y times the vertical step, rounded to the nearest of 32 phases as the horizontal pass is, with taps at rows -1 to +2 and the edge rows repeated. The vendor programs the linear vertical bank for a packed source. The stage also runs the Lanczos vertical bank, the semi-planar setting, through a variant that only its image accepts (`A733_G2D_CONVERT_LANCZOS_VERTICAL`, in the job's `reserved` word, built with `SUNSTONE_G2D_CONVERT_VARIANTS`). At the 2.14 to 1 vertical step of a 640 by 480 frame scaled to 224 rows, the linear bank's two taps alias, and the Lanczos bank of that step low-pass filters first. If the Lanczos variant matches its prediction, packed input ships with it.
+
+[g2d-convert](../apps/g2d-convert/main.c) builds three 640 by 480 frames in the "source" region:
+- **Frame P**: the third stage's luma-sweep frame from seed 0xbb67ae85, stored as YUYV and as UYVY.
+- **Frame R**: constant along each row, with luma 7y, U 64 + 5y and V 200 + 3y (each mod 256) in row y. Its scaled output isolates the vertical pass, since a horizontal pass leaves a constant row unchanged. It is scaled to 224 by 250 rather than 224 by 224: at 250 rows the Lanczos taps of the first row read row -1 and those of the last row read row 480, so both edges are exercised, and the positions' fractions are not all whole phases, so rounding the phases down instead of to the nearest changes 51 of the 250 rows with the linear bank and 50 with the Lanczos bank. The linear bank never reads outside a frame that it reduces.
+- **Frame Q**: random in every byte.
+
+All six operations use the BT.601 limited table, the UVC default matrix, and an ARGB8888 output. Each output is filled with 0x5a bytes first, and each prediction is the model's output:
+
+| Operation | Source | Vertical bank | Output | Rectangle CRC-32 | Interior CRC-32 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | P as YUYV, code 0x20 | linear (unscaled) | 640 by 480 | 0x2f666439 | 0xb99d6357 |
+| 2 | P as UYVY, code 0x21 | linear (unscaled) | 640 by 480 | 0x2f666439 | 0xb99d6357 |
+| 3 | R, code 0x20 | linear | 224 by 250 | 0x1492b1f0 | 0x475278da |
+| 4 | R, code 0x20 | Lanczos (variant) | 224 by 250 | 0x2e2e2397 | 0xf862f1a1 |
+| 5 | Q, code 0x20 | linear | 224 by 224 | 0x6bae6406 | 0xa1837737 |
+| 6 | Q, code 0x20 | Lanczos (variant) | 224 by 224 | 0x213dc44a | 0x33e4cd89 |
+
+The interior excludes the two rows and columns at each edge. Both unscaled conversions' exact regions (pixels 8 to 311) have CRC-32 0x85a5fc61. An even pixel sits on its own pair, at phase 0, so its chroma is not interpolated: for each unscaled conversion the application counts the even pixels that differ from the table applied to their pair's bytes read in each of the four orders. The predicted order has no mismatch: YUYV for code 0x20 and UYVY for 0x21. The application also records two rows of each unscaled conversion, column 112 of each frame-R output with the count of its rows that are not constant, and both frame-Q outputs whole. Then one A76 core converts frame P from YUYV three times in scalar C, as in the earlier stages.
+
+[The decoder](../apps/g2d-convert/host.py) reports each frame-R output's rows 0, 1, 248 and 249 separately, and names the vertical bank and phase rounding (nearest or truncated) that its column equals. For each frame-Q output it reports the mismatches in the edge rows and columns separately from the interior, and names which candidates the output and its interior equal: either bank, the horizontal pass first or the vertical one, the horizontal sum rounded or kept whole, and nearest or truncated phases. [g2d-convert-host.py](../checks/g2d-convert-host.py) builds the application on the host with a second implementation of the model in C and checks the decoder against it and eight mutant engines: the 0x20 and 0x21 orders swapped, uninterpolated chroma, truncated phases, the vertical pass first, the horizontal sum kept whole, the variant ignored, a missed pixel and a failed scale.

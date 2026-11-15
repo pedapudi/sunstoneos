@@ -78,10 +78,15 @@ Cases:
     generated tables). One attach maps the output read-write, the source read-only and the command page. Each convert
     cleans and invalidates the output's lines, cleans the luma and the chroma plane's, and invalidates the output's
     again after the finish, in whole lines.
+  - convert-packed-session: the same three jobs from a packed 640 by 480 frame (docs/g2d-os.md#packed-conversion-stage)
+    in the YUYV, UYVY and YVYU orders, and a 2048 by 64 VYUY frame scaled to 224 by 64, with the same checks; a packed
+    source has no chroma plane to clean.
   - Convert refusals: a table outside 1 to 4, an odd sx, an RGB source, a degree or a colour, scale fields on a blit,
     chroma fields on an RGB surface, an NV16 output, a chroma plane outside its region or narrower than the frame, a
     zero output width, an output rectangle that leaves the surface, and a nonzero reserved word on a convert or a
-    blit. Each fails with its step and value and touches nothing.
+    blit. For a packed source: an odd width or sx, a width above 2048, the Lanczos vertical variant (the shipped image
+    has none), a chroma plane, a stride narrower than 2 bytes a pixel, and a packed output. Each fails with its step
+    and value and touches nothing.
 
 Usage: os-g2d-operation.py --image ELF --output DIR"""
 import argparse
@@ -164,6 +169,16 @@ CONVERT_OPS = [dict(op='convert', source=NV16_FRAME, output=dict(region=0, forma
                dict(op='convert', source=NV16_FRAME,
                     output=dict(region=0, format=3, width=200, height=130, stride=800, offset=0x180000),
                     sx=64, sy=37, w=320, h=240, dx=8, dy=4, ow=160, oh=120, csc=2)]
+# The packed plan (stage 10): a 640 by 480 frame of 2 bytes a pixel in region 1, in each of the four packed orders
+# (include/sunstone_g2d.h), with no chroma plane.
+YUYV = 0x20
+YUYV_FRAME = dict(region=1, format=YUYV, width=640, height=480, stride=1280, offset=0)
+PACKED_OPS = [dict(CONVERT_OPS[0], source=YUYV_FRAME),
+              dict(CONVERT_OPS[1], source=dict(YUYV_FRAME, format=0x21, offset=0x100000), csc=1),
+              dict(CONVERT_OPS[2], source=dict(YUYV_FRAME, format=0x22)),
+              dict(op='convert', source=dict(YUYV_FRAME, format=0x23, width=2048, height=64, stride=4096),
+                   output=dict(region=0, format=5, width=224, height=64, stride=896, offset=0x180000),
+                   sx=0, sy=0, w=2048, h=64, dx=0, dy=0, ow=224, oh=64, csc=3)]
 RGB_FRAME = dict(region=1, format=0, width=256, height=160, stride=1024)
 
 
@@ -799,7 +814,8 @@ def check_rotates(record, state, ops, vendor, stray=None):
 def check_converts(record, state, ops, words):
     """Every convert completes on the mixer's launch sequence with the vendor's command page for the job at the device
     addresses the service used; one attach of the output read-write, the source read-only and the command page; each
-    convert maintains the output, luma and chroma lines, then the output's again after the finish."""
+    convert maintains the output, luma and chroma lines (a packed source has no chroma plane), then the output's again
+    after the finish."""
     name, records = record['case'], record['ops']
     assert len(records) == len(ops) and record['phase'] == OPEN, \
         (name, [(o['result'], o['fault_step'], hex(o['fault_value'])) for o in records])
@@ -820,8 +836,9 @@ def check_converts(record, state, ops, words):
         s, d = op['source'], op['output']
         assert o['result'] == 1 and o['fault_step'] == 0 and o['entries'] == 1 and o['irq_count'] == n + 1, \
             (name, n, o['result'], o['fault_step'], hex(o['fault_value']), o['entries'], o['irq_count'])
+        packed = s['format'] in words.PACKED
         luma = IOVA_BASE + REGION_BYTES + s.get('offset', 0)
-        chroma = IOVA_BASE + REGION_BYTES + s['chroma_offset']
+        chroma = 0 if packed else IOVA_BASE + REGION_BYTES + s['chroma_offset']
         output = IOVA_BASE + d.get('offset', 0)
         assert (o['output_iova'], o['source_iova']) == (output, luma), \
             (name, n, hex(o['output_iova']), hex(o['source_iova']))
@@ -830,26 +847,32 @@ def check_converts(record, state, ops, words):
             all(want is None or v == want for (_, v), (_, want) in zip(launch, LAUNCH)), (name, n, 'launch order', launch)
         assert launch[3][1] == rcq_iova, (name, n, 'RCQ header address', launch)
         assert not any(a >= ROT_CTL for a, _ in o['writes']), (name, n, 'rotator writes in a convert', o['writes'])
-        # The vendor's images: the source pitch is its width (align 0) and the output's is four times its width.
-        src_image = words.image(s['format'], s['stride'], op['sx'], op['sy'], op['w'], op['h'], (luma, chroma, 0))
+        # The vendor's images: the source pitch is its width (align 0; twice it for a packed source) and the output's
+        # is four times its width.
+        src_image = words.image(s['format'], s['stride'] // (2 if packed else 1), op['sx'], op['sy'], op['w'], op['h'],
+                                (luma, chroma, 0))
         dst_image = words.image(d['format'], d['stride'] // 4, op['dx'], op['dy'], op['ow'], op['oh'], (output, 0, 0))
         problems = words.check_page(f'{name} operation {n + 1}', o['page'],
                                     words.vendor_blocks(src_image, dst_image, tables[op['csc']], lan2), rcq_iova)
         assert not problems, (name, n, 'the command page differs from the vendor\'s words', problems[:6])
-    cache = state['cache']
-    assert [c for c, _, _ in cache] == [CACHE_CLEAN_INVALIDATE, CACHE_CLEAN, CACHE_CLEAN, CACHE_CLEAN_INVALIDATE] * \
-        len(ops), (name, cache)
-    for n, op in enumerate(ops):
+    cache, kinds, spans = state['cache'], [], []
+    for op in ops:
         s, d = op['source'], op['output']
         planes = [(SURFACE + d.get('offset', 0), d['stride'] * d['height']),
-                  (SOURCE + s.get('offset', 0), s['stride'] * s['height']),
-                  (SOURCE + s['chroma_offset'], s['chroma_stride'] * s['height'])]
+                  (SOURCE + s.get('offset', 0), s['stride'] * s['height'])]
+        kinds += [CACHE_CLEAN_INVALIDATE, CACHE_CLEAN]
+        if s['format'] not in words.PACKED:
+            planes.append((SOURCE + s['chroma_offset'], s['chroma_stride'] * s['height']))
+            kinds.append(CACHE_CLEAN)
         planes.append(planes[0])
-        for (_, at, size), (first, length) in zip(cache[4 * n:4 * n + 4], planes):
-            end = first + length
-            assert at % LINE == 0 and size % LINE == 0 and at <= first and at + size >= end and \
-                first - at < LINE and at + size - end < LINE, (name, n, 'maintenance must cover the plane in whole lines',
-                                                               hex(at), size, hex(first), length)
+        kinds.append(CACHE_CLEAN_INVALIDATE)
+        spans += planes
+    assert [c for c, _, _ in cache] == kinds, (name, cache)
+    for n, ((_, at, size), (first, length)) in enumerate(zip(cache, spans)):
+        end = first + length
+        assert at % LINE == 0 and size % LINE == 0 and at <= first and at + size >= end and \
+            first - at < LINE and at + size - end < LINE, (name, n, 'maintenance must cover the plane in whole lines',
+                                                           hex(at), size, hex(first), length)
 
 
 def check_stray_in_mixer(record, vendor):
@@ -973,7 +996,19 @@ def main():
         'refuse-chroma-stride': (dict(convert, source=dict(frame, chroma_stride=636)), 49, 0x101),
         'refuse-convert-ow-0': (dict(convert, ow=0), 50, 2),
         'refuse-convert-fit': (dict(convert, dx=2), 50, 2)})
-    converts = {'convert-session': CONVERT_OPS}
+    packed = PACKED_OPS[0]
+    refusals.update({
+        'refuse-packed-odd-w': (dict(packed, w=639, ow=320), 48, 4),
+        'refuse-packed-odd-sx': (dict(packed, sx=1, w=638), 48, 4),
+        'refuse-packed-wide': (dict(packed, source=dict(YUYV_FRAME, width=2050, height=64, stride=4100), w=2050, h=64,
+                                    ow=224, oh=64), 48, 4),
+        # The Lanczos vertical variant is accepted only by the stage-10 image (SUNSTONE_G2D_CONVERT_VARIANTS).
+        'refuse-packed-variant': (dict(packed, reserved=1), 48, 4),
+        'refuse-packed-chroma': (dict(packed, source=dict(YUYV_FRAME, chroma_offset=0x50000, chroma_stride=640)), 49,
+                                 0x101),
+        'refuse-packed-stride': (dict(packed, source=dict(YUYV_FRAME, stride=1276)), 49, 0x101),
+        'refuse-packed-output': (dict(packed, output=dict(YUYV_FRAME, region=0)), 49, 0)})
+    converts = {'convert-session': CONVERT_OPS, 'convert-packed-session': PACKED_OPS}
     cases += [(n, rotate_shape, {'converts': o}) for n, o in converts.items()]
     cases += [(n, rotate_shape, {'converts': [o]}) for n, (o, _, _) in refusals.items() if 'source' in o]
     vendor, words = rotate_vendor(), convert_vendor()
@@ -1039,7 +1074,8 @@ def main():
           f'service open, timeout faults, {len(closes)} closes after a fault, both stage-3 copies in one session, two '
           f'fills with the update bit left set, and every copy and fill page equal to the qualified image\'s; '
           f'{len(rotations)} rotate sessions with the vendor\'s words, a rotator stray masked during a fill, a rotate '
-          f'timeout and its close; {len(converts["convert-session"])} camera-frame converts in one session with the '
+          f'timeout and its close; {len(converts["convert-session"])} NV16 and '
+          f'{len(converts["convert-packed-session"])} packed camera-frame converts, each set in one session, with the '
           f'vendor\'s command pages and plane maintenance; and {len(refusals)} refusals that touch nothing')
 
 

@@ -19,6 +19,7 @@ Native HDMI, DSI, DisplayPort, immutable scanout and retained G2D paths have hos
 | OS-image G2D copy of alpha-0 pixels on four alternative blender configurations ([g2d-os.md](../g2d-os.md#copy-paths)) | board-measured on 3-1 | none copies exactly: three write 0x00000000 like the vendor path, and the premultiplied words multiply colour by alpha | `1794732202569746479-c9b5e324` |
 | OS-image G2D rotate of ARGB8888 at 0, 90, 180 and 270 degrees through the rotate module ([g2d-os.md](../g2d-os.md#first-rotate-stage)) | board-qualified on 3-1 | 96 by 40 rectangle, every CRC as predicted, alpha-0 pixels copied exactly; 90 turns clockwise; launch to interrupt 16 to 23 us | `1794743298175050163-4ed14c80` |
 | OS-image G2D convert of NV16 camera frames to RGB with scaling, four YUV-to-RGB tables derived from the BT.601 and BT.709 matrices ([g2d-os.md](../g2d-os.md#third-conversion-stage)) | board-qualified on 3-1 | 640 by 480 in 1050 us (292 Mpixel/s) with every table, every CRC as predicted; luma 0 to 255 kept through csc0, rounding to nearest; scales to 320 by 240 and 224 by 224 in 1039 us, equal to the scaler model; one A76 in scalar C without NEON 2478 us | `1794754244027087094-2256ed85`, `1794752244516494656-bd8feb22`, `1794749218366895381-6f184f31` |
+| OS-image G2D convert of packed 4:2:2 frames (YUYV, UYVY, YVYU, VYUY) to RGB with vertical scaling, linear and Lanczos vertical banks ([g2d-os.md](../g2d-os.md#packed-conversion-stage)) | host-tested | words equal the vendor transcription for 41 packed jobs; stage 10 predicted, not yet run | `g2d-convert-words`, `g2d-convert-host`, `os-g2d-operation` |
 | HDMI, DSI, immutable scanout and retained G2D paths | host-tested | none | [g2d.md](../g2d.md), [displayport-native.md](../displayport-native.md) |
 | Visible sink output and physical pixels | open | none | open work 1 and 2 |
 
@@ -44,7 +45,8 @@ The OS-image service is described in [g2d-os.md](../g2d-os.md). Exact copies of 
 2. Establish DisplayPort negotiation: analog and SERDES authority, AUX clock, board revision, orientation, link training and sink output.
 3. Obtain panel-bound electrical, PLL, rail and wiring evidence, and the DSI read transactions.
 4. Add per-access ownership checks to the G2D command path.
-5. Measure a NEON conversion on one A76 once applications may build with FP and SIMD registers, since the engine is 2.5 times faster than scalar C only; then RGB888 output, NV12 input, NV12 and YUV420 camera rotation, flips on the board, a mixer job and a rotate in one session (the stray masking), other pixel sizes and translucent solid backgrounds.
+5. Run the packed conversion stage on 3-1: the byte order of codes 0x20 and 0x21, and the vertical filter's banks, phase rounding and edges. Then feed USB camera frames, which arrive as payload spans, to the engine as one surface, and take the matrix and range from the camera's colour-matching descriptor.
+6. Measure a NEON conversion on one A76 once applications may build with FP and SIMD registers, since the engine is 2.5 times faster than scalar C only; then RGB888 output, NV12 input, NV12 and YUV420 camera rotation, flips on the board, a mixer job and a rotate in one session (the stray masking), other pixel sizes and translucent solid backgrounds.
 
 ## Evidence
 
