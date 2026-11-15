@@ -97,7 +97,10 @@ struct chain_state {
     uint64_t entry_tick, switch_tick;
     struct ss_wake_seg_values point[SS_WAKE_POINTS], part[SS_WAKE_PARTS], part_begin;
 };
-struct wake_chain { struct chain_state cur, held; struct ss_wake_seg_values running; bool marked; };
+/* generation counts the chains started on the core (point 0). The woken task reads the chains at EL0 with interrupts
+ * open, so an interrupt on its core can restart cur, and move a completed chain to held, while the task copies one; the
+ * task copies again when generation moved during its copy. */
+struct wake_chain { struct chain_state cur, held; struct ss_wake_seg_values running; bool marked; unsigned generation; };
 static struct { _Alignas(64) struct wake_chain c; } chain[SS_LATENCY_CAUSE_CORES];
 static struct ss_wake_seg_report wake_report;
 static uint64_t busy_complete_ticks;
@@ -123,6 +126,7 @@ void ss_wake_seg_point(unsigned core,unsigned point)
     struct wake_chain *w=&chain[core].c;
     struct chain_state *c=&w->cur;
     if (!point) {
+        __atomic_store_n(&w->generation,w->generation+1u,__ATOMIC_RELAXED);
         if (c->stage==SS_WAKE_POINTS-1) w->held=*c;
         c->stage=1;c->nested=0;c->part_open=0;c->entry_tick=READ(cntvct_el0);c->switch_tick=0;
         memset(c->part,0,sizeof(c->part));
@@ -188,11 +192,22 @@ void ss_wake_seg_running(unsigned core,uint64_t deadline,uint64_t release,uint64
     if (!w->marked) { w->cur.stage=0;w->held.stage=0;++wake_report.core[core].unlinked;return; }
     const struct ss_wake_seg_values now=w->running;w->marked=false;
     struct ss_wake_seg_core *r=&wake_report.core[core];
-    const struct chain_state *c=NULL;bool interrupted=false;
-    if (chain_links(core,&w->cur,deadline,release,running)) c=&w->cur;
-    else if (chain_links(core,&w->held,deadline,release,running)) { c=&w->held;interrupted=true; }
+    /* Take the linked chain whole: copy it again when an interrupt started a chain during the copy, and file nothing
+     * from a wake whose every copy was torn (SS_WAKE_SEG_COPIES, latency_cause.h). */
+    struct chain_state linked;const struct chain_state *c=NULL;bool interrupted=false,torn=true;unsigned stage=0;
+    for (unsigned copy=0;copy<SS_WAKE_SEG_COPIES && torn;++copy) {
+        const unsigned generation=__atomic_load_n(&w->generation,__ATOMIC_RELAXED);
+        __asm__ volatile("" ::: "memory");
+        c=NULL;interrupted=false;stage=w->cur.stage;
+        if (chain_links(core,&w->cur,deadline,release,running)) { linked=w->cur;c=&linked; }
+        else if (chain_links(core,&w->held,deadline,release,running)) { linked=w->held;c=&linked;interrupted=true; }
+        __asm__ volatile("" ::: "memory");
+        torn=__atomic_load_n(&w->generation,__ATOMIC_RELAXED)!=generation;
+    }
     if (!index)
-        r->first_state=UINT64_C(1)<<16|(uint64_t)(c!=NULL)<<8|(uint64_t)interrupted<<9|w->cur.stage;
+        r->first_state=(r->first_state&~UINT64_C(0xffffffff))|UINT64_C(1)<<16|(uint64_t)torn<<10|
+            (uint64_t)(c!=NULL)<<8|(uint64_t)interrupted<<9|stage;
+    if (torn) { w->cur.stage=0;w->held.stage=0;r->first_state+=UINT64_C(1)<<32;return; }
     if (!c) { w->cur.stage=0;w->held.stage=0;++r->unlinked;return; }
     ++r->linked;
     if (c->nested) ++r->nested;

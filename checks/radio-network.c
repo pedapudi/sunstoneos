@@ -149,8 +149,9 @@ static int network_write(void *context,uint32_t offset,uint32_t value)
     }
     return ok;
 }
+static unsigned random_calls; /* words the stack drew (checks/radio-network-dhcp-dns.c sizes the address stage's from it) */
 static int random32(void *context,uint32_t *value)
-{assert(context==&m);if(entropy_failure)return 0;*value=0x13579bdf;return 1;}
+{assert(context==&m);++random_calls;if(entropy_failure)return 0;*value=0x13579bdf;return 1;}
 static int sequence(void *context,uint32_t src,uint16_t sport,uint32_t dst,uint16_t dport,uint32_t *value)
 {(void)src;(void)sport;(void)dst;(void)dport;return random32(context,value);}
 static void checkpoint(void)
