@@ -13,7 +13,9 @@ Cases, on a scratch git repository and the object compiled and linked as the ima
   unknown             a build outside any git checkout carries no revision (known false) and the record falls back to the host tree;
   old-image           an ELF without the object, and a file that is not an ELF, give no embedded revision and the same fallback;
   quiet-rebuild       a build with no new commit leaves the generated file untouched, so nothing recompiles or relinks;
-  every-image         a configure of this tree lists every image that has a build id in source-revision-targets.txt.
+  every-image         a configure of this tree lists every image that has a build id in source-revision-targets.txt;
+  selection           a change to cmake/source-revision-write.cmake, which a build runs with cmake -P, selects the checks that build images,
+                      as a change to an included CMake file does (checks/check-index.py, CMAKE_SCRIPT).
 Usage: image-source-revision.py --output DIR
 """
 import argparse
@@ -123,6 +125,13 @@ def main():
     images = {path.parent.name for path in configured.rglob('build-id.txt')}
     assert len(listed) >= len(images) >= 8, (len(listed), sorted(images))
     print('PASS a configure lists %d images for the revision object (%d build ids)' % (len(listed), len(images)))
+
+    selected = subprocess.run([sys.executable, str(ROOT / 'checks/check-index.py'), '--changed', 'cmake/source-revision-write.cmake'],
+                              capture_output=True, text=True, cwd=ROOT)
+    assert selected.returncode == 0, selected.stderr
+    names = {line.split(':')[0] for line in selected.stdout.splitlines()}
+    assert 'checks/os-image-identity.py' in names and len(names) > 20, sorted(names)
+    print('PASS a change to the revision script selects %d checks, the checks that build images among them' % len(names))
 
 
 if __name__ == '__main__':
