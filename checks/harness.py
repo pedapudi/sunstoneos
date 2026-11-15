@@ -379,9 +379,22 @@ def trace_sections(log, classify, names):
     translated blocks (in_asm) and their executions (exec, nochain), and, for
     each name in names, the instructions for which classify(word) returns a
     list containing that name. Code before the first call is not counted.
+
+    QEMU logs "Trace" when it enters a block. When the block's first check
+    finds an exit request or a spent instruction budget, the block leaves
+    before its first instruction: QEMU logs "Stopped execution of TB chain
+    before HOST [PC]" for that block and enters it again later. The stopped
+    entry executed nothing, so it is taken back out. Both lines come from one
+    block entry in the TCG thread, and -icount runs every vCPU in one thread,
+    so the stopped entry is the nearest preceding Trace line of any CPU; it
+    must name the same host block and guest address, or the log is refused.
+    The Stopped line names no CPU, so a log from multi-threaded TCG, where
+    CPUs log at the same time, cannot be paired and is not supported.
     """
     blocks, sections, counts, words, address = {}, [], None, None, None
-    exec_line = re.compile(r'^Trace 0: \S+ \[[0-9a-f]+/([0-9a-f]+)/')
+    exec_line = re.compile(r'^Trace (\d+): (\S+) \[[0-9a-f]+/([0-9a-f]+)/')
+    stopped_line = re.compile(r'^Stopped execution of TB chain before (\S+) \[([0-9a-f]+)\]')
+    entry = None  # (host block, guest address, the section it was counted in, its words) of the last Trace line
     with Path(log).open(errors='replace') as stream:
         for line in stream:
             if line.startswith('IN:'):
@@ -402,11 +415,26 @@ def trace_sections(log, classify, names):
                 sections.append(counts)
                 continue
             match = exec_line.match(line)
-            if match and counts is not None:
-                for word in blocks[int(match[1], 16)]:
-                    counts['instructions'] += 1
-                    for name in classify(word):
-                        counts[name] += 1
+            if match:
+                pc = int(match[3], 16)
+                counted = counts if match[1] == '0' and counts is not None else None
+                entry = (match[2], pc, counted, blocks[pc] if counted is not None else None)
+                if counted is not None:
+                    for word in entry[3]:
+                        counted['instructions'] += 1
+                        for name in classify(word):
+                            counted[name] += 1
+                continue
+            match = stopped_line.match(line)
+            if match:
+                if entry is None or entry[:2] != (match[1], int(match[2], 16)):
+                    raise RuntimeError(f'{log}: {line.strip()} follows no entry of that block')
+                if entry[2] is not None:
+                    for word in entry[3]:
+                        entry[2]['instructions'] -= 1
+                        for name in classify(word):
+                            entry[2][name] -= 1
+                entry = None
     return sections
 
 

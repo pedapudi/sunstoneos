@@ -6,6 +6,10 @@
 #include "aarch64_device_memory.h"
 #include "pvr_gpu_call.h"
 #include <string.h>
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+#include "a733_nsi_counters.h"
+int os_nsi_counters_call(struct a733_nsi_counter_call *);
+#endif
 
 static struct pvr_compute_queue *instance;
 __attribute__((weak)) int pvr_compute_queue_runtime_sync(void) { return 1; }
@@ -167,7 +171,7 @@ static int context(struct pvr_compute_queue *q,struct gpu_queue_context c)
 /* Fixed same-task kernel entry. The argument stays on the caller's stack;
  * no function pointer or private GPU-memory pointer crosses the interface. */
 extern int pvr_gpu_call(unsigned,void *) __attribute__((weak));
-enum { FAST_SUBMIT=1, FAST_COLLECT=2, FAST_BATCH=3 };
+enum { FAST_SUBMIT=1, FAST_COLLECT=2, FAST_BATCH=3, FAST_COUNTERS=4 };
 struct fast_call {
     struct gpu_queue_context context;
     struct gpu_queue_job job;
@@ -179,11 +183,26 @@ struct fast_batch_call {
     struct gpu_queue_job job[GPU_QUEUE_DEPTH];
     uint32_t fence[GPU_QUEUE_DEPTH],count,accepted;
 };
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+/* The NSI counter diagnostic: only the GPU owner's context reaches the counter owner (drivers/dram/a733_nsi_counters_guard.c). */
+struct __attribute__((aligned(8))) fast_counters_call {
+    struct gpu_queue_context context;
+    struct a733_nsi_counter_call call;
+};
+#endif
 int pvr_gpu_call_dispatch(unsigned operation,void *argument)
 {
     struct pvr_compute_queue *q=instance;
-    if (operation!=FAST_SUBMIT && operation!=FAST_COLLECT && operation!=FAST_BATCH) return GPU_QUEUE_REFUSED;
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+    const int counters=operation==FAST_COUNTERS;
+#else
+    const int counters=0;
+#endif
+    if (operation!=FAST_SUBMIT && operation!=FAST_COLLECT && operation!=FAST_BATCH && !counters) return GPU_QUEUE_REFUSED;
     size_t bytes=operation==FAST_BATCH?sizeof(struct fast_batch_call):sizeof(struct fast_call);
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+    if (counters) bytes=sizeof(struct fast_counters_call);
+#endif
     if (!argument || ((uintptr_t)argument&7) || !a733_span_excl_nonempty(argument,bytes)) return GPU_QUEUE_REFUSED;
     struct aarch64_translation translation;
     uintptr_t first=(uintptr_t)argument,last=first+bytes-1;
@@ -196,6 +215,13 @@ int pvr_gpu_call_dispatch(unsigned operation,void *argument)
     memcpy(&identity,argument,sizeof(identity));
     int r=context(q,identity);
     if (r!=GPU_QUEUE_OK || !q->service->config.job_irq_ack) return r==GPU_QUEUE_OK?GPU_QUEUE_REFUSED:r;
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+    if (counters) {
+        if (identity.client) return GPU_QUEUE_REFUSED;   /* the owner task only */
+        (void)os_nsi_counters_call(&((struct fast_counters_call *)argument)->call);
+        return GPU_QUEUE_OK;
+    }
+#endif
     if (operation==FAST_COLLECT) return pvr_compute_fast_collect(q,a->context.client,a->fence,a->sequence,&a->record);
     int live=pvr_compute_queue_runtime_admit();
     if (live!=1) return live<0?GPU_QUEUE_FAULT:GPU_QUEUE_PARKED;
@@ -225,6 +251,16 @@ static int direct_submit(struct gpu_queue_context c,const struct gpu_queue_job *
     if (fence && (r==GPU_QUEUE_OK || (r==GPU_QUEUE_FAULT && call.fence))) *fence=call.fence;
     return r;
 }
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+int gpu_queue_nsi_counters(struct gpu_queue_context c,struct a733_nsi_counter_call *call)
+{
+    if (!call || !pvr_gpu_call) return GPU_QUEUE_REFUSED;
+    struct fast_counters_call a={.context=c,.call=*call};
+    int r=pvr_gpu_call(FAST_COUNTERS,&a);
+    *call=a.call;
+    return r;
+}
+#endif
 static void direct_wait_clear(atomic_uint *waiter)
 {
 #ifdef SUNSTONE_A733_OS

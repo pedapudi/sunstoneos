@@ -112,6 +112,15 @@ Profile 3 of `compile.py` admits programs with two 64-bit pointer arguments in u
 
 The mimus kernel reads this layout: a 32-byte record with the weight and code addresses first and four shape words after them, and the output region in the second pointer (`shaders/pvr_mimus_linear.cl`).
 
+A program that uses the inline argument ABI (`GPU_QUEUE_ABI_GRID_INLINE`, `compile.py --inline-arguments`) receives the argument block itself, so no lane loads its arguments from memory:
+
+- **Unified registers 0-1:** block bytes 0-7.
+- **Unified registers 2-3:** the GPU address of binding 0.
+- **Unified registers 4-5:** block bytes 8-15; bytes past the block's end read as zero.
+- **Unified register 6:** the flat local index.
+
+The PDS dispatch program writes these registers once per task, with one extra data write (`DOUTW`) for registers 4-5. Such a job may carry at most 16 block bytes (`GPU_QUEUE_INLINE_BYTES`), for example one binding address and 8 argument bytes. The limit comes from the job page: the dispatch program fills all 16 instruction words of its 64-byte code line. `checks/gpu-queue-inline.py` runs the job writer's PDS data and program through an emulator of the PDS data and dispatch instructions, and compares the registers they write with the registers each compiled program reads.
+
 A program descriptor (`struct gpu_queue_program`) carries the code, its length (at most 8,128 bytes, the limit of `compile.py --session`), the compiler's temporary count, coefficient count and local size, and the three digests the compiler manifest records. The queue checks the descriptor's fields at creation. It cannot check the code's memory behavior: programs are trusted, and source admission is an offline review step (`include/pvr_compute_package.h:26-31`). The local-memory ABI is in [gpu-compute-local-memory.md](gpu-compute-local-memory.md).
 
 ### The worker repeats every check on its own copy
@@ -124,6 +133,7 @@ A program descriptor (`struct gpu_queue_program`) carries the code, its length (
 | Sequence above the caller's last sequence and below 2^32 - 1 | Worker | REFUSED, `SEQUENCE` |
 | Each group count nonzero | Submit, worker | REFUSED, `GRID` |
 | Argument bytes at most 64, and the argument block at most 88 bytes | Submit, worker | REFUSED, `ARGUMENTS` |
+| For an inline-argument program, the argument block at most 16 bytes | Submit, worker | REFUSED, `ARGUMENTS` |
 | `not_after_us` not passed at the kick | Worker | REFUSED, `DEADLINE` |
 
 Lease access needs no per-job check, because creation already refused the combinations that maintenance cannot serve. Every check compares against the context's lease table, which never changes after creation. No check translates an address, hashes a buffer or takes a lock. A refused job gets a REFUSED record and nothing reaches the client ring.
@@ -165,13 +175,13 @@ The context has one job page in the PDS heap:
 
 | Bytes | Contents | Written |
 | --- | --- | --- |
-| 0-127 | PDS data: task word, group counts, the two pointer constants | At creation; the binding-0 address and the group counts again only when they change |
+| 0-127 | PDS data: task word, group counts, the two pointer constants; for an inline-argument program, the argument block's 16 bytes at bytes 80 and 112 | At creation; the binding-0 address and the group counts again only when they change; the inline argument block on every job |
 | 128-191 | PDS dispatch program | At creation |
 | 192-255 | Fence PDS program | At creation |
 | 256-315 | CDM stream: the grid kernel, the fence kernel, the terminate word | Per job |
-| 320-407 | Argument block: binding addresses, then argument bytes | Per job |
+| 320-407 | Argument block: binding addresses, then argument bytes; unused by an inline-argument program | Per job |
 
-The worker writes the PDS data with `pvr_compute_job_grid_pds`. A program that reads no group counts, such as mimus's, keeps zero counts there; the CDM stream carries each job's grid. Per job the worker writes the CDM stream with `pvr_compute_job_grid_cdm`, the argument block and the 8-byte timeline UPDATE. It rewrites the binding-0 pointer only when the address differs from the previous job's, and the group counts only for a program with seven coefficients and only when they change. The per-job bytes are contiguous from byte 256, so one clean covers them (at most 3 lines). The 96-byte firmware compute command points at the CDM stream and is built once with `pvr_compute_job_command`.
+The worker writes the PDS data with `pvr_compute_job_grid_pds_abi`. For an inline-argument program it writes the argument block into the PDS data with `pvr_compute_job_grid_inline` on every job, so the per-job clean also covers the PDS data line at bytes 64-127. A program that reads no group counts, such as mimus's, keeps zero counts there; the CDM stream carries each job's grid. Per job the worker writes the CDM stream with `pvr_compute_job_grid_cdm`, the argument block and the 8-byte timeline UPDATE. It rewrites the binding-0 pointer only when the address differs from the previous job's, and the group counts only for a program with seven coefficients and only when they change. The per-job bytes are contiguous from byte 256, so one clean covers them (at most 3 lines). The 96-byte firmware compute command points at the CDM stream and is built once with `pvr_compute_job_command`.
 
 ### Completion reads one timeline word
 

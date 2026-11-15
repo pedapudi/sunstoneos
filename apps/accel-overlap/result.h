@@ -14,10 +14,19 @@
 #define ACCEL_OVERLAP_NPU 2u
 #define ACCEL_OVERLAP_STREAM 4u
 #define ACCEL_OVERLAP_PLL_CYCLES 8u
-/* The second input region: this header, then the relu graph's input tensor and its simulator reference output. */
+/* The second input region: this header, then the relu graph's input tensor and its simulator reference output. Version 2
+ * (pack.py with more than one graph) holds count graphs in the order the models region lists them, each with its input
+ * tensor and reference output. */
 struct accel_overlap_vectors {
     uint32_t magic, version;
     uint32_t input_offset, input_bytes, reference_offset, reference_bytes;
+};
+struct accel_overlap_vectors_graph {
+    uint32_t input_offset, input_bytes, reference_offset, reference_bytes;
+};
+struct accel_overlap_vectors2 {
+    uint32_t magic, version, count, reserved;
+    struct accel_overlap_vectors_graph graph[];
 };
 /* A distribution of interval samples in ticks. count samples entered the histogram; missing counts the completions with no
  * sample (the waiter did not block, or a stamp was absent); overflow counts samples above the histogram, which only max
@@ -80,6 +89,14 @@ _Static_assert(sizeof(struct accel_overlap_sweep) == 56 && sizeof(struct accel_o
 /* The four-elements-per-lane GPU run (ACCEL_OVERLAP_WIDTH): the larger-job layout; only phase 0, the GPU alone, runs, and the
  * other phases stay zero. */
 #define ACCEL_OVERLAP_WIDTH_VERSION 4u
+/* The NSI counter periods (ACCEL_OVERLAP_COUNTERS): the width build on the inline-argument program (add4inline/) with eight
+ * phases, idle, the GPU with arguments per lane (mode 1), the GPU with arguments once per task (mode 0), the NPU relu at
+ * widths 176, 128, 192 and 256, and the core-2 stream. NSI ports 6 and 18 count each with a 100 ms period; the larger-job
+ * header and its eight phases, then the counter record. */
+#define ACCEL_OVERLAP_COUNTERS_VERSION 6u
+#define ACCEL_OVERLAP_COUNTER_PHASES 8u
+#define ACCEL_OVERLAP_PERIODS 5u
+#define ACCEL_OVERLAP_NPU_GRAPHS 4u
 #define ACCEL_OVERLAP_INTERLEAVED 0x100u
 struct accel_overlap_large_phase {
     struct accel_overlap_phase run;
@@ -102,4 +119,32 @@ _Static_assert(sizeof(struct accel_overlap_large_phase) == 312 && sizeof(struct 
 _Static_assert(sizeof(struct accel_overlap_distribution) == 32 && sizeof(struct accel_overlap_device) == 88 &&
                sizeof(struct accel_overlap_phase) == 216 && sizeof(struct accel_overlap_pll) == 72 &&
                sizeof(struct accel_overlap_result) == 1200, "host.py decodes this layout");
+/* One sample of both banks (0 port 6, 1 port 18): ticks since the phase's first BEGIN call began, the GPU and NPU jobs
+ * collected so far in the phase, the first failing call status, and per bank RQ_RD, RQ_WR, DT_RD, DT_WR, LA_RD, LA_WR. */
+struct accel_overlap_period_sample {
+    uint32_t ticks, gpu_jobs, npu_jobs, status;
+    uint32_t value[2][6];
+};
+/* One phase. Its devices start, and after the warm-up both banks begin with a 100 ms period. begin gives each bank's
+ * BEGIN call as ticks from the first call's start to its own start and end. Period k (1 to ACCEL_OVERLAP_PERIODS) ends
+ * k periods after the enable inside BEGIN: pre[k-1] samples both banks 3 ms before the earliest such end, post[k-1] 2 ms
+ * after the latest. At begin, the jobs collected when the first BEGIN call began. After the last sample the banks
+ * end: value just after the disable, held 10 us later. mode is the GPU mode (0 arguments once, 1 per lane) or the NPU
+ * graph index; start and end bound the phase's device work. */
+struct accel_overlap_period_phase {
+    uint32_t status, clear[2], mode;
+    uint32_t begin[2][2];
+    uint32_t gpu_jobs_at_begin, npu_jobs_at_begin, samples, reserved;
+    uint64_t start, first_begin, end;
+    uint32_t value[2][6], held[2][6];
+    struct accel_overlap_period_sample pre[ACCEL_OVERLAP_PERIODS], post[ACCEL_OVERLAP_PERIODS];
+};
+struct accel_overlap_counter_result {
+    struct accel_overlap_large_result large;
+    uint32_t open_status, close_status, fail_address, fail_value;
+    uint32_t reset[2][9];                         /* every bank word read before any write */
+    struct accel_overlap_period_phase phase[ACCEL_OVERLAP_COUNTER_PHASES];
+};
+_Static_assert(sizeof(struct accel_overlap_period_sample) == 64 && sizeof(struct accel_overlap_period_phase) == 808 &&
+               sizeof(struct accel_overlap_counter_result) == 2944 + 88 + 8 * 808, "host.py decodes this layout");
 #endif
