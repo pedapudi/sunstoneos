@@ -1,3 +1,6 @@
+#ifdef SUNSTONE_LATENCY_PRECISE
+#include "sunstone_deadline.h"
+#endif
 #include "sunstone_latency.h"
 #ifdef SUNSTONE_SCHED_LATENCY_TRACE
 #include "latency_trace.h"
@@ -594,5 +597,9 @@ void ss_latency_gpu_received(unsigned client)
 __attribute__((weak)) void ss_latency_tick_hook(uint64_t due) { (void)due; }
 __attribute__((weak)) void ss_latency_task_ready(void *task) { (void)task; }
 __attribute__((weak)) void ss_latency_deadline_ready(void *task, uint64_t tick) { (void)task; (void)tick; }
+#ifdef SUNSTONE_LATENCY_PRECISE
+int ss_latency_deadline_register(void) { return sunstone_deadline_register(); }
+int ss_latency_deadline_wait_until(uint64_t absolute_us) { return sunstone_deadline_wait_until(absolute_us); }
+#endif
 __attribute__((weak)) void ss_latency_current_set(unsigned core, void *task, int idle) { (void)core; (void)task; (void)idle; }
 #endif

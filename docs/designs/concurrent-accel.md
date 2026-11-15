@@ -423,6 +423,72 @@ path select and both bridges at EL1 on core 0 and writes nothing. One returning 
 Non-secure EL1 therefore sees both bridges, which hold boot0's values with every limit disabled. These words are the
 reset values that a limiter owner restores.
 
+### A 60% cap on CPU bandwidth adds no wake time on cores 1-7
+
+**Status: measured on the board; the queue model is rejected.** A limiter that cut the CPU streams from 7.6 to
+3.0 GB/s left the mean busy wake of cores 1-3 unchanged, and the streaming cores 4 and 5 woke faster under the cap.
+Queueing at the DRAM side from CPU traffic does not set the wake time of cores 1-7. The scheduler's woken-frame
+prefetch, which lowered the mean busy wake on every one of CPUs 1-7 ([scheduler status](../status/scheduler.md),
+open item 11), points to L1D refills of the woken task's saved frame instead.
+
+**Model under test.** Each wake path misses in L3 a few times. If DRAM-side queueing sets those refills' cost, a cap
+that cuts CPU bandwidth to a fraction of its uncapped value lengthens each refill by the ratio of uncapped to capped
+bandwidth. For the cap below that ratio is 2.5. The model therefore predicted wakes longer by 4.5 to 5.0 µs on
+cores 1-3, 86 to 100 µs on cores 4 and 5, and 27 to 106 µs on cores 6 and 7.
+
+**Conditions.** One returning run on port 3-1 (queue entry `1794752040047726287-79c1bfad`), image `76a06142cd87`
+built from commit 56bcbecea. The image is the CPU latency bar image: the latency application with streaming on
+cores 4-7, the cause, wake-segment and scheduler traces, and an L3 partition. Its busy phase is
+split into four sub-phases of 32 wakes per core, uncapped, capped, capped, uncapped (U0, B1, B2, U3). A task at EL1 on
+CPU0 writes both bridges in the [vendor sequence](#vendor-sequence) between sub-phases. The cap sets the total limit
+on each bridge to bandwidth word 753 and saturation word 483, which is 1,500 MB/s per bridge at the 510 MHz counting
+clock. Before the busy phase a warm-up runs the streams for 50 ms uncapped and 50 ms under the largest words (4,095
+and 1,023), so the first capped sub-phase does not pay for the limiter's first use.
+
+**Judgement.** For each core the verdict is the mean busy wake of B1 and B2 pooled, minus the mean of U3. U3 follows
+the caps, so it shares their warm caches. In three runs of the bar image without a cap, the mean difference on
+cores 1-3 spans -0.23 to +0.64 µs against U3 and -0.45 to +0.17 µs against U0 and U3 pooled; that spread is the
+resolution. A difference of 2 µs or more on cores 1-3 would confirm the
+model, and one under 0.5 µs makes a full NPU workload under the same latency bar the next stage.
+
+**Results.**
+
+| Core | B minus U3, mean of wakes (µs) | Predicted (µs) | Largest B wake minus largest U3 wake (µs) |
+| --- | --- | --- | --- |
+| CPU1 | -0.18 | +4.5 to +5.0 | +3.00 |
+| CPU2 | -0.60 (-0.70 without the thermal service's wakes) | +4.5 to +5.0 | +3.46 |
+| CPU3 | -0.35 | +4.5 to +5.0 | +2.42 |
+| CPU4 | -2.44 | +86 to +100 | +2.21 |
+| CPU5 | -2.98 | +86 to +100 | +32.21 |
+| CPU6 | +0.77 | +27 to +106 | +8.38 |
+| CPU7 | +1.85 | +27 to +106 | +8.50 |
+
+- **Bandwidth.** The streams ran at 7.64 and 7.65 GB/s uncapped and 3.00 and 3.07 GB/s capped; the 50 ms warm-up
+  windows ran at 7.81 and 7.79 GB/s, a ratio of 0.997. The cap therefore bound, and the largest words did not.
+- **Bridge operations.** Every operation completed and read back what it wrote. Setting the cap took 36.6 to
+  61.8 µs and clearing it 24.4 to 31.4 µs, of which 38 to 51 percent was bridge accesses. The final restore read every
+  limiter word back as 0, and a read-only probe afterwards read +0x30 and +0x48 to +0x5c as 0 on both bridges (queue
+  entry `1794752114488359547-c13a4325`).
+- **Warm-up.** U3 minus U0 is -0.43, -0.32 and -0.39 µs on cores 1-3, inside the 0.5 µs threshold.
+
+Every wake prediction missed by about ten times the uncapped spread, so one run settles the stage.
+
+**Exits.** Every way out of the cap image wrote 0 to +0x30 on both bridges first. A first submission of the image
+(queue entry `1794750406816673707-79429d7a`) placed that store behind a `CurrentEL` read in a function that the
+terminal tasks call at EL0. The read faulted and the board returned through the watchdog; a read-only probe then
+found every limiter word at 0. The image that ran moves the store to the EL1 side of the terminal's supervisor call.
+A static check over the linked image (`checks/latency-axi-cap.py` at commit 57e391760) shows that no path from an
+EL0 task entry reaches either store, and it refuses the faulting version.
+
+**Decoder.** The latency decoder refused the run's first result although the image returned cleanly. CPU0 selects
+rarely during the warm-up, so its 16 kept selections reach back about 105 ms while its 16 kept IRQ dispatches span
+14 ms, and 6 selections named dispatches that the IRQ ring had overwritten. The image flags lost IRQ history only
+when the loss covers the wake itself. The decoder now names such a selection as having an overwritten origin
+(commit 72d81b83a); no wake value depends on that field.
+
+The cap option is not in the tree. Commits 56bcbecea, 57e391760 and 72d81b83a rebuild the image, its check and its
+decoder.
+
 ## The GPU add waits on memory four times per task
 
 Alone, the stage-1c GPU add ran 4.48 ms per job and moved 0.70 GB/s. The time comes from the program and the

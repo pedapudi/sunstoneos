@@ -9,7 +9,7 @@ launch admission facts.
 
 This document is for driver developers and the board coordinator. It states how
 the shipped Wi-Fi service in the OS image behaves, from supply power-up to
-association, and what it reports to the host.
+association, an IPv4 lease and one name lookup, and what it reports to the host.
 
 ## The stages run in order and each one is reported
 
@@ -36,8 +36,8 @@ a 232-byte head that gives the total length and the access point count, then one
 44-byte entry per access point, then the 16-byte scan counts when head flags
 bit 10 is set, then the 48-byte association tail when bit 9 is set, then the
 16-byte RSN summary when bit 11 is set, then the 16-byte fault site when bit 12
-is set, then the 28-byte transport trace when bit 13 is set. The head carries the record version
-(3 since the scan counts and the RSN summary). The image exports the version it
+is set, then the 28-byte transport trace when bit 13 is set, then the 64-byte address section when bit 14 is set. The head
+carries the record version (4 since the address section). The image exports the version it
 writes as `os_radio_result_version`, and admission refuses an image whose
 version the runner's `tools/radio_result.py` does not read, naming both
 (`checks/radio-record-version.py`). The scan counts are:
@@ -262,18 +262,140 @@ confirmation four bytes longer, and with the first one a byte short;
 `checks/aic8800-dispatch.c` cover the binding messages, the memory
 confirmations and the dispatcher's matching rules.
 
-Two board runs reached the pairwise key add. In run 5 (entry
+Three board runs reached the pairwise key add. In run 5 (entry
 1794738427185556712-c450b701) no confirmation came within the 1 s bound the
 image then had; that remains unexplained. In run 6 (entry
 1794745255109339882-f869332f) the confirmation came at once as two bytes with
 status 0, and the image refused it because it then required exactly 4 bytes.
+In run 7 (entry 1794751437798567373-be2dcf1b), with the lengths above, the
+stage ended authorized: connect 4.13 s after arming, both key adds and the port
+open confirmed, the link secured 0.42 s after connect, the orderly shutdown
+matched and the board returned 4.66 s after arming.
+
+The trace counts milliseconds from the transport's clock read at the start of
+each owner pass. A confirmation read in the same pass as its write completed
+reads 0 ms, as every confirmation did in run 7, so the trace resolves no
+latency below one pass and one millisecond. The 6000 ms command bound stays
+until a run measures a latency it can be tightened against.
+
+## The address stage leases an IPv4 address and resolves one name
+
+Status: **host-tested**. No board run has reached it, and the IPv4 stack has not yet run on the board.
+
+`--radio-stage-limit 6` (`BOARD_RADIO_STAGE_ADDRESS`) runs the association stage and then this one. It needs `--wifi
+NAME` as stage 5 does. The prepared profile sets the network's DHCP flag and the bounds below; the image refuses a stage-6
+profile without them, and a profile that sets DHCP at any other stage. The sequence after authorization is:
+
+1. Authorization ends association as in stage 5: the transport trace is captured and the PMK copy is erased. The address
+   stage's bound starts.
+2. The owner starts the station network, the pinned FreeRTOS+TCP stack over the AIC8800 data path, once the transport
+   is idle and the IP task's random-number ring (below) holds four words. The stack's DHCP client sends its first
+   discover 250 ms later.
+3. The owner's notification wakes the radio client task, which submits one `SUNSTONE_NET_RESOLVE` for `example.com`.
+   The network service holds the request until a lease is published, then sends one A query to the first DNS server the
+   lease names and waits for the response. The client zeroes any returned address before it stores the reply.
+4. On the client's reply, if the lease is still held, the owner takes the network offline (`sunstone_net_offline`). The
+   IP task runs the stack's network-down processing, which stops DHCP's timer and closes its socket, and then
+   acknowledges. The owner returns the session from the network to the management layer
+   (`a733_radio_session_park_network`), which discards any held data frames, and the stage ends at `scanned`. The module
+   then shuts down as after association.
+
+Every wait is a blocked task. The owner wakes on radio interrupts and on the client's notification. The IP task wakes on
+its receive queue and the stack's timers. The client wakes on its reply notification.
+
+The image sends no DHCPRELEASE. The pinned stack has no release message, and the image does not patch it. Stopping DHCP
+and shutting down in order leaves the lease on the server until its lease time ends. No DHCP message carries a host
+name: the stack's `ipconfigDHCP_REGISTER_HOSTNAME` stays disabled, and the record flags any sent message that holds
+option 12.
+
+The stage fails, and the failure shutdown runs, in three cases:
+
+- **No lease:** the client's reply comes while no lease is held, as it does after no offer, or after a NAK with no
+  later ACK.
+- **Link lost:** the access point disconnects the station.
+- **Bound passed:** the stage's bound ends first.
+
+The network faults in each case, which also stops DHCP. Each path writes the address section.
+
+The stack draws its DHCP transaction identifiers, its DNS query identifier and its socket port numbers on the IP task.
+The CE entropy reader serves only the owner task, so the owner fills a 16-word single-producer ring from the CE
+reservoir on every pass and the IP task takes words from it. The stack draws the first DHCP transaction identifier once
+at its start, and DHCP never starts when that draw fails; the network therefore starts only with four words ready.
+`checks/radio-network-dhcp-dns.py` measures four words drawn through a lease, its renewal, one socket and one lookup. A
+draw that finds the ring empty sets the record's entropy-short flag. The ring is erased with the other secrets.
+
+The IP task is an OS service created without an affinity, so it runs on the service core, CPU0, as the radio owner
+does. The record's placement fields show the cores both ran on and how often the IP task woke.
+
+### The address section holds counts, codes, flags and times only
+
+Head flags bit 14 marks a 64-byte address section, the last section of the record (version 4). Its fields
+(`include/aic8800_address_trace.h`) are:
+
+- **Counts:** DHCP discovers, offers, requests, ACKs and NAKs, DNS queries and responses, and the frames ignored because
+  their transaction identifier, query identifier or hardware address belongs to another station.
+- **Times:** the first frame of each kind, in milliseconds since the network started.
+- **Placement:** the IP task's wakes since the network started, and those that carried no event (the stack's timer
+  waits ending, and the driver's two bare wake-ups at the stack's start and the offline marker); the cores the IP task
+  woke on, and the cores the radio owner polled the network on, one bit per core.
+- **Codes:** the lease time in seconds, the number of DNS servers the lease names, the DNS response code and answer
+  count, and the resolve's reply code.
+- **Flags:**
+  - the lease was published;
+  - the leased address is in an RFC 1918 private range;
+  - the ACK named a router, and the first router is private-range;
+  - the offer and the ACK name the same address, and the same server;
+  - a sent DHCP message carried a host-name option;
+  - the ACK carried a lease time;
+  - a DNS response carried the query's identifier, and the resolve returned an address;
+  - the IP task acknowledged the offline fence;
+  - the stage's bound passed;
+  - the ring was empty at a draw.
+
+The section holds no address, MAC, host name or DNS name. The owner's frame observer keeps the transaction identifiers
+and the offered address in memory to compare with later frames; they never reach the record. `tools/evidence.py`
+refuses any record in `docs/evidence/radio.jsonl` that holds an IPv4 dotted quad or a 48-bit MAC in colon or hyphen form
+(`checks/evidence-addresses.py`).
+
+### The stage's bounds nest inside the startup deadline and the session
+
+Ticks are milliseconds. The bounds start at three points:
+
+- **Stage, 17 s from authorization.** It covers the wait for an idle transport and four ring words, the network's
+  start, the resolve and the offline fence: the resolve's 16 s plus 1 s for the rest.
+- **DHCP acquisition, 12 s from the network's start.** The stack sends its first discover at 250 ms
+  (`dhcpINITIAL_TIMER_PERIOD`) and waits 5 s for an offer (`dhcpINITIAL_DHCP_TX_PERIOD`), then sends a second discover
+  and waits 10 s; a request waits 5 s for its ACK. 12 s holds two discovers, or one discover and the request with its
+  full wait.
+- **Resolve, 16 s from the client's submit.** The resolve waits for the lease and then has at least 4 s for the query
+  when the lease came within 12 s.
+
+Each frame has 2 s to transmit and 3 s in the queue. The lease cap is 10 minutes, far beyond the stage. Every bound
+also stops at the 50 s startup deadline (`bounded_deadline` in `apps/board/radio.c`).
+
+Three later deadlines follow in session time. The radio client application must finish by 55 s: the 60 s session end
+less the 5 s return reserve in `apps/radio-scan/manifest.json`, which is earlier than its 52 s run bound from its start.
+The radio owner's deadline is 10 ms before the session end, and the session ends at 60 s.
+
+- **Nominal.** On the board, firmware is confirmed about 2 s into the session and association authorizes about 4.5 s
+  in. The lease should follow within 1 to 2 s and the DNS answer within tens of milliseconds; with the fence and the
+  normal shutdown, the stage ends near 8 s.
+- **Worst case.** With firmware confirmed at the 16.7 s the association budget allows, the association bounds (scan
+  10 s, join 8 s, security 14 s) can carry authorization to 48.7 s, and
+  the stage's 17 s then stops at the 50 s startup deadline. The failure shutdown starts there, the client must finish by
+  55 s, and the return has the 5 s reserve before the 60 s session end.
+
+`checks/radio-stage-limit.py` checks the relations between the acquisition, resolve, frame and lease bounds and the
+association budget on the prepared profile. `checks/radio-network-dhcp-dns.py` runs the stack against a scripted
+server for an offer and ACK, a NAK, and no reply, and `checks/board-radio.c` covers the fenced end, no lease and the
+bound.
 
 ## Entropy and credentials gate association only
 
 Enumeration, firmware loading and the scan need neither entropy qualification
 nor a WPA2 profile. Association needs keys, so entropy qualification and the
 credential (`ss_wifi_credential()` in `include/sunstone_wifi_credential.h`)
-gate that stage alone. A session with no credential stops after the scan and
+gate that stage and the address stage after it. A session with no credential stops after the scan and
 returns normally; its result is the record up to `scanned`.
 
 ## Registered return and admission limits

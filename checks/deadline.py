@@ -92,7 +92,10 @@ def main():
         ('no-notified-wake-time','runtime','runtime/deadline.c','if(!s->woken_us)s->woken_us=sunstone_deadline_now_us();',
          '(void)0;'),
         ('wake-every-due-owner','runtime','runtime/deadline.c','if(d&&d<=now&&(!first||d<first)){first=d;due=&slots[i];}',
-         'if(d&&d<=now){first=d;due=&slots[i];}')):
+         'if(d&&d<=now){first=d;due=&slots[i];}'),
+        ('slot-ownership-unchecked','runtime','runtime/deadline.c',
+         'if(s<slots||s>=slots+DEADLINE_SLOTS||atomic_load_explicit(&s->owner,memory_order_relaxed)!=self)return NULL;',
+         '(void)self;')):
         sources=['checks/deadline-host.c','runtime/deadline.c']
         defines=list(owner_defines)
         if source.startswith('apps/'):

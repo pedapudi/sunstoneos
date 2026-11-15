@@ -194,6 +194,15 @@ table, record decode, wire size and the host session builder's record table
 (`apps/os/host.py`) are derived from these rows, and the host models include the
 header instead of copying it.
 
+Each start entry also carries its number of deadline owners: the tasks that its
+start function creates, directly or through the tasks it creates, and that
+register a precise-wait slot (`sunstone_deadline_register`,
+`runtime/deadline.c`). The image's own tables hold the slots, sized by
+`OS_DEADLINE_OWNERS`, because only they see the services that the
+application's options link; `apps/os/os-services.h` lists the terms of that
+sum. `checks/deadline-owners.py` proves each column, and each image's slot
+count, from the linked images.
+
 The application ABI numbers stay where applications read them: the device bits
 in `include/sunstone_app.h` and the extent types in `include/sunstone_session.h`.
 The manifest tool and `apps/os/host.py` parse them from there, and the rows name
@@ -202,7 +211,8 @@ them.
 A new service is therefore:
 
 1. its device bit or extent type, if it needs one, in the SDK header;
-2. a row in each list of `apps/os/os-services.h` that applies;
+2. a row in each list of `apps/os/os-services.h` that applies, with the start
+   entry's deadline-owner count;
 3. its code: the start entries, the record's field in `struct os_session` and
    its validation in `os_session_valid` (`apps/os/admission.c`), and any rows of
    `refused_compositions` that a shared resource requires;

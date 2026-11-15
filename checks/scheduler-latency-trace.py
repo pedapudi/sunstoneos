@@ -16,9 +16,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+RUN1_WINDOW = 'checks/data/scheduler-window-axi-cap-run1.json'
 CHECK_INPUTS = ['apps/latency/host.py', 'kernel/scheduler/latency_trace.h',
                 'kernel/scheduler/latency_trace.c', 'checks/scheduler-latency-history.c',
-                'tools/sunstone-image-link.py', 'include/sunstone_latency.h']
+                'tools/sunstone-image-link.py', 'include/sunstone_latency.h',
+                'checks/data/scheduler-window-axi-cap-run1.json']
 FREQUENCY = 24_000_000
 MAGIC = 0x5353534348545231
 RECORDS = 32
@@ -557,6 +559,28 @@ def run(decode):
     bad = copy.deepcopy(v5); bad['window']['header'][0] = 16; bad['window']['header'][2] = 8
     bad['window']['irqs'] = bad['window']['irqs'] + [bad['window']['irqs'][-1]] * 13
     rejected('an overrun window cannot retain every row', pack(bad))
+    # A returned cap-image run: CPU0 selected rarely during the warm-up, so 6 of its 8 IRQ-origin selections cite
+    # dispatches that the full 16-row IRQ ring had overwritten, with no window flag.
+    run1 = json.loads((ROOT / RUN1_WINDOW).read_text())
+    sparse = copy.deepcopy(v5)
+    sparse['wake'][0], sparse['history'][0], sparse['window'] = run1['wake0'], run1['history0'], run1['window']
+    def overwritten(value):
+        window = value['cpu0_wake_window']
+        origins = [(row['irq_sequence'], row['origin']) for row in window['selections'] if row['irq_sequence']]
+        assert origins == [(485, 'irq_overwritten'), (509, 'irq_overwritten'), (535, 'irq_overwritten'),
+                           (545, 'irq_overwritten'), (560, 'irq_overwritten'), (584, 'irq_overwritten'),
+                           (605, 'irq'), (606, 'irq')], origins
+        assert not window['flags'] and len(window['irqs']) == 16
+    accepted('version 5 names selection origins the full IRQ ring overwrote (cap run 1 rows)', sparse, overwritten)
+    gap = copy.deepcopy(sparse)
+    row = next(r for r in gap['window']['irqs'] if r[0] == 598)
+    row[0], row[5], row[6] = 0, 0, 0
+    next(s for s in gap['window']['selections'] if s[2] == 605)[2] = 598
+    rejected('a selection origin missing inside the kept IRQ range', pack(gap))
+    short = copy.deepcopy(sparse)
+    short['window']['irqs'] = short['window']['irqs'][1:]
+    short['window']['header'][0] = 15
+    rejected('a selection origin missing while the IRQ ring is not full', pack(short))
     for name, field, value in (('IRQ count exceeds capacity', 0, 17),
                                ('selection count exceeds capacity', 1, 17),
                                ('unknown window flags', 2, 16), ('window capacity differs', 3, 15)):

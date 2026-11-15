@@ -525,6 +525,8 @@ endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_A733_RADIO_IRQ=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   SUNSTONE_A733_OS_HEADSET_IRQ=1
   SUNSTONE_CRUMBS=1
+  # The image's tables hold the deadline slots, sized by the services the image links (include/sunstone_deadline.h).
+  SUNSTONE_DEADLINE_IMAGE_SLOTS=1
   "$<$<BOOL:${os_usb_failure_test}>:SUNSTONE_A733_USB_FAILURE_TEST=1>"
   "$<$<BOOL:${os_return_only}>:SUNSTONE_A733_OS_RETURN_ONLY=1>"
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
@@ -689,9 +691,26 @@ elseif(SUNSTONE_A733_TABLE_WALKS STREQUAL "uncached")
 elseif(NOT SUNSTONE_A733_TABLE_WALKS STREQUAL "default")
   message(FATAL_ERROR "SUNSTONE_A733_TABLE_WALKS must be default, cached or uncached")
 endif()
-# Publish the exact OS compile configuration to application and device objects.
+# Publish the exact OS compile configuration to application and device objects, except one flag. Application sources
+# (add_sunstone_application, which sets SUNSTONE_APPLICATION_NAME) are built without -mgeneral-regs-only, so that an
+# application task can use NEON: every task has an FP context (configUSE_TASK_FPU_SUPPORT 2). OS units, services and
+# images keep the flag. An application that wants it adds it to its own target. In an image linked with
+# configSS_IRQ_SAVES_FP 0, checks/irq-general-regs.py refuses any unit without the flag that exception code reaches
+# (its rule 2), and any FP instruction there (rule 1).
 foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_FEATURES)
   get_target_property(value sunstone-a733-os-core ${property})
+  if(property STREQUAL "COMPILE_OPTIONS" AND NOT value STREQUAL "value-NOTFOUND")
+    list(FIND value "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>" general)
+    if(general EQUAL -1)
+      message(FATAL_ERROR "the OS core's compile options lack the C-only -mgeneral-regs-only this file publishes per target")
+    endif()
+    list(REMOVE_ITEM value "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")
+    if(value MATCHES "general-regs-only")
+      message(FATAL_ERROR "the OS core's compile options name -mgeneral-regs-only in a form this file does not publish per target")
+    endif()
+    list(INSERT value ${general}
+      "$<$<AND:$<COMPILE_LANGUAGE:C>,$<NOT:$<BOOL:$<TARGET_PROPERTY:SUNSTONE_APPLICATION_NAME>>>>:-mgeneral-regs-only>")
+  endif()
   if(NOT value STREQUAL "value-NOTFOUND")
     set_property(TARGET sunstone-os-settings PROPERTY INTERFACE_${property} "${value}")
   endif()

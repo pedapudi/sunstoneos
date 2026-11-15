@@ -175,6 +175,11 @@ void ss_latency_deadline_ready(void *task, uint64_t tick);
 /* The counter value at which kernel tick `tick` begins; it needs the time
  * base the platform publishes when it starts the tick. */
 uint64_t ss_latency_tick_counter(uint64_t tick);
+/* The precise mode's waits (apps/latency/workload.c, SUNSTONE_LATENCY_PRECISE):
+ * runtime/deadline.c's sunstone_deadline_register and
+ * sunstone_deadline_wait_until, for a task of the diagnostic application. */
+int ss_latency_deadline_register(void);
+int ss_latency_deadline_wait_until(uint64_t absolute_us);
 void ss_latency_current_set(unsigned core, void *task, int idle);
 #define SS_LATENCY_RECORD(core, region, start, site) \
     ss_latency_record((core), (region), (start), (uintptr_t)(site))

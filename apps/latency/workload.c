@@ -7,6 +7,9 @@
 #ifdef SUNSTONE_LATENCY_MODEL
 #include "platform.h"
 #endif
+#ifdef SUNSTONE_LATENCY_PRECISE
+#include "sunstone_deadline.h"   /* the wait's results */
+#endif
 
 _Static_assert(configNUMBER_OF_CORES == LATENCY_CORES, "requires eight cores");
 /* Cores whose memory task streams in the busy phase. The other cores keep
@@ -28,6 +31,15 @@ _Static_assert(SUNSTONE_LATENCY_STREAM_MASK > 0 && SUNSTONE_LATENCY_STREAM_MASK 
 #endif
 _Static_assert(SUNSTONE_LATENCY_RELEASE_MASK <= 0xff, "a core mask");
 #define LATENCY_RELEASED(c) ((SUNSTONE_LATENCY_RELEASE_MASK >> (c)) & 1u)
+/* The precise mode (SUNSTONE_LATENCY_PRECISE): the wake task of a core outside
+ * the release mask waits with the precise deadline wait (runtime/deadline.c)
+ * instead of a one-tick delay, for the same phase: the counter value at which
+ * the next kernel tick begins, rounded up to the wait's whole microsecond. Its
+ * wake is measured from the counter value at which that microsecond begins,
+ * and that value is also its release stamp. The SDK's ss_wait_until reaches
+ * the same wait but serves the main application task only
+ * (include/sunstone_app.h), so these tasks register and wait through the
+ * diagnostic's own calls (include/sunstone_latency.h). */
 enum phase { QUIET, IDLE, BUSY, STOP };
 /* One line per core: only that core and CPU0's tick share it. The core
  * also publishes here the task it last switched to, so that CPU0's release
@@ -233,8 +245,21 @@ void ss_latency_task_ready(void *task)
     unsigned p = atomic_load_explicit(&phase, memory_order_acquire);
     if (p != IDLE && p != BUSY) return;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
+#ifdef SUNSTONE_LATENCY_PRECISE
+        if (task != wake_task[c] || !atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
+        if (!LATENCY_RELEASED(c)) {
+            /* A precise wake that its own core's deadline expiry has not
+             * stamped already (ss_latency_deadline_ready): the notification
+             * of CPU0's deadline interrupt. */
+            if (wake[c].metric < SS_LAT_METRICS || !admitted(c, p)) return;
+            wake[c].released = wake[c].deadline;
+            wake[c].metric = p == IDLE ? SS_LAT_SCHED_IDLE : SS_LAT_SCHED_BUSY;
+            return;
+        }
+#else
         if (!LATENCY_RELEASED(c) || task != wake_task[c] ||
             !atomic_load_explicit(&wake[c].pending, memory_order_acquire)) continue;
+#endif
         if (!admitted(c, p)) return;
         wake[c].released = ready;
         wake[c].metric = p == IDLE ? SS_LAT_SCHED_IDLE : SS_LAT_SCHED_BUSY;
@@ -272,8 +297,17 @@ static void wait_own(unsigned c)
         unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : p == BUSY ? LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES : 0;
         if (atomic_load_explicit(&wake[c].completed, memory_order_acquire) < limit) {
             wake[c].metric = SS_LAT_METRICS;
+#ifdef SUNSTONE_LATENCY_PRECISE
+            /* Whole periods first, so that neither product overflows. */
+            const uint64_t f = ss_latency_counter_frequency(), tick = ss_latency_tick_counter(xTaskGetTickCount() + 1);
+            const uint64_t until = tick / f * 1000000u + (tick % f * 1000000u + f - 1) / f;
+            wake[c].deadline = until / 1000000u * f + (until % 1000000u * f + 999999u) / 1000000u;
+            atomic_store_explicit(&wake[c].pending, 1, memory_order_release);
+            configASSERT(ss_latency_deadline_wait_until(until) != SUNSTONE_DEADLINE_ERROR);
+#else
             atomic_store_explicit(&wake[c].pending, 1, memory_order_release);
             vTaskDelay(1);
+#endif
             return;
         }
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -373,6 +407,12 @@ void ss_latency_tick_hook(uint64_t due)
 static void wake_worker(void *argument)
 {
     unsigned c = (unsigned)(uintptr_t)argument;
+#ifdef SUNSTONE_LATENCY_PRECISE
+    /* Every wake task registers, those of the released cores too, which wait one tick and never use the slot: the
+     * image's slot count is then the eight tasks of latency_workload_init (OS_LATENCY_PRECISE_OWNERS), which
+     * checks/deadline-owners.py counts from wake_state without reading the release mask. */
+    configASSERT(ss_latency_deadline_register());
+#endif
     atomic_fetch_or_explicit(&ready_mask, 1U << c, memory_order_release);
     for (;;) {
         if (LATENCY_RELEASED(c)) (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);

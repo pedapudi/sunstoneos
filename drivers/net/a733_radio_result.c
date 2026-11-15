@@ -151,6 +151,8 @@ void a733_radio_report_fault_site(struct a733_radio_report *r,const struct aic88
 {if(!r->has_fault){r->fault=*f;r->has_fault=1;if(t&&!r->has_trace){r->trace=*t;r->has_trace=1;}}}
 void a733_radio_report_trace(struct a733_radio_report *r,const struct aic8800_transport_trace *t)
 {if(!r->has_trace){r->trace=*t;r->has_trace=1;}}
+void a733_radio_report_address(struct a733_radio_report *r,const struct aic8800_address_record *a)
+{r->address=*a;r->has_address=1;}
 static unsigned suite(const uint8_t *p,uint8_t *flags)
 {
     if(p[0]==0x00&&p[1]==0x0f&&p[2]==0xac)return p[3];
@@ -194,7 +196,8 @@ enum a733_radio_rsn_check a733_radio_rsn_classify(const struct a733_radio_rsn *s
 }
 size_t a733_radio_report_bytes(const struct a733_radio_report *r)
 {return sizeof(r->head)+r->ap_count*sizeof(struct a733_radio_result_ap)+(r->has_scan?sizeof(r->scan):0)+
-    (r->has_assoc?sizeof(r->assoc):0)+(r->has_rsn?sizeof(r->rsn):0)+(r->has_fault?sizeof(r->fault):0)+(r->has_trace?sizeof(r->trace):0);}
+    (r->has_assoc?sizeof(r->assoc):0)+(r->has_rsn?sizeof(r->rsn):0)+(r->has_fault?sizeof(r->fault):0)+(r->has_trace?sizeof(r->trace):0)+
+    (r->has_address?sizeof(r->address):0);}
 size_t a733_radio_report_encode(const struct a733_radio_report *r,void *out,size_t capacity)
 {
     size_t bytes=a733_radio_report_bytes(r);
@@ -206,6 +209,7 @@ size_t a733_radio_report_encode(const struct a733_radio_report *r,void *out,size
     if(r->has_rsn)head.flags|=2048u;
     if(r->has_fault)head.flags|=4096u;
     if(r->has_trace)head.flags|=8192u;
+    if(r->has_address)head.flags|=16384u;
     uint8_t *at=out;
     memcpy(at,&head,sizeof(head));at+=sizeof(head);
     if(r->ap_count){memcpy(at,r->aps,r->ap_count*sizeof(*r->aps));at+=r->ap_count*sizeof(*r->aps);}
@@ -213,6 +217,7 @@ size_t a733_radio_report_encode(const struct a733_radio_report *r,void *out,size
     if(r->has_assoc){memcpy(at,&r->assoc,sizeof(r->assoc));at+=sizeof(r->assoc);}
     if(r->has_rsn){memcpy(at,&r->rsn,sizeof(r->rsn));at+=sizeof(r->rsn);}
     if(r->has_fault){memcpy(at,&r->fault,sizeof(r->fault));at+=sizeof(r->fault);}
-    if(r->has_trace)memcpy(at,&r->trace,sizeof(r->trace));
+    if(r->has_trace){memcpy(at,&r->trace,sizeof(r->trace));at+=sizeof(r->trace);}
+    if(r->has_address)memcpy(at,&r->address,sizeof(r->address));
     return bytes;
 }

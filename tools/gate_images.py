@@ -76,6 +76,36 @@ IMAGES = {
         '-DSUNSTONE_LATENCY=ON',
         '-DSUNSTONE_APPLICATION=latency',
     ], 'target': 'sunstone-a733-os-latency', 'elf': 'sunstone-a733-os-latency.elf'},
+    # the latency image of the cores 1-7 bar on the board: CPU0's tick releases CPU0 and CPU5 (mask 0x21), CPUs 4-7 stream,
+    # with the cause, wake-segment, restore-span and scheduler traces and the L3 partition of the stage 5 baseline; the other
+    # cores' wake tasks wait one tick on their own deadlines
+    'ret-latency-bar': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
+        '-DSUNSTONE_LATENCY=ON',
+        '-DSUNSTONE_APPLICATION=latency',
+        '-DSUNSTONE_LATENCY_CAUSE=ON',
+        '-DSUNSTONE_LATENCY_L3_PARTITION=ON',
+        '-DSUNSTONE_LATENCY_RELEASE_MASK=0x21',
+        '-DSUNSTONE_LATENCY_RESTORE_SPANS=ON',
+        '-DSUNSTONE_LATENCY_STREAM_MASK=0xf0',
+        '-DSUNSTONE_LATENCY_WAKE_SEGMENTS=ON',
+        '-DSUNSTONE_SCHED_LATENCY_TRACE=ON',
+    ], 'target': 'sunstone-a733-os-latency', 'elf': 'sunstone-a733-os-latency.elf'},
+    # the same image whose wake tasks outside the release mask wait with the precise deadline wait (runtime/deadline.c) for the
+    # same phase (apps/latency/workload.c, SUNSTONE_LATENCY_PRECISE)
+    'ret-latency-bar-precise': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
+        '-DSUNSTONE_LATENCY=ON',
+        '-DSUNSTONE_APPLICATION=latency',
+        '-DSUNSTONE_LATENCY_CAUSE=ON',
+        '-DSUNSTONE_LATENCY_L3_PARTITION=ON',
+        '-DSUNSTONE_LATENCY_RELEASE_MASK=0x21',
+        '-DSUNSTONE_LATENCY_RESTORE_SPANS=ON',
+        '-DSUNSTONE_LATENCY_STREAM_MASK=0xf0',
+        '-DSUNSTONE_LATENCY_WAKE_SEGMENTS=ON',
+        '-DSUNSTONE_SCHED_LATENCY_TRACE=ON',
+        '-DSUNSTONE_LATENCY_PRECISE=ON',
+    ], 'target': 'sunstone-a733-os-latency', 'elf': 'sunstone-a733-os-latency.elf'},
     # the supervised SD0 read image (apps/storage-read); the host session is modeled by checks/storage-read-fixture.py (tools/gate_session.py), at profile 2, or the profile in the image name (storage-read-p1: profile 1)
     'storage-read': {'configure': [
         '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
@@ -134,6 +164,14 @@ IMAGES = {
         '-DSUNSTONE_LATENCY_WAKE_SEGMENTS=ON', '-DSUNSTONE_LATENCY_STREAM_MASK=0xf0',
         '-DSUNSTONE_LATENCY_RELEASE_MASK=0x21',
     ], 'target': 'latency-partitioned-pmu-model', 'elf': 'latency-partitioned-pmu-model.elf'},
+    # the same model whose wake tasks on CPUs 1-4, 6 and 7 wait with the precise deadline wait for the same phase
+    # (apps/latency/workload.c, SUNSTONE_LATENCY_PRECISE), as the board's ret-latency-bar-precise image does
+    'latency-precise-model': {'configure': [
+        '-DSUNSTONE_PARTITIONED_SCHEDULER=ON', '-DSUNSTONE_LATENCY=ON',
+        '-DSUNSTONE_SCHED_LATENCY_TRACE=ON', '-DSUNSTONE_LATENCY_CAUSE=ON',
+        '-DSUNSTONE_LATENCY_WAKE_SEGMENTS=ON', '-DSUNSTONE_LATENCY_STREAM_MASK=0xf0',
+        '-DSUNSTONE_LATENCY_RELEASE_MASK=0x21', '-DSUNSTONE_LATENCY_PRECISE=ON',
+    ], 'target': 'latency-partitioned-pmu-model', 'elf': 'latency-partitioned-pmu-model.elf'},
     # the other host model images that link the latency workloads (cmake/latency.cmake); one configure builds them all, so the
     # images that checks/latency-control-integration.py runs and these are built by the same recipe options
     'latency-models': {'configure': [
@@ -166,6 +204,13 @@ IMAGES = {
         'sunstone-a733-jpeg-encode', 'sunstone-a733-monitor', 'sunstone-a733-pcie', 'sunstone-a733-pcie-nvme',
         'sunstone-a733-pcie-test', 'sunstone-a733-pwm', 'sunstone-a733-rtc', 'sunstone-a733-spi', 'sunstone-a733-thermal',
     ], 'elf': 'a733-smp-cached-diagnostic.elf'},
+    # the image that links the services a core option selects: the RAM-copy DMA service, the invalidation task and the
+    # write-capable SD0 owner, whose deadline owners checks/deadline-owners.py derives with the other OS images'. It is
+    # built and read, never run.
+    'os-deadline-owners': {'configure': [
+        '-DSUNSTONE_A733_OS_DMA=ON', '-DSUNSTONE_TLBI_ISSUER=1', '-DSUNSTONE_A733_OS_SD_WRITE=ON',
+        '-DSUNSTONE_APPLICATION=storage-write-test',
+    ], 'target': 'sunstone-a733-os-storage-write-test', 'elf': 'sunstone-a733-os-storage-write-test.elf'},
     # the returning scanning radio image
     'ret-radio-scan': {'configure': [
         '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
