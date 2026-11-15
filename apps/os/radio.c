@@ -59,6 +59,12 @@ static enum board_radio_result radio_terminal_result(struct board_radio *r,enum 
 /* The owner bypasses ordinary board/session polling as soon as return is
  * requested. The accepted SDIO transfer drains while Bluetooth closes; only
  * its protocol release authorizes the shared module's physical shutdown. */
+/* docs/designs/failure-return-audit.md, "A faulted device service closes before it reports". The failure shutdown
+ * that retain() runs on this task is the vendor-order close (docs/designs/radio-vendor-power-sequence.md); a step
+ * that fails leaves the platform unclean, and the fault then stays. A shared Bluetooth client never released the
+ * module before that shutdown, so a headset session keeps its fault. */
+int os_radio_failure_closed(const struct board_radio *r)
+{return r->config.scan_only&&!os_granted(OS_GRANT_HEADSET)&&a733_radio_platform_clean(&r->platform);}
 int os_radio_quiesce_poll(struct board_radio *r,int result)
 {
     (void)result;
@@ -74,6 +80,27 @@ int os_radio_quiesce_poll(struct board_radio *r,int result)
         if(r->config.entropy_only){
             radio_quiesce_refuse(0x905u);(void)radio_terminal_result(r,A733_SESSION_RETAINED);radio_module_stopped(r);return 2;
         }
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+        if(r->config.scan_only&&atomic_load_explicit(&r->failed,memory_order_acquire)){
+            /* A failed station has no session to stop. Its failure shutdown continues on this task; once it has
+             * read back every step the fault is in the record and the return completes, otherwise it stays FAULT. */
+            if(r->platform.aborting&&!r->platform.abort_done){(void)board_radio_external_failure(r);return 1;}
+            if(!os_radio_failure_closed(r)){
+                radio_quiesce_refuse(r->platform.fail_line?r->platform.fail_line<<16|(r->platform.fail_stage&0xffffu):
+                    r->session.fail_line<<16|0x100u|(r->session.fail_stage&0xfeffu));
+                (void)radio_terminal_result(r,A733_SESSION_RETAINED);radio_module_stopped(r);return 2;
+            }
+            radio_module_stopped(r);
+            if(r->config.associate){
+                int ce=os_ce_retire_step(os_cpu_return_deadline_us());
+                if(!ce)return 1;
+                if(ce<0){radio_quiesce_refuse(0x905u|(uint32_t)-ce<<16);return 2;}
+            }
+            os_wifi_credential_poll();
+            if(os_wifi_credential_wiped()){os_quiesce_complete(&radio_quiesce);return 2;}
+            return 1;
+        }
+#endif
         if(!a733_radio_session_stop(&r->session,deadline)){
             radio_quiesce_refuse(0x904u);(void)radio_terminal_result(r,A733_SESSION_RETAINED);radio_module_stopped(r);return 2;
         }

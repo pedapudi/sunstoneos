@@ -30,6 +30,13 @@ static struct {
     struct a733_clock_token clock;
     struct gicv3_spi gic;
     atomic_uint phase,request,live,irq_flag,irq_count,alarm_state,quiesce_wanted,quiesced;
+    /* 1 once a close has started since the last open: a FAULT service gets one close attempt. Only the owner task
+     * reads it. */
+    atomic_uint close_started;
+    /* 1 once the fault must be reported: a close step failed, or the fault is one the close cannot settle. The owner
+     * task stores it after the fault fields; quiesce_step loads it and nothing else, see there. A reported service stays
+     * FAULT, so it is never cleared. */
+    atomic_uint reported;
     unsigned op;int result;
     uint32_t a,b;
     struct ss_rtc_info info;struct ss_rtc_time time;uint64_t time_ticks;
@@ -69,7 +76,28 @@ static int pause(void *c,uint64_t until)
     if(n<until){uint64_t t=now_us()+(until-n);while(now_us()<t)(void)sunstone_deadline_wait_until(t);}
     return 1;
 }
-static void fail(unsigned step){if(!rtc.fault)rtc.fault=step;atomic_store(&rtc.live,0);atomic_store(&rtc.phase,FAULT);}
+static int fault_closable(void);
+/* Only the owner task enters FAULT; the driver state fault_closable reads is settled at every call site. */
+static void fail(unsigned step)
+{
+    if(!rtc.fault)rtc.fault=step;
+    atomic_store(&rtc.live,0);atomic_store(&rtc.phase,FAULT);
+    if(atomic_load(&rtc.close_started)||!fault_closable())atomic_store_explicit(&rtc.reported,1,memory_order_release);
+}
+/* Whether the close can return a FAULT service to CLOSED (docs/designs/failure-return-audit.md, "A faulted device
+ * service closes before it reports"). The RTC has no bus master; what the close must settle is the alarm. A driver
+ * that is not RETAINED holds no uncertain write, and an armed alarm is cancelled by a733_rtc_finish. A RETAINED
+ * driver refuses every later operation and never rolls back (include/a733_rtc.h), so the close can settle it only
+ * when the operation that retained it wrote nothing and no alarm was owned: the open (step 2) and the calendar
+ * reads (steps 4 and 5) only read. A RETAINED driver after a write (the calendar, the alarm, the acknowledgment or the
+ * crystal selection) keeps the service FAULT. */
+static int fault_closable(void)
+{
+    if(rtc.rtc.state!=A733_RTC_RETAINED)return 1;
+    return !atomic_load(&rtc.rtc.owned)&&(rtc.fault==2||rtc.fault==4||rtc.fault==5);
+}
+static int closable(unsigned phase)
+{return phase==OPEN||(phase==FAULT&&!atomic_load(&rtc.close_started)&&fault_closable());}
 
 /* --- interrupt ------------------------------------------------------------------------------------------------------ */
 void os_rtc_irq(void)
@@ -167,6 +195,7 @@ static int measure(unsigned n)
 static int do_open(void)
 {
     atomic_store(&rtc.phase,OPENING);
+    atomic_store(&rtc.close_started,0);
     const uint64_t limit=lease_now()+40000000;
     enum a733_clock_result c=A733_CLOCK_BUSY;
     while(c==A733_CLOCK_BUSY&&lease_now()<limit-39900000){
@@ -202,7 +231,9 @@ static void serve(void)
         if(phase==OPEN&&rtc.rtc.state==A733_RTC_READY&&rtc.a>=1&&rtc.a<=20)r=measure(rtc.a);
         break;
     case SET_OP:
-        if(phase==OPEN&&rtc.rtc.state==A733_RTC_READY)r=a733_rtc_set_time(&rtc.rtc,rtc.a,rtc.b,pause)?1:(fail(3),-1);
+        /* The driver refuses an invalid day or time before any access and stays READY: a refusal, not a fault. */
+        if(phase==OPEN&&rtc.rtc.state==A733_RTC_READY)
+            r=a733_rtc_set_time(&rtc.rtc,rtc.a,rtc.b,pause)?1:rtc.rtc.state==A733_RTC_READY?-1:(fail(3),-1);
         break;
     case READ_OP:
         if(phase==OPEN&&(rtc.rtc.state==A733_RTC_READY||rtc.rtc.state==A733_RTC_ARMED||
@@ -220,7 +251,12 @@ static void serve(void)
             rtc.alarm.armed=*(struct ss_rtc_time *)&t;
             atomic_store_explicit(&rtc.live,1,memory_order_release);
             rtc.alarm.arm_ticks=ss_counter_ticks();
-            if(!a733_rtc_arm(&rtc.rtc,rtc.a)){fail(6);break;}
+            if(!a733_rtc_arm(&rtc.rtc,rtc.a)){
+                /* Refused before any access (the driver stays READY), or failed after one. */
+                atomic_store_explicit(&rtc.live,0,memory_order_release);
+                if(rtc.rtc.state!=A733_RTC_READY)fail(6);
+                break;
+            }
             rtc.alarm.arm_ticks=ss_counter_ticks();
             rtc.alarm.target_day=rtc.rtc.snapshot.target_day;rtc.alarm.target_hms=rtc.rtc.snapshot.target_hms;
             /* Generous bound: the RC second is about 1.1 s; allow 2 s per second plus 2 s. */
@@ -231,7 +267,8 @@ static void serve(void)
         }
         break;
     case CLOSE_OP:
-        if(phase==OPEN){
+        if(closable(phase)){
+            atomic_store(&rtc.close_started,1);
             atomic_store(&rtc.phase,CLOSING);
             if(rtc.rtc.state==A733_RTC_ARMED){end_alarm(1);if(atomic_load(&rtc.phase)==FAULT){r=-1;break;}}
             atomic_store(&rtc.live,0);
@@ -263,7 +300,7 @@ void os_rtc_task(void *unused)
             else if(rtc.alarm_deadline_us<next)next=rtc.alarm_deadline_us;
         }
         if(atomic_load(&rtc.quiesce_wanted)&&atomic_load(&rtc.request)!=POSTED){
-            if(atomic_load(&rtc.phase)==OPEN){rtc.op=CLOSE_OP;atomic_store(&rtc.request,POSTED);continue;}
+            if(closable(atomic_load(&rtc.phase))){rtc.op=CLOSE_OP;atomic_store(&rtc.request,POSTED);continue;}
             if(atomic_load(&rtc.phase)==CLOSED)atomic_store(&rtc.quiesced,1);
         }
         if(now_us()<next)(void)sunstone_deadline_wait_until(next);
@@ -271,9 +308,18 @@ void os_rtc_task(void *unused)
 }
 int os_rtc_task_privileged(void (*entry)(void *),void *context){return !context&&entry==os_rtc_task;}
 int os_rtc_pins(struct a733_pin_handoff *pins){return pins!=NULL;}
+/* A FAULT service that its close can settle first gets that close: DONE when every close step read back, FAULT when
+ * one failed or when the close cannot settle the driver.
+ *
+ * This step runs on the supervisor's core while the owner task closes, so it decides from the one word the owner
+ * publishes. Deciding from phase and close_started together is racy in either load order: with the close storing
+ * close_started and then CLOSING, a load of close_started can see 1 while the next load of phase still sees the
+ * fault's FAULT; with the stores swapped, a load of phase can see FAULT before CLOSING lands and the next load of
+ * close_started sees 1. Either way the step reports 0x921 while a close that will succeed is running, and the sticky
+ * report ends the session at 0x742. Reading the driver state from here would also race the close's memset. */
 static enum os_quiesce_result quiesce_step(struct os_quiesce *q)
 {
-    if(atomic_load(&rtc.phase)==FAULT){
+    if(atomic_load_explicit(&rtc.reported,memory_order_acquire)){
         (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x921,rtc.fault,SUNSTONE_CRUMB_HERE());
         return OS_QUIESCE_FAULT;
     }
@@ -336,3 +382,9 @@ void ss_rtc_wait(uint32_t wait_us)
     if(os_application_wait_unless(until,any_ready)==SUNSTONE_DEADLINE_ERROR)ss_fail(0x759);
 }
 int ss_rtc_close(void){return call(CLOSE_OP,0,0);}
+int ss_rtc_fault(uint32_t *step)
+{
+    if(!ss_rtc_declared||!ss_grant())return -1;
+    if(step)*step=rtc.fault;
+    return rtc.fault?1:0;
+}

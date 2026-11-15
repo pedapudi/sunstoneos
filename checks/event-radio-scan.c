@@ -54,6 +54,7 @@ static int os_radio_quiesce_requested(void){return quiescing;}
 static uint32_t fault_value;
 static int os_radio_quiesce_fault(uint32_t value,const void *here)
 {(void)here;fault_value=value;++faults;return 1;}
+static int os_radio_failure_closed(const struct board_radio *r){(void)r;return 0;}
 static void board_fail_note(uint32_t site,uint32_t value,const void *here)
 {(void)site;(void)value;(void)here;assert(0);}
 static void os_ce_probe_start(void){}
