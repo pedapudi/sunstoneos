@@ -123,10 +123,26 @@ IMAGES = {
                   'latency-partitioned-pmu-model'], 'elf': 'latency-model.elf'},
     # standalone model projects beside the top-level one: 'project' is the CMake source directory, configured with the toolchain file
     # and the pinned kernel only (no cfg.sh, which configures the top-level project)
-    'latency-cost-model': {'project': 'apps/latency-cost', 'configure': [],
+    'latency-cost-model': {'project': 'apps/latency-cost', 'configure': ['-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'],
                            'target': 'latency-cost-model', 'elf': 'latency-cost-model.elf'},
-    'cpu-reliability-model': {'project': 'checks/cpu-reliability-model', 'configure': [],
+    'cpu-reliability-model': {'project': 'checks/cpu-reliability-model', 'configure': ['-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'],
                               'target': 'a733-smp-cached-diagnostic', 'elf': 'a733-smp-cached-diagnostic.elf'},
+    # the A733 board and diagnostic images outside the OS, with the options that add the board applications;
+    # checks/irq-general-regs.py walks every executable it links with configSS_IRQ_SAVES_FP 0. The OS option is off,
+    # after the gate's own -DSUNSTONE_A733_OS=ON: with it, the storage-maintenance image does not link.
+    'a733-applications': {'configure': [
+        '-DSUNSTONE_A733_OS=OFF',
+        '-DSUNSTONE_A733_ADC=ON', '-DSUNSTONE_A733_DEINTERLACE=ON', '-DSUNSTONE_A733_MONITOR=ON',
+        '-DSUNSTONE_A733_PCIE=ON', '-DSUNSTONE_A733_PCIE_NVME=ON', '-DSUNSTONE_A733_PCIE_TEST=ON',
+        '-DSUNSTONE_A733_PWM=ON', '-DSUNSTONE_A733_RTC=ON', '-DSUNSTONE_A733_SPI=ON', '-DSUNSTONE_A733_THERMAL=ON',
+        '-DSUNSTONE_BLUETOOTH_APPLICATION=ON', '-DSUNSTONE_JPEG_ENCODE_APPLICATION=ON',
+    ], 'target': [
+        'a733-smp-cached-diagnostic', 'a733-smp-observe', 'a733-smp-supervised', 'sunstone-a733-smp-cached-devices',
+        'sunstone-a733-storage-maintenance', 'sunstone-a733-board', 'sunstone-a733-camera', 'sunstone-a733-gpu-render',
+        'sunstone-a733-hdmi', 'sunstone-a733-adc', 'sunstone-a733-bluetooth', 'sunstone-a733-deinterlace',
+        'sunstone-a733-jpeg-encode', 'sunstone-a733-monitor', 'sunstone-a733-pcie', 'sunstone-a733-pcie-nvme',
+        'sunstone-a733-pcie-test', 'sunstone-a733-pwm', 'sunstone-a733-rtc', 'sunstone-a733-spi', 'sunstone-a733-thermal',
+    ], 'elf': 'a733-smp-cached-diagnostic.elf'},
     # the returning scanning radio image
     'ret-radio-scan': {'configure': [
         '-DSUNSTONE_APPLICATION=radio-scan',

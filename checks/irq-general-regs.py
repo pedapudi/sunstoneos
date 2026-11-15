@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
-"""Exception code of each linked OS image uses no FP or SIMD register outside a task's own context save and restore.
+"""Exception code of each image linked with configSS_IRQ_SAVES_FP 0 uses no FP or SIMD register outside a task's own
+context save and restore.
 
-On the A733 and the QEMU OS board, configSS_IRQ_SAVES_FP is 0 (platform/a733-smp-cached/FreeRTOSConfig.h): IRQ entry
-does not save the 32 Q registers, FPSR and FPCR, because nothing an exception runs may change them
-(docs/driver-validation.md, rule 7). This check proves that for a linked image. It starts at every slot of the EL1
-vector table a733_cached_el1_vectors (IRQ, SVC and fault entries) and follows every direct branch and call. An indirect
-call or tail call may reach every function whose address the image takes, in data or by ADR or ADRP and ADD, except the
-task-only functions of TASK_ONLY. It then requires:
+With configSS_IRQ_SAVES_FP 0 (platform/a733-smp-cached/FreeRTOSConfig.h, which every A733 configuration includes),
+IRQ entry does not save the 32 Q registers, FPSR and FPCR, because nothing an exception runs may change them
+(docs/driver-validation.md, rule 7). This check proves that for every such image the gate builds. The QEMU OS board
+(platform/qemu-os/FreeRTOSConfig.h) also sets 0; checks/qemu-os-boot.py builds and runs its images, and this check
+does not walk them. It finds them itself: in each build directory it gives, the compile command of each FreeRTOS port
+assembly unit is run through the preprocessor to read configSS_IRQ_SAVES_FP, and the CMake link commands
+(CMakeFiles/TARGET.dir/link.txt) name the executables that link each unit, their ELF and their linker map. Every
+built executable linked with 0 is walked. An executable that a build configures with 0 but that no build links fails
+the check, and GATE_RUNS must name every image recipe of tools/gate_images.py and every OS variant, so a new image
+cannot skip it. The unpatched FreeRTOS port, which some probes link, defines no setting: its IRQ entry has never saved
+the FP registers.
+
+The walk starts at every slot of the EL1 vector table a733_cached_el1_vectors (IRQ, SVC and fault entries) and follows
+every direct branch and call. An indirect call or tail call may reach every function whose address the image takes, in
+data or by ADR or ADRP and ADD, except the task-only functions of TASK_ONLY. It then requires:
 
 1. no FP or SIMD instruction is reachable, except the task context transfers of portSAVE_CONTEXT and
    portRESTORE_CONTEXT: a CBZ on the core's FPU-context flag that skips exactly one complete save or restore of Q0-Q31,
@@ -14,82 +24,100 @@ task-only functions of TASK_ONLY. It then requires:
 2. every C and C++ unit with a reachable function is compiled with -mgeneral-regs-only (compile_commands.json and the
    linker map of the build), so the compiler cannot add SIMD there, including inlined memcpy and memset;
 3. each function of TASK_ONLY whose address the image takes has that address taken only in the units its entry names.
-   These functions reach FP code; their callers are tasks, which run with their own FP context, the boot code
-   before the scheduler starts, or a secondary core's power-on entry at EL3. An entry names the unit that defines the function, so a static name that several
-   units define (observe, worker) excludes only that unit's function.
+   These functions reach FP code; their callers are tasks, which run with their own FP context, the boot code before
+   the scheduler starts, or a secondary core's power-on entry at EL3. An entry names the unit that defines the
+   function, so a static name that several units define (observe, worker) excludes only that unit's function.
 
 The walk includes the panic path (configASSERT calls platform_panic) and the fault entries, so printf, memchr and the
 other FP users of newlib are proven unreachable from them as well. Four mutations must each fail: an FP instruction
 planted in a function that only an indirect call reaches, the guard of an IRQ-path context save replaced by a NOP,
--mgeneral-regs-only removed from a reachable unit, and the TASK_ONLY entry of a function whose direct calls reach FP removed.
-It reads files only.
+-mgeneral-regs-only removed from a reachable unit, and the TASK_ONLY entry of a function whose direct calls reach FP
+removed. It writes only its result; the preprocessor runs write nothing.
 """
 import argparse
+import ast
 import bisect
 import collections
 import copy
+import importlib.util
 import json
 from pathlib import Path
 import re
 import shlex
 import struct
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'checks'))
 import harness  # noqa: E402,F401  Refuses to run with assertions disabled.
 
-# Every OS image the gate builds (checks/kernel-xn.py).
+# Every build of the gate: the check finds the executables linked with configSS_IRQ_SAVES_FP 0 in them, and main
+# refuses a GATE_RUNS that misses an image recipe of tools/gate_images.py or an OS variant.
 GATE_RUNS = [[
-    '--image', '{build:sup}', '{elf:sup}',
-    '--image', '{build:headset}', '{elf:headset}',
-    '--image', '{build:os-usb-ledger}', '{elf:os-usb-ledger}',
-    '--image', '{build:resident-stop}', '{elf:resident-stop}',
-    '--image', '{build:card-profile}', '{elf:card-profile}',
-    '--image', '{build:ret-npu-load}', '{elf:ret-npu-load}',
-    '--image', '{build:ret-gpu}', '{elf:ret-gpu}',
-    '--image', '{build:ret-g2d}', '{elf:ret-g2d}',
-    '--image', '{build:ret-latency}', '{elf:ret-latency}',
-    '--image', '{build:ret-radio-scan}', '{elf:ret-radio-scan}',
-    '--image', '{build:ret-walks-cached}', '{elf:ret-walks-cached}',
-    '--image', '{build:ret-walks-uncached}', '{elf:ret-walks-uncached}',
+    '--build', '{build:sup}', '--build', '{build:headset}', '--build', '{build:os-usb-ledger}',
+    '--build', '{build:resident-stop}', '--build', '{build:card-profile}', '--build', '{build:ret-npu-load}',
+    '--build', '{build:ret-gpu}', '--build', '{build:ret-g2d}', '--build', '{build:ret-latency}',
+    '--build', '{build:ret-radio-scan}', '--build', '{build:ret-walks-cached}',
+    '--build', '{build:ret-walks-uncached}', '--build', '{build:storage-read}', '--build', '{build:storage-read-p1}',
+    '--build', '{build:a733-applications}', '--build', '{build:cpu-reliability-model}',
+    '--build', '{build:card-fel-recovery}', '--build', '{build:stage2}', '--build', '{build:stage2-armed-stop}',
+    '--build', '{build:smp-models}', '--build', '{build:scheduler-control-models}',
+    '--build', '{build:latency-control-busy-model}', '--build', '{build:latency-control-idle-model}',
+    '--build', '{build:latency-cause-model}', '--build', '{build:latency-wake-model}',
+    '--build', '{build:latency-local-model}', '--build', '{build:latency-models}',
+    '--build', '{build:latency-cost-model}',
     '--output', '{output}']]
 CHECK_INPUTS = ('patches/freertos-smp-asm.patch', 'patches/freertos-mask-returns.patch', 'patches/freertos-latency-asm.patch',
                 'patches/freertos-partitioned-port-asm.patch', 'patches/freertos-gpu-call.patch',
                 'platform/a733-smp-cached/FreeRTOSConfig.h', 'platform/qemu-os/FreeRTOSConfig.h',
                 'platform/a733-smp-cached/platform.c', 'platform/a733-smp-cached/irq_table.c',
-                'platform/a733-smp-cached/continue.S', 'kernel/scheduler', 'drivers', 'docs/driver-validation.md')
+                'platform/a733-smp-cached/continue.S', 'kernel/scheduler', 'drivers', 'docs/driver-validation.md',
+                # the configuration chain that sets configSS_IRQ_SAVES_FP, and the builds the check discovers it in
+                'include/FreeRTOSConfig.h', 'platform/a733-storage-maintenance/FreeRTOSConfig.h',
+                'apps/board/FreeRTOSConfig.h', 'apps/camera/FreeRTOSConfig.h', 'apps/hdmi/FreeRTOSConfig.h',
+                'CMakeLists.txt', 'cmake', 'tools/gate_images.py', 'tools/integration-gate.py', 'checks/fp-context.S')
 VECTORS = 'a733_cached_el1_vectors'
 # Functions that reach FP code and whose addresses only task code, boot code or the secondary cores' EL3 entry uses:
-# name -> (the unit that defines it, the units that may take its address, why).
+# (name, the unit that defines it) -> (the units that may take its address, why).
 APP = 'apps/cpu-npu-concurrency/main.c'
+FP_TASK = 'the FP-context task entry of the diagnostic, which creates one per core; check_fp_context (checks/fp-context.S) ' \
+          'verifies that its own FP registers survive task switches'
 TASK_ONLY = {
-    'a733_cpu_secondary_continue': ('continue.S', ('platform/a733/cpu_entry_native.c',),
-                                    'the EL3 continuation that a powered-on secondary core branches to from '
-                                    'a733_cpu_secondary_entry; it parks unless it runs at EL3, and its boot path reaches '
-                                    'os_application_prepare'),
-    'a733_cpu_secondary_entry': ('platform/a733/cpu_entry.S', ('platform/a733/cpu_entry_native.c', 'boot.c'),
-                                 'the reset entry of the secondary cores, which the boot code gives the power '
-                                 'controller as each core\'s start address; it parks unless it runs at EL3'),
-    'cpu_npu_load_init': (APP, ('sunstone-tables.c',), 'the init hook of the CPU and NPU load application, which '
-                          'os_application_prepare calls at boot before the scheduler starts'),
-    'cpu_npu_load_main': (APP, ('sunstone-tables.c',), 'the CPU and NPU load application main, which the OS starts as '
-                          'the application task'),
-    'latency_main': ('apps/latency/native.c', ('sunstone-tables.c',),
-                     'the latency application main, which the OS starts as the application task'),
-    'loader': ('apps/os/large_load.c', ('apps/os/large_load.c',),
-               'the large-region loader task entry; it hashes with the SHA2 instructions'),
-    'observe': (APP, (APP,), 'the NPU observer of the CPU and NPU load application, registered by its init hook; '
-                'only the NPU service worker task calls it (drivers/npu/npu_service.c worker, apps/os/npu-observe.c '
-                'sample)'),
-    'os_application_prepare': ('apps/os/application.c', ('apps/os/start.c',),
-                               'the application preparation, which board_application_start calls directly at boot '
-                               'before the scheduler starts; start.c takes its address only for the failure note'),
-    'sink_consume': ('apps/os/large_load.c', ('apps/os/large_load.c',),
-                     'the FAT32 sink of the loader task, which it calls from its own reads'),
-    'table_walks_main': ('apps/table-walks/main.c', ('sunstone-tables.c',),
-                         'the table-walks application main, which the OS starts as the application task'),
-    'worker': (APP, (APP,), 'the cpu-gemm task entry of the CPU and NPU load application, which its init hook creates'),
+    ('a733_cpu_secondary_continue', 'continue.S'): (
+        ('platform/a733/cpu_entry_native.c',), 'the EL3 continuation that a powered-on secondary core branches to from '
+        'a733_cpu_secondary_entry; it parks unless it runs at EL3, and its boot path reaches os_application_prepare'),
+    ('a733_cpu_secondary_entry', 'platform/a733/cpu_entry.S'): (
+        ('platform/a733/cpu_entry_native.c', 'boot.c', 'boot-supervised.c'), 'the reset entry of the secondary cores, '
+        'which the boot code gives the power controller as each core\'s start address; it parks unless it runs at EL3'),
+    ('cpu_npu_load_init', APP): (('sunstone-tables.c',), 'the init hook of the CPU and NPU load application, which '
+                                 'os_application_prepare calls at boot before the scheduler starts'),
+    ('cpu_npu_load_main', APP): (('sunstone-tables.c',), 'the CPU and NPU load application main, which the OS starts '
+                                 'as the application task'),
+    ('latency_main', 'apps/latency/native.c'): (('sunstone-tables.c',), 'the latency application main, which the OS '
+                                                'starts as the application task'),
+    ('loader', 'apps/os/large_load.c'): (('apps/os/large_load.c',), 'the large-region loader task entry; it hashes '
+                                         'with the SHA2 instructions'),
+    ('observe', APP): ((APP,), 'the NPU observer of the CPU and NPU load application, registered by its init hook; '
+                       'only the NPU service worker task calls it (drivers/npu/npu_service.c worker, '
+                       'apps/os/npu-observe.c sample)'),
+    ('os_application_prepare', 'apps/os/application.c'): (
+        ('apps/os/start.c',), 'the application preparation, which board_application_start calls directly at boot '
+        'before the scheduler starts; start.c takes its address only for the failure note'),
+    ('sink_consume', 'apps/os/large_load.c'): (('apps/os/large_load.c',), 'the FAT32 sink of the loader task, which '
+                                               'it calls from its own reads'),
+    ('table_walks_main', 'apps/table-walks/main.c'): (('sunstone-tables.c',), 'the table-walks application main, '
+                                                      'which the OS starts as the application task'),
+    ('worker', APP): ((APP,), 'the cpu-gemm task entry of the CPU and NPU load application, which its init hook '
+                      'creates'),
+    ('worker', 'platform/a733-smp-cached/diagnostic.c'): (('platform/a733-smp-cached/diagnostic.c',), FP_TASK),
+    ('worker', 'platform/a733-smp-observe/diagnostic.c'): (('platform/a733-smp-observe/diagnostic.c',), FP_TASK),
+    ('main_entry', 'a733-smp-cached-diagnostic.dir/application.c'): (
+        ('a733-smp-cached-diagnostic.dir/application.c',), 'the cpu-rel-main task entry of the CPU reliability model '
+        '(checks/cpu-reliability-model/application.c), which its init creates'),
+    ('worker', 'apps/cpu-runtime-qualification/reliability.c'): (
+        ('apps/cpu-runtime-qualification/reliability.c',), 'the cpu-rel task entry of the CPU reliability '
+        'qualification, which its main creates on each worker core'),
 }
 FP_REGISTER = re.compile(r'^[qdshbv]\d+$')
 
@@ -97,7 +125,7 @@ FP_REGISTER = re.compile(r'^[qdshbv]\d+$')
 class Image:
     """The functions, code bytes, address-taken functions and units of one linked image."""
 
-    def __init__(self, build, elf_path):
+    def __init__(self, build, elf_path, map_path):
         from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
         from elftools.elf.elffile import ELFFile
         self.disassembler = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
@@ -126,7 +154,7 @@ class Image:
                     self.symbols[symbol.name].add(value)
         self.starts = sorted(self.names)
         self.functions = set(self.sized)
-        self.units = self.read_map(build)
+        self.units = self.read_map(map_path)
         self.taken = self.address_taken()
 
     def in_code(self, address):
@@ -156,10 +184,8 @@ class Image:
     def name(self, address):
         return self.names.get(address, hex(address))
 
-    def read_map(self, build):
+    def read_map(self, path):
         """Input section ranges of the linker map: (start, end, unit path or library member)."""
-        maps = [build / 'os-image/image.map', *sorted((build / 'os-image').glob('*/image.map'))]
-        path = next(p for p in maps if p.exists())
         ranges = []
         for line in path.read_text().splitlines():
             match = re.match(r'\s*([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)\s+\d+\s+(\S+?):\((\S+)\)', line)
@@ -332,7 +358,7 @@ def vector_entries(image):
 
 def walk(image, task_only, cache):
     """Reachable function -> (the caller it was first reached from, how)."""
-    excluded = {a for name, (unit, _, _) in task_only.items() for a in image.defined(name, unit)}
+    excluded = {a for name, unit in task_only for a in image.defined(name, unit)}
     candidates = sorted(a for a in image.taken if a not in excluded)
     seen, stack, indirect_done = {}, [(root, None, 'vector') for root in sorted(vector_entries(image))], False
     while stack:
@@ -405,7 +431,7 @@ def unit_problems(image, seen, commands, build):
 def task_only_problems(image, task_only, cache):
     """Each TASK_ONLY function present has its address taken only in its declared units."""
     found = []
-    for name, (defined, allowed, _) in task_only.items():
+    for (name, defined), (allowed, _) in task_only.items():
         for address in image.defined(name, defined):
             for unit in image.taken.get(address, ()):
                 if not unit or not any(part in unit for part in allowed):
@@ -413,8 +439,8 @@ def task_only_problems(image, task_only, cache):
     return found
 
 
-def check(build, elf, task_only=TASK_ONLY, commands=None, mutate=None):
-    image = Image(build, elf)
+def check(build, elf, map_path, task_only=TASK_ONLY, commands=None, mutate=None):
+    image = Image(build, elf, map_path)
     if mutate:
         mutate(image)
     commands = commands if commands is not None else json.loads((build / 'compile_commands.json').read_text())
@@ -426,65 +452,132 @@ def check(build, elf, task_only=TASK_ONLY, commands=None, mutate=None):
     return image, seen, units, found, cache
 
 
+def port_setting(entry):
+    """configSS_IRQ_SAVES_FP as the compile command of one FreeRTOS port assembly unit defines it: '0', '1', or None
+    for the unpatched port, whose IRQ entry has never saved the FP registers."""
+    arguments = shlex.split(entry['command']) if 'command' in entry else list(entry['arguments'])
+    at = arguments.index('-o')
+    arguments = [a for a in arguments[:at] + arguments[at + 2:] if a != '-c'] + ['-E', '-dM', '-o', '-']
+    macros = subprocess.run(arguments, cwd=entry['directory'], capture_output=True, text=True, check=True).stdout
+    match = re.search(r'^#define configSS_IRQ_SAVES_FP (\S+)$', macros, re.M)
+    return match.group(1) if match else None
+
+
+def linked_images(build):
+    """(target, ELF, linker map, port setting) of each executable the build configures that links a port assembly unit,
+    from compile_commands.json and the link commands CMake writes (CMakeFiles/TARGET.dir/link.txt)."""
+    commands = json.loads((build / 'compile_commands.json').read_text())
+    ports = {entry['output']: entry for entry in commands if entry['file'].endswith('/portASM.S')}
+    settings, found = {}, []
+    links = sorted((build / 'CMakeFiles').glob('*.dir/link.txt'))
+    assert links, 'no link commands in %s: the check reads the link.txt files of the Unix Makefiles generator' % build
+    for link in links:
+        words = shlex.split(link.read_text())
+        linked = [w for w in words if w in ports]
+        if not linked:
+            continue
+        values = {settings.setdefault(w, port_setting(ports[w])) for w in linked}
+        assert len(values) == 1 and '-o' in words, (link, values)
+        maps = [w[len('-Wl,-Map,'):] for w in words if w.startswith('-Wl,-Map,')]
+        found.append((link.parent.name[:-len('.dir')], build / words[words.index('-o') + 1],
+                      build / maps[0] if maps else None, values.pop()))
+    return found
+
+
+def gate_builds():
+    """Every image recipe of tools/gate_images.py and every OS variant of tools/integration-gate.py."""
+    spec = importlib.util.spec_from_file_location('gate_images', ROOT / 'tools/gate_images.py')
+    images = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(images)
+    tree = ast.parse((ROOT / 'tools/integration-gate.py').read_text())
+    variants = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == 'VARIANTS' for t in node.targets))
+    return set(images.IMAGES) | set(variants)
+
+
+def prove(build, elf, map_path):
+    """Walk one image, then require each mutation to fail."""
+    image, seen, units, found, cache = check(build, elf, map_path)
+    assert not found, '%s:\n%s' % (elf, '\n'.join(found[:20]))
+    irq = image.address['FreeRTOS_IRQ_Handler']
+    assert irq in seen and image.address.get('vApplicationIRQHandler') in seen, 'the walk misses the IRQ handler'
+    assert 'platform_panic' not in image.address or image.address['platform_panic'] in seen, \
+        'the walk misses the panic path'
+    transfers = sum(len(context_transfers(image.disassembler, list(image.disassembler.disasm(
+        image.words(a, image.extent(a)), a)))) for a in seen if a in image.names and
+        image.name(a) in ('FreeRTOS_IRQ_Handler', 'FreeRTOS_SWI_Handler'))
+    reaching = sorted(key for key in TASK_ONLY if image.defined(*key) & set(image.taken))
+    mutations = []
+    commands = json.loads((build / 'compile_commands.json').read_text())
+    # 1: an FP instruction (FMOV D0, XZR) planted at the entry of a function that only an indirect call reaches.
+    victim = next(a for a in sorted(seen) if seen[a][1] == 'indirect' and a in image.sized and image.unit(a)
+                  and '.c.obj' in image.unit(a))
+    _, _, _, bad, _ = check(build, elf, map_path, commands=commands, mutate=lambda i: i.patch(victim, 0x9e6703e0))
+    assert any(line.startswith(image.name(victim) + ' uses FP') for line in bad), (image.name(victim), bad[:3])
+    mutations.append('planted FMOV in %s' % image.name(victim))
+    # 2: the CBZ that guards the IRQ path's task context save replaced by a NOP.
+    guard = next(i.address for i in image.disassembler.disasm(image.words(irq, image.extent(irq)), irq)
+                 if i.mnemonic == 'cbz' and context_transfers(image.disassembler, list(image.disassembler.disasm(
+                     image.words(i.address, 0x60), i.address))))
+    _, _, _, bad, _ = check(build, elf, map_path, commands=commands, mutate=lambda i: i.patch(guard, 0xd503201f))
+    assert any(line.startswith('FreeRTOS_IRQ_Handler uses FP') for line in bad), bad[:3]
+    mutations.append('unguarded the context save at %x' % guard)
+    # 3: -mgeneral-regs-only removed from the unit of vApplicationIRQHandler.
+    unit = image.unit(image.address['vApplicationIRQHandler'])
+    changed = copy.deepcopy(commands)
+    for entry in changed:
+        if str((build / entry.get('output', '')).resolve()) == str((build / unit).resolve()):
+            entry['command'] = entry['command'].replace('-mgeneral-regs-only', '')
+    _, _, _, bad, _ = check(build, elf, map_path, commands=changed)
+    assert any('-mgeneral-regs-only' in line and unit in line for line in bad), bad[:3]
+    mutations.append('removed -mgeneral-regs-only from %s' % unit.split('.dir/')[-1])
+    # 4: a task-only function that reaches FP made a candidate of the indirect calls. The entry is one whose direct
+    # calls reach FP in this image: the secondary cores' entries reach FP only through the GPU image's boot path. The
+    # unmutated image has no FP problem, so any FP line is the drop's.
+    to_fp = [key for key in reaching if any(reaches_fp(image, a, cache) for a in image.defined(*key))]
+    if to_fp:
+        key = to_fp[0]
+        reduced = {k: v for k, v in TASK_ONLY.items() if k != key}
+        _, _, _, bad, _ = check(build, elf, map_path, task_only=reduced, commands=commands)
+        assert any('uses FP' in line for line in bad), (key, bad[:3])
+        mutations.append('dropped the task-only entry of %s (%s)' % key)
+    assert len(mutations) >= 3, mutations
+    print('%s: %d functions reachable from the EL1 vectors, %d units built with -mgeneral-regs-only, no FP outside '
+          'the guarded task context transfers; refused: %s' % (elf.name, len(seen), len(units), '; '.join(mutations)))
+    return {'image': str(elf), 'functions': len(seen), 'units': len(units), 'context_transfers': transfers,
+            'address_taken': len(image.taken), 'task_only_present': ['%s (%s)' % key for key in reaching],
+            'mutations_refused': mutations}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--image', nargs=2, action='append', type=Path, metavar=('BUILD', 'ELF'), required=True,
-                        help='an OS build directory with compile_commands.json and the linker map, and its linked image')
+    parser.add_argument('--build', action='append', type=Path, required=True,
+                        help='a gate build directory, configured with compile_commands.json and built')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    results = []
-    for build, elf in args.image:
-        image, seen, units, found, cache = check(build, elf)
-        assert not found, '%s:\n%s' % (elf, '\n'.join(found[:20]))
-        irq = image.address['FreeRTOS_IRQ_Handler']
-        assert irq in seen and image.address.get('vApplicationIRQHandler') in seen, 'the walk misses the IRQ handler'
-        assert image.address['platform_panic'] in seen, 'the walk misses the panic path'
-        transfers = sum(len(context_transfers(image.disassembler, list(image.disassembler.disasm(
-            image.words(a, image.extent(a)), a)))) for a in seen if a in image.names and
-            image.name(a) in ('FreeRTOS_IRQ_Handler', 'FreeRTOS_SWI_Handler'))
-        reaching = sorted(n for n, (unit, _, _) in TASK_ONLY.items() if image.defined(n, unit) & set(image.taken))
-        mutations = []
-        commands = json.loads((build / 'compile_commands.json').read_text())
-        # 1: an FP instruction (FMOV D0, XZR) planted at the entry of a function that only an indirect call reaches.
-        victim = next(a for a in sorted(seen) if seen[a][1] == 'indirect' and a in image.sized and image.unit(a)
-                      and '.c.obj' in image.unit(a))
-        _, _, _, bad, _ = check(build, elf, commands=commands, mutate=lambda i: i.patch(victim, 0x9e6703e0))
-        assert any(line.startswith(image.name(victim) + ' uses FP') for line in bad), (image.name(victim), bad[:3])
-        mutations.append('planted FMOV in %s' % image.name(victim))
-        # 2: the CBZ that guards the IRQ path's task context save replaced by a NOP.
-        guard = next(i.address for i in image.disassembler.disasm(image.words(irq, image.extent(irq)), irq)
-                     if i.mnemonic == 'cbz' and context_transfers(image.disassembler, list(image.disassembler.disasm(
-                         image.words(i.address, 0x60), i.address))))
-        _, _, _, bad, _ = check(build, elf, commands=commands, mutate=lambda i: i.patch(guard, 0xd503201f))
-        assert any(line.startswith('FreeRTOS_IRQ_Handler uses FP') for line in bad), bad[:3]
-        mutations.append('unguarded the context save at %x' % guard)
-        # 3: -mgeneral-regs-only removed from the unit of vApplicationIRQHandler.
-        unit = image.unit(image.address['vApplicationIRQHandler'])
-        changed = copy.deepcopy(commands)
-        for entry in changed:
-            if str((build / entry.get('output', '')).resolve()) == str((build / unit).resolve()):
-                entry['command'] = entry['command'].replace('-mgeneral-regs-only', '')
-        _, _, _, bad, _ = check(build, elf, commands=changed)
-        assert any('-mgeneral-regs-only' in line and unit in line for line in bad), bad[:3]
-        mutations.append('removed -mgeneral-regs-only from %s' % unit.split('.dir/')[-1])
-        # 4: a task-only function that reaches FP made a candidate of the indirect calls.
-        # The entry is one whose direct calls reach FP in this image: the secondary cores' entries reach FP only
-        # through the GPU image's boot path. The unmutated image has no FP problem, so any FP line is the drop's.
-        to_fp = [n for n in reaching if any(reaches_fp(image, a, cache) for a in image.defined(n, TASK_ONLY[n][0]))]
-        if to_fp:
-            name = to_fp[0]
-            reduced = {k: v for k, v in TASK_ONLY.items() if k != name}
-            _, _, _, bad, _ = check(build, elf, task_only=reduced, commands=commands)
-            assert any('uses FP' in line for line in bad), (name, bad[:3])
-            mutations.append('dropped the task-only entry of %s' % name)
-        assert len(mutations) >= 3, mutations
-        results.append({'image': str(elf), 'functions': len(seen), 'units': len(units), 'context_transfers': transfers,
-                        'address_taken': len(image.taken), 'task_only_present': reaching, 'mutations_refused': mutations})
-        print('%s: %d functions reachable from the EL1 vectors, %d units built with -mgeneral-regs-only, no FP outside '
-              'the guarded task context transfers; refused: %s' % (elf.name, len(seen), len(units), '; '.join(mutations)))
+    named = {m.group(1) for part in GATE_RUNS[0] for m in re.finditer(r'\{build:([A-Za-z0-9_-]+)\}', part)}
+    unnamed = sorted(gate_builds() - named)
+    assert not unnamed, 'GATE_RUNS must give the check every gate build; it misses %s' % ', '.join(unnamed)
+    results, configured, walked = [], {}, set()
+    for build in args.build:
+        assert (build / 'compile_commands.json').is_file(), 'no compile_commands.json in %s' % build
+        for target, elf, map_path, setting in linked_images(build):
+            if setting != '0':
+                continue
+            configured.setdefault(target, set()).add(str(build))
+            if not elf.is_file():
+                continue
+            assert map_path and map_path.is_file(), 'no linker map for %s' % elf
+            result = prove(build, elf, map_path)
+            results.append(dict(result, target=target, build=str(build)))
+            walked.add(target)
+    unwalked = sorted(set(configured) - walked)
+    assert not unwalked, ('these executables link a port with configSS_IRQ_SAVES_FP 0, but no build given to the check '
+                          'built them: %s' % ', '.join(unwalked))
     (args.output / 'result.json').write_text(json.dumps(results, indent=1))
-    print('PASS exception code uses general registers only in %d images' % len(results))
+    print('PASS exception code uses general registers only in %d images of %d executables with configSS_IRQ_SAVES_FP 0'
+          % (len(results), len(walked)))
 
 
 if __name__ == '__main__':
