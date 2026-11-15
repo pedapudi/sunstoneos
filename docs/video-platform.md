@@ -196,7 +196,8 @@ The native read and write functions use explicit physical-address allowlists,
 volatile 32-bit accesses, the JPEG byte-write locations, and AArch64 `DSB SY`
 barriers. They refuse an address outside the pages that
 `a733_video_unit_native_map` checked once: every page the video bindings
-access, identity-mapped Device-nGnRnE. `a733_video_decoder_init` and
+access, identity-mapped Device-nGnRnE. The decoder bindings' inits
+(`a733_video_platform_init` and its H.264 and HEVC forms) and
 `a733_encode_platform_init` call it, so the page walks fall outside every hold;
 an image that uses the native functions without either init makes the check at
 its first native access. The encoder shares these functions.

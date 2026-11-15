@@ -25,6 +25,34 @@ struct aic8800_fault_site {
     uint16_t stop_site, ms;
 };
 _Static_assert(sizeof(struct aic8800_fault_site)==16,"fault site section");
+/* What the bus did after the last command write, for the radio record (head flags bit 13, after the fault site).
+ * Codes and counts only, saturating. tx_id: that command's message id. tx_flags: bit 0 it was submitted, 1 its CMD53
+ * completed, 2 a data write followed it, 3 the transport waits for the function interrupt, 4 a receive record is
+ * held, 5 the dispatcher faulted. credit: the flow-control value (function 1 register 3) that admitted that write.
+ * tx_age_ms: from that write's completion to the transport's last clock read. Since that write: rx_records receive
+ * records decoded or retired, rx_kind by transport type (command responses 0x11, data, data confirmations 0x12,
+ * prints and others), rx_aggregates receive reads, status_reads function 1 status reads, rx_last_id the last command
+ * response's message id (0 none), irq_wakes bits 7:4 the radio's GIC interrupts and 3:0 the owner's wakes from
+ * waiting (each saturating at 15), both from the end of the pass that completed the write. phase: the transport's
+ * phase. last_status: the last function 1 status value read. queued: bits 7:4 dispatcher events queued, 3:0
+ * diagnostic records queued; queued_kinds: 2 bits per queued diagnostic record, oldest in bits 1:0, enum
+ * aic8800_dispatch_record_kind minus 1. held_type: the held record's transport type (255 none). data_cfm: bits 7:0
+ * of the last data confirmation's status (bit 0 sent, 1 retry required, 2 software retry required, 3 acknowledged).
+ * irq: bit 0 the host saw the controller's SDIO interrupt latch set and has not acknowledged it, 1 the controller
+ * was read at capture, 2 its SDIO interrupt latch (RINT bit 16) was then set, 3 that interrupt was unmasked (IMASK
+ * bit 16), 4 the radio's GIC interrupt is masked. slow_id and slow_ms: the slowest security confirmation accepted
+ * in the stage, as its request's message id (0 none) and the ms from that request's write to the confirmation. The
+ * trace is also written when the stage ends authorized, without a fault site. */
+struct aic8800_transport_trace {
+    uint16_t tx_id;
+    uint8_t tx_flags, credit;
+    uint16_t tx_age_ms, rx_records;
+    uint8_t rx_kind[4], rx_aggregates, status_reads;
+    uint16_t rx_last_id;
+    uint8_t phase, last_status, queued, queued_kinds, held_type, data_cfm, irq_wakes, irq;
+    uint16_t slow_id, slow_ms;
+};
+_Static_assert(sizeof(struct aic8800_transport_trace)==28,"transport trace section");
 #ifdef SUNSTONE_AIC8800_FAULT_SITE_CAPTURE
 #include "aic8800_sdio_transport.h"
 #include "aic8800_data.h"
@@ -50,6 +78,32 @@ static inline void aic8800_fault_site_capture(struct aic8800_fault_site *f,const
         f->actions=(uint8_t)((s->count&&s->actions[s->head].kind==AIC8800_SUPPLICANT_KEY?1u:0)|(s->action_active?2u:0)|
             (s->port_pending?4u:0)|(s->completed?8u:0)|(s->deferred_bytes?16u:0));
         f->stop_site=s->stop_site;
+    }
+}
+#include "aic8800_dispatch.h"
+static inline unsigned aic8800_trace_nibble(uint64_t v){return v>15u?15u:(unsigned)v;}
+/* controller: 1 when raw and mask were read from the SD controller at capture. */
+static inline void aic8800_transport_trace_capture(struct aic8800_transport_trace *o,const struct aic8800_sdio_transport *t,
+    const struct aic8800_dispatch *d,unsigned gic_masked,uint64_t interrupts,uint64_t wakes,
+    unsigned controller,uint32_t raw,uint32_t mask)
+{
+    *o=(struct aic8800_transport_trace){.tx_id=t->trace_tx_id,.credit=t->trace_credit,.rx_records=t->trace_rx_records,
+        .rx_aggregates=t->trace_rx_aggregates,.status_reads=t->trace_status_reads,.rx_last_id=t->trace_rx_last_id,
+        .phase=t->phase,.last_status=t->raw_rx_status,.held_type=255u,.slow_id=t->trace_slow_id,.slow_ms=t->trace_slow_ms,
+        .irq_wakes=(uint8_t)(aic8800_trace_nibble(interrupts)<<4|aic8800_trace_nibble(wakes))};
+    for(unsigned i=0;i<4;++i)o->rx_kind[i]=t->trace_rx_kind[i];
+    const struct sunxi_sdio *h=t->card?t->card->host:0;
+    o->tx_flags=(uint8_t)((t->trace_tx_flags&7u)|(t->irq_wait?8u:0)|(t->held?16u:0)|(d&&d->faulted?32u:0));
+    o->irq=(uint8_t)((h&&h->sdio_pending?1u:0)|(controller?2u:0)|(controller&&(raw&(1u<<16))?4u:0)|
+        (controller&&(mask&(1u<<16))?8u:0)|(gic_masked?16u:0));
+    if(t->trace_tx_flags&2u&&h&&h->last_now>=t->trace_tx_at&&t->config.ticks_per_ms){
+        uint64_t ms=(h->last_now-t->trace_tx_at)/t->config.ticks_per_ms;o->tx_age_ms=(uint16_t)(ms>65535u?65535u:ms);}
+    if(t->held)o->held_type=t->unrelated.transport_type;
+    if(t->data)o->data_cfm=(uint8_t)t->data->result.raw_status;
+    if(d&&d->initialized){
+        o->queued=(uint8_t)((d->event_count>15u?15u:d->event_count)<<4|(d->record_count>15u?15u:d->record_count));
+        for(unsigned i=0;i<d->record_count&&i<4;++i)
+            o->queued_kinds|=(uint8_t)((((unsigned)d->records[(d->record_head+i)%AIC8800_DISPATCH_RECORDS].kind-1u)&3u)<<(2*i));
     }
 }
 #endif

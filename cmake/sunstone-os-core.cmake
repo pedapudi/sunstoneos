@@ -459,10 +459,11 @@ foreach(service audio headset gpu npu radio video-decode)
     if(service STREQUAL "video-decode")
       # Linked per image, by the application's manifest, with the decoder binding unless the core already has it.
       if(NOT SUNSTONE_A733_OS_USB_JPEG)
-        target_sources(sunstone-a733-os-video-decode PRIVATE "${os_root}/drivers/video/a733_video_platform.c"
-          "${os_root}/drivers/video/a733_video_unit.c")
-        list(APPEND os_external_inputs "${os_root}/drivers/video/a733_video_platform.c"
-          "${os_root}/drivers/video/a733_video_unit.c")
+        set(video_decode_binding drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c
+          drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c)
+        list(TRANSFORM video_decode_binding PREPEND "${os_root}/")
+        target_sources(sunstone-a733-os-video-decode PRIVATE ${video_decode_binding})
+        list(APPEND os_external_inputs ${video_decode_binding})
       endif()
       target_compile_definitions(sunstone-a733-os-video-decode PRIVATE SUNSTONE_A733_OS_VIDEO_DECODE=1)
     elseif(service STREQUAL "headset")
