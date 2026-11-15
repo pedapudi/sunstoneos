@@ -156,6 +156,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         'sunstone_deadline_register': lambda m: ret(m, 1),
         'sunstone_deadline_now_us': now,
         'sunstone_deadline_wait_until': wait,
+        'ulTaskGenericNotifyTake': wait,  # the owner task's idle block
         'a733_counter_clock_now': counter_now,
         'a733_pmic_now': pmic_now,
         'ss_counter_ticks': lambda m: ret(m, state['time'] * 24),

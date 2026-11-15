@@ -343,7 +343,8 @@ static void os_video_decode_task(void *unused)
             if(closable(atomic_load(&vd.phase)))(void)do_close();
             if(atomic_load(&vd.phase)==CLOSED)atomic_store(&vd.quiesced,1);
         }
-        (void)sunstone_deadline_wait_until(now_us()+10000000);
+        /* Every input notifies this task: an application request, the quiesce and the row's wake. */
+        (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
     }
 }
 
