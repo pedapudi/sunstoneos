@@ -36,7 +36,7 @@ a 232-byte head that gives the total length and the access point count, then one
 44-byte entry per access point, then the 16-byte scan counts when head flags
 bit 10 is set, then the 48-byte association tail when bit 9 is set, then the
 16-byte RSN summary when bit 11 is set, then the 16-byte fault site when bit 12
-is set, then the 28-byte transport trace when bit 13 is set, then the 56-byte address section when bit 14 is set. The head
+is set, then the 28-byte transport trace when bit 13 is set, then the 64-byte address section when bit 14 is set. The head
 carries the record version (4 since the address section). The image exports the version it
 writes as `os_radio_result_version`, and admission refuses an image whose
 version the runner's `tools/radio_result.py` does not read, naming both
@@ -314,17 +314,20 @@ at its start, and DHCP never starts when that draw fails; the network therefore 
 `checks/radio-network-dhcp-dns.py` measures four words drawn through a lease, its renewal, one socket and one lookup. A
 draw that finds the ring empty sets the record's entropy-short flag. The ring is erased with the other secrets.
 
-The IP task has no core affinity, so the scheduler places it on the least-loaded A55 core (0 to 5). Whether it should
-be bound beside the radio owner is open.
+The IP task is an OS service created without an affinity, so it runs on the service core, CPU0, as the radio owner
+does. The record's placement fields show the cores both ran on and how often the IP task woke.
 
 ### The address section holds counts, codes, flags and times only
 
-Head flags bit 14 marks a 56-byte address section, the last section of the record (version 4). Its fields
+Head flags bit 14 marks a 64-byte address section, the last section of the record (version 4). Its fields
 (`include/aic8800_address_trace.h`) are:
 
 - **Counts:** DHCP discovers, offers, requests, ACKs and NAKs, DNS queries and responses, and the frames ignored because
   their transaction identifier, query identifier or hardware address belongs to another station.
 - **Times:** the first frame of each kind, in milliseconds since the network started.
+- **Placement:** the IP task's wakes since the network started, and those that carried no event (the stack's timer
+  waits ending, and the driver's two bare wake-ups at the stack's start and the offline marker); the cores the IP task
+  woke on, and the cores the radio owner polled the network on, one bit per core.
 - **Codes:** the lease time in seconds, the number of DNS servers the lease names, the DNS response code and answer
   count, and the resolve's reply code.
 - **Flags:**

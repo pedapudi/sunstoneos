@@ -47,6 +47,7 @@ struct aic8800_network {
     atomic_uint_fast64_t address_started,lease_started,lease_ticks;
     uint32_t leased_address; /* IP task: fixed within each online DHCP lifetime. */
     struct aic8800_address_trace address_trace; /* Owner task: DHCP and DNS frames as they pass (aic8800_address_trace.h). */
+    atomic_uint ip_wakes,ip_empty_wakes,ip_cores; /* IP task: its wakes and the cores it woke on (aic8800_network_ip_event). */
     uint8_t initialized,owns_current,active,down_sent,stack_started;
 };
 /* One stack instance for its image lifetime. Fresh storage; sole radio task

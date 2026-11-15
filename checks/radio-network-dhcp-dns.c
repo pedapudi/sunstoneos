@@ -217,7 +217,13 @@ static void address_application(void *unused)
         t->ms_response>=t->ms_query);
      /* Every random word from the start through a lease, its renewal, one extra socket and the first lookup: the
       * address stage's sixteen pre-drawn words hold a run with fewer steps without a refill. */
-     platform_puts("random words drawn ");platform_hex(random_calls);platform_puts("\n");assert(random_calls<=16);}
+     platform_puts("random words drawn ");platform_hex(random_calls);platform_puts("\n");assert(random_calls<=16);
+     /* Placement: the IP task's wakes, those without an event, and the cores it and the owner's network poll ran on (the
+      * model has one core). */
+     unsigned wakes=atomic_load(&net.network.ip_wakes),empty=atomic_load(&net.network.ip_empty_wakes);
+     platform_puts("IP task wakes/empty/cores, owner cores ");platform_hex(wakes);platform_hex(empty);
+     platform_hex(atomic_load(&net.network.ip_cores));platform_hex(t->owner_cores);platform_puts("\n");
+     assert(wakes>=t->discovers+t->offers+t->acks&&empty<wakes&&atomic_load(&net.network.ip_cores)==1u&&t->owner_cores==1u);}
     value=resolve("wrong.test",40);assert(value.result==SUNSTONE_NET_TIMEOUT||value.result==SUNSTONE_NET_IO);
     for(unsigned i=0;i<1000&&atomic_load(&net.dns[0].state)!=SUNSTONE_DNS_CANCELED&&atomic_load(&net.dns[0].state)!=SUNSTONE_DNS_IDLE;++i)vTaskDelay(1);
     assert(atomic_load(&net.dns[0].state)==SUNSTONE_DNS_CANCELED||atomic_load(&net.dns[0].state)==SUNSTONE_DNS_IDLE);

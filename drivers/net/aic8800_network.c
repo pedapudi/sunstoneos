@@ -306,6 +306,7 @@ int aic8800_network_lost(const struct aic8800_network *n)
 void aic8800_network_poll(struct aic8800_network *n)
 {
     if(!n||!n->initialized)return;
+    n->address_trace.record.owner_cores|=(uint8_t)(1u<<portGET_CORE_ID());
     struct aic8800_sdio_transport *t=n->config.transport;
     if(address_expired(n)==1)address_revoke(n);
     if(atomic_load(&n->failed)){if(n->stack_started&&!n->down_sent){FreeRTOS_NetworkDown(&n->interface);n->down_sent=1;}return;}
@@ -360,7 +361,12 @@ void aic8800_network_poll(struct aic8800_network *n)
  * RX/output events too. Future timer/output callbacks see offline until resume. */
 void aic8800_network_ip_event(unsigned event,void *data)
 {
-    struct aic8800_network *n=stack_owner;if(!n||!atomic_load(&n->offline))return;
+    struct aic8800_network *n=stack_owner;if(!n)return;
+    /* Every return from the IP task's event wait passes here once: its wake count and the cores it woke on. */
+    atomic_fetch_add_explicit(&n->ip_wakes,1,memory_order_relaxed);
+    if(event==(unsigned)eNoEvent)atomic_fetch_add_explicit(&n->ip_empty_wakes,1,memory_order_relaxed);
+    atomic_fetch_or_explicit(&n->ip_cores,1u<<portGET_CORE_ID(),memory_order_relaxed);
+    if(!atomic_load(&n->offline))return;
     configASSERT(xIsCallingFromIPTask());
     unsigned epoch=atomic_load_explicit(&n->offline_request,memory_order_acquire);
     if(n->config.dhcp&&atomic_load_explicit(&n->resume_request,memory_order_acquire)==epoch&&

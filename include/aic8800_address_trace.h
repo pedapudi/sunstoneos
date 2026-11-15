@@ -24,7 +24,11 @@
  *   bit 10 the IP task acknowledged the offline fence: DHCP stopped and its socket closed
  *   bit 11 the address stage's bound passed
  *   bit 12 the network's random-number hook found no pre-drawn word
- * result: the resolve's reply (enum sunstone_net_result) plus 1; 0 when no reply came. */
+ * result: the resolve's reply (enum sunstone_net_result) plus 1; 0 when no reply came.
+ * ip_wakes: the IP task's wakes since the network's activation, each a return from its event-queue wait; ip_empty_wakes, those that
+ * carried no event (eNoEvent): the wait's timeout for the stack's timers, or one of the driver's two bare wake-ups (the
+ * stack's start and the offline marker). ip_empty_wakes saturates at 65535. ip_cores and owner_cores: bit n set
+ * when the IP task woke on, or the radio owner polled the network on, core n. */
 struct aic8800_address_record {
     uint32_t flags;
     uint16_t discovers, offers, requests, acks, naks, queries, responses, ignored;
@@ -32,8 +36,11 @@ struct aic8800_address_record {
     uint32_t lease_seconds;
     uint16_t answers;
     uint8_t rcode, dns_servers, result, pad[3];
+    uint32_t ip_wakes;
+    uint16_t ip_empty_wakes;
+    uint8_t ip_cores, owner_cores;
 };
-_Static_assert(sizeof(struct aic8800_address_record)==56,"address record");
+_Static_assert(sizeof(struct aic8800_address_record)==64,"address record");
 #define AIC8800_ADDRESS_PUBLISHED 1u
 #define AIC8800_ADDRESS_PRIVATE 2u
 #define AIC8800_ADDRESS_ROUTER 4u

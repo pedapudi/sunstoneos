@@ -16,7 +16,7 @@ SCAN_COUNTS_BYTES = 16   # struct a733_radio_scan_counts, present when head flag
 RSN_BYTES = 16           # struct a733_radio_rsn, present when head flags bit 11 is set
 FAULT_BYTES = 16         # struct aic8800_fault_site, present when head flags bit 12 is set
 TRACE_BYTES = 28         # struct aic8800_transport_trace, present when head flags bit 13 is set
-ADDRESS_BYTES = 56       # struct aic8800_address_record, present when head flags bit 14 is set; the last section
+ADDRESS_BYTES = 64       # struct aic8800_address_record, present when head flags bit 14 is set; the last section
 # AIC8800_SITE file codes (include/aic8800_security.h).
 SITE_FILES = {0: 'other', 1: 'aic8800_supplicant.c', 2: 'aic8800_supplicant_os.c', 3: 'aic8800_sae.c',
               4: 'aic8800_sdio_transport.c', 5: 'aic8800_security.c'}
@@ -213,10 +213,12 @@ DNS_RCODES = ['no-error', 'format-error', 'server-failure', 'name-error', 'not-i
 
 
 def decode_address(raw):
-    """The address section (include/aic8800_address_trace.h): DHCP and DNS counts, codes and times. It holds no address,
-    MAC or name."""
+    """The address section (include/aic8800_address_trace.h): DHCP and DNS counts, codes and times, and where the IP task
+    and the radio owner ran. It holds no address, MAC or name."""
     (flags, discovers, offers, requests, acks, naks, queries, responses, ignored, ms_discover, ms_offer, ms_request,
-     ms_ack, ms_query, ms_response, lease, answers, rcode, servers, reply) = struct.unpack('<I8H7IH3B3x', raw)
+     ms_ack, ms_query, ms_response, lease, answers, rcode, servers, reply, ip_wakes, ip_empty, ip_cores,
+     owner_cores) = struct.unpack('<I8H7IH3B3xIHBB', raw)
+    def cores(mask): return [core for core in range(8) if mask >> core & 1]
     def at(count, ms): return ms if count else None
     return {
         'dhcp': {'discover': {'sent': discovers, 'first_ms': at(discovers, ms_discover)},
@@ -236,7 +238,9 @@ def decode_address(raw):
         'resolve': {'reply': (NET_RESULTS[reply - 1] if reply - 1 < len(NET_RESULTS) else reply - 1) if reply else None,
                     'address_returned': bool(flags & 512)},
         'ignored_frames': ignored, 'dhcp_stopped': bool(flags & 1024), 'deadline_passed': bool(flags & 2048),
-        'entropy_short': bool(flags & 4096)}
+        'entropy_short': bool(flags & 4096),
+        'ip_task': {'wakes': ip_wakes, 'empty_wakes': ip_empty, 'cores': cores(ip_cores)},
+        'owner_cores': cores(owner_cores)}
 
 
 def site(value):

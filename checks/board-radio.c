@@ -772,7 +772,10 @@ int main(void)
                 struct aic8800_address_record *seen=&app.session.sockets.network.address_trace.record;
                 *seen=(struct aic8800_address_record){.flags=AIC8800_ADDRESS_PRIVATE|AIC8800_ADDRESS_OFFER_MATCH,.discovers=1,
                     .offers=1,.requests=1,.acks=1,.queries=1,.responses=1,.ms_discover=250,.ms_offer=260,.ms_request=261,
-                    .ms_ack=270,.ms_query=300,.ms_response=320,.lease_seconds=86400,.answers=1,.dns_servers=2};
+                    .ms_ack=270,.ms_query=300,.ms_response=320,.lease_seconds=86400,.answers=1,.dns_servers=2,.owner_cores=1};
+                /* The IP task's counts, which the record copies at the stage's end; empty wakes saturate. */
+                struct aic8800_network *ip=&app.session.sockets.network;
+                atomic_store(&ip->ip_wakes,70000);atomic_store(&ip->ip_empty_wakes,65536);atomic_store(&ip->ip_cores,4);
                 if(kind==DEADLINE){
                     time_us=2499;assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==ONLINE);
                     time_us=2500;assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED);
@@ -800,11 +803,12 @@ int main(void)
                 assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED);
                 const struct a733_radio_report *done=board_radio_report(&app);const struct aic8800_address_record *a=&done->address;
                 assert(done->has_address&&a->result==SUNSTONE_NET_OK+1u&&a->discovers==1&&a->acks==1&&a->ms_ack==270&&
-                    a->lease_seconds==86400&&a->dns_servers==2&&a->answers==1&&
+                    a->lease_seconds==86400&&a->dns_servers==2&&a->answers==1&&a->ip_wakes==70000&&a->ip_empty_wakes==65535&&
+                    a->ip_cores==4&&a->owner_cores==1&&
                     a->flags==(AIC8800_ADDRESS_PRIVATE|AIC8800_ADDRESS_OFFER_MATCH|AIC8800_ADDRESS_PUBLISHED|AIC8800_ADDRESS_FENCED|
                         AIC8800_ADDRESS_RESOLVED|AIC8800_ADDRESS_ENTROPY_SHORT));
                 uint8_t encoded[1024];size_t n=a733_radio_report_encode(done,encoded,sizeof(encoded));
-                assert(n==a733_radio_report_bytes(done)&&(encoded[37]&64u)&&(encoded[37]&32u)&&!memcmp(encoded+n-56,a,56)&&
+                assert(n==a733_radio_report_bytes(done)&&(encoded[37]&64u)&&(encoded[37]&32u)&&!memcmp(encoded+n-64,a,64)&&
                     !memcmp(encoded+n-84,&done->trace,28));
                 /* The answer's address is in neither the record nor the board object. */
                 for(size_t i=0;i+4<=n;++i)assert(memcmp(encoded+i,answer,4));

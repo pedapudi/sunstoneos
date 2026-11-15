@@ -563,7 +563,13 @@ static void address_record(struct board_radio *r,uint32_t flags)
 {
     if(!r->config.report_memory.allocate)return;
     struct aic8800_address_record a={0};
-    if(r->session.sockets.initialized)a=r->session.sockets.network.address_trace.record;
+    if(r->session.sockets.initialized){
+        const struct aic8800_network *n=&r->session.sockets.network;a=n->address_trace.record;
+        a.ip_wakes=atomic_load_explicit(&n->ip_wakes,memory_order_relaxed);
+        unsigned empty=atomic_load_explicit(&n->ip_empty_wakes,memory_order_relaxed);
+        a.ip_empty_wakes=(uint16_t)(empty<65535u?empty:65535u);
+        a.ip_cores=(uint8_t)atomic_load_explicit(&n->ip_cores,memory_order_relaxed);
+    }
     a.flags|=flags;
     unsigned result=atomic_load_explicit(&r->address_result,memory_order_acquire);
     a.result=(uint8_t)(result<256u?result:255u);
