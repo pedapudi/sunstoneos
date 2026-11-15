@@ -70,7 +70,8 @@ enum {
     G2D_STEP_RUN=48, G2D_STEP_RUN_SURFACE, G2D_STEP_RUN_GEOMETRY, G2D_STEP_RUN_MEMORY, G2D_STEP_RUN_IOVA,
     G2D_STEP_RUN_WRITES=56, G2D_STEP_RUN_ATTACH, G2D_STEP_RUN_MAP, G2D_STEP_RUN_CACHE, G2D_STEP_RUN_BUSY,
     G2D_STEP_RUN_LAUNCH, G2D_STEP_RUN_TIMEOUT, G2D_STEP_RUN_IRQ, G2D_STEP_RUN_FINISH, G2D_STEP_RUN_IOMMU_FAULT,
-    G2D_STEP_RUN_IOMMU, G2D_STEP_CLOSE_GIC=72, G2D_STEP_CLOSE_DETACH
+    G2D_STEP_RUN_IOMMU, G2D_STEP_CLOSE_GIC=72, G2D_STEP_CLOSE_DETACH, G2D_STEP_CLOSE_STOP, G2D_STEP_CLOSE_RESET,
+    G2D_STEP_CLOSE_IDLE
 };
 static struct {
     struct a733_power_domain_row row;
@@ -349,7 +350,23 @@ static int do_close(void)
         for(unsigned i=0;r==1&&i<200;++i){r=gicv3_spi_masked(&g2d.gic);if(r==1)break;if(r==0)pause_us(10);}
         if(r!=1)return fail(G2D_STEP_CLOSE_GIC,(uint32_t)r);
     }
-    if(g2d.attached){
+    /* A faulted engine may still be running an operation (a timeout, a launch that did not read back, a busy engine):
+     * it is stopped before master 10 returns to bypass, which would widen what it can reach to all of memory. The
+     * RCQ update is turned off as g2d_mixer_apply does before a job (g2d_mixer.c 1003), the mixer and rotator AHB
+     * resets are pulsed as the vendor's timeout recovery does (g2d_wait_cmd_finish, g2d.c 786; g2d_bsp_reset,
+     * g2d_top.c 86-93), and the engine must then read idle: update (0x28 bit 0) and the mixer's start (0x100 bit 31)
+     * clear. */
+    if(faulted&&engine){
+        uint32_t v=0;
+        if(!update(G2D+0x28,1u,0))return fail(G2D_STEP_CLOSE_STOP,0);
+        if(!update(G2D+0x08,3u,0))return fail(G2D_STEP_CLOSE_RESET,0);
+        if(!update(G2D+0x08,3u,3u))return fail(G2D_STEP_CLOSE_RESET,1);
+        if(!rd(G2D+0x28,&v)||(v&1u))return fail(G2D_STEP_CLOSE_IDLE,v);
+        if(!rd(G2D+0x100,&v)||(v&0x80000000u))return fail(G2D_STEP_CLOSE_IDLE,v);
+    }
+    /* The owner's record decides: a first attach that faulted after its clock lease records master 10 as attached
+     * before any of its writes, although the service never saw the attach complete. */
+    if(g2d.attached||(os_iommu_owner()->attached>>G2D_MASTER&1u)){
         if(os_iommu_detach(1u<<G2D_MASTER)!=1)return fail(G2D_STEP_CLOSE_DETACH,os_iommu_owner()->fault_step);
         g2d.attached=0;g2d.mapped_region=0;
     }

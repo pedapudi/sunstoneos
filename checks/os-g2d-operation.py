@@ -18,6 +18,18 @@ Cases:
   and the service stays open, so the application's close can run (this check does not run the close).
 - timeout: the engine never sets task end. The operation fails at step 62 (RUN_TIMEOUT) and the service is FAULT,
   which retains its gates, leases and mapping.
+- Close after a fault (docs/g2d-os.md#operations): the application's close of the FAULT service runs through the image's
+  own close with the CCU and PCK1 registers modeled. The close must stop the engine (0x28 update off, the 0x08 AHB
+  reset pulse) and read it idle before master 10 is detached, and then gate and reset the engine.
+  - timeout-close: after the timeout the engine is still running (0x28 bit 0 and 0x100 bit 31 set) until the reset
+    pulse. The close returns 1, the service is CLOSED, and the fault record keeps step 62.
+  - timeout-stuck-close: the engine still reads running after the reset pulse. The close fails, the service stays
+    FAULT with step 62 kept, master 10 is not detached and the bus gate stays open.
+  - launch-fault-close: 0x24 bit 2 does not clear, so the launch fails at step 61 (RUN_LAUNCH); the close succeeds.
+  - attach-fault-close: the first attach faults after the IOMMU owner recorded master 10 attached. The operation
+    fails at step 57 (RUN_ATTACH) and the close detaches master 10, although the service never saw the attach
+    complete.
+  An image built before the close of a faulted service fails the four close cases: its close refuses a FAULT service.
 
 Usage: os-g2d-operation.py --image ELF --output DIR"""
 import argparse
@@ -42,8 +54,13 @@ LINE = 64
 # MMU and data cache on, and CTR_EL0 with DminLine and CWG 4 (64-byte lines). The emulated core reports none of these.
 MRS = {0xd5384240: 4, 0xd5381000: 0x30d01805, 0xd53b0020: (4 << 24) | (4 << 16)}   # CurrentEL, SCTLR_EL1, CTR_EL0
 # apps/os/g2d.c: enum phase, enum op, the request states, the step numbers.
-OPEN, FAULT, RUN_OP, POSTED, DONE = 2, 4, 3, 1, 2
-STEP_RUN_CACHE, STEP_RUN_TIMEOUT = 59, 62
+CLOSED, OPEN, FAULT, CLOSE_OP, RUN_OP, POSTED, DONE = 0, 2, 4, 2, 3, 1, 2
+STEP_RUN_ATTACH, STEP_RUN_CACHE, STEP_RUN_LAUNCH, STEP_RUN_TIMEOUT = 57, 59, 61, 62
+CCU, PCK1, G2D = 0x02002000, 0x07061000, 0x05440000
+IOMMU_OWNER_FAULT, G2D_MASTER = 2, 10
+# The CCU words of an open engine: module clock on, bus gate open and G2D reset deasserted, DE_SYS reset deasserted;
+# the DE and DI gates closed, so the close also asserts the DE_SYS reset.
+OPENED_CCU = {0xa40: 0x80000000, 0xa44: 0x00010001, 0xa74: 0x00010000}
 LAUNCH = [(0x20, 0), (0x24, 5), (0x28, 0), (0x2c, None), (0x30, 0), (0x34, 128), (0x20, 0x10), (0x28, 1)]
 
 
@@ -74,10 +91,15 @@ def shapes():
 
 
 class G2d:
-    """The engine's registers as the operation path sees them, and the writes it made."""
-    def __init__(self, completes):
-        self.regs = {0x08: 3, 0x20: 0, 0x24: 0, 0x28: 0, 0x100: 0}
+    """The engine's registers as the operation path sees them, and the writes it made.
+
+    An engine that does not complete keeps running after the launch: the mixer's start (0x100 bit 31) stays set until
+    the mixer AHB reset (0x08 bit 0) is asserted, or for good when the engine is stuck. A stuck 0x24 bit (launch_fault)
+    never clears."""
+    def __init__(self, completes, stuck=False, status_stuck=0):
+        self.regs = {0x08: 3, 0x20: 0, 0x24: status_stuck, 0x28: 0, 0x100: 0}
         self.writes, self.completes, self.launched, self.interrupts = [], completes, False, 0
+        self.stuck, self.status_stuck, self.running = stuck, status_stuck, False
 
     def read(self, off):
         return self.regs.get(off, 0)
@@ -85,7 +107,7 @@ class G2d:
     def write(self, off, value):
         self.writes.append((off, value))
         if off == 0x24:
-            self.regs[0x24] &= ~value & 0xffffffff     # write one to clear
+            self.regs[0x24] = (self.regs[0x24] & ~value & 0xffffffff) | self.status_stuck    # write one to clear
             return
         self.regs[off] = value
         if off == 0x28 and value & 1:
@@ -93,9 +115,29 @@ class G2d:
             if self.completes:
                 self.regs[0x24] |= 1                   # task end
                 self.regs[0x28] = 0
+            else:
+                self.running = True
+                self.regs[0x100] = 0x80000000
+        if off == 0x08 and not value & 1 and self.running and not self.stuck:
+            self.running = False                       # the mixer reset stops the engine and clears its registers
+            self.regs[0x100] = 0
 
 
-def run_case(image, parts, fields, name, width, height, stride, offset, refuse_cache=False, completes=True):
+class Registers:
+    """Plain 32-bit registers of one page."""
+    def __init__(self, base, words):
+        self.base, self.words, self.writes = base, dict(words), []
+
+    def read(self, uc, offset, size, data):
+        return self.words.get(offset, 0)
+
+    def write(self, uc, offset, size, value, data):
+        self.writes.append((offset, value))
+        self.words[offset] = value
+
+
+def run_case(image, parts, fields, name, width, height, stride, offset, refuse_cache=False, completes=True,
+             stuck=False, launch_fault=False, attach_fault=False, close=False):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -105,9 +147,11 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
     uc.mem_map(SURFACE, REGION_BYTES)
     uc.mem_map(RCQ, 0x300000)
     skip_crumbs(uc, image)
-    engine = G2d(completes)
+    engine = G2d(completes, stuck, 4 if launch_fault else 0)
+    ccu, pck = Registers(CCU, OPENED_CCU), Registers(PCK1, {0x8: 8})
     state = {'time': 1000, 'ticks': 24000, 'iova': IOVA_BASE, 'cache': [], 'stopped': False, 'irq_entered': 0,
-             'unmapped': None}
+             'unmapped': None, 'detach': [], 'events': []}
+    ol = image.layouts['a733_iommu_owner']
     g2d = image.address('g2d', UNIT)
     board = image.address('board')
 
@@ -181,10 +225,24 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         engine.write(m.reg_read(UC_ARM64_REG_X0), m.reg_read(UC_ARM64_REG_X1) & 0xffffffff)
         ret(m, 1)
 
-    def rd(m):
-        address, at = m.reg_read(UC_ARM64_REG_X0), m.reg_read(UC_ARM64_REG_X1)
-        assert address == 0x05440000 + 0x100, hex(address)
-        put(at, engine.read(0x100))
+    def translate(m):
+        address, out = m.reg_read(UC_ARM64_REG_X0), m.reg_read(UC_ARM64_REG_X2)
+        uc.mem_write(out, address.to_bytes(8, 'little') + bytes(8))      # physical, Device-nGnRnE, shareability 0
+        ret(m, 1)
+
+    def attach(m):
+        if not attach_fault:
+            ret(m, 1)
+            return
+        # The owner took its clock lease, recorded master 10 attached, then failed a register write.
+        put(OWNER + ol['state'], IOMMU_OWNER_FAULT); put(OWNER + ol['attached'], 1 << G2D_MASTER, 2)
+        put(OWNER + ol['fault_step'], 1); put(OWNER + ol['fault_word'], 0x1004)
+        ret(m, -1)
+
+    def detach(m):
+        state['detach'].append((m.reg_read(UC_ARM64_REG_X0) & 0xffff, engine.running))
+        state['events'].append('detach')
+        put(OWNER + ol['attached'], 0, 2)
         ret(m, 1)
 
     def cache(m):
@@ -201,9 +259,17 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         return engine.read(offset)
 
     def mmio_write(m, offset, size, value, data):
+        if offset == 0x08:
+            state['events'].append('reset-%d' % (value & 3))
         engine.write(offset, value)
 
-    uc.mmio_map(0x05440000, 0x1000, mmio_read, None, mmio_write, None)
+    def ccu_write(m, offset, size, value, data):
+        state['events'].append('ccu-%x' % offset)
+        ccu.write(m, offset, size, value, data)
+
+    uc.mmio_map(G2D, 0x1000, mmio_read, None, mmio_write, None)
+    uc.mmio_map(CCU, 0x2000, ccu.read, None, ccu_write, None)
+    uc.mmio_map(PCK1, 0x1000, pck.read, None, pck.write, None)
     hooks = {
         'sunstone_deadline_register': lambda m: ret(m, 1),
         'sunstone_deadline_now_us': now,
@@ -213,7 +279,13 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         'os_large_slot': lambda m: ret(m, SLOT if m.reg_read(UC_ARM64_REG_X0) == 0 else 0),
         'os_owner_memory': lambda m: ret(m, RCQ),
         'os_iommu_iova': iova,
-        'os_iommu_attach': lambda m: ret(m, 1),
+        'os_iommu_attach': attach,
+        'os_iommu_detach': detach,
+        'aarch64_device_translate': translate,
+        'a733_platform_lock_enter': lambda m: ret(m, 1),
+        'a733_platform_lock_leave': lambda m: ret(m),
+        'board_live': lambda m: ret(m, 1),
+        'gicv3_spi_masked': lambda m: ret(m, 1),
         'os_iommu_map': lambda m: ret(m, 1),
         'os_iommu_unmap': lambda m: ret(m, 1),
         'os_iommu_owner': lambda m: ret(m, OWNER),
@@ -226,7 +298,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
     }
     for symbol, callback in hooks.items():
         hook_addresses(uc, {image.address(symbol)}, lambda m, a, s, u, c=callback: c(m))
-    for symbol, callback in (('g2d_rd', g2d_rd), ('g2d_wr', g2d_wr), ('rd', rd), ('pause_us', lambda m: ret(m))):
+    for symbol, callback in (('g2d_rd', g2d_rd), ('g2d_wr', g2d_wr), ('pause_us', lambda m: ret(m))):
         hook_addresses(uc, {image.address(symbol, UNIT)}, lambda m, a, s, u, c=callback: c(m))
 
     def mrs(m, address, size, unused):
@@ -245,14 +317,25 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         return False
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, unmapped)
     uc.mem_map(STACK - 0x10000, 0x10000)
-    uc.reg_write(UC_ARM64_REG_SP, STACK - 0x100)
-    uc.reg_write(UC_ARM64_REG_LR, 0)
-    try:
-        uc.emu_start(image.address('os_g2d_task', UNIT), 0, count=60_000_000)
-    except Exception as error:
-        raise AssertionError(f'{name}: emulation stopped at {hex(uc.reg_read(UC_ARM64_REG_PC))}: {error}; '
-                             f'unmapped access {state["unmapped"]}')
-    assert state['stopped'], (name, 'the owner did not complete the request', hex(uc.reg_read(UC_ARM64_REG_PC)))
+
+    def serve(what):
+        state['stopped'] = False
+        uc.reg_write(UC_ARM64_REG_SP, STACK - 0x100)
+        uc.reg_write(UC_ARM64_REG_LR, 0)
+        try:
+            uc.emu_start(image.address('os_g2d_task', UNIT), 0, count=60_000_000)
+        except Exception as error:
+            raise AssertionError(f'{name}: {what}: emulation stopped at {hex(uc.reg_read(UC_ARM64_REG_PC))}: {error}; '
+                                 f'unmapped access {state["unmapped"]}')
+        assert state['stopped'], (name, what, 'the owner did not complete the request', hex(uc.reg_read(UC_ARM64_REG_PC)))
+    serve('operation')
+    run = {'result': struct.unpack('<i', uc.mem_read(field('result'), 4))[0], 'phase': get(field('phase')),
+           'fault_step': get(field('fault_step'))}
+    if close:
+        # The application takes the operation's result, then posts its close.
+        state['events'].clear()
+        put(field('request'), 0); put(field('op'), CLOSE_OP); put(field('request'), POSTED)
+        serve('close')
     done = field('done')
     dl = image.layouts['ss_g2d_done']
     record = {
@@ -264,6 +347,8 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         'rcq_status': get(done + dl['rcq_status']), 'status_after': get(done + dl['status_after']),
         'cache': [(op, hex(at), n) for op, at, n in state['cache']],
         'writes': [(hex(o), hex(v)) for o, v in engine.writes], 'interrupts': state['irq_entered'],
+        'run': run, 'detach': state['detach'], 'events': state['events'], 'running': engine.running,
+        'ccu': {hex(k): hex(v) for k, v in sorted(ccu.words.items())},
     }
     return record, state, engine
 
@@ -286,6 +371,24 @@ def check_surface(record, state, engine):
         assert first - at < LINE and at + n - end < LINE, (name, 'cache range wider than the surface lines')
 
 
+def check_close(record, step, closes):
+    name, run, events = record['case'], record['run'], record['events']
+    assert run['result'] == -1 and run['phase'] == FAULT and run['fault_step'] == step, (name, 'operation', run)
+    assert record['fault_step'] == step, (name, 'the close must keep the first fault', record['fault_step'])
+    stop = [e for e in events if e.startswith('reset-')]
+    assert stop[:2] == ['reset-0', 'reset-3'], (name, 'the close must pulse the mixer and rotator resets', events)
+    ccu = {int(k, 16): int(v, 16) for k, v in record['ccu'].items()}
+    if not closes:
+        assert record['result'] == -1 and record['phase'] == FAULT, (name, 'a running engine must leave FAULT', record)
+        assert not record['detach'], (name, 'master 10 detached while the engine runs', record['detach'])
+        assert ccu[0xa44] & 0x10001 == 0x10001, (name, 'the bus gate and reset must stay open', record['ccu'])
+        return
+    assert record['result'] == 1 and record['phase'] == CLOSED and record['request'] == DONE, (name, record)
+    assert record['detach'] == [(1 << G2D_MASTER, False)], (name, 'one detach of master 10, engine stopped', record['detach'])
+    assert events.index('reset-3') < events.index('detach') < events.index('ccu-a40'), (name, 'order', events)
+    assert not ccu[0xa40] & 0x80000000 and not ccu[0xa44] & 0x10001 and not ccu[0xa74] & 0x10000, (name, record['ccu'])
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image', type=Path, required=True)
@@ -293,7 +396,7 @@ def main():
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=False)
     image = Image(a.image, {'board_application', 'a733_board_session', 'large_slot', 'ss_g2d_job', 'ss_g2d_surface',
-                            'ss_g2d_done'})
+                            'ss_g2d_done', 'a733_iommu_owner'})
     with a.image.open('rb') as stream:
         elf = ELFFile(stream)
         parts = [(int(s['p_vaddr']), bytes(s.data()), int(s['p_memsz']))
@@ -310,18 +413,27 @@ def main():
                                      for c in typ.iter_children() if c.tag == 'DW_TAG_member'}
                 if die.tag == 'DW_TAG_enumerator':
                     n, v = die.attributes['DW_AT_name'].value.decode(), die.attributes['DW_AT_const_value'].value
-                    want = {'OPEN': OPEN, 'FAULT': FAULT, 'RUN_OP': RUN_OP, 'POSTED': POSTED, 'DONE': DONE,
-                            'G2D_STEP_RUN_CACHE': STEP_RUN_CACHE, 'G2D_STEP_RUN_TIMEOUT': STEP_RUN_TIMEOUT}.get(n)
+                    want = {'CLOSED': CLOSED, 'OPEN': OPEN, 'FAULT': FAULT, 'CLOSE_OP': CLOSE_OP, 'RUN_OP': RUN_OP,
+                            'POSTED': POSTED, 'DONE': DONE, 'G2D_STEP_RUN_ATTACH': STEP_RUN_ATTACH,
+                            'G2D_STEP_RUN_CACHE': STEP_RUN_CACHE, 'G2D_STEP_RUN_LAUNCH': STEP_RUN_LAUNCH,
+                            'G2D_STEP_RUN_TIMEOUT': STEP_RUN_TIMEOUT, 'A733_IOMMU_OWNER_FAULT': IOMMU_OWNER_FAULT}.get(n)
                     assert want is None or want == v, (n, v)
     assert 'g2d' in fields, 'no g2d state in ' + UNIT
     rows, failures = [], []
     cases = [('surface-%dx%d-stride%d-offset%d' % s, s, {}) for s in shapes()]
     cases += [('cache-refusal', stage2(), {'refuse_cache': True}), ('timeout', stage2(), {'completes': False})]
+    closes = {'timeout-close': ({'completes': False}, STEP_RUN_TIMEOUT, True),
+              'timeout-stuck-close': ({'completes': False, 'stuck': True}, STEP_RUN_TIMEOUT, False),
+              'launch-fault-close': ({'launch_fault': True}, STEP_RUN_LAUNCH, True),
+              'attach-fault-close': ({'attach_fault': True}, STEP_RUN_ATTACH, True)}
+    cases += [(n, stage2(), dict(o, close=True)) for n, (o, _, _) in closes.items()]
     for name, shape, options in cases:
         try:
             record, state, engine = run_case(image, parts, fields, name, *shape, **options)
             if name.startswith('surface'):
                 check_surface(record, state, engine)
+            elif name in closes:
+                check_close(record, *closes[name][1:])
             elif name == 'cache-refusal':
                 assert record['result'] == -1 and record['fault_step'] == STEP_RUN_CACHE, record
                 assert record['phase'] == OPEN, (record, 'a refused cache maintenance must leave the service open')
@@ -344,7 +456,8 @@ def main():
             if not row['passed']:
                 print('FAIL', row['case'], row['error'][:600])
         raise SystemExit(f'{len(failures)} of {len(rows)} cases failed')
-    print(f'PASS G2D operation path: {len(rows) - 2} surfaces, cache refusal leaves the service open, timeout faults')
+    print(f'PASS G2D operation path: {len(rows) - 2 - len(closes)} surfaces, cache refusal leaves the service open, '
+          f'timeout faults, {len(closes)} closes after a fault')
 
 
 if __name__ == '__main__':
