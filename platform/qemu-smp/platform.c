@@ -31,6 +31,19 @@ extern void ss_kernel_local_timer_irq(void);
 #else
 #define LOCAL_TIMER_BIT(c) ((c) ? 0 : 1U << TIMER_IRQ)
 #endif
+/* Precise deadlines (runtime/deadline.c, platform/qemu-smp/deadline.c): the
+ * virtual timer on CPU0, at the tick's priority, as on the A733
+ * (platform/a733-smp-cached/platform.c). */
+#ifdef SUNSTONE_TASK_DEADLINES
+#include "sunstone_deadline.h"
+#define DEADLINE_IRQ 27U
+#define DEADLINE_BIT(c) ((c) ? 0 : 1U << DEADLINE_IRQ)
+#ifdef SS_STORM
+#error "the storm interrupt uses CNTV, which precise deadlines own"
+#endif
+#else
+#define DEADLINE_BIT(c) 0U
+#endif
 
 static uint32_t read32(uintptr_t address) { return *(volatile uint32_t *)address; }
 static void write32(uintptr_t address, uint32_t value) { *(volatile uint32_t *)address = value; }
@@ -106,13 +119,19 @@ static void local_init(void) {
     *(volatile uint8_t *)(s + 0x400) = SS_BAND_COMMAND_PRIORITY;
     for (unsigned b = 1; b <= SS_BANDS; ++b) *(volatile uint8_t *)(s + 0x400 + b) = SS_BAND_SGI_PRIORITY(b);
     *(volatile uint8_t *)(s + 0x400 + TIMER_IRQ) = SS_BAND_COMMAND_PRIORITY;
+#ifdef SUNSTONE_TASK_DEADLINES
+    *(volatile uint8_t *)(s + 0x400 + DEADLINE_IRQ) = SS_BAND_COMMAND_PRIORITY;
+#endif
     if (core()) __asm__ volatile("msr cntp_ctl_el0, xzr\n isb" ::: "memory");
-    write32(s + 0x100, 0xfU | LOCAL_TIMER_BIT(core()));
+    write32(s + 0x100, 0xfU | LOCAL_TIMER_BIT(core()) | DEADLINE_BIT(core()));
 #else
     uint8_t priority = portLOWEST_USABLE_INTERRUPT_PRIORITY << portPRIORITY_SHIFT;
     *(volatile uint8_t *)(s + 0x400) = priority;
     *(volatile uint8_t *)(s + 0x400 + TIMER_IRQ) = priority;
-    write32(s + 0x100, 1 | LOCAL_TIMER_BIT(core()));
+#ifdef SUNSTONE_TASK_DEADLINES
+    *(volatile uint8_t *)(s + 0x400 + DEADLINE_IRQ) = priority;
+#endif
+    write32(s + 0x100, 1 | LOCAL_TIMER_BIT(core()) | DEADLINE_BIT(core()));
 #endif
     wait_clear(r, 8);
     uint64_t value = 1;
@@ -269,11 +288,17 @@ void vApplicationIRQHandler(uint64_t interrupt) {
     else
 #endif
     if (interrupt == TIMER_IRQ) FreeRTOS_Tick_Handler();
+#ifdef SUNSTONE_TASK_DEADLINES
+    else if (interrupt == DEADLINE_IRQ && !core()) sunstone_deadline_irq();
+#endif
     else if (interrupt <= 3) { /* SGI 0 and the band SGIs (kernel/scheduler/bands.h) */
 #if configSS_BAND_SGIS
         __atomic_fetch_add(&qemu_smp_sgis[core()][interrupt], 1, __ATOMIC_RELAXED);
 #endif
         FreeRTOS_SGI_Handler();
+#ifdef SUNSTONE_TASK_DEADLINES
+        if (!core()) sunstone_deadline_rearm();
+#endif
     }
     else if (interrupt < 1020) platform_panic("unexpected interrupt", interrupt);
 }

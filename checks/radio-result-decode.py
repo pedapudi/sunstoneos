@@ -143,8 +143,51 @@ def main():
     assert decoded['transport_trace']['slowest_confirmed_id'] == 36 and \
         decoded['transport_trace']['slowest_confirmation_ms'] == 5900, decoded['transport_trace']
     assert not any(word in key for key in decoded['transport_trace'] for word in ('bssid', 'frequency', 'rssi', 'ssid'))
+    assert decoded['address'] is None
+    # The address stage (flags bit 14): the DHCP and DNS section, last, after the trace. Counts, codes and times only.
+    addressed = bytearray(alone)
+    struct.pack_into('<I', addressed, 12, len(RECORD) + len(entry) + 16 + 48 + 16 + 28 + 64)
+    struct.pack_into('<I', addressed, 36, head_flags | 1024 | 512 | 2048 | 8192 | 16384)
+    section = struct.pack('<I8H7IH3B3xIHBB', 1 | 2 | 4 | 8 | 16 | 32 | 128 | 256 | 512 | 1024, 1, 1, 1, 1, 0, 1, 1, 0,
+                          250, 262, 263, 271, 300, 318, 86400, 1, 0, 2, 1, 41, 9, 1, 1)
+    counts = struct.pack('<4I', 3, 12, 2, 4)
+    decoded = radio_result.decode(bytes(addressed) + entry + counts + tail + rsn + slow + section)
+    a = decoded['address']
+    assert decoded['transport_trace']['slowest_confirmed_id'] == 36 and decoded['rsn']['group'] == 'TKIP', decoded
+    assert a['dhcp'] == {'discover': {'sent': 1, 'first_ms': 250}, 'offer': {'received': 1, 'first_ms': 262},
+                         'request': {'sent': 1, 'first_ms': 263}, 'ack': {'received': 1, 'naks': 0, 'first_ms': 271},
+                         'lease_seconds': 86400, 'address_private': True, 'router': True, 'router_private': True,
+                         'offer_ack_address_match': True, 'offer_ack_server_match': True, 'hostname_sent': False,
+                         'dns_servers': 2, 'lease_published': True}, a['dhcp']
+    assert a['dns'] == {'queries': 1, 'responses': 1, 'query_ms': 300, 'response_ms': 318, 'time_ms': 18, 'id_matched': True,
+                        'rcode': 'no-error', 'answers': 1}, a['dns']
+    assert a['resolve'] == {'reply': 'ok', 'address_returned': True} and a['dhcp_stopped'] and not a['deadline_passed'], a
+    # Placement: the IP task's wakes and the cores it and the radio owner ran on, one list entry per mask bit.
+    assert a['ip_task'] == {'wakes': 41, 'empty_wakes': 9, 'cores': [0]} and a['owner_cores'] == [0], a
+    placed = radio_result.decode(bytes(addressed) + entry + counts + tail + rsn + slow + section[:-2] + bytes([0x24, 0x81]))
+    assert placed['address']['ip_task']['cores'] == [2, 5] and placed['address']['owner_cores'] == [0, 7], placed['address']
+    # A refused request: one NAK, no ACK fields, no DNS exchange, the resolve's reply address-lost.
+    nak = struct.pack('<I8H7IH3B3xIHBB', 0, 2, 1, 1, 0, 1, 0, 0, 0, 250, 262, 263, 270, 0, 0, 0, 0, 0, 0, 7, 30, 12, 1, 1)
+    a = radio_result.decode(bytes(addressed) + entry + counts + tail + rsn + slow + nak)['address']
+    assert a['dhcp']['ack'] == {'received': 0, 'naks': 1, 'first_ms': 270} and a['dhcp']['lease_seconds'] is None and \
+        a['dns']['rcode'] is None and a['dns']['time_ms'] is None and a['resolve']['reply'] == 'address-lost', a
+    # The section holds counts, codes, flags and times: every value is a number, a flag, a code name or None, and no
+    # field names an address, MAC or host name.
+    def values(value):
+        return [w for v in value.values() for w in (values(v) if isinstance(v, dict) else v if isinstance(v, list) else [v])]
+    assert all(v is None or isinstance(v, (bool, int)) or v in radio_result.NET_RESULTS + radio_result.DNS_RCODES
+               for v in values(a)), a
+    def keys(value):
+        return [k for k, v in value.items() for k in [k] + (keys(v) if isinstance(v, dict) else [])]
+    assert not any(word in key for key in keys(a) for word in ('mac', 'gateway_address', 'server_address', 'host_name', 'ip_address', 'address_value')), keys(a)
+    try:
+        radio_result.decode(bytes(addressed) + entry + counts + tail + rsn + slow + section[:-4])
+    except ValueError:
+        pass
+    else:
+        raise SystemExit('a truncated address section was accepted')
     assert radio_result.decode(bytes(full) + entry + struct.pack('<4I', 3, 12, 2, 4) + tail + rsn)['fault_site'] is None
-    struct.pack_into('<I', full, 8, 4)
+    struct.pack_into('<I', full, 8, max(radio_result.VERSIONS) + 1)
     try:
         radio_result.decode(bytes(full) + entry + struct.pack('<4I', 3, 12, 2, 4) + tail + rsn)
     except ValueError:
@@ -164,7 +207,7 @@ def main():
         pass
     else:
         raise SystemExit('a truncated association tail was accepted')
-    print('PASS radio result decode: guard refusal with PG at 1.8 V and BLDO5 off, firmware progress and the association tail')
+    print('PASS radio result decode: guard refusal with PG at 1.8 V and BLDO5 off, firmware progress, the association tail and the address section')
 
 
 if __name__ == '__main__':

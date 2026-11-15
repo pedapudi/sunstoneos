@@ -87,6 +87,11 @@ function(sunstone_latency_partitioned_model target metric)
     # Real counter time with the PMU capture of the board image (QEMU counts instructions only).
     target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_PMU=1)
   endif()
+  if(SUNSTONE_LATENCY_PRECISE AND NOT metric)
+    # The precise wakes' deadline wait and its QEMU backend (apps/latency/workload.c, SUNSTONE_LATENCY_PRECISE).
+    target_sources(${target} PRIVATE "${latency_root}/runtime/deadline.c" "${latency_root}/platform/qemu-smp/deadline.c")
+    target_compile_definitions(${target} PRIVATE SUNSTONE_TASK_DEADLINES=1 configTASK_NOTIFICATION_ARRAY_ENTRIES=2)
+  endif()
   if(SUNSTONE_LATENCY_CAUSE AND NOT metric)
     target_sources(${target} PRIVATE "${latency_root}/apps/latency/cause-ping.c")
     target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_CAUSE=1

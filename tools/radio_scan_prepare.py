@@ -26,12 +26,15 @@ FIRMWARE = [('fw_adid_8800d80_u02.bin', 1708, 'a526cbd02fcdc495f049f3ad6b5933cb0
 SCAN_SUPERVISED_VERSION = 8
 # How far the session runs (BOARD_RADIO_STAGE_* in apps/board/radio.h): 0 a full run (the scan), 1 enumeration, 2
 # enumeration plus the chip-ID words, 3 through the firmware upload, 4 the CE entropy stage alone (the module stays
-# unpowered), 5 association with the stored network and the four-way handshake (unqualified CE entropy, bring-up only). It is a submit-time option (board.py submit --radio-stage-limit N), frozen in the queue entry, so a new stage
-# needs no landing of this file.
-STAGE_LIMITS = (0, 1, 2, 3, 4, 5)
+# unpowered), 5 association with the stored network and the four-way handshake (unqualified CE entropy, bring-up only),
+# 6 association, then DHCP and one DNS lookup through the leased server (the same entropy). It is a submit-time option
+# (board.py submit --radio-stage-limit N), frozen in the queue entry.
+STAGE_LIMITS = (0, 1, 2, 3, 4, 5, 6)
 ASSOCIATE_STAGE = 5
+ADDRESS_STAGE = 6
+ASSOCIATING_STAGES = (ASSOCIATE_STAGE, ADDRESS_STAGE)
 STAGE_LIMIT_OFFSET = 1861
-ENTROPY_UNQUALIFIED_OFFSET = 1862   # network_reserved[1]: 1 on the association stage, else 0
+ENTROPY_UNQUALIFIED_OFFSET = 1862   # network_reserved[1]: 1 on the association and address stages, else 0
 # The identity the profile expects (raw words, decoded again by the firmware engine): the words the board's module
 # returned at the identity stage (run 1793750775070389039-2a278fd8, port 3-1): chip word 0xfb078820, revision 7 (U03,
 # which the vendor drives with the u02 firmware set, aic_bsp_8800d80.c:676-690), not an H part, subrevision word 0x821.
@@ -41,7 +44,8 @@ PROFILE = {'magic': 0, 'version': 8, 'bytes': 12, 'platform_authority': 16, 'pla
            'radio_identity': 496, 'transport': 512, 'bootstrap': 544, 'wifi': 568, 'firmware_address': 432,
            'firmware_bytes': 464, 'session_owner': 1224, 'runtime_lease_us': 1240, 'renew_margin_us': 1248,
            'binding_timeout_us': 1256, 'command_timeout_us': 1264, 'refill_timeout_us': 1272, 'association_timeout_us': 1296,
-           'security_timeout_us': 1304}
+           'security_timeout_us': 1304, 'tx_timeout_us': 1280, 'queue_timeout_ticks': 1312, 'client_timeout_ticks': 1316,
+           'network_dhcp': 1856, 'address_timeout_ticks': 1864, 'lease_cap_ticks': 1868}
 PLATFORM = {'owner': 0, 'topology': 32, 'fabric': 56, 'fabric_hz': 68, 'expected': 80, 'desired': 104, 'card': 128}
 # Offsets of struct a733_board_session (include/a733_board_application.h).
 SESSION = {'topology': 184, 'sid_authority': 312, 'sid_evidence': 320, 'radio_profile_address': 352,
@@ -122,7 +126,7 @@ def profile_bytes(prefix, evidence, firmware, stage_limit=0):
     struct.pack_into('<Q', raw, PROFILE['session_owner'], SESSION_OWNER)
     struct.pack_into('<QQ', raw, PROFILE['runtime_lease_us'], 20000000, 5000000)
     struct.pack_into('<QQ', raw, PROFILE['binding_timeout_us'], 5000000, 1000000)
-    if stage_limit == ASSOCIATE_STAGE:
+    if stage_limit in ASSOCIATING_STAGES:
         # The time budget against the 50 s startup deadline (firmware confirmed near 16.7 s of session time): scan 10 s,
         # authentication and association 8 s, the security stage 14 s; the stage stops at the session deadline whichever
         # is first. The entropy is UNQUALIFIED (bring-up only): byte 1 declares it.
@@ -137,9 +141,28 @@ def profile_bytes(prefix, evidence, firmware, stage_limit=0):
         struct.pack_into('<Q', raw, PROFILE['association_timeout_us'], 10000000)   # bounds the scan
         struct.pack_into('<Q', raw, PROFILE['security_timeout_us'], 14000000)  # the security stage
         struct.pack_into('<QQ', raw, PROFILE['runtime_lease_us'], 20000000, 7000000)
+        if stage_limit == ADDRESS_STAGE:
+            address_profile(raw)
         return bytes(raw)
     struct.pack_into('<Q', raw, PROFILE['association_timeout_us'], 20000000)   # bounds the scan
     return bytes(raw)
+
+
+def address_profile(raw):
+    """The address stage's bounds (ticks are milliseconds). They run from the network's start, which follows
+    authorization, and each also stops at the 50 s startup deadline.
+
+    DHCP acquisition, 12 s: the pinned FreeRTOS+TCP sends its first discover 250 ms after the start
+    (dhcpINITIAL_TIMER_PERIOD) and waits 5 s for an offer (dhcpINITIAL_DHCP_TX_PERIOD), then sends a second discover
+    and waits 10 s; a request waits 5 s for its ACK. 12 s holds two discovers, or one discover and the request with its
+    full wait. The resolve, 16 s: it waits in the network service for the lease, then sends one A query and waits up to
+    the rest of its bound (at least 4 s once the lease came within 12 s). The owner's stage bound adds 1 s for the
+    offline fence (apps/board/radio.c). Each frame's transmission is bounded at 2 s and its time in the queue at 3 s.
+    The lease cap is 10 minutes; the stage ends long before it."""
+    raw[PROFILE['network_dhcp']] = 1
+    struct.pack_into('<II', raw, PROFILE['address_timeout_ticks'], 12000, 600000)
+    struct.pack_into('<Q', raw, PROFILE['tx_timeout_us'], 2000000)
+    struct.pack_into('<II', raw, PROFILE['queue_timeout_ticks'], 3000, 16000)
 
 
 def apply(prefix, evidence, firmware_dir=None, stage_limit=0):

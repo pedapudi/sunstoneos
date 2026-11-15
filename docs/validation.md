@@ -411,9 +411,11 @@ with the owner losing one slot's hint in one round and requires it to fail with 
 the shared-owner composition model of the concurrent-accelerator branch, whose deadline "the GPU retirement did not start during the NPU
 job" read the GPU thread's active flag: on a loaded host the GPU thread ran the whole retirement between two looks of the NPU thread, the
 flag was clear again, and the wait ran to its model-time limit (2,009,498 µs against 2,009,497). The retirement has started once it is
-active or done. The latency cause model's ping timed out in 6 of 24 runs at a load average of 84 (host time again: 250 ms for a core the
-host did not schedule); the model prints its statuses and the check runs it again, and reports the claim inconclusive when it timed out in
-all three attempts. A planted sequence error is reported by its peer as status 5 and is never mistaken for it.
+active or done. The latency cause model's ping timed out in 6 of 24 runs at a load average of 84 with eight copies at once beside 36 busy
+processes (host time again: 250 ms for a core the host did not schedule). The check runs as a timing step, and there the image's own
+bounds hold: 193 runs made four at once under the timing lock, at load averages up to 75, all passed, with the ping at most 84.9 ms of
+its 250 ms and the run at most 2.2 s of its 12 s budget. The check runs each image once; the model prints its ping statuses before its
+assertion, and a planted sequence error is reported by its peer as status 5.
 
 ### Gate slots and the timing lock
 

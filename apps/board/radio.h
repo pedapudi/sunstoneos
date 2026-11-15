@@ -38,6 +38,18 @@ struct board_radio_config {
      * four-way handshake; both stop at the session deadline. */
     unsigned associate;
     uint64_t connect_timeout_us;
+    /* The address stage (BOARD_RADIO_STAGE_ADDRESS), on an associating owner: once the supplicant authorizes, the owner
+     * starts the network with DHCP, the client resolves one name through the leased DNS server, and the owner then takes
+     * the network offline through the IP task's fence (DHCP stops, no release is sent) and stops at SCANNED.
+     * address_timeout_us bounds the stage from the network's start: the lease, the resolve and the fence. The network's
+     * random numbers come from words the owner draws from the association stage's CE entropy (UNQUALIFIED, bring-up
+     * only). resolve_name names the host the client resolves (resolve_bytes long, no terminator); the client submits the
+     * one resolve when the network starts, and it waits in the network service until the lease is published. */
+    unsigned address;
+    uint64_t address_timeout_us;
+    const char *resolve_name;
+    unsigned resolve_bytes;
+    TickType_t resolve_timeout; /* The resolve's bound in ticks, from the network's start: the lease and the lookup. */
     /* Stop after enumeration (no four-bit widening, no transport, no firmware), for the smallest
      * probe; the owner then reports BOARD_RADIO_SCANNED with the report at stage enumerated. */
     unsigned enumeration_only;
@@ -96,6 +108,14 @@ struct board_radio {
     /* The RSN summary in the record: whether one is set, and the RSSI of the result it came from. */
     uint8_t rsn_recorded;int8_t rsn_rssi;
     unsigned cand_found,entropy_begun,wiped; /* wiped: the credential-derived memory was zeroed; the session is not polled again */
+    /* The address stage. The network's random words: the owner draws them from the CE reservoir (whose calls are owner-only)
+     * and the IP task takes them; one producer and one consumer, so the two counters need no lock. */
+    uint32_t net_random[16];
+    atomic_uint net_random_put,net_random_take,net_random_short;
+    /* The client's resolve outcome (enum sunstone_net_result + 1, 0 while pending), whether it returned an address, and
+     * the owner's progress: network started, offline requested. */
+    atomic_uint address_result,address_resolved;
+    unsigned address_started,address_offline;
     /* Link recovery: owner-drained events while reassociating, and the bound
      * for admitting recovery after a clean loss is first reported. */
     unsigned recovering;
@@ -165,6 +185,12 @@ struct board_radio_profile {
  * the scan, refill_timeout_us for the authentication and association exchange, security_timeout_us for the handshake and
  * command_timeout_us for the supplicant's commands. */
 #define BOARD_RADIO_STAGE_ASSOCIATE 5u
+/* 6: the association stage, then DHCP and one DNS lookup through the leased server (the same unqualified entropy, byte 1
+ * is 1). The profile sets network_dhcp, address_timeout_ticks and lease_cap_ticks, tx_timeout_us and queue_timeout_ticks
+ * for the network, and client_timeout_ticks for the resolve. */
+#define BOARD_RADIO_STAGE_ADDRESS 6u
+static inline int board_radio_stage_associates(unsigned stage)
+{return stage==BOARD_RADIO_STAGE_ASSOCIATE||stage==BOARD_RADIO_STAGE_ADDRESS;}
 static inline unsigned board_radio_profile_stage_limit(const struct board_radio_profile *f){return f->network_reserved[0];}
 static inline int board_radio_profile_scan_only(const struct board_radio_profile *f)
 {return f&&f->version==BOARD_RADIO_PROFILE_SCAN_VERSION;}
@@ -173,11 +199,14 @@ static inline int board_radio_profile_scan_only(const struct board_radio_profile
 static inline int board_radio_profile_network_valid(const struct board_radio_profile *p)
 {
     if(!p||p->network_dhcp>1||p->network_reserved[2])return 0;
-    /* Byte 1 declares unqualified entropy, on the association stage only. */
-    if(p->network_reserved[1]!=(p->network_reserved[0]==BOARD_RADIO_STAGE_ASSOCIATE?1u:0u))return 0;
+    /* Byte 1 declares unqualified entropy, on the association and address stages only. */
+    if(p->network_reserved[1]!=(board_radio_stage_associates(p->network_reserved[0])?1u:0u))return 0;
     /* Byte 0 is the stage limit of a scan-only profile; every other profile keeps it zero. */
     if(p->network_reserved[0]&&(!(p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION)||
-        p->network_reserved[0]>BOARD_RADIO_STAGE_ASSOCIATE))return 0;
+        p->network_reserved[0]>BOARD_RADIO_STAGE_ADDRESS))return 0;
+    /* A scan profile asks for an address on the address stage only, and then always through DHCP. */
+    if((p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION)&&
+       p->network_dhcp!=(p->network_reserved[0]==BOARD_RADIO_STAGE_ADDRESS?1u:0u))return 0;
     if(p->version==BOARD_RADIO_PROFILE_VERSION||p->version==BOARD_RADIO_PROFILE_SUPERVISED_VERSION||
        p->version==BOARD_RADIO_PROFILE_SCAN_VERSION||p->version==BOARD_RADIO_PROFILE_SCAN_SUPERVISED_VERSION){if(p->tcp_mode)return 0;}
     else if(p->version==BOARD_RADIO_PROFILE_LISTENER_VERSION||p->version==BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION){

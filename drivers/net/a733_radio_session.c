@@ -401,6 +401,14 @@ int a733_radio_session_start_network(struct a733_radio_session *s,const struct s
     if(ok)s->stage=NETWORK;else if(s->sockets.initialized)(void)fail(s);
     return done(s,ok);
 }
+int a733_radio_session_park_network(struct a733_radio_session *s)
+{
+    if(!enter(s))return 0;
+    int ok=!s->stop_requested&&!s->fault&&s->stage==NETWORK&&s->sockets.initialized&&
+        atomic_load(&s->sockets.offline)&&aic8800_network_offline_ready(&s->sockets.network);
+    if(ok)s->stage=MANAGEMENT;
+    (void)leave(s,A733_SESSION_PENDING);return ok;
+}
 int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_dispatch_event *out)
 {if(!enter(s))return 0;int ok=!s->stop_requested&&outside(s,out,sizeof(*out))&&aic8800_dispatch_take_event(&s->dispatcher,out);(void)leave(s,A733_SESSION_PENDING);return ok;}
 int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_dispatch_record *out)

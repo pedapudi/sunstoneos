@@ -12,6 +12,13 @@ void *ss_task_create_static_affinity_set(void (*entry)(void *), const char *name
                                         (StaticTask_t *)tcb, (UBaseType_t)affinity);
 }
 
+#ifdef SUNSTONE_LATENCY_PRECISE
+/* The precise wakes' deadline wait takes notification index 1, so that the
+ * phase starts' gives on index 0 (apps/latency/workload.c, start_own) cannot
+ * end it, as the OS gives an application task's waits their own index. */
+_Static_assert(configTASK_NOTIFICATION_ARRAY_ENTRIES >= 2, "a deadline notification index");
+unsigned sunstone_deadline_notify_index(void) { return 1; }
+#endif
 #ifdef SUNSTONE_LATENCY_CPU_ONLY
 /* The CPU control has no DMA client; these hooks stand for the board image's absence of one. */
 void latency_dma_model_tick(void) {}
@@ -101,8 +108,10 @@ static void controller(void *argument)
         platform_puts("\n");
         /* A wake whose interrupt chain a later interrupt replaced before the woken task finished its bookkeeping (a stall of
          * that core, long on a loaded host) is counted unlinked, by design; every busy wake is one or the other, and a chain
-         * that is not recorded at all links none. The first wake may be among the unlinked. */
-        configASSERT(filed && (w->first_state >> 16 & 1u) && w->linked + w->unlinked == LATENCY_BUSY_SAMPLES && 2 * w->linked > LATENCY_BUSY_SAMPLES);
+         * that is not recorded at all links none. A wake whose chain an interrupt tore in every copy is counted torn
+         * (first_state bits 32-63). The first wake may be among the unlinked or the torn. */
+        configASSERT(filed && (w->first_state >> 16 & 1u) &&
+                     w->linked + w->unlinked + (w->first_state >> 32) == LATENCY_BUSY_SAMPLES && 2 * w->linked > LATENCY_BUSY_SAMPLES);
         /* Each setting's worst wakes, largest first from the deadline; a released core's deadline is CPU0's. */
         for (unsigned setting = 0; setting < 2; ++setting)
             for (unsigned i = 0; i < SS_WAKE_WORST; ++i) {
@@ -119,9 +128,14 @@ static void controller(void *argument)
          * for them while the recorder is still armed; every other core must arm none for a wake CPU0 released. */
         bool pings = false;
         for (unsigned pair = 0; pair < LATENCY_CAUSE_PING_PAIRS; ++pair) pings |= result.ping.pair[pair].target_core == core;
+#ifdef SUNSTONE_LATENCY_PRECISE
+        /* A precise wake comes from CPU0's deadline interrupt, so a core outside the release mask may arm nothing. */
+        if (core && (SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u)) configASSERT(pings || !w->arms);
+#else
         if (core) configASSERT((SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u) ? (pings || !w->arms) : w->arms != 0);
         /* Their timer samples, kept until the woken task ran, were recorded. */
         if (core && !(SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u)) configASSERT(result.core[core].metric[SS_LAT_IRQ].count);
+#endif
 #endif
     }
     configASSERT(result.wake_segments.release_mask == SUNSTONE_LATENCY_RELEASE_MASK);

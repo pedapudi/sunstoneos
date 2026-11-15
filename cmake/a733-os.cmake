@@ -225,6 +225,9 @@ elseif(SUNSTONE_APPLICATION STREQUAL "table-walks")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/manifest.json"
     INPUTS "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/privilege.c"
     INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/table-walks")
+  # The exception-code walk (checks/irq-general-regs.py) counts the walk worker, a task entry whose address the
+  # application takes, among the targets of indirect calls, so these sources keep the OS's general-register flag.
+  target_compile_options(table-walks PRIVATE "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")
   add_sunstone_image(sunstone-a733-os-table-walks LIFETIME ${os_lifetime} APPLICATION table-walks)
   target_sources(sunstone-a733-os-table-walks PRIVATE "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/privilege.c")
   target_link_options(sunstone-a733-os-table-walks PRIVATE -Wl,--wrap=os_application_task_privileged)
@@ -296,6 +299,10 @@ elseif(SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/gpu-lifecycle/manifest.json"
     INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/gpu-lifecycle"
       "${SUNSTONE_SOURCE_ROOT}/apps/gpu-queue-peer")
+  # The exception-code walk (checks/irq-general-regs.py) counts the peer's entry, which the owner table holds, among
+  # the targets of indirect calls, so the peer keeps the OS's general-register flag.
+  set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/apps/gpu-queue-peer/main.c" PROPERTIES
+    COMPILE_OPTIONS -mgeneral-regs-only)
   target_compile_definitions(gpu-lifecycle PRIVATE
     GPU_LIFECYCLE_PEER=$<BOOL:${SUNSTONE_GPU_LIFECYCLE_PEER}>
     GPU_LIFECYCLE_FAIL_AFTER_SUBMIT=$<BOOL:${SUNSTONE_GPU_LIFECYCLE_FAIL_AFTER_SUBMIT}>
