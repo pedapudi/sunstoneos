@@ -18,6 +18,7 @@ Native HDMI, DSI, DisplayPort, immutable scanout and retained G2D paths have hos
 | OS-image G2D copy, unconverted and ARGB8888 to BGRA8888, two operations in one session ([g2d-os.md](../g2d-os.md#operations)) | board-qualified on 3-1 | 395 by 257 surfaces, CRC and 12 samples as predicted; alpha-0 pixels written as 0; launch to interrupt 130.5 us for 32,148 pixels | `1794725199336568290-5c9e9da6` |
 | OS-image G2D copy of alpha-0 pixels on four alternative blender configurations ([g2d-os.md](../g2d-os.md#copy-paths)) | board-measured on 3-1 | none copies exactly: three write 0x00000000 like the vendor path, and the premultiplied words multiply colour by alpha | `1794732202569746479-c9b5e324` |
 | OS-image G2D rotate of ARGB8888 at 0, 90, 180 and 270 degrees through the rotate module ([g2d-os.md](../g2d-os.md#first-rotate-stage)) | board-qualified on 3-1 | 96 by 40 rectangle, every CRC as predicted, alpha-0 pixels copied exactly; 90 turns clockwise; launch to interrupt 16 to 23 us | `1794743298175050163-4ed14c80` |
+| OS-image G2D convert of NV16 camera frames to RGB with scaling, four YUV-to-RGB tables ([g2d-os.md](../g2d-os.md#camera-frame-conversion)) | host-tested | command pages equal a transcription of the vendor's bitblt path over 46 jobs; first board stage built, not run | `g2d-convert-words`, `g2d-convert-host`, `os-g2d-operation` |
 | HDMI, DSI, immutable scanout and retained G2D paths | host-tested | none | [g2d.md](../g2d.md), [displayport-native.md](../displayport-native.md) |
 | Visible sink output and physical pixels | open | none | open work 1 and 2 |
 
@@ -35,7 +36,7 @@ The display engine's scanout and composition, HDMI, MIPI DSI and DisplayPort hav
 
 **Software evidence:** host, source.
 
-The OS-image service is described in [g2d-os.md](../g2d-os.md). Scaling, blending, flipped rotates, YUV rotates, the X-byte formats and the retained native paths are host-tested or open.
+The OS-image service is described in [g2d-os.md](../g2d-os.md). Exact copies of camera frames and packed sensor data use a rotate at 0 degrees; the blit treats alpha as coverage. NV16-to-RGB conversion with scaling is host-tested. Blending, flipped rotates, YUV rotates, the X-byte formats and the retained native paths are host-tested or open.
 
 ## Open work
 
@@ -43,7 +44,7 @@ The OS-image service is described in [g2d-os.md](../g2d-os.md). Scaling, blendin
 2. Establish DisplayPort negotiation: analog and SERDES authority, AUX clock, board revision, orientation, link training and sink output.
 3. Obtain panel-bound electrical, PLL, rail and wiring evidence, and the DSI read transactions.
 4. Add per-access ownership checks to the G2D command path.
-5. Route exact copies through the rotate module at 0 degrees, which keeps alpha-0 pixels where the blit cannot (alpha is coverage there); then NV12 and YUV420 camera rotation, flips on the board, a mixer job and a rotate in one session (the stray masking), other pixel sizes and translucent solid backgrounds.
+5. Qualify NV16-to-RGB conversion and scaling on the board, with the engine's pixel rate against one A76 core; then RGB888 output, NV12 input, NV12 and YUV420 camera rotation, flips on the board, a mixer job and a rotate in one session (the stray masking), other pixel sizes and translucent solid backgrounds.
 
 ## Evidence
 
