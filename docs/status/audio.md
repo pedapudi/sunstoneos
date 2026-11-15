@@ -26,6 +26,7 @@ on port 3-3. External microphone and headset operation remain unqualified.
 1. Measure the unguarded DMA ordering margin.
 2. Qualify external microphone and headset operation, including physical pairing, interoperability and safe shutdown.
 3. Keep the generic capture and paced or recorded input services independent of the external recognition application.
+4. Make the HDMI audio variants configure on their own, or state what they need: `-DSUNSTONE_HDMI_AUDIO_STREAM=ON` alone stops with `HDMI streaming requires audio and USB`, and `-DSUNSTONE_HDMI_AUDIO_USB=ON` alone with `HDMI audio observation requires the finite audio profile` (cmake/a733-hdmi-application.cmake).
 
 ## Evidence
 

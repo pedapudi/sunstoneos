@@ -24,6 +24,7 @@ OV5640 control, both CSI connector bindings, TWI9 for CAM2, the local PHY and pa
 3. Complete ongoing native frame delivery.
 4. Establish whether the interpolation and color-conversion algorithm is equivalent to ISP600.
 5. Qualify repeated operation; both IOMMU masters, allocations and provider leases stay owned until fresh status and fault checks pass.
+6. Make `-DSUNSTONE_CAMERA_STREAM=ON` configure on its own, or state what it needs: alone it stops with `Continuous camera capture requires the retained supervised profile` (cmake/a733-camera-application.cmake).
 
 ## Evidence
 
