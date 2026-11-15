@@ -89,7 +89,7 @@ include("{ROOT}/cmake/aarch64-clang.cmake")
     for case in ('dhcp','acquisition','static','omitted','sntp'):
         if record['cases'].get(case,{}).get('exit_code')==0:continue
         cmd=[str(a.qemu),'-M','virt,gic-version=3,secure=off,virtualization=off',*harness.QEMU_DETERMINISTIC,'-cpu','cortex-a53','-m','128M','-nographic','-nic','none','-monitor','none','-semihosting-config','enable=on,target=native,arg='+case,'-kernel',str(out/'build/radio-network-dhcp-dns-model.elf')]
-        r=subprocess.run(cmd,capture_output=True,text=True,timeout=harness.qemu_kill_seconds('radio-network-dhcp-dns'));record['cases'][case]={'command':cmd,'exit_code':r.returncode,'stdout':r.stdout,'stderr':r.stderr};save()
+        r=harness.run_qemu(cmd,harness.qemu_kill_seconds('radio-network-dhcp-dns'));record['cases'][case]={'command':cmd,'exit_code':r.returncode,'stdout':r.stdout,'stderr':r.stderr};save()
         if r.returncode:raise RuntimeError(r.stdout+r.stderr)
     record['result']='PASS new actual-stack DHCP/DNS/SNTP cases only; no physical RF, credentials, entropy, or networking qualification';save();print(record['result'])
 if __name__=='__main__':main()

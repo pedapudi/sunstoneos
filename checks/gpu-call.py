@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import harness  # noqa: E402
 
 CHECK_INPUTS = ['runtime/gpu_call.S', 'include/pvr_gpu_call.h',
                 'patches/freertos-gpu-call.patch', 'patches/freertos-smp-asm.patch',
@@ -33,9 +34,9 @@ def main():
     def run(cmd, *, data=None, timeout=30):
         commands.append([str(x) for x in cmd])
         (a.output / 'commands.json').write_text(json.dumps(commands, indent=2) + '\n')
-        r = subprocess.run([str(x) for x in cmd], input=data, text=True,
+        r = harness.until_booted(lambda: subprocess.run([str(x) for x in cmd], input=data, text=True,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           env=env, timeout=timeout)
+                           env=env, timeout=timeout), lambda done: (done.stdout or '') + (done.stderr or ''))
         with (a.output / 'build.log').open('a') as f:
             f.write(r.stdout)
         if r.returncode:

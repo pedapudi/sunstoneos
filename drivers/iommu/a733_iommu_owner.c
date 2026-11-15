@@ -23,17 +23,19 @@ const char a733_iommu_programmer[] = "a733_iommu_owner";
 #define AUTO_GATING_VALUE 0x7fff0003u
 #define TTB 0x20u
 #define PREFETCH 0x2cu
-/* The banks' prefetch word a master needs: the A733 platform data's tlb_prefetch, 0x3007f, except for the CSI and ISP
- * masters (1 and 2), whose effective vendor parser leaves prefetch zero (a733_iommu.c programs the same). The word is
- * bank-wide: the first attach writes the value its masters share (zero if any needs zero), and a later master that
- * needs another value is refused. */
-static uint32_t prefetch_of(unsigned id) { return id == 1 || id == 2 ? 0 : 0x3007fu; }
-static uint32_t prefetch_for(uint16_t masters)
-{
-    uint32_t v = 0x3007fu;
-    for(unsigned id = 0; id < A733_IOMMU_OWNER_MASTERS; ++id) if(masters >> id & 1) v &= prefetch_of(id);
-    return v;
-}
+/* Each bank has its own prefetch word (sunxi-iommu-v2.c: IOMMU_TLB_PREFETCH_REG 0x2c in each 0x10000 bank set).
+ * Bits 0-6 enable prefetch per micro-TLB, numbered by the master's local ID in its bank, and bits 16-17 are mode bits
+ * for the whole bank. The vendor platform tables show the per-master bits: sun8iw20 writes 0x30016 and sun8iw21
+ * 0x30077, each clearing exactly the bit of the masters it disables, such as G2D (sunxi-iommu-v1.c). The A733
+ * platform data (sun60iw2p1.dtsi) gives 0x3007f. Its vendor parser never reads the property, so Linux leaves every
+ * bit clear, the setting the recorded ISP profile ran with.
+ * Bank 0 clears the bits of CSI (1) and ISP (2), so they run without prefetch as recorded; bank 1 keeps 0x3007f, the
+ * setting G2D (bank 1, local ID 4) passed its board runs with. hw_init writes both words once, so no attach rewrites
+ * a word another master uses and attach order does not matter. The vendor writes one value to both banks
+ * (WRITE_EQUAL_REG); the two values here differ only in the CSI and ISP bits. Bank 0's word is read again after
+ * bank 1's write, so a board where the two offsets name one register fails the first attach at that readback. */
+#define PREFETCH_BANK0 0x30079u
+#define PREFETCH_BANK1 0x3007fu
 #define FLUSH 0x30u
 #define TLB_MODE 0x40u
 #define TLB_START 0x44u
@@ -69,14 +71,19 @@ static int wr(struct a733_iommu_owner *o, uint32_t off, uint32_t v)
 {
     return o->ops.write(o->context, off, v) == 1 ? 1 : fail(o, STEP_IO, off);
 }
-/* A write with readback of the whole word. */
-static int set(struct a733_iommu_owner *o, uint32_t off, uint32_t v)
+/* A register that must read v; a mismatch records the value read. */
+static int holds(struct a733_iommu_owner *o, uint32_t off, uint32_t v)
 {
     uint32_t r;
-    if(wr(o, off, v) != 1 || rd(o, off, &r) != 1) return -1;
+    if(rd(o, off, &r) != 1) return -1;
     if(r == v) return 1;
     if(!o->fault_step) o->fault_read = r;
     return fail(o, STEP_READBACK, off);
+}
+/* A write with readback of the whole word. */
+static int set(struct a733_iommu_owner *o, uint32_t off, uint32_t v)
+{
+    return wr(o, off, v) == 1 ? holds(o, off, v) : -1;
 }
 static int both(struct a733_iommu_owner *o, uint32_t off, uint32_t v)
 {
@@ -234,7 +241,8 @@ static int inherited(struct a733_iommu_owner *o, uint16_t touched)
  * masters' bypass, a full flush, auto gating, then enable. */
 static int install(struct a733_iommu_owner *o, uint16_t touched, uint16_t masters)
 {
-    return both(o, TTB, (uint32_t)(o->directory_physical >> 14)) == 1 && both(o, PREFETCH, o->prefetch) == 1 &&
+    return both(o, TTB, (uint32_t)(o->directory_physical >> 14)) == 1 && set(o, PREFETCH, PREFETCH_BANK0) == 1 &&
+        set(o, BANK + PREFETCH, PREFETCH_BANK1) == 1 && holds(o, PREFETCH, PREFETCH_BANK0) == 1 &&
         both(o, TLB_MODE, 1) == 1 && both(o, PC_MODE, 1) == 1 && both(o, INT_ENABLE, 0) == 1 &&
         masters_set(o, touched, masters) == 1 && flush(o, touched) == 1 &&
         both(o, AUTO_GATING, AUTO_GATING_VALUE) == 1 && both(o, ENABLE, 1) == 1 ? 1 : -1;
@@ -253,7 +261,6 @@ int a733_iommu_owner_attach(struct a733_iommu_owner *o, uint16_t masters, const 
        !spans_free(o, s, count)) return -1;
     o->refused_word = 0;
     if(o->state == A733_IOMMU_OWNER_ACTIVE) {
-        if(prefetch_for(masters) != o->prefetch) { o->refused_word = 3; return -1; }
         /* sunxi_iommu_map, its sync, then the new masters' interrupt enable and bypass
          * (sunxi_enable_device_iommu and sunxi_iommu_master_ready): no flush of the banks other masters use. */
         if(write_spans(o, s, count) != 1) return -1;
@@ -271,7 +278,7 @@ int a733_iommu_owner_attach(struct a733_iommu_owner *o, uint16_t masters, const 
     if(o->ops.clock(o->context, 1) != 1) { o->refused_word = 1; return -1; }
     o->clock_held = 1;
     /* Attached from here, so a failure below leaves detach able to bypass, disable and release. */
-    o->attached = masters; o->translated = masters; o->touched = touched; o->prefetch = prefetch_for(masters);
+    o->attached = masters; o->translated = masters; o->touched = touched;
     const int quiet = inherited(o, touched);
     if(quiet != 1) {
         if(quiet == 0) {

@@ -6,6 +6,49 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+/* MODEL_THREADS, off by default, runs the models of this file and of
+ * checks/power-domains-model.h and checks/npu-startup-host.c under real
+ * threads. Each model callback then takes one recursive model lock for its
+ * register access and reads model time under it, as a bus serializes one
+ * access at a time; driver code runs outside the lock. The lock is a ticket
+ * lock, so that it grants in arrival order: an unfair mutex let a thread
+ * that samples registers continuously starve the others. The provider
+ * worker identity is then thread-local. Without the option, MODEL_GUARD()
+ * is empty and PMIC_WORKER() names the model's field. */
+#ifdef MODEL_THREADS
+/* With MODEL_DRIVER_RACES as well, ThreadSanitizer does not instrument the
+ * model callbacks and the model lock. The lock edge of every register access
+ * otherwise orders many driver accesses of two threads and can hide their
+ * races; without the edges, a report names driver synchronization. The build
+ * without it instruments the model too and finds races in the model. */
+#ifdef MODEL_DRIVER_RACES
+#define MODEL_UNSANITIZED __attribute__((no_sanitize("thread")))
+#else
+#define MODEL_UNSANITIZED
+#endif
+#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
+static atomic_uint model_next,model_serving;
+static _Thread_local unsigned model_depth;
+MODEL_UNSANITIZED static inline void model_lock(void)
+{
+    if(model_depth++)return;
+    const unsigned ticket=atomic_fetch_add_explicit(&model_next,1,memory_order_relaxed);
+    while(atomic_load_explicit(&model_serving,memory_order_acquire)!=ticket)sched_yield();
+}
+MODEL_UNSANITIZED static inline void model_unlock(int *held)
+{(void)held;if(!--model_depth)atomic_fetch_add_explicit(&model_serving,1,memory_order_release);}
+#define MODEL_GUARD() model_lock();int model_guard_ __attribute__((cleanup(model_unlock),unused))=1
+#define MODEL_TLS _Thread_local
+static _Thread_local unsigned model_worker;
+#define PMIC_WORKER(m) model_worker
+#else
+#define MODEL_UNSANITIZED
+#define MODEL_GUARD()
+#define MODEL_TLS
+#define PMIC_WORKER(m) ((m)->worker)
+#endif
 struct pmic_model_word { uintptr_t address; uint32_t value; };
 struct pmic_model {
     struct a733_pmic provider;
@@ -58,15 +101,15 @@ struct pmic_model {
 };
 static int pmic_model_separate(const void *a,size_t n,const void *b,size_t k)
 {return (uintptr_t)a<=(uintptr_t)b ? (uintptr_t)b-(uintptr_t)a>=n : (uintptr_t)a-(uintptr_t)b>=k;}
-static uint32_t *pmic_model_word(struct pmic_model *m,uintptr_t address)
+MODEL_UNSANITIZED static uint32_t *pmic_model_word(struct pmic_model *m,uintptr_t address)
 {
     for(unsigned i=0;i<m->word_count;++i)if(m->words[i].address==address)return &m->words[i].value;
     assert(m->word_count<256);m->words[m->word_count].address=address;
     return &m->words[m->word_count++].value;
 }
-static int pmic_model_now(void *v,uint64_t *out)
+MODEL_UNSANITIZED static int pmic_model_now(void *v,uint64_t *out)
 {
-    struct pmic_model *m=v;
+    struct pmic_model *m=v;MODEL_GUARD();
     if(m->replace_parent){*m->replace_parent=m->replacement;m->replace_parent=0;}
     m->in_time_read=1;
     if(m->concurrent)m->concurrent(m);
@@ -77,10 +120,10 @@ static int pmic_model_now(void *v,uint64_t *out)
     else m->now+=m->now_step;
     return 1;
 }
-static void pmic_model_cost(struct pmic_model *m,uint64_t ns)
+MODEL_UNSANITIZED static void pmic_model_cost(struct pmic_model *m,uint64_t ns)
 {m->frac_ns+=ns;m->now+=m->frac_ns/1000;m->frac_ns%=1000;}
-static int pmic_model_current(void *v)
-{struct pmic_model *m=v;if(m->poll_ns)pmic_model_cost(m,m->poll_ns);return m->worker==1;}
+MODEL_UNSANITIZED static int pmic_model_current(void *v)
+{struct pmic_model *m=v;MODEL_GUARD();if(m->poll_ns)pmic_model_cost(m,m->poll_ns);return PMIC_WORKER(m)==1;}
 static int pmic_model_outside(void *v,const void *p,size_t n)
 {
     struct pmic_model *m=v;
@@ -89,17 +132,17 @@ static int pmic_model_outside(void *v,const void *p,size_t n)
     return p && pmic_model_separate(p,n,m->words,sizeof(m->words)) &&
         pmic_model_separate(p,n,&m->now,sizeof(*m)-(size_t)((char *)&m->now-(char *)m));
 }
-static int pmic_model_enter(void *v,uint64_t deadline)
+MODEL_UNSANITIZED static int pmic_model_enter(void *v,uint64_t deadline)
 {
-    struct pmic_model *m=v;assert(m->worker && !m->register_held);
+    struct pmic_model *m=v;MODEL_GUARD();assert(PMIC_WORKER(m) && !m->register_held);
     if(m->retained || m->i2c_held || m->now>=deadline)return 0;
     m->i2c_held=1;return 1;
 }
-static void pmic_model_leave(void *v)
-{struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);m->i2c_held=0;}
-static void pmic_model_retain(void *v)
-{struct pmic_model *m=v;assert(m->worker && m->i2c_held);m->retained=1;}
-static void pmic_model_probe(struct pmic_model *m,unsigned write)
+MODEL_UNSANITIZED static void pmic_model_leave(void *v)
+{struct pmic_model *m=v;MODEL_GUARD();assert(PMIC_WORKER(m) && m->i2c_held && !m->retained);m->i2c_held=0;}
+MODEL_UNSANITIZED static void pmic_model_retain(void *v)
+{struct pmic_model *m=v;MODEL_GUARD();assert(PMIC_WORKER(m) && m->i2c_held);m->retained=1;}
+MODEL_UNSANITIZED static void pmic_model_probe(struct pmic_model *m,unsigned write)
 {
     if(m->late_after && m->now>=m->late_after)++m->late;
     const uint64_t ns=write && m->write_ns ? m->write_ns : m->access_ns;
@@ -107,18 +150,18 @@ static void pmic_model_probe(struct pmic_model *m,unsigned write)
     if(m->probe_live && a733_pmic_live(&m->provider,&m->lifetime)==A733_PMIC_BUSY)++m->live_busy;
     if(m->concurrent)m->concurrent(m);
 }
-static int pmic_model_read(void *v,uintptr_t address,uint32_t *out)
+MODEL_UNSANITIZED static int pmic_model_read(void *v,uintptr_t address,uint32_t *out)
 {
-    struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);pmic_model_probe(m,0);
+    struct pmic_model *m=v;MODEL_GUARD();assert(PMIC_WORKER(m) && m->i2c_held && !m->retained);pmic_model_probe(m,0);
     assert(a733_pmic_native_address(address,0));++m->reads;
     if(address==0x0708300c && m->flag_at && (m->now_ns ? m->now*1000+m->frac_ns>=m->flag_ns : m->now>=m->flag_at)){*pmic_model_word(m,address)=m->flag_value;m->flag_at=0;}
     if(address==0x07083010 && m->status_late){++m->status_waits;if(!--m->status_late)*pmic_model_word(m,address)=0xf8;}
     if(address==0x07083020)++m->line_reads;
     *out=*pmic_model_word(m,address);return 1;
 }
-static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
+MODEL_UNSANITIZED static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
 {
-    struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);pmic_model_probe(m,1);
+    struct pmic_model *m=v;MODEL_GUARD();assert(PMIC_WORKER(m) && m->i2c_held && !m->retained);pmic_model_probe(m,1);
     assert(a733_pmic_native_address(address,1) && value<=255);++m->writes;
     assert(m->trace_count<4096);m->trace[m->trace_count++]=(struct pmic_model_word){address,value};
     if(address==0x07083008){*pmic_model_word(m,address)=value;return 1;}
@@ -154,17 +197,17 @@ static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
     else *pmic_model_word(m,address)=done;
     *pmic_model_word(m,0x07083010)=m->wire==m->fail_phase ? m->fail_status : status;return 1;
 }
-static int pmic_model_pin_enter(void *v,uint64_t deadline)
+MODEL_UNSANITIZED static int pmic_model_pin_enter(void *v,uint64_t deadline)
 {
-    struct pmic_model *m=v;assert(!(m->worker && m->i2c_held));
+    struct pmic_model *m=v;MODEL_GUARD();assert(!(PMIC_WORKER(m) && m->i2c_held));
     if(m->register_held || m->now>=deadline)return 0;m->register_held=1;return 1;
 }
-static void pmic_model_pin_leave(void *v)
-{struct pmic_model *m=v;assert(m->register_held);m->register_held=0;}
-static int pmic_model_pin_read(void *v,uintptr_t a,uint32_t *out)
-{struct pmic_model *m=v;assert(m->register_held && a733_pins_native_address(a,0));*out=*pmic_model_word(m,a);return 1;}
-static int pmic_model_pin_write(void *v,uintptr_t a,uint32_t value)
-{struct pmic_model *m=v;assert(m->register_held && a733_pins_native_address(a,1));*pmic_model_word(m,a)=value;return 1;}
+MODEL_UNSANITIZED static void pmic_model_pin_leave(void *v)
+{struct pmic_model *m=v;MODEL_GUARD();assert(m->register_held);m->register_held=0;}
+MODEL_UNSANITIZED static int pmic_model_pin_read(void *v,uintptr_t a,uint32_t *out)
+{struct pmic_model *m=v;MODEL_GUARD();assert(m->register_held && a733_pins_native_address(a,0));*out=*pmic_model_word(m,a);return 1;}
+MODEL_UNSANITIZED static int pmic_model_pin_write(void *v,uintptr_t a,uint32_t value)
+{struct pmic_model *m=v;MODEL_GUARD();assert(m->register_held && a733_pins_native_address(a,1));*pmic_model_word(m,a)=value;return 1;}
 static int pmic_model_gpu_read(void *v,uintptr_t a,uint32_t *out)
 {(void)v;(void)a;(void)out;assert(0);return 0;}
 static int pmic_model_gpu_write(void *v,uintptr_t a,uint32_t r,uint32_t s,uint64_t d)
@@ -207,7 +250,7 @@ static void pmic_model_setup(struct pmic_model *m)
     assert(a733_pmic_identity(&m->provider,&m->lifetime)==A733_PMIC_READY);
 }
 static enum a733_pmic_status pmic_model_step(struct pmic_model *m)
-{m->worker=1;enum a733_pmic_status r=a733_pmic_poll(&m->provider);m->worker=0;return r;}
+{PMIC_WORKER(m)=1;enum a733_pmic_status r=a733_pmic_poll(&m->provider);PMIC_WORKER(m)=0;return r;}
 #ifndef PMIC_MODEL_NO_MAIN
 static void ready(struct pmic_model *m)
 {for(unsigned i=0;i<16 && a733_pmic_live(&m->provider,&m->lifetime)!=A733_PMIC_READY;++i)assert(pmic_model_step(m)!=A733_PMIC_RETAINED);assert(a733_pmic_live(&m->provider,&m->lifetime)==A733_PMIC_READY);}

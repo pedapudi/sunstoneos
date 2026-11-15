@@ -39,7 +39,8 @@ static void unused_boot(void){(void)domains_boot;}
 static struct a733_npu_startup s;
 static struct a733_counter_clock counter;
 static struct a733_platform_locks locks;
-static int bootstrap_running,scheduler_running;
+static MODEL_TLS int bootstrap_running;
+static int scheduler_running;
 BaseType_t xTaskGetSchedulerState(void){return scheduler_running ? taskSCHEDULER_RUNNING : taskSCHEDULER_NOT_STARTED;}
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return bootstrap_running ? (TaskHandle_t)&s : (TaskHandle_t)&d;}
 /* The sequencer uses its own callbacks here; the native ones must not run. */
@@ -75,12 +76,22 @@ static struct {
     unsigned stop_at_settle,spin_stalled,spin_reads;
     uint64_t local_open_ns;
 } r;
-static uint32_t *word(uintptr_t a)
+/* Whether the calling task holds the platform register lock: r.held, or
+ * thread-local under MODEL_THREADS, where r.held says only that some task
+ * holds it. */
+#ifdef MODEL_THREADS
+static _Thread_local unsigned register_mine;
+static unsigned register_waits; /* lock attempts that found another holder */
+#define REGISTER_MINE register_mine
+#else
+#define REGISTER_MINE r.held
+#endif
+MODEL_UNSANITIZED static uint32_t *word(uintptr_t a)
 {assert(a>=CCU && a<CCU+0x2000 && !(a&3));return &r.ccu[(a-CCU)/4];}
-static int reg_read(void *v,uintptr_t a,uint32_t *out)
+MODEL_UNSANITIZED static int reg_read(void *v,uintptr_t a,uint32_t *out)
 {
-    assert(v==&r && bootstrap_running);
-    ++r.reads;if(a==CCU+0x2a0 && !r.held)++r.lock_samples;
+    assert(v==&r && bootstrap_running);MODEL_GUARD();
+    ++r.reads;if(a==CCU+0x2a0 && !REGISTER_MINE)++r.lock_samples;
     if(a==0x07090160){*out=r.osc;return 1;}
     if(a==SYSCTRL){*out=r.sysctrl;return 1;}
     if(a==UINT32_C(0x0300624c)){*out=r.sid;return 1;}
@@ -89,7 +100,7 @@ static int reg_read(void *v,uintptr_t a,uint32_t *out)
         if(s.stage==A733_NPU_STARTUP_OPEN)++r.open_pll_reads;
         const unsigned flip=r.flip_pll;
         if((flip==1 && s.stage==A733_NPU_STARTUP_ENABLE && r.writes==2) ||
-           (flip==2 && !r.held && r.writes) ||
+           (flip==2 && !REGISTER_MINE && r.writes) ||
            (flip==3 && s.stage==A733_NPU_STARTUP_OPEN && r.open_pll_reads==1) ||
            (flip==4 && s.stage==A733_NPU_STARTUP_OPEN && r.open_pll_reads==2) ||
            (flip==5 && s.stage==A733_NPU_STARTUP_FINAL) ||
@@ -110,9 +121,9 @@ static int reg_read(void *v,uintptr_t a,uint32_t *out)
     }
     return 1;
 }
-static int reg_write(void *v,uintptr_t a,uint32_t value)
+MODEL_UNSANITIZED static int reg_write(void *v,uintptr_t a,uint32_t value)
 {
-    assert(v==&r && bootstrap_running && r.held);
+    assert(v==&r && bootstrap_running && REGISTER_MINE);MODEL_GUARD();
     assert(a==CCU+0xb00 || a==CCU+0xb04 || a==CCU+0x1920 || a==CCU+0x2a0 || a==SYSCTRL);
     if(!r.writes)r.ppu_before_first_write=d.ppu_writes;
     ++r.writes;r.last_write=a;
@@ -138,23 +149,44 @@ static int reg_write(void *v,uintptr_t a,uint32_t value)
     if(a==CCU+0xb00 && (value&0x80000000))r.local_open_ns=m.now*1000+m.frac_ns;
     *word(a)=value;return 1;
 }
-static int now_us(void *v,uint64_t *out){assert(v==&r);++r.clock_reads;return pmic_model_now(&m,out);}
+MODEL_UNSANITIZED static int now_us(void *v,uint64_t *out){assert(v==&r);MODEL_GUARD();++r.clock_reads;return pmic_model_now(&m,out);}
 /* Raw counter for the LOCK spacing: one modeled microsecond per read. */
-static uint64_t spin_us(void *v)
-{assert(v==&r);++r.spin_reads;return r.spin_stalled ? m.now : ++m.now;}
-static int enter(void *v,uint64_t deadline)
+MODEL_UNSANITIZED static uint64_t spin_us(void *v)
+{assert(v==&r);MODEL_GUARD();++r.spin_reads;return r.spin_stalled ? m.now : ++m.now;}
+#ifdef MODEL_THREADS
+/* The production lock: wait while another task holds it, and fail at the
+ * deadline. The model mutex is released between attempts. */
+MODEL_UNSANITIZED static int enter(void *v,uint64_t deadline)
+{
+    assert(v==&r && !register_mine);
+    for(unsigned attempt=0;;++attempt) {
+        {
+            MODEL_GUARD();
+            if(!attempt)++r.enters;
+            if(r.register_busy || m.now>=deadline)return 0;
+            if(!r.held){r.held=1;register_mine=1;return 1;}
+            if(!attempt)++register_waits;
+        }
+        sched_yield();
+    }
+}
+MODEL_UNSANITIZED static void leave(void *v){assert(v==&r && register_mine);MODEL_GUARD();assert(r.held);r.held=0;register_mine=0;}
+MODEL_UNSANITIZED static void retain(void *v){assert(v==&r && register_mine);MODEL_GUARD();r.retained=1;}
+#else
+MODEL_UNSANITIZED static int enter(void *v,uint64_t deadline)
 {assert(v==&r && !r.held && m.now<deadline);++r.enters;if(r.register_busy)return 0;r.held=1;return 1;}
-static void leave(void *v){assert(v==&r && r.held);r.held=0;}
-static void retain(void *v){assert(v==&r && r.held);r.retained=1;}
+MODEL_UNSANITIZED static void leave(void *v){assert(v==&r && r.held);r.held=0;}
+MODEL_UNSANITIZED static void retain(void *v){assert(v==&r && r.held);r.retained=1;}
+#endif
 /* The power service's notification: the bootstrap runs after the service's step. */
-static void wake(void *v){assert(v==&r && !bootstrap_running);r.woken=1;++r.wakes;}
+MODEL_UNSANITIZED static void wake(void *v){assert(v==&r && !bootstrap_running);MODEL_GUARD();r.woken=1;++r.wakes;}
 
 /* The image's GPU/PCK resource manager reads the oscillator, the PERI0 words
  * and the PCK bus clock gate; none needs a write here. */
-static int gpu_now(void *v,uint64_t *out){assert(v==&r);return pmic_model_now(&m,out);}
-static int gpu_read(void *v,uintptr_t a,uint32_t *out)
+MODEL_UNSANITIZED static int gpu_now(void *v,uint64_t *out){assert(v==&r);return pmic_model_now(&m,out);}
+MODEL_UNSANITIZED static int gpu_read(void *v,uintptr_t a,uint32_t *out)
 {
-    assert(v==&r);
+    assert(v==&r);MODEL_GUARD();
     if(a==CCU+0x5c0 || a==CCU+0x5e0)++r.fabric_reads;
     if(a==0x07090160)*out=r.osc;
     else if(a==RCCU_BASE+0x1ac)*out=d.rccu_1ac;
@@ -163,12 +195,12 @@ static int gpu_read(void *v,uintptr_t a,uint32_t *out)
     else *out=*word(a);
     return 1;
 }
-static int gpu_update(void *v,uintptr_t a,uint32_t q,uint32_t x,uint64_t t)
+MODEL_UNSANITIZED static int gpu_update(void *v,uintptr_t a,uint32_t q,uint32_t x,uint64_t t)
 {
-    assert(v==&r && bootstrap_running && !r.held && m.now<t && !q);
+    {MODEL_GUARD();assert(v==&r && bootstrap_running && !REGISTER_MINE && m.now<t && !q);}
     assert((a==CCU+0x5c0 && x==(1u<<6)) || (a==CCU+0x5e0 && x==(1u<<18)) ||
            (a==RCCU_BASE+0x1ac && x==1));
-    assert(enter(v,t)==1);uint32_t *w=level_word(a);assert(w);
+    assert(enter(v,t)==1);MODEL_GUARD();uint32_t *w=level_word(a);assert(w);
     unsigned at=++r.fabric_updates;assert(at<=3);r.fabric_order[at-1]=a;
     if(r.fabric_bad_readback!=at)*w|=x;
     if(r.fabric_expire==at)m.now=t;

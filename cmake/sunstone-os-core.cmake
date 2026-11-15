@@ -21,6 +21,11 @@ option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
 set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
   "GPU diagnostic limit: constructor, firmware, jobs:N or layer:K")
 option(SUNSTONE_GPU_FAST_TIMING "Capture optional GPU IRQ-entry counter timestamps" OFF)
+option(SUNSTONE_NPU_WAKE_TIMING "Capture the NPU interrupt entry and producer resume counters in the EL0 ring" OFF)
+option(SUNSTONE_ACCEL_PLL_WATCH "Read PLL_NPU around every PLL_GPU0 write and at the next NPU completion" OFF)
+if(SUNSTONE_ACCEL_PLL_WATCH AND NOT SUNSTONE_A733_OS_GPU)
+  message(FATAL_ERROR "SUNSTONE_ACCEL_PLL_WATCH requires SUNSTONE_A733_OS_GPU")
+endif()
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
 option(SUNSTONE_A733_CPU_TOPOLOGY "Expose read-only topology and per-core architectural observations" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
@@ -505,6 +510,8 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${os_usb_failure_test}>:SUNSTONE_A733_USB_FAILURE_TEST=1>"
   "$<$<BOOL:${os_return_only}>:SUNSTONE_A733_OS_RETURN_ONLY=1>"
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
+  "$<$<BOOL:${SUNSTONE_NPU_WAKE_TIMING}>:SUNSTONE_NPU_WAKE_TIMING=1>"
+  "$<$<BOOL:${SUNSTONE_ACCEL_PLL_WATCH}>:SUNSTONE_ACCEL_PLL_WATCH=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>")
 # The EL0 ring is linked too; the application's declaration selects it (apps/os/npu-session.h, os_npu_session_queued).
 target_sources(sunstone-a733-os-core PRIVATE "${os_root}/runtime/npu_app_queue.c" "${os_root}/apps/os/npu-queue.c")

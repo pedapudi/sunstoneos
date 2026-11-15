@@ -49,6 +49,13 @@ static void controller(void *argument)
     configASSERT(result.cause.bench.done && result.cause.bench.status == SS_CAUSE_OK);
     for (unsigned sample = 0; sample < SS_CAUSE_CASES; ++sample)
         configASSERT(result.cause.bench.count[sample] == SS_LATENCY_CAUSE_SAMPLES);
+    if (result.ping.status != LATENCY_CAUSE_PING_OK) {
+        /* One line that checks/latency-cause-model.py reads: a pair that timed out waiting for its peer (status 4) says the host did not
+         * schedule the cores, not that the ping is broken. */
+        number("latency cause ping result: status=", result.ping.status);
+        for (unsigned pair = 0; pair < LATENCY_CAUSE_PING_PAIRS; ++pair) { number(" pair=", result.ping.pair[pair].status); }
+        platform_puts("\n");
+    }
     configASSERT(result.ping.status == LATENCY_CAUSE_PING_OK);
     platform_puts("PASS latency cause model: complete barrier samples and same/cross-type line exchanges; functional evidence only\n");
 #endif
