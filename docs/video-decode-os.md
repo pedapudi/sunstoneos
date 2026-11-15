@@ -2,7 +2,7 @@
 
 The VE decoder at `0x01c0e000` (JPEG, H.264 and HEVC) is an OS-image service. An application declares the `video-decode` device in its manifest, the session grants it as `SS_DEVICE_VIDEO_DECODE`, and the application calls the class interface in include/sunstone_video_decode.h. One owner task (apps/os/video_decode.c, priority 3, pinned to CPU 4) makes every decoder, CCU and GIC access through the decoder platform binding (drivers/video/a733_video_platform.c). The service and the binding are an object library that an image links only when its application declares `video-decode` (cmake/sunstone-image.cmake), so other images keep their code placement. EL3 admission refuses a grant that the manifest does not declare, so a granted device always has its service. The service writes no PCK600 or PMIC register: the shared power-domain owner (drivers/power/a733_power_domains.c) powers domain 2 for it.
 
-Status: open and close are implemented, host-tested by the cold-start model (`checks/video-cold.py`), and passed board stage 1 on port 3-1 (run `1794714415147688285-6b3ec3f5`, [Board stages](#board-stages)). The JPEG decode is implemented and host-tested: the cold-start model runs it on the binding and executor, and `checks/os-vdec-fault-return.py` runs the image's own decode, interrupt handler and close under emulation. It has not run on a board. After a close the decoder stays closed for the rest of the board's power lifetime; a second open is refused.
+Status: open and close are implemented, host-tested by the cold-start model (`checks/video-cold.py`), and passed board stage 1 on port 3-1 (run `1794714415147688285-6b3ec3f5`, [Board stages](#board-stages)). The JPEG decode is implemented, host-tested (the cold-start model runs it on the binding and executor, and `checks/os-vdec-fault-return.py` runs the image's own decode, interrupt handler and close under emulation) and passed board stage 2 on port 3-1 at the CPU top points (run `1794742351867366265-ef057195`). H.264 has not run on a board. After a close the decoder stays closed for the rest of the board's power lifetime; a second open is refused.
 
 ## Vendor sequence and the native diff
 
@@ -111,6 +111,19 @@ Run `1794714415147688285-6b3ec3f5` on port 3-1 matched every row and returned no
 - The identity was `0x0003331000021320` with `+0xf0` reading `0`.
 - Domain 2 was adopted ON at policy and status 8, with no command and no sample.
 - `0x804` read `0x5555aaaa` both before and after the write that sets bits 0 and 4: the pulse bits read zero. The exact readback in the image of run `1794712072331160946-bd447f26` therefore refused hold B.
+
+Run `1794742351867366265-ef057195` on port 3-1 (image `ada5dab1…ee41`) matched every stage-2 prediction and returned normally; its evidence files span 25 s, from the image copy to the result:
+
+- **Clocks.** Before the open the clock owner reported CPU-L 1794 MHz at 1000 mV, CPU-B 2002 MHz at 1050 mV and the DSU at 1274 MHz, after 3 transitions; the application's wait took 129 ms. At the return CPU-B was lowered to 1014 MHz, and the runner restored DCDC5 to 800 mV with DCDC3 already at 800 mV.
+- **Open.** The entry words matched the prediction. The identity was `0x0003331000021320` with `+0xf0` reading 0, as in stage 1. Domain 2 was adopted ON with no command. The lock wait took 4 reads.
+- **Programming.** 661 writes, with SHA-256 `15a4f869…b18d`, equal to the cold model's log; the format word read 0.
+- **Completion.** INTID 81 was taken once while armed, with no stray interrupt. The status word read `0xc001` at completion and `0xc000` after the acknowledgment. The interrupt arrived 13.5 µs after the trigger.
+- **Memory.** The buffers sat at device addresses `0x10001000`, `0x10004000` and `0x10007000`. Both IOMMU master scans were clean, with fault words zero, and every guard byte kept its poison.
+- **Frame.** The 2,304 bytes equal the reference, SHA-256 `eada6821…8296`.
+- **Close.** PLL_VE0 read `0x01204d00` and the module word `0x01000000`, the reset and bus gates were as at entry, and INTID 81 was disabled, not pending and not active.
+- **Timing.** The decode request took 8.06 ms: 4.34 ms to the trigger (parsing, preparation and the 661 writes), 13.5 µs to the interrupt, 42 µs to the drain, and 3.66 ms for the guard check, the copy out of non-cacheable memory and the SHA-256 of the copied bytes.
+
+The runner's record of that run is `host-error`. The decoder returned the pixels as bytes, which result.json cannot hold, so the runner stopped while saving the record, after the rail restore. The decode above is host.py's reading of the run's output.bin. host.py now returns the pixels as hexadecimal text, and `checks/os-vdec-fault-return.py` checks that a decoded result serializes as JSON.
 
 **Image identity.** The image that run ran, `7d63776e…5e4c`, is what commit 6fef74d18 builds, apart from its build id:
 

@@ -141,7 +141,8 @@ def decode(payload):
     out['done'] = done
     r = unpack(payload, HEADER.size + DONE_SIZE, RECORD)
     pixels = payload[HEADER.size + DONE_SIZE + RECORD_SIZE:]
-    out['pixels'] = pixels
+    # Hexadecimal text: the runner stores the decoded record in result.json.
+    out['pixels'] = pixels.hex()
     out['pixels_sha256'] = hashlib.sha256(pixels).hexdigest()
     dec = r['decode']
     dec['output_sha256'] = bytes(dec['output_sha256']).hex()

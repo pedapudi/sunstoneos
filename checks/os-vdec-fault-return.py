@@ -64,6 +64,7 @@ Usage: os-vdec-fault-return.py --image ELF --output DIR"""
 import argparse
 import hashlib
 import importlib.util
+import json
 import struct
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
@@ -632,6 +633,13 @@ def record_layout(image):
     if (r['done'], r['info'], r['pixels']) != (host.HEADER.size, host.HEADER.size + host.DONE_SIZE,
                                                host.HEADER.size + host.DONE_SIZE + host.RECORD_SIZE):
         problems.append('the result is not the 64-byte header, the answer, the record and the pixels')
+    # The runner writes the decoder's answer into result.json, so a decoded result must serialize as JSON.
+    payload = bytearray(host.SIZE)
+    struct.pack_into('<2I', payload, 0, host.CHECK_MAGIC, 2)
+    try:
+        json.dumps(host.decode(bytes(payload)))
+    except (TypeError, ValueError) as error:
+        problems.append(f'host.py decode() output does not serialize as JSON: {error}')
     if not host.fixture_header_matches(Path(__file__).resolve().parents[1]):
         problems.append('apps/vdec-check/fixture.h differs from apps/jpeg/fixture.py')
     return problems
