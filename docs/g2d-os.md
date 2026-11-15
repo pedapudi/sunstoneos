@@ -301,3 +301,19 @@ The engine model predicts operation A: luma raised and rounded down, rectangle C
 For each scale, the flat region must equal the flat colour converted under the model (0xffdf884f), every row must equal the middle row, the ramp must not decrease, and the middle row must lie within 2 of the decoder's scaler model in each channel.
 
 After the engine is closed, one A76 core at 2002 MHz converts the luma-sweep frame with the BT.709 full table under the model's rule three times in scalar C, as in the first stage. [The decoder](../apps/g2d-convert/host.py) reports A's rule, each variant's rule and the scales' checks. [g2d-convert-host.py](../checks/g2d-convert-host.py) builds the application on the host with the engine model, whose variants B and D keep luma and E rounds to nearest. It checks the decoder against that model and four mutant engines: one without the floor, one with uninterpolated chroma, one that misses a conversion and one whose scale fails.
+
+Run `1794752244516494656-bd8feb22` (port 3-1, image 40ef88476734, built at 59c11057a) matched the prediction and ran every operation:
+
+| Operation | Rule matched | Rectangle CRC-32 | Exact-region CRC-32 | Launch to interrupt |
+| --- | --- | --- | --- | --- |
+| A, vendor page | luma raised, rounded down | 0x5551ee74 | 0x0f05ef24 | 1050.8 µs |
+| B, fill colours at luma 0 | luma raised, rounded down | 0x5551ee74 | 0x0f05ef24 | 1049.0 µs |
+| C, pipe 0's fill colour off | luma raised, rounded down | 0x5551ee74 | 0x0f05ef24 | 1049.4 µs |
+| D, csc0 at pipe 0's input, RGB blender | luma kept, rounded down | 0xb9c1df94 | 0xe1f6034c | 1049.2 µs |
+| E, write-back `round_en` | luma raised, rounded down | 0x5551ee74 | 0x0f05ef24 | 1048.9 µs |
+
+In A, raising luma to 16 and rounding down matched all 145,920 exact-region pixels, and keeping luma differed at 9,078. The fill colours and the write-back's `round_en` do not change the output. Converting at pipe 0's input and blending in RGB keeps luma 0 to 15, so the floor is applied when the blender works in YUV, before csc2. Both converters round down. Every rectangle word had alpha 0xff, the padding and the source were unchanged, and the two sampled rows of each conversion matched the half-phase chroma model.
+
+Both scales passed. The flat region equalled 0xffdf884f, every row equalled the middle row, and no channel of the ramp decreased. The 320 by 240 middle row equals the decoder's scaler model, and the 224 by 224 ramp differs from it by up to 2. The engine took 1039.3 µs for 320 by 240 and 1038.4 µs for 224 by 224, close to a conversion's time, so the engine's time follows the input's 307,200 pixels (296 Mpixel/s).
+
+One A76 core at 2002 MHz converted the frame in 2670.5 µs, then 2646.5 and 2648.2 µs (116 Mpixel/s), and its output equalled A's. That reference is scalar integer C without NEON, a lower bound on the CPU's rate: the engine is 2.5 times faster than scalar C. The open and the close returned 1, the close gated the engine, and the session returned normally in 24.1 s.
