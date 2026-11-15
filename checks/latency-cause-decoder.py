@@ -368,6 +368,28 @@ def main():
     assert host.peel_wake_segments(service_whole + v3 + struct.pack('<8Q', host.WAKE_FOOTER_MAGIC, 1,
         len(service_whole) + len(v3) + 64, len(service_whole), len(v3), 0, 0, 0))[1] == v3
     cases.append('a version 3 wake report decodes deadlines, release ticks, span ranks and the three longest wakes')
+    # Version 4 has version 3's layout and counts in first_state (bits 32-63) the wakes torn in every copy; bit 10 marks
+    # a torn first wake, which keeps no sample.
+    v4 = bytearray(v3)
+    struct.pack_into('<Q', v4, 8, 4)
+    state = lambda core: (16 + core * host.WAKE_CORE_WORDS + 4) * 8
+    first = lambda core: (16 + core * host.WAKE_CORE_WORDS + 8 + 2 * host.WAKE_CELL_WORDS) * 8
+    struct.pack_into('<Q', v4, state(2), (1 << 16) | (1 << 8) | 8 | 3 << 32)
+    struct.pack_into('<Q', v4, state(3), (1 << 16) | (1 << 10) | 8 | 1 << 32)
+    v4[first(3):first(3) + host.WAKE_SAMPLE_WORDS * 8] = bytes(host.WAKE_SAMPLE_WORDS * 8)
+    decoded = host.decode_wake_segments(bytes(v4), 24000000)
+    assert decoded['version'] == 4 and [c['torn'] for c in decoded['cores']] == [0, 0, 3, 1, 0, 0, 0, 0]
+    assert decoded['cores'][3]['first'] is None and decoded['cores'][3]['first_state']['torn']
+    assert not decoded['cores'][2]['first_state']['torn'] and decoded['cores'][2]['first'] is not None
+    cases.append('a version 4 wake report counts the wakes torn in every copy per core and marks a torn first wake')
+    for name, at, value, version in [('torn wakes in a version 3 report', state(2), 1 << 32, 3),
+                                     ('a torn first wake that keeps its sample', state(2), (1 << 10) | 1 << 32, 4),
+                                     ('a torn first wake without a torn count', state(3), (1 << 16) | (1 << 10) | 8, 4)]:
+        bad = bytearray(v4)
+        struct.pack_into('<Q', bad, 8, version)
+        struct.pack_into('<Q', bad, at, value)
+        harness.refused(lambda: host.decode_wake_segments(bytes(bad), 24000000), 'wake segment', ValueError)
+        cases.append(name)
     core5 = 16 + 5 * host.WAKE_CORE_WORDS
     cell_on = core5 + 8 + host.WAKE_CELL_WORDS
     ranks_on = cell_on + 4 + 13 * 6

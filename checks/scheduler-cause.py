@@ -8,7 +8,7 @@ import struct
 import subprocess
 from capstone import Cs,CS_ARCH_ARM64,CS_MODE_ARM
 from elftools.elf.elffile import ELFFile
-from unicorn import UC_HOOK_CODE,UC_HOOK_MEM_WRITE
+from unicorn import UC_HOOK_CODE,UC_HOOK_MEM_READ,UC_HOOK_MEM_WRITE
 from unicorn import arm64_const as R
 from harness import machine,environment,LLD
 ROOT=Path(__file__).resolve().parents[1]
@@ -154,6 +154,53 @@ def run_wake(m,core,ready,running,index,setting,deadline=None,**options):
 def worst(m,core,setting,i):
     """worst[setting][i]: deadline, release, entry, running, index."""
     return m.readq(wake_core(m,core)+WAKE_FIRST+(1+3*setting+i)*WAKE_SAMPLE,5)
+# The tear: the woken task copies its linked chain with interrupts open (ss_wake_seg_running), and an interrupt on its
+# core restarts the current chain at point 0. TEAR_GUARD is the reader without its generation check.
+TEAR_GUARD=('        torn=__atomic_load_n(&w->generation,__ATOMIC_RELAXED)!=generation;\n',
+            '        torn=false;(void)generation;\n')
+CHAIN_STATE=752  # sizeof(struct chain_state), the copy's length
+def torn_run(image,tears,fire=True):
+    """A completed chain on CPU1, then its woken task's running call with `tears` interrupts on CPU1, each between the
+    task's link test and the end of one copy: at the copy's first read past the chain's stage and stamps, the chain
+    memory becomes what the real interrupt path leaves (each state computed beforehand with ss_latency_cause_irq_begin
+    and ss_latency_cause_irq_end, then the completed chain put back). With fire False the states are computed and never
+    written, which gives the untorn run the same instructions before its running call. Returns the model and CPU1's
+    report core."""
+    m=Model(image);m.setup();m.call('ss_latency_cause_irq_end',0);m.core=1
+    m.call('ss_latency_cause_irq_begin',1,30);m.call('ss_latency_cause_irq_end',1)
+    ready=m.clock;wake_chain(m,1)
+    base=m.sym['chain']+m.size['chain']//8;size=m.size['chain']//8
+    completed=bytes(m.uc.mem_read(base,size));states=[]
+    for _ in range(tears):
+        m.call('ss_latency_cause_irq_begin',1,0);m.call('ss_latency_cause_irq_end',1);states.append(bytes(m.uc.mem_read(base,size)))
+    m.uc.mem_write(base,completed);m.el1=False
+    pending={'armed':False}
+    def copy_entry(uc,pc,size_,unused):
+        if fire and states:pending['armed']=True
+    def read(uc,access,address,size_,value,unused):
+        if pending['armed'] and base+32<=address<base+2*CHAIN_STATE:
+            uc.mem_write(base,states.pop(0));pending['armed']=False
+    m.uc.hook_add(UC_HOOK_CODE,copy_entry,begin=m.sym['memcpy'],end=m.sym['memcpy'])
+    m.uc.hook_add(UC_HOOK_MEM_READ,read,begin=base,end=base+size-1)
+    m.call('ss_wake_seg_mark',1);m.call('ss_wake_seg_running',1,ready,ready,m.clock+10,1,1)
+    assert not fire or not states,('interrupts left over',len(states))
+    return m,m.readq(wake_core(m,1),5)
+def tear_cases(image,mutant,results):
+    untorn,plain=torn_run(image,1,fire=False)
+    m,core=torn_run(image,1)
+    # The chain copied after the interrupt is the completed one, now held: its sample equals the untorn run's.
+    x=m.readq(wake_core(m,1)+WAKE_FIRST+4*WAKE_SAMPLE,83);y=untorn.readq(wake_core(untorn,1)+WAKE_FIRST+4*WAKE_SAMPLE,83)
+    assert core[:4]==(1,0,0,1) and plain[:4]==(1,0,0,0) and x[4]==y[4]|1<<32 and x[:4]==y[:4] and x[5:]==y[5:],(core,plain)
+    results.append('an interrupt on the woken core during the chain copy makes the task copy again and file the completed chain, '
+                   'now held, with the values of an untorn copy')
+    m,core=torn_run(image,4)
+    cell=m.readq(wake_cell(m,1,1),1)[0]
+    assert core[:4]==(0,0,0,0) and core[4]>>32==1 and not core[4]>>10&1 and cell==0,core
+    results.append('a wake torn in every one of its four copies is counted torn, neither linked nor unlinked, and files nothing')
+    m,core=torn_run(mutant,1)
+    x=m.readq(wake_core(m,1)+WAKE_FIRST+4*WAKE_SAMPLE,83)
+    assert x[5:]!=y[5:],'the reader without its generation check filed an untorn sample'
+    results.append('without the generation check the same interrupt files a torn sample (mutant)')
 def wake_cases(image,results):
     m=Model(image);m.setup();assert m.row(0)[4]==12
     m.call('ss_latency_cause_irq_end',0)
@@ -238,7 +285,7 @@ def wake_cases(image,results):
     m.el1=False;assert not m.call('ss_wake_seg_snapshot',OUTPUT)
     for c in range(8):m.core=c;m.call('ss_latency_cause_freeze',c)
     assert m.call('ss_wake_seg_snapshot',OUTPUT)
-    assert m.readq(OUTPUT,10)==(0x5353574b53454731,3,56960,8,9,5,0,1,0xff,0xff)
+    assert m.readq(OUTPUT,10)==(0x5353574b53454731,4,56960,8,9,5,0,1,0xff,0xff)
     results.append('the wake snapshot waits for every core to freeze and names its layout, release mask and scan mask')
     # The last segment ends at the woken task's mark, not after its bookkeeping (stage 3 counted the bookkeeping).
     m=Model(image);m.setup();m.call('ss_latency_cause_irq_end',0);m.core=1
@@ -405,6 +452,9 @@ def main():
     assert busy_cells(m,1)==1
     results.append('a configured EL0 drain is recorded; one that resumes on an unconfigured CPU reads no counter and is dropped')
     wake_cases(wake_image,results)
+    source=(ROOT/'kernel/scheduler/latency_cause.c').read_text();assert source.count(TEAR_GUARD[0])==1
+    mutated=out/'latency_cause-no-generation.c';mutated.write_text(source.replace(*TEAR_GUARD))
+    tear_cases(wake_image,build(out,'tear-mutant',['-DSUNSTONE_LATENCY_WAKE_SEGMENTS=1'],(str(mutated),'checks/scheduler-pmu-support.c')),results)
     # Local timers (stage 4): CPU0's tick releases CPUs 0 and 4 and reads CPU0's deadlines only. Such a tick is complete;
     # one that released and read all eight is not, since the build's masks name the ticks it compares.
     m=Model(local_image);m.setup()

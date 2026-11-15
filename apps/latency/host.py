@@ -52,7 +52,9 @@ WAKE_TICK_WORDS = 4 + 2 * len(CAUSE_EVENTS) + 8 + 8 * len(CAUSE_EVENTS)
 def wake_layout(version):
     """Words per sample, cell and core, and the report's bytes. Version 3 adds each
     sample's deadline, each cell's release ticks and per-span ranks, and keeps the
-    three largest wakes per setting where versions 1 and 2 kept one."""
+    three largest wakes per setting where versions 1 and 2 kept one. Version 4 has the
+    layout of version 3 and counts in first_state the wakes whose chain an interrupt tore
+    in every copy."""
     v3 = version >= 3
     sample = (5 if v3 else 4) + WAKE_SPANS * WAKE_VALUES
     cell = (4 if v3 else 3) + WAKE_SPANS * WAKE_VALUES + (WAKE_SPANS * (WAKE_WORST + 1) if v3 else 0)
@@ -61,7 +63,7 @@ def wake_layout(version):
 
 
 WAKE_SAMPLE_WORDS, WAKE_CELL_WORDS, WAKE_CORE_WORDS, WAKE_BYTES = wake_layout(3)
-WAKE_BYTES_BY_VERSION = {version: wake_layout(version)[3] for version in (1, 2, 3)}
+WAKE_BYTES_BY_VERSION = {version: wake_layout(version)[3] for version in (1, 2, 3, 4)}
 BAND_CELL_FIELDS = ('windows', 'cycles', 'foreign', 'foreign_irq', 'foreign_max', 'foreign_sum', 'own', 'own_max')
 SERVICE_CELL = 464
 SERVICE_BINS = 105
@@ -1128,14 +1130,18 @@ def decode_wake_segments(payload, frequency):
               'switch_shift': shift, 'cores': [], 'ticks': {},
               'scope': ('a chain starts at the outermost interrupt entry and is kept only when every point '
                         'follows in order and it carried the release (CPU0: release inside the chain); a chain '
-                        'completed before a later interrupt links with that interrupt in its last segment; busy samples after '
+                        'completed before a later interrupt links with that interrupt in its last segment; a wake whose '
+                        'chain an interrupt on its core tore in every copy is counted torn and files nothing; busy samples after '
                         'the first are filed by the band setting at the wake; events are refills and backend stalls; '
                         + ('wakes run from the deadline, the compare value of the timer interrupt that released them'
                            if v3 else 'wakes run from the release stamp'))}
     for core in range(8):
         linked, unlinked, nested, interrupted, first_state, arms, arm_cycles, arm_max = take(8)
+        # Version 4: bit 10 marks a torn first wake and bits 32-63 count the torn wakes, which file nothing.
+        torn = first_state >> 32
         if (nested > linked or interrupted > linked or (version == 1 and (arms or arm_cycles or arm_max)) or
-                arm_max > arm_cycles or (not arms and arm_cycles)):
+                arm_max > arm_cycles or (not arms and arm_cycles) or
+                (version < 4 and (torn or first_state >> 10 & 1)) or (first_state >> 10 & 1 and not torn)):
             raise ValueError('wake segment core counts or reserved words are invalid')
         cells = {}
         for setting in ('off', 'on'):
@@ -1181,14 +1187,17 @@ def decode_wake_segments(payload, frequency):
             worst = {setting: [row] if row else [] for setting, row in maxima.items()}
         if sum(cell['count'] for cell in cells.values()) + (first is not None) > linked:
             raise ValueError('wake segment cells exceed the linked count')
+        if first_state >> 10 & 1 and first is not None:
+            raise ValueError('wake segment first wake is torn but holds a sample')
         result['cores'].append({'core': core, 'linked': linked, 'unlinked': unlinked, 'nested': nested,
-                                'interrupted': interrupted,
+                                'interrupted': interrupted, 'torn': torn,
                                 'timer_arms': {'count': arms, 'mean_cycles': arm_cycles / arms if arms else None,
                                                'max_cycles': arm_max,
                                                'scope': 'local timer register writes at EL1 while measuring, '
                                                         'net of an empty bracket; the arm call itself is outside'},
                                 'first_state': {'seen': bool(first_state >> 16 & 1), 'linked': bool(first_state >> 8 & 1),
                                                 'through_held_chain': bool(first_state >> 9 & 1),
+                                                'torn': bool(first_state >> 10 & 1),
                                                 'current_chain_stage': first_state & 0xff},
                                 **cells, 'first': first, 'maximum': maxima, 'worst': worst})
 
