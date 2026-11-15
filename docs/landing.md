@@ -168,6 +168,44 @@ A new file that sets a clock or voltage, or writes storage, is added to the list
 in the same commit that adds the file, and that commit is landed by the
 coordinator.
 
+## Open work: landing time
+
+Measured on 2026-11-15: five code landings took 911 to 1252 s of gate time each and ran 385 to 436 of the 486 steps
+that a full gate runs, though most of the branches changed fewer than 30 files. One landing that changed two lines of one check ran 386
+steps in 911 s. The items below are ordered by the time they would save.
+
+1. **A landing gate leaves no record for the next landing to reuse.** `tools/integration-gate.py` writes
+   `gate-record.json` only when its plan has a revision range, and a landing gate runs with `--changed`, which has none.
+   Of the 284 landing gates under `~/.cache/sunstoneos/build`, one has a record. The next landing therefore compares its
+   tree with an older worker gate, and every file that landed since then counts as changed: 28 files selected 285 checks
+   for the two-line change above, and 44 files selected 320 checks for the next landing. The fix is for a passing
+   landing gate to write a record for the landed tree, with the merged `bringup` commit as its base, and for
+   `checks/land.py` to show that a second landing after a first reruns only the checks that its own files affect.
+2. **A few shared files select most of the checks.** A change to a shared header or to `cmake/sunstone-os-core.cmake`
+   selects every check that inspects a linked OS image. Before changing the selection, measure which input files
+   account for most selected checks. One candidate change is for a check to skip when the linked image and every other
+   input it declares are byte-identical to those of its last passing run.
+3. **A branch is often gated twice.** Workers have run a full `--affected` gate on their branch and then waited for the
+   landing gate as well. A worker runs the checks its change affects; the landing gate is the gate. With item 1 fixed, a
+   worker gate that is run is reused when its tree matches.
+4. **The full suite runs beside landing gates.** `tools/full-gate.py` starts after every code landing and takes about
+   1050 s. It holds its own lock, so it blocks no landing, but it shares the host's cores with the landing gates. Measure
+   the landing gate's time with and without a full-suite run beside it before deciding whether the full suite waits for
+   an empty landing queue.
+5. **A full-suite failure reaches no one until a person reads it.** The 24 full-suite runs between the passing runs on
+   commits e8bf93ea and 74901b408, about 12 hours apart, all failed in `checks/radio-result-channel.py`, whose test
+   records carried bytes that the decoder refuses. The failure was found only when a worker's full gate hit it. `tools/land.py` could print the last full-suite verdict from
+   `~/.cache/sunstoneos/full-gate.jsonl` and name the failing steps.
+6. **The coordinator's landing queue is a hand-written shell script per batch.** Two scripts failed on 2026-11-15: an
+   empty process ID made the wait `kill -0 0`, which tests the caller's own process group and never ends, and a guard
+   read another batch's log through a relative path after the script had changed into `bringup`. A queue tool in
+   `tools/` that takes a list of worktrees, reviewed commits and reasons, and lands them in order with the
+   clean-tree, already-landed and reviewed-commit checks, would replace these scripts.
+7. **Branches that edit the same files are found to conflict only at landing.** Two branches that both edited the
+   deadline runtime and the owner count conflicted with a third that landed first, and each then needed a merge, its
+   checks and another gate. The coordinator can run `git merge-tree` of each reviewed branch against the branches
+   already queued, and order or merge overlapping branches before any of them is gated.
+
 ## Check
 
 `checks/land.py --output DIR` builds a bare origin, a `bringup` worktree and
