@@ -90,6 +90,12 @@ LAUNCH = [(0x28, 0), (0x20, 0), (0x24, 1), (0x2c, None), (0x30, 0), (0x34, 128),
 # from (108, 13) to (8, 44) converting ARGB8888 to BGRA8888, operation 2 a 172 by 48 copy from (222, 206) to
 # (108, 131) unconverted.
 STAGE3 = (395, 257, 1644)
+# The command pages of the board-qualified image 916988f84c39 (runs 1794725199336568290-5c9e9da6 and
+# 1794714427314630502-a44050c7), by SHA-256: both stage-3 copies, and a stage-2-shaped fill. The image's pages must
+# stay byte-identical to them.
+QUALIFIED_PAGES = {'blit1': '9199b2f7878a615c78fc40cbc61fb8adc76fc10861aff902e26ee90b0236ac21',
+                   'blit2': '9e77ad4dfe814f5ef2e1dc32b018d51ae80326abc359a89a5da8d296499fab2d',
+                   'fill': 'e4ed360e8c298dbd9977aa45d92a9298a8ad6092ddeb5e3d8c38051942fd94ce'}
 STAGE3_OPS = [dict(w=282, h=114, sx=108, sy=13, dx=8, dy=44, format=0, output_format=3),
               dict(w=172, h=48, sx=222, sy=206, dx=108, dy=131, format=0, output_format=0)]
 
@@ -527,6 +533,9 @@ def check_blits(record, state, engine, update_sticks):
         assert o['status_after'] == 4 and o['update_after'] == (1 if update_sticks else 0) and o['mixer_after'] == 0, \
             (name, 'after-operation words', hex(o['status_after']), hex(o['update_after']), hex(o['mixer_after']))
     assert record['built'] == [True, True], (name, 'the command page differs from the builder\'s for the plan')
+    pages = [hashlib.sha256(o['page']).hexdigest() for o in ops]
+    assert pages == [QUALIFIED_PAGES['blit1'], QUALIFIED_PAGES['blit2']], \
+        (name, 'the copy pages must equal the board-qualified image\'s', pages)
     cache = state['cache']
     assert [op for op, _, _ in cache] == [CACHE_CLEAN_INVALIDATE, CACHE_CLEAN, CACHE_CLEAN_INVALIDATE] * 2, (name, cache)
     for (op, at, n), base in zip(cache, [SURFACE, SOURCE, SURFACE] * 2):
@@ -542,6 +551,8 @@ def check_fills(record):
         (name, 'the second operation must launch although 0x28 read 1 after the first',
          [(o['result'], o['fault_step'], hex(o['fault_value'])) for o in ops])
     assert [o['irq_count'] for o in ops] == [1, 2], (name, ops)
+    pages = [hashlib.sha256(o['page']).hexdigest() for o in ops]
+    assert pages == [QUALIFIED_PAGES['fill']] * 2, (name, 'the fill pages must equal the board-qualified image\'s', pages)
 
 
 def check_close(record, step, closes):
@@ -641,7 +652,7 @@ def main():
         raise SystemExit(f'{len(failures)} of {len(rows)} cases failed')
     print(f'PASS G2D operation path: {len(rows) - 3 - len(closes) - len(blits)} surfaces, cache refusal leaves the '
           f'service open, timeout faults, {len(closes)} closes after a fault, both stage-3 copies in one session, two '
-          f'fills with the update bit left set')
+          f'fills with the update bit left set, and every copy and fill page equal to the qualified image\'s')
 
 
 if __name__ == '__main__':
