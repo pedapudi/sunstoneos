@@ -54,11 +54,15 @@ struct a733_iommu_owner {
     uint32_t *directory;
     uint64_t directory_physical;
     uint16_t attached, translated;             /* master bits */
+    uint16_t touched;                          /* masters whose micro registers this lifetime wrote; the last detach
+                                                * flushes them all */
+    uint32_t prefetch;                         /* the banks' prefetch word, set by the first attach */
     enum a733_iommu_owner_state state;
     unsigned tables, entries;                  /* second-level tables allocated, leaf entries present */
     uint32_t fault_step, fault_word;           /* the first failure: step and the register offset or word */
     uint32_t fault_read;                       /* for a readback mismatch, the value read */
-    uint32_t refused_word;                     /* last attach refusal with no change: 1 clock lease, 2 entry state */
+    uint32_t refused_word;                     /* last attach refusal with no change: 1 clock lease, 2 entry state,
+                                                * 3 a later master whose prefetch word differs from the banks' */
     struct a733_iommu_owner_entry entry;
     struct a733_iommu_owner_fault faults[A733_IOMMU_OWNER_MASTERS];
     uint16_t faulted;                          /* masters whose fault record is set */
@@ -78,8 +82,9 @@ int a733_iommu_owner_map(struct a733_iommu_owner *, const struct a733_iommu_span
 /* Remove spans: entries cleared, then the TLB and page-walk caches invalidated over each span. The caller has
  * drained every master that used them. */
 int a733_iommu_owner_unmap(struct a733_iommu_owner *, const struct a733_iommu_span *, unsigned count);
-/* Detach drained masters: each is bypassed again. After the last one, both banks are flushed and disabled, the
- * tables are released and the clock lease is given back. Detach also runs after a fault, so the quiesce path can
+/* Detach drained masters: each master's fault words are scanned into faults[master], then it is bypassed again. After
+ * the last one, both banks are flushed with every master this lifetime touched, and disabled, the tables are released
+ * and the clock lease is given back. Detach also runs after a fault, so the quiesce path can
  * still disable the banks; a bank that does not read back disabled keeps its tables and the lease. A fault stays
  * recorded for the lifetime: later attaches are refused. 1 done, -1 failed. */
 int a733_iommu_owner_detach(struct a733_iommu_owner *, uint16_t masters);

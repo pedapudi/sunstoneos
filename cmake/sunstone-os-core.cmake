@@ -74,6 +74,13 @@ endif()
 if(SUNSTONE_A733_OS_USB_JPEG AND NOT SUNSTONE_A733_OS_USB_CLASSES)
   message(FATAL_ERROR "USB JPEG requires USB class services")
 endif()
+# The OS image programs the IOMMU through its one owner (drivers/iommu/a733_iommu_owner.c, docs/iommu.md). USB JPEG
+# still programs it through drivers/iommu/a733_iommu.c, so the two would share the banks with no common state. The
+# two files also define one symbol, a733_iommu_programmer, so a link of both fails even without this refusal.
+if(SUNSTONE_A733_OS_USB_JPEG)
+  message(FATAL_ERROR "USB JPEG programs the IOMMU through drivers/iommu/a733_iommu.c; the OS image's IOMMU owner "
+    "must be its only programmer, so USB JPEG is refused until its decoder attaches through the owner")
+endif()
 if(NOT SUNSTONE_BOARD_SUPERVISED OR NOT TARGET sunstone-a733-board)
   message(FATAL_ERROR "The OS kit requires the supervised native board composition")
 endif()
