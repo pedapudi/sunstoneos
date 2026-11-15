@@ -1,8 +1,12 @@
 #ifndef SUNSTONE_DEADLINE_H
 #define SUNSTONE_DEADLINE_H
 #include <stdint.h>
-/* Notification index zero carries wake hints, never completion records. The
- * caller must recheck its authoritative device predicate after every result,
+/* The wait's notification index carries wake hints, never completion records: index 0 for a task that registers
+ * with sunstone_deadline_register, unless sunstone_deadline_notify_index names another (the OS image gives an
+ * application task SS_NOTIFY_DEADLINE), and the named index for one that registers with
+ * sunstone_deadline_register_index. Every wait takes its index on its way out, so a task that also blocks on index 0
+ * for its inputs registers with another index, and the producers that end its deadline waits give that index
+ * (include/sunstone_notify.h). The caller must recheck its authoritative device predicate after every result,
  * including expiry: a completion can race the deadline or cancellation.
  * Register in each owning task before its first wait. A second call from the same task returns 1 with the slot it
  * already holds; a call from a task whose task-local pointer names a slot it does not own returns 0. Registered tasks
@@ -27,6 +31,9 @@ enum sunstone_deadline_result {
     SUNSTONE_DEADLINE_EXPIRED=1
 };
 int sunstone_deadline_register(void);
+/* As sunstone_deadline_register, with every wait of this task on notification index `index`. 0 for an index outside the
+ * notification array, or for a task that already registered with another index. */
+int sunstone_deadline_register_index(unsigned index);
 int sunstone_deadline_wait_until(uint64_t absolute_us);
 /* Immutable owner identity and a certificate of its latest admitted wait.
  * woken_us is set on timer fire or notification return. The supervisor may
