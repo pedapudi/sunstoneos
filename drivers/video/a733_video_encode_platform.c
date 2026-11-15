@@ -36,6 +36,8 @@ static int encoder_init(struct a733_video_encoder *p,const struct a733_encode_pl
     if(!a733_video_unit_init(&p->unit,&a733_video_encoder_unit,&u,o,cookie))return 0;
     p->config=config;p->admit=admit;p->memory=memory;p->context=context;
     p->bound=p->checked=p->prepared=0;
+    /* The page walks run here, once per boot, so the first hold makes none (a733_video_platform.c, decoder_init). */
+    (void)a733_video_unit_native_map();
     return 1;
 }
 /* The codec binding binds its job on the first call and reports whether a
@@ -55,7 +57,7 @@ static int acquire(struct a733_video_encoder *p,const void *j,int same,uint64_t 
     if(p->checked)return held(u);
     r=lock(u);if(r!=1)return r;
     uint64_t version;
-    if(!a733_video_unit_baseline(u)||!a733_video_unit_identity(u,&version))return fail(u);
+    if(!a733_video_unit_baseline(u)||!a733_video_unit_identity(u,&version))return a733_video_unit_refuse_held(u);
     if(unlock(u)!=1)return -1;
     p->checked=1;return 1;
 }
@@ -102,7 +104,7 @@ int a733_encode_platform_init(struct a733_encode_platform *p,const struct a733_e
     const struct a733_encode_platform_ops *o,void *cookie)
 {
     if(!p||!o||!o->admit||!o->memory||!o->copied)return 0;
-    const struct a733_video_unit_ops unit={o->now_us,o->enter,o->leave,o->read,o->write};
+    const struct a733_video_unit_ops unit={o->now_us,o->enter,o->leave,o->read,o->write,0};
     const struct a733_encode_platform_ops ops=*o;
     if(!encoder_init(&p->encoder,c,&unit,cookie,jpeg_admit,jpeg_memory,p))return 0;
     p->ops=ops;p->cookie=cookie;
@@ -194,7 +196,7 @@ int a733_h264_encode_platform_init(struct a733_h264_encode_platform *p,const str
  const struct a733_h264_encode_platform_ops *o,void *cookie)
 {
  if(!p||!o||!o->admit||!o->memory||!o->prime||!o->copied)return 0;
- const struct a733_video_unit_ops unit={o->now_us,o->enter,o->leave,o->read,o->write};
+ const struct a733_video_unit_ops unit={o->now_us,o->enter,o->leave,o->read,o->write,0};
  const struct a733_h264_encode_platform_ops ops=*o;
  if(!encoder_init(&p->encoder,c,&unit,cookie,h264_admit,h264_memory,p))return 0;
  p->ops=ops;p->cookie=cookie;return 1;

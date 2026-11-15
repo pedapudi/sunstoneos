@@ -8,6 +8,7 @@
 #include "rsn_supp/wpa.h"
 #include "common/wpa_common.h"
 #include "common/ieee802_11_defs.h"
+#include "aic8800_supplicant_rsn.h"
 static const uint8_t own_rsn[]={48,20,1,0,0,15,172,4,1,0,0,15,172,4,1,0,0,15,172,2,0,0};
 void aic8800_supplicant_stop(struct aic8800_supplicant *s)
 {
@@ -70,6 +71,13 @@ static u8 *alloc_eapol(void *ctx,u8 type,const void *payload,u16 bytes,size_t *l
     if(payload)os_memcpy(p+4,payload,bytes);
     *length=4+bytes;if(data)*data=p+4;return p;
 }
+int aic8800_supplicant_rsn_parse(const uint8_t *element,size_t bytes)
+{
+    struct wpa_ie_data ie;
+    if(!element||bytes<2)return -128;
+    int result=wpa_parse_wpa_ie_rsn(element,bytes,&ie);
+    return result<-127?-127:result;
+}
 int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *cfg)
 {
     if(!a733_span_excl(cfg,sizeof(*cfg))||!cfg->entropy||!cfg->entropy_record||!cfg->beacon_record||
@@ -77,8 +85,7 @@ int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *cfg)
        !cfg->command_timeout||cfg->command_timeout>UINT64_MAX/8||
        cfg->ap_rsn_bytes<2||cfg->ap_rsn_bytes>sizeof(cfg->ap_rsn))return 0;
     struct wpa_ie_data ie;
-    if(wpa_parse_wpa_ie_rsn(cfg->ap_rsn,cfg->ap_rsn_bytes,&ie)||ie.group_cipher!=WPA_CIPHER_CCMP||
-        !(ie.pairwise_cipher&WPA_CIPHER_CCMP)||(ie.capabilities&WPA_CAPABILITY_MFPR))return 0;
+    if(wpa_parse_wpa_ie_rsn(cfg->ap_rsn,cfg->ap_rsn_bytes,&ie)||!aic8800_rsn_ciphers_accepted(&ie))return 0;
     if(cfg->key_mgmt==AIC8800_SUPPLICANT_PSK)
         return (ie.key_mgmt&WPA_KEY_MGMT_PSK)&&!cfg->sae_password_bytes;
 #ifdef SUNSTONE_AIC8800_SAE

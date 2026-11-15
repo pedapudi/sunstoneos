@@ -238,6 +238,19 @@ def symbol_bytes(image, name):
     raise ValueError('Symbol has no file bytes: ' + name)
 
 
+def radio_record_admission(image, names, decoder=None):
+    """Refuse a radio image whose result record version the runner's decoder does not read. Images before the
+    os_radio_result_version symbol write version 2."""
+    decoder = decoder or load('radio_result', ROOT/'tools/radio_result.py')
+    version = struct.unpack('<I', symbol_bytes(image, 'os_radio_result_version'))[0] \
+        if 'os_radio_result_version' in names else 2
+    require(version in decoder.VERSIONS,
+            'The image writes radio result record version %d; this runner decodes versions %s. Land the decoder '
+            'that reads it (tools/radio_result.py) and restart the daemon first.'
+            % (version, ', '.join(str(v) for v in decoder.VERSIONS)))
+    return version
+
+
 def finite_npu_files(args):
     """Resolve the native session and exact build manifest consumed by admission."""
     template = Path(args.template) if args.template else None
@@ -447,6 +460,8 @@ def policy(info, args, session=None):
     # The radio stage limit shapes the radio profile; an image without the radio's result channel has none.
     require(not getattr(args, 'radio_stage_limit', 0) or 'os_radio_result_descriptor' in (info.get('symbols') or {}),
             '--radio-stage-limit applies only to the radio scan image.')
+    if 'os_radio_result_descriptor' in (info.get('symbols') or {}):
+        radio_record_admission(args.image, info['symbols'])
     if 'usb_vbus_probe_profile' in info.get('symbols', {}):
         require(approved and args.port == '3-1', 'PL8 VBUS probe requires coordinator approval on port 3-1.')
     if info.get('usb_class'):

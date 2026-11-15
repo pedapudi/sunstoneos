@@ -273,6 +273,9 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, large_ex
     # A measurement call, not part of the application kit: an image built with SUNSTONE_TLBI_ISSUER links the issuer's
     # sample copy (include/sunstone_tlbi.h), which the scheduler measurement application reads.
     public_calls.add('sunstone_tlbi_sample')
+    # Likewise an image built with SUNSTONE_VIDEO_DECODE_MEASURE links the video decoder's stage-1 record copy
+    # (apps/vdec-check/record.h), which the vdec-check application reads.
+    public_calls.add('vdec_check_record')
     # Object inventories include references in discarded sections. A public
     # call remains valid when no live caller keeps its implementation linked.
     allowed |= public_calls
