@@ -35,6 +35,14 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     target_sources(sunstone-a733-os-hello PRIVATE ${hello_pmu_inputs})
     target_link_options(sunstone-a733-os-hello PRIVATE -Wl,--wrap=hello_compute_main)
   endif()
+elseif(SUNSTONE_APPLICATION STREQUAL "vdec-check")
+  # Declares the video decoder device: the session grants it and the image routes INTID 81 (docs/video-decode-os.md).
+  # Stage 1 measures PCK600 transitions back to back (docs/power-domains.md).
+  add_sunstone_application(vdec-check
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/vdec-check/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/vdec-check/manifest.json")
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_VIDEO_DECODE_MEASURE=1)
+  add_sunstone_image(sunstone-a733-os-vdec-check LIFETIME ${os_lifetime} APPLICATION vdec-check)
 elseif(SUNSTONE_APPLICATION STREQUAL "i2c-scan")
   add_sunstone_application(i2c-scan
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/i2c-scan/main.c"

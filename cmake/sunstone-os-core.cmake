@@ -327,10 +327,11 @@ endforeach()
 list(APPEND os_added apps/os/quiesce.c apps/os/cpu-return.c apps/os/cpu-return-el0.S apps/os/cpu-return-spi.c apps/os/cpu-return-entry.c)
 list(APPEND os_include_dirs "${os_build}")
 list(APPEND os_external_inputs "${os_qualification}/runtime.h" "${os_build}/cpu-return-runtime.h")
+# The video decoder service (apps/os/video_decode.c) runs the decoder platform binding in every image.
+list(APPEND os_added drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c)
 if(SUNSTONE_A733_OS_USB_JPEG)
   list(APPEND os_added apps/os/usb-jpeg-native.c apps/jpeg/input.c
-    drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c
-    drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c drivers/iommu/a733_iommu.c)
+    drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c drivers/iommu/a733_iommu.c)
 endif()
 if(SUNSTONE_A733_CPU_TOPOLOGY)
   list(APPEND os_added kernel/scheduler/topology.c platform/a733/cpu_topology.c
