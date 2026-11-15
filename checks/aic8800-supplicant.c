@@ -69,6 +69,8 @@ static int late_now(void *context,uint64_t *out)
 /* window-events variants after the first key add is written: 1 silent (no reply), 2 the reply sits in the card with
  * its function interrupt raised but the owner never polls, 3 a different message arrives instead of the reply. */
 static int key_variant;
+/* key-bound: the first key add's reply waits this many ticks after the write (0: at once). */
+static uint64_t key_delay,key_release;
 static int entropy(void *ctx,uint8_t *out,size_t bytes)
 {
     assert(ctx==&m&&bytes==32);++entropy_calls;
@@ -103,6 +105,10 @@ static int security_write(void *ctx,uint32_t off,uint32_t value)
                 unsigned which=p[59]?1:(p[16]==1?2:3);assert(!memcmp(p+24,vectors[which],16));
                 ++key_adds;uint8_t cfm[]={reject_key?7:0,(uint8_t)(10+which),0xa5,0x5a};control_reply(37,cfm,4);
                 if(drop_key_reply){memset(receive,0,sizeof(receive));m.card[1][4]=0;}
+                if(key_delay&&key_adds==1){
+                    memcpy(delayed,receive,sizeof(delayed));memset(receive,0,sizeof(receive));m.card[1][4]=0;
+                    key_release=m.now+key_delay;
+                }
                 if(key_variant&&key_adds==1){
                     memset(receive,0,sizeof(receive));m.card[1][4]=0;
                     if(key_variant==2)control_reply(37,cfm,4);
@@ -344,6 +350,34 @@ int main(int argc,char **argv)
          * (aic8800_transport_poll's post label). Here that read lands on the command's deadline: the pass that
          * parsed the confirmation ran late. */
         inject(5);settled();late_completion=1;host.config.ops.now=late_now;inject(7);
+    }
+    else if(!strcmp(argv[2],"key-bound")) {
+        /* The board's bound: 6000 ms per supplicant command, the reference's RWNX_80211_CMD_TIMEOUT_MS for SDIO with one
+         * command queued (tools/radio_scan_prepare.py). The pairwise key add's reply comes argv[3] ms after the write;
+         * the handshake and transport bounds lie beyond it, as the profile's security stage and lease renewal do. */
+        assert(argc==4);unsigned ms=(unsigned)strtoul(argv[3],0,10);assert(ms>=1000u&&ms<=10000u);
+        const uint64_t tick_ms=10u;supplicant.config.command_timeout=6000u*tick_ms;
+        transport.deadline=m.now+30000u*tick_ms;supplicant.deadline=m.now+20000u*tick_ms;
+        key_delay=ms*tick_ms;inject(5);settled();inject(7);
+        for(unsigned i=0;i<200000&&transport.state!=AIC8800_TRANSPORT_FAULT&&
+            supplicant.state!=AIC8800_SUPPLICANT_AUTHORIZED;++i){
+            if(key_release&&m.now>=key_release&&!m.card[1][4]){memcpy(receive,delayed,sizeof(delayed));m.card[1][4]=1;key_release=0;}
+            step();
+        }
+        uint64_t written=transport.trace_tx_at;
+        if(ms<6000u){
+            assert(supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&wifi.link==AIC8800_WIFI_SECURED&&key_adds==2&&ports==1);
+            printf("command bound: a key confirmation %u ms after the write is accepted\n",ms);return 0;
+        }
+        assert(transport.state==AIC8800_TRANSPORT_FAULT&&supplicant.state==AIC8800_SUPPLICANT_FAULT&&key_adds==1);
+        struct aic8800_fault_site site;aic8800_fault_site_capture(&site,&transport,&supplicant,1234);
+        struct aic8800_transport_trace tr;aic8800_transport_trace_capture(&tr,&transport,0,0,0,0,0,0,0);
+        fprintf(stderr,"bound %u: site %#x reason %u security %#x cfm %u tx %u age %u rx %u written %llu\n",ms,site.transport_site,
+            site.slot>>4,site.security,site.cfm_bytes,tr.tx_id,tr.tx_age_ms,tr.rx_records,(unsigned long long)written);
+        assert(site.transport_site==transport.fail_site&&(site.slot>>4)==AIC8800_SECURITY_STOP_DEADLINE&&
+            (site.security&15u)==AIC8800_SECURITY_WAITING&&!site.cfm_bytes&&tr.tx_id==36&&!tr.rx_records&&
+            tr.tx_age_ms>=5990u&&tr.tx_age_ms<=6000u);
+        printf("command bound: a key confirmation %u ms after the write stops the security worker at its deadline\n",ms);return 0;
     }
     else if(!strcmp(argv[2],"key-link")) {
         /* The link leaves security-pending while a key add awaits its confirmation. */

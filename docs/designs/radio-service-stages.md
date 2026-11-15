@@ -102,8 +102,15 @@ device is touched. The sequence after the passive 2.4 GHz scan is:
    stage.
 
 Time budget, against the 50 s startup deadline (firmware confirmed near 16.7 s of session time): scan 10 s, authentication
-and association 8 s, four-way handshake 8 s, supplicant command 1 s. A normal run should need about 3 s of scan, well under
-1 s to join, and tens of milliseconds per handshake message. Each bound also stops at the session deadline.
+and association 8 s, the security stage 14 s, each supplicant command 6 s. A normal run should need about 3 s of scan, well
+under 1 s to join, and tens of milliseconds per handshake message. Each bound also stops at the session deadline.
+
+The command bound is the reference's: `RWNX_80211_CMD_TIMEOUT_MS` is 6000 ms for SDIO (`aic8800_fdrv/rwnx_cmds.h`),
+multiplied by the command manager's queue size, which is 1 while one command is outstanding, as it always is here. The
+bounds nest so that a full wait ends at the security worker's own deadline: the security stage holds a handshake of up to
+8 s and then the pairwise key add's 6 s, and the runtime lease renews 7 s before its end, so no lease end falls inside a
+command's wait. `checks/radio-stage-limit.py` checks these relations on the prepared profile, and the `key-bound` case of
+`checks/aic8800-supplicant.py` accepts a confirmation 5.9 s after the write and stops at the deadline for one at 6.1 s.
 
 Credential residue. The runner backs up image RAM before it delivers the credential, so the backups hold none. After the
 return it reads only named blocks: the return report, the output record, the radio descriptor and the record it names, and
