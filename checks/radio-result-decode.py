@@ -85,6 +85,25 @@ def main():
         pass
     else:
         raise SystemExit('scan counts that disagree with the listed count were accepted')
+    # Version 3 with every section: scan counts, the association tail, then the RSN summary (flags bit 11). The
+    # summary is the stage-1 refusal shape: a WPA/WPA2 mixed element, TKIP group, CCMP and TKIP pairwise, PSK.
+    full = bytearray(listed)
+    struct.pack_into('<I', full, 8, 3)
+    struct.pack_into('<I', full, 12, len(RECORD) + len(entry) + 16 + 48 + 16)
+    struct.pack_into('<I', full, 36, head_flags | 1024 | 512 | 2048)
+    rsn = struct.pack('<3BbHH2I', 4, 2, 1 | 8 | 16, -1, 1, 0, 1 << 4 | 1 << 2, 1 << 2)
+    decoded = radio_result.decode(bytes(full) + entry + struct.pack('<4I', 3, 12, 2, 4) + tail + rsn)
+    assert decoded['association']['stage'] == 'authorized' and decoded['scan']['merges'] == 2
+    assert decoded['rsn'] == {'check': 'group-not-ccmp', 'element_found': True, 'other_oui': False, 'malformed': False,
+                              'parse_result': -1, 'version': 1, 'group': 'TKIP', 'pairwise': ['TKIP', 'CCMP-128'],
+                              'akm': ['PSK'], 'capabilities': 0, 'mfp_capable': False, 'mfp_required': False}, decoded['rsn']
+    struct.pack_into('<I', full, 8, 4)
+    try:
+        radio_result.decode(bytes(full) + entry + struct.pack('<4I', 3, 12, 2, 4) + tail + rsn)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit('a record version the decoder does not know was accepted')
     for named in (entry[:6] + bytes([4]) + entry[7:], entry[:12] + b'case' + entry[16:]):
         try:
             radio_result.decode(bytes(listed) + named)

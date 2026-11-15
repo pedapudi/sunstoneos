@@ -110,9 +110,21 @@ int ss_wifi_credential(const uint8_t **ssid,size_t *n,const uint8_t **pmk,const 
     if(!cred_present)return -2;
     *ssid=cred_ssid;*n=sizeof(cred_ssid);*pmk=cred_pmk;return 0;
 }
-/* Valid: a nonzero entropy callback and records, and an RSN element whose first body byte is the version (1). */
+/* The RSN element the modeled beacons carry: version 1, group CCMP, pairwise CCMP, key management PSK, no capability
+ * bits. Cases replace it, and test_parse_result stands in for wpa_parse_wpa_ie_rsn's result. */
+static const uint8_t rsn_psk_ccmp[22]={48,20,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,2,0,0};
+static const uint8_t *test_rsn=rsn_psk_ccmp,*test_vendor;
+static size_t test_rsn_bytes=sizeof(rsn_psk_ccmp),test_vendor_bytes;
+static int test_parse_result;
+int aic8800_supplicant_rsn_parse(const uint8_t *element,size_t bytes)
+{assert(element&&bytes>=2);return test_parse_result;}
+/* Valid: a nonzero entropy callback and records, an element the parser accepts, and one that meets every RSN
+ * condition of the PSK test. checks/aic8800-supplicant.c checks that the classifier agrees with the real test. */
 int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *c)
-{return c->entropy&&c->entropy_record&&c->beacon_record&&c->ap_rsn_bytes>=2&&c->ap_rsn[0]==48&&c->ap_rsn[2]==1;}
+{
+    struct a733_radio_rsn s;a733_radio_rsn_summarize(&s,c->ap_rsn,c->ap_rsn_bytes);
+    return c->entropy&&c->entropy_record&&c->beacon_record&&!test_parse_result&&a733_radio_rsn_classify(&s)==A733_RADIO_RSN_PASSED;
+}
 void aic8800_security_zero(void *p,size_t n){memset(p,0,n);}
 int a733_radio_session_recover(struct a733_radio_session *s,const struct aic8800_wifi_target *t,
     const struct aic8800_supplicant_config *c,uint64_t reason,uint64_t deadline)
@@ -160,12 +172,14 @@ int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_di
     else{e->metadata.scan.ssid_bytes=3;memcpy(e->metadata.scan.ssid,n==2?"b-5":"a-2",3);}
     memcpy(e->metadata.scan.bssid,n==2?"\x02\x00\x00\x00\x00\x02":"\x02\x00\x00\x00\x00\x01",6);
     if(app.config.associate){
-        /* A beacon: 36 bytes of header and fixed fields, an SSID element, then the RSN element (version 1). */
-        static uint8_t frame[96];
+        /* A beacon: 36 bytes of header and fixed fields, an SSID element, any vendor element, then the RSN element. */
+        static uint8_t frame[160];
         memset(frame,0,sizeof(frame));frame[36]=0;frame[37]=(uint8_t)e->metadata.scan.ssid_bytes;memcpy(frame+38,e->metadata.scan.ssid,e->metadata.scan.ssid_bytes);
-        uint8_t *rsn=frame+38+e->metadata.scan.ssid_bytes;
-        rsn[0]=48;rsn[1]=4;rsn[2]=1;rsn[3]=0;rsn[4]=0x0f;rsn[5]=0xac;
-        e->metadata.scan.frame=frame;e->metadata.scan.frame_bytes=(uint16_t)(38+e->metadata.scan.ssid_bytes+6);
+        size_t at=38+e->metadata.scan.ssid_bytes;
+        if(test_vendor){memcpy(frame+at,test_vendor,test_vendor_bytes);at+=test_vendor_bytes;}
+        if(test_rsn){memcpy(frame+at,test_rsn,test_rsn_bytes);at+=test_rsn_bytes;}
+        assert(at<=sizeof(frame));
+        e->metadata.scan.frame=frame;e->metadata.scan.frame_bytes=(uint16_t)at;
     }
     return 1;
 }
@@ -402,7 +416,7 @@ int main(void)
             assoc_target.connection_authority&&assoc_target.beacon_evidence==assoc_target.connection_authority);
         app.session.wifi.link=AIC8800_WIFI_SECURITY_PENDING;
         assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SECURING&&security_calls==secs+1&&app.assoc.stage==5);
-        assert(!memcmp(assoc_security.pmk,cred_pmk,32));assert(assoc_security.ap_rsn_bytes==6);assert(assoc_security.entropy==os_ce_entropy_bytes);
+        assert(!memcmp(assoc_security.pmk,cred_pmk,32));assert(assoc_security.ap_rsn_bytes==sizeof(rsn_psk_ccmp));assert(assoc_security.entropy==os_ce_entropy_bytes);
         uint8_t zero[32]={0};assert(!memcmp(app.config.security.pmk,zero,32)); /* the board's copy is gone once the supplicant has it */
         app.session.supplicant.eapol_rx=2;app.session.supplicant.eapol_tx=2;
         app.session.wifi.link=AIC8800_WIFI_SECURED;app.session.supplicant.state=AIC8800_SUPPLICANT_AUTHORIZED;
@@ -411,8 +425,13 @@ int main(void)
         assert(report->has_assoc&&report->assoc.stage==6&&report->assoc.eapol_rx==2&&report->assoc.eapol_tx==2&&
             report->assoc.link==AIC8800_WIFI_SECURED&&(report->assoc.flags&0x3f)==0x3f&&report->assoc.candidates==2);
         assert(report->ap_count==2&&!report->aps[0].ssid_bytes&&!report->aps[1].ssid_bytes);
+        /* The passing candidate's RSN summary: CCMP group and pairwise, PSK, version 1. */
+        assert(report->has_rsn&&report->rsn.check==A733_RADIO_RSN_PASSED&&report->rsn.group==4&&report->rsn.pairwise==1u<<4&&
+            report->rsn.akm==1u<<2&&report->rsn.version==1&&!report->rsn.capabilities&&!report->rsn.parse_result&&
+            report->rsn.flags==(1u|8u|16u));
         uint8_t record[512];size_t bytes=a733_radio_report_encode(report,record,sizeof(record));
-        assert(bytes==a733_radio_report_bytes(report)&&bytes==sizeof(report->head)+2*sizeof(struct a733_radio_result_ap)+sizeof(struct a733_radio_scan_counts)+sizeof(struct a733_radio_assoc));
+        assert(bytes==a733_radio_report_bytes(report)&&bytes==sizeof(report->head)+2*sizeof(struct a733_radio_result_ap)+
+            sizeof(struct a733_radio_scan_counts)+sizeof(struct a733_radio_assoc)+sizeof(struct a733_radio_rsn));
         for(size_t i=0;i+8<=bytes;++i)assert(memcmp(record+i,cred_ssid,8)&&memcmp(record+i,cred_pmk,8));
         a733_radio_report_release(&app.report);
         /* No candidate, and a missing credential, end as a retained failure with the record. */
@@ -424,6 +443,53 @@ int main(void)
         (void)board_radio_poll(&app);
         assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED&&!app.cand_found&&connects==conns+1);
         cred_present=1;
+        /* Each RSN condition the PSK candidate test refuses, as the record names it. The results carry the credential's
+         * SSID, none passes, and the summary comes from the strongest (-41 dBm). */
+        {
+            static const uint8_t wpa1[]={221,22,0x00,0x50,0xf2,1,1,0,0x00,0x50,0xf2,2,1,0,0x00,0x50,0xf2,2,1,0,0x00,0x50,0xf2,2};
+            static const uint8_t mixed[]={48,24,1,0,0x00,0x0f,0xac,2,2,0,0x00,0x0f,0xac,4,0x00,0x0f,0xac,2,1,0,0x00,0x0f,0xac,2,0,0};
+            static const uint8_t tkip_pairwise[]={48,20,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,2,1,0,0x00,0x0f,0xac,2,0,0};
+            static const uint8_t transition_required[]={48,24,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,4,2,0,0x00,0x0f,0xac,2,0x00,0x0f,0xac,8,0xc0,0};
+            static const uint8_t sae_only[]={48,20,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,8,0x80,0};
+            static const uint8_t sae_required[]={48,20,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,8,0xc0,0};
+            static const uint8_t short_count[]={48,10,1,0,0x00,0x0f,0xac,4,2,0,0x00,0x0f,0xac,4};
+            const struct {const uint8_t *rsn;size_t bytes;const uint8_t *vendor;int parse;unsigned check,group,pairwise,akm,caps;} cases[]={
+                {mixed,sizeof(mixed),wpa1,-1,A733_RADIO_RSN_GROUP_NOT_CCMP,2,1u<<4|1u<<2,1u<<2,0},  /* WPA/WPA2 mixed: group TKIP */
+                {tkip_pairwise,sizeof(tkip_pairwise),NULL,0,A733_RADIO_RSN_PAIRWISE_NO_CCMP,4,1u<<2,1u<<2,0},
+                {transition_required,sizeof(transition_required),NULL,0,A733_RADIO_RSN_MFP_REQUIRED,4,1u<<4,1u<<2|1u<<8,0xc0},
+                {sae_required,sizeof(sae_required),NULL,0,A733_RADIO_RSN_MFP_REQUIRED,4,1u<<4,1u<<8,0xc0},
+                {sae_only,sizeof(sae_only),NULL,0,A733_RADIO_RSN_NO_PSK,4,1u<<4,1u<<8,0x80},
+                {short_count,sizeof(short_count),NULL,-2,A733_RADIO_RSN_MALFORMED,4,0,0,0},
+                {rsn_psk_ccmp,sizeof(rsn_psk_ccmp),NULL,-10,A733_RADIO_RSN_OTHER,4,1u<<4,1u<<2,0}, /* the parser refuses */
+                {NULL,0,NULL,0,A733_RADIO_RSN_NO_ELEMENT,A733_RADIO_RSN_SUITE_ABSENT,0,0,0},
+            };
+            for(unsigned k=0;k<sizeof(cases)/sizeof(cases[0]);++k){
+                a733_radio_report_release(&app.report);
+                memset(&app,0,sizeof(app));scan_events_left=0;scan_finished=0;report_used=0;scheduler=taskSCHEDULER_NOT_STARTED;
+                atomic_store(&recovery_state,1);
+                test_rsn=cases[k].rsn;test_rsn_bytes=cases[k].bytes;test_vendor=cases[k].vendor;
+                test_vendor_bytes=cases[k].vendor?sizeof(wpa1):0;test_parse_result=cases[k].parse;
+                assert(board_radio_init(&app,&assoc));scheduler=taskSCHEDULER_RUNNING;time_us=100;app.session.dispatcher.initialized=1;
+                entropy_is_ready=1;
+                assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SCANNING);
+                scan_events_left=3;scan_finished=1;
+                (void)board_radio_poll(&app);
+                assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED&&!app.cand_found&&app.assoc.candidates==2&&!(app.assoc.flags&4u));
+                const struct a733_radio_report *refused=board_radio_report(&app);
+                const struct a733_radio_rsn *s=&refused->rsn;
+                if(!(refused->has_rsn&&s->check==cases[k].check&&s->group==cases[k].group&&s->pairwise==cases[k].pairwise&&
+                    s->akm==cases[k].akm&&s->capabilities==cases[k].caps&&s->parse_result==(cases[k].rsn?cases[k].parse:0)&&
+                    app.rsn_rssi==-41)){
+                    fprintf(stderr,"RSN case %u: check %u group %u pairwise %x akm %x caps %x parse %d\n",
+                        k,s->check,s->group,s->pairwise,s->akm,s->capabilities,s->parse_result);
+                    assert(!"RSN summary");
+                }
+                uint8_t encoded[1024];uint32_t flags;
+                assert(a733_radio_report_encode(refused,encoded,sizeof(encoded))==a733_radio_report_bytes(refused));
+                memcpy(&flags,encoded+36,4);assert(flags&2048u); /* the summary follows the association tail */
+            }
+            test_rsn=rsn_psk_ccmp;test_rsn_bytes=sizeof(rsn_psk_ccmp);test_vendor=NULL;test_vendor_bytes=0;test_parse_result=0;
+        }
         /* A CE failure ends the stage as a retained failure, flagged in the record. */
         a733_radio_report_release(&app.report);
         memset(&app,0,sizeof(app));scan_events_left=0;scan_finished=0;report_used=0;scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);

@@ -14,6 +14,9 @@
 /* The host reads this symbol after the return (tools/radio_result_channel.py). It lives in BSS, zero
  * until the record is published. */
 struct os_radio_result_descriptor os_radio_result_descriptor __attribute__((used,retain,aligned(8)));
+/* The record version this image writes. Admission reads it from the image file and refuses the run when the runner's
+ * decoder does not read that version (tools/board_images.py radio_record_admission). */
+const uint32_t os_radio_result_version __attribute__((used,retain)) = A733_RADIO_RESULT_VERSION;
 enum { RUNNING, SCANNED, DOWN, FAILED };
 static _Atomic unsigned state, stage_seen;
 static unsigned published;

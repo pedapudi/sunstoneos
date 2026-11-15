@@ -391,28 +391,39 @@ static void assoc_candidate(struct board_radio *r,const struct aic8800_wifi_scan
     r->assoc.flags|=32u;
     if(ssid_bytes!=sc->ssid_bytes||memcmp(ssid,sc->ssid,ssid_bytes))return;
     ++r->assoc.candidates;r->assoc.flags|=2u;
-    if(!sc->frame||sc->frame_bytes<=36)return;
-    const uint8_t *ie=sc->frame+36,*end=sc->frame+sc->frame_bytes;
-    while(end-ie>=2&&(size_t)(end-ie)>=2u+ie[1]){
-        if(ie[0]==48){
-            size_t n=2u+ie[1];
-            struct aic8800_supplicant_config *t=&r->config.security;
-            if(n<=sizeof(t->ap_rsn)){
-                memset(t->ap_rsn,0,sizeof(t->ap_rsn));memcpy(t->ap_rsn,ie,n);t->ap_rsn_bytes=(uint16_t)n;
-                if(aic8800_supplicant_config_valid(t)){
-                    r->assoc.flags|=4u;
-                    if(!r->cand_found||sc->rssi_dbm>r->cand_rssi){
-                        memcpy(r->cand_bssid,sc->bssid,6);memcpy(r->cand_rsn,t->ap_rsn,n);r->cand_rsn_bytes=(uint16_t)n;
-                        r->cand_frequency=sc->frequency;r->cand_rssi=sc->rssi_dbm;r->cand_found=1;
-                        r->assoc.stage=r->assoc.stage<1?1:r->assoc.stage;
-                    }
-                }
-            }
-            break;
+    const uint8_t *element=NULL;size_t n=0;int passed=0,became=0;
+    if(sc->frame&&sc->frame_bytes>36){
+        const uint8_t *ie=sc->frame+36,*end=sc->frame+sc->frame_bytes;
+        while(end-ie>=2&&(size_t)(end-ie)>=2u+ie[1]){
+            if(ie[0]==48){element=ie;n=2u+ie[1];break;}
+            ie+=2u+ie[1];
         }
-        ie+=2u+ie[1];
     }
-    memset(r->config.security.ap_rsn,0,sizeof(r->config.security.ap_rsn));r->config.security.ap_rsn_bytes=0;
+    struct aic8800_supplicant_config *t=&r->config.security;
+    if(element&&n<=sizeof(t->ap_rsn)){
+        memset(t->ap_rsn,0,sizeof(t->ap_rsn));memcpy(t->ap_rsn,element,n);t->ap_rsn_bytes=(uint16_t)n;
+        if(aic8800_supplicant_config_valid(t)){
+            passed=1;r->assoc.flags|=4u;
+            if(!r->cand_found||sc->rssi_dbm>r->cand_rssi){
+                memcpy(r->cand_bssid,sc->bssid,6);memcpy(r->cand_rsn,t->ap_rsn,n);r->cand_rsn_bytes=(uint16_t)n;
+                r->cand_frequency=sc->frequency;r->cand_rssi=sc->rssi_dbm;r->cand_found=1;became=1;
+                r->assoc.stage=r->assoc.stage<1?1:r->assoc.stage;
+            }
+        }
+    }
+    memset(t->ap_rsn,0,sizeof(t->ap_rsn));t->ap_rsn_bytes=0;
+    /* The record's RSN summary: the passing candidate, or while none passes, the strongest result with the SSID. */
+    int record=passed?became:!r->cand_found&&(!r->rsn_recorded||sc->rssi_dbm>r->rsn_rssi);
+    if(!record||!r->config.report_memory.allocate)return;
+    struct a733_radio_rsn s;
+    a733_radio_rsn_summarize(&s,element,n);
+    if(element){
+        s.parse_result=(int8_t)aic8800_supplicant_rsn_parse(element,n);
+        enum a733_radio_rsn_check check=a733_radio_rsn_classify(&s);
+        s.check=(uint8_t)(passed?A733_RADIO_RSN_PASSED:n>sizeof(t->ap_rsn)?A733_RADIO_RSN_TOO_LONG:
+            check!=A733_RADIO_RSN_PASSED?check:A733_RADIO_RSN_OTHER);
+    }
+    a733_radio_report_rsn(&r->report,&s);r->rsn_recorded=1;r->rsn_rssi=sc->rssi_dbm;
 }
 /* Build the target and the supplicant configuration from the candidate and the credential, at EL1. 0 if any piece is
  * missing; the PMK is copied only into the supplicant configuration, which is zeroed once the supplicant has taken it. */

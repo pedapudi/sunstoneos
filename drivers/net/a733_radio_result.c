@@ -144,9 +144,52 @@ void a733_radio_report_set_aside(struct a733_radio_report *r,uint64_t set_aside)
 }
 void a733_radio_report_association(struct a733_radio_report *r,const struct a733_radio_assoc *a)
 {r->assoc=*a;r->has_assoc=1;}
+void a733_radio_report_rsn(struct a733_radio_report *r,const struct a733_radio_rsn *s)
+{r->rsn=*s;r->has_rsn=1;}
+static unsigned suite(const uint8_t *p,uint8_t *flags)
+{
+    if(p[0]==0x00&&p[1]==0x0f&&p[2]==0xac)return p[3];
+    *flags|=2u;return 256u;
+}
+void a733_radio_rsn_summarize(struct a733_radio_rsn *s,const uint8_t *e,size_t n)
+{
+    memset(s,0,sizeof(*s));s->group=A733_RADIO_RSN_SUITE_ABSENT;
+    if(!e){s->check=A733_RADIO_RSN_NO_ELEMENT;return;}
+    s->flags=1u;
+    if(n<4||e[0]!=48||(size_t)e[1]+2u!=n){s->flags|=4u;return;}
+    const uint8_t *p=e+2,*end=e+n;
+    s->version=(uint16_t)(p[0]|p[1]<<8);p+=2;
+    /* The body's fields in order; each is optional from the end (IEEE 802.11-2020 9.4.2.24). */
+    if(end-p>=4){s->group=p[0]==0x00&&p[1]==0x0f&&p[2]==0xac?p[3]:A733_RADIO_RSN_SUITE_OTHER;p+=4;}
+    else if(end!=p){s->flags|=4u;return;}
+    for(unsigned list=0;list<2;++list){
+        if(end==p)return;
+        if(end-p<2){s->flags|=4u;return;}
+        size_t count=(size_t)(p[0]|p[1]<<8);p+=2;
+        if(!count||count>(size_t)(end-p)/4u){s->flags|=4u;return;}
+        s->flags|=list?16u:8u;
+        for(size_t i=0;i<count;++i,p+=4){
+            unsigned type=suite(p,&s->flags);
+            if(type<32u){if(list)s->akm|=1u<<type;else s->pairwise|=1u<<type;}
+        }
+    }
+    if(end==p)return;
+    if(end-p<2){s->flags|=4u;return;}
+    s->capabilities=(uint16_t)(p[0]|p[1]<<8);
+}
+enum a733_radio_rsn_check a733_radio_rsn_classify(const struct a733_radio_rsn *s)
+{
+    if(!(s->flags&1u))return A733_RADIO_RSN_NO_ELEMENT;
+    if(s->flags&4u)return A733_RADIO_RSN_MALFORMED;
+    if(s->group!=4u&&s->group!=A733_RADIO_RSN_SUITE_ABSENT)return A733_RADIO_RSN_GROUP_NOT_CCMP; /* 4: CCMP-128 */
+    if((s->flags&8u)&&!(s->pairwise&(1u<<4)))return A733_RADIO_RSN_PAIRWISE_NO_CCMP;
+    if(s->capabilities&(1u<<6))return A733_RADIO_RSN_MFP_REQUIRED;
+    if(!(s->akm&(1u<<2)))return A733_RADIO_RSN_NO_PSK; /* 2: PSK; an absent list means 802.1X */
+    return A733_RADIO_RSN_PASSED;
+}
 size_t a733_radio_report_bytes(const struct a733_radio_report *r)
 {return sizeof(r->head)+r->ap_count*sizeof(struct a733_radio_result_ap)+(r->has_scan?sizeof(r->scan):0)+
-    (r->has_assoc?sizeof(r->assoc):0);}
+    (r->has_assoc?sizeof(r->assoc):0)+(r->has_rsn?sizeof(r->rsn):0);}
 size_t a733_radio_report_encode(const struct a733_radio_report *r,void *out,size_t capacity)
 {
     size_t bytes=a733_radio_report_bytes(r);
@@ -155,10 +198,12 @@ size_t a733_radio_report_encode(const struct a733_radio_report *r,void *out,size
     head.bytes=(uint32_t)bytes;head.ap_count=(uint32_t)r->ap_count;
     if(r->has_assoc)head.flags|=512u;
     if(r->has_scan)head.flags|=1024u;
+    if(r->has_rsn)head.flags|=2048u;
     uint8_t *at=out;
     memcpy(at,&head,sizeof(head));at+=sizeof(head);
     if(r->ap_count){memcpy(at,r->aps,r->ap_count*sizeof(*r->aps));at+=r->ap_count*sizeof(*r->aps);}
     if(r->has_scan){memcpy(at,&r->scan,sizeof(r->scan));at+=sizeof(r->scan);}
-    if(r->has_assoc)memcpy(at,&r->assoc,sizeof(r->assoc));
+    if(r->has_assoc){memcpy(at,&r->assoc,sizeof(r->assoc));at+=sizeof(r->assoc);}
+    if(r->has_rsn)memcpy(at,&r->rsn,sizeof(r->rsn));
     return bytes;
 }

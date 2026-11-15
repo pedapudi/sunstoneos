@@ -15,7 +15,9 @@ enum a733_radio_stage {
     A733_RADIO_STAGE_IDENTIFIED, A733_RADIO_STAGE_SCANNED, A733_RADIO_STAGE_ASSOCIATED
 };
 #define A733_RADIO_RESULT_MAGIC UINT64_C(0x3152444152333337) /* bytes "733RADR1" */
-#define A733_RADIO_RESULT_VERSION 2u
+/* Version 3 adds the scan counts (head flags bit 10) and the RSN summary (bit 11). The image exports the version it
+ * writes as os_radio_result_version, and admission refuses an image whose version the runner's decoder lacks. */
+#define A733_RADIO_RESULT_VERSION 3u
 /* Four supplies are observed (DCDC1, DCDC8, BLDO5, CLDO1); SDIO defines
  * function numbers 0 to 7. Both are protocol or topology counts, not caps. */
 #define A733_RADIO_RESULT_RAILS 4u
@@ -70,6 +72,35 @@ _Static_assert(sizeof(struct a733_radio_assoc)==48,"association tail");
  * dropped. */
 struct a733_radio_scan_counts { uint32_t sightings, firmware_reported, merges, set_aside; };
 _Static_assert(sizeof(struct a733_radio_scan_counts)==16,"scan counts tail");
+/* The RSN element of the scan result the association stage judged: the passing candidate, or while none passes, the
+ * strongest result with the credential's SSID. Appended after the association tail when head flags bit 11 is set. It
+ * holds security capabilities only: no address, SSID or key.
+ * check: why the candidate test refused the element (enum a733_radio_rsn_check). group: the group cipher's suite
+ * type under OUI 00-0F-AC, A733_RADIO_RSN_SUITE_OTHER for another OUI, A733_RADIO_RSN_SUITE_ABSENT when the element
+ * ends before it. flags: bit 0 an RSN element was found, bit 1 a pairwise or key-management suite has another OUI,
+ * bit 2 the element is malformed (a count or length runs past its end), bit 3 it has a pairwise list, bit 4 it has a
+ * key-management list (an absent list means CCMP and 802.1X). parse_result: wpa_parse_wpa_ie_rsn's return
+ * (0 accepted). version and capabilities: the element's fields (capabilities bit 6 MFP required, bit 7 MFP capable).
+ * pairwise and akm: bit n set for suite type n under OUI 00-0F-AC (n < 32). */
+struct a733_radio_rsn {
+    uint8_t check, group, flags;
+    int8_t parse_result;
+    uint16_t version, capabilities;
+    uint32_t pairwise, akm;
+};
+_Static_assert(sizeof(struct a733_radio_rsn)==16,"RSN summary tail");
+#define A733_RADIO_RSN_SUITE_OTHER 0xffu
+#define A733_RADIO_RSN_SUITE_ABSENT 0xfeu
+/* The candidate test's checks in the order aic8800_supplicant_config_valid applies them. */
+enum a733_radio_rsn_check {
+    A733_RADIO_RSN_PASSED, A733_RADIO_RSN_NO_ELEMENT, A733_RADIO_RSN_TOO_LONG, A733_RADIO_RSN_MALFORMED,
+    A733_RADIO_RSN_GROUP_NOT_CCMP, A733_RADIO_RSN_PAIRWISE_NO_CCMP, A733_RADIO_RSN_MFP_REQUIRED,
+    A733_RADIO_RSN_NO_PSK, A733_RADIO_RSN_OTHER /* every RSN condition met; the configuration or parser refused */
+};
+/* Summarize an RSN element (ID 48, its length byte, then the body); element NULL records that none was found. */
+void a733_radio_rsn_summarize(struct a733_radio_rsn *,const uint8_t *element,size_t bytes);
+/* The first RSN condition of the PSK candidate test that the summary fails, or A733_RADIO_RSN_PASSED. */
+enum a733_radio_rsn_check a733_radio_rsn_classify(const struct a733_radio_rsn *);
 /* Memory comes from the caller: the radio build supplies the FreeRTOS heap. */
 struct a733_radio_allocator {
     void *(*allocate)(void *context,size_t bytes);
@@ -83,7 +114,8 @@ struct a733_radio_report {
     struct a733_radio_allocator memory;
     struct a733_radio_assoc assoc;
     struct a733_radio_scan_counts scan;
-    unsigned has_assoc,has_scan;
+    struct a733_radio_rsn rsn;
+    unsigned has_assoc,has_scan,has_rsn;
 };
 /* Zero storage. Returns 0 if the allocator is incomplete. */
 int a733_radio_report_init(struct a733_radio_report *,const struct a733_radio_allocator *);
@@ -95,6 +127,8 @@ void a733_radio_report_platform(struct a733_radio_report *,const struct a733_rad
 /* The session's failure site, when the platform decided none (its fail_site is zero): source line << 16 | 0x100 |
  * stage. Call after a733_radio_report_platform. */
 void a733_radio_report_session_failure(struct a733_radio_report *,unsigned line,unsigned stage);
+/* Set the RSN summary (and head flags bit 11). */
+void a733_radio_report_rsn(struct a733_radio_report *,const struct a733_radio_rsn *);
 /* Set the association tail (and head flags bit 9). */
 void a733_radio_report_association(struct a733_radio_report *,const struct a733_radio_assoc *);
 void a733_radio_report_firmware(struct a733_radio_report *);
