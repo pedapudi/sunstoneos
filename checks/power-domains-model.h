@@ -48,9 +48,17 @@ struct domains_model {
     uint32_t top5_closed[2];
 };
 static struct domains_model d;
-static void trace(unsigned write,uintptr_t a,uint32_t v)
+/* Whether the calling task is the service task within its step: d.in_step,
+ * or thread-local under MODEL_THREADS (checks/a733-pmic.c). */
+#ifdef MODEL_THREADS
+static _Thread_local unsigned domains_in_step;
+#define DOMAINS_IN_STEP domains_in_step
+#else
+#define DOMAINS_IN_STEP d.in_step
+#endif
+MODEL_UNSANITIZED static void trace(unsigned write,uintptr_t a,uint32_t v)
 {if(d.trace_n<512)d.trace[d.trace_n++]=(struct access){write,a,v};}
-static uint32_t *level_word(uintptr_t a)
+MODEL_UNSANITIZED static uint32_t *level_word(uintptr_t a)
 {
     switch(a) {
     case CCU_BASE+0x5c0:return &d.ccu_5c0;
@@ -62,15 +70,15 @@ static uint32_t *level_word(uintptr_t a)
     default:return 0;
     }
 }
-static int ppu_block(uintptr_t a,unsigned *id,unsigned *offset)
+MODEL_UNSANITIZED static int ppu_block(uintptr_t a,unsigned *id,unsigned *offset)
 {
     if(a<UINT32_C(0x07061000) || a>=UINT32_C(0x07066000))return 0;
     *id=(unsigned)((a-UINT32_C(0x07060000))>>12);*offset=(unsigned)(a&0xfff);
     return *id==1 || *id==4 || *id==5;
 }
-static int owner_read(void *v,uintptr_t a,uint32_t *out)
+MODEL_UNSANITIZED static int owner_read(void *v,uintptr_t a,uint32_t *out)
 {
-    assert(v==&d);unsigned id,offset;
+    assert(v==&d);unsigned id,offset;MODEL_GUARD();
     if(d.fail_read && !--d.fail_read)return 0;
     if(m.concurrent)m.concurrent(&m);
     if(m.access_ns)pmic_model_cost(&m,m.access_ns);
@@ -95,9 +103,9 @@ static int owner_read(void *v,uintptr_t a,uint32_t *out)
     if(offset==8 && d.status_override[id])*out=(*out&~15u)|(d.status_override[id]&15);
     trace(0,a,*out);return 1;
 }
-static int owner_write(void *v,uintptr_t a,uint32_t value)
+MODEL_UNSANITIZED static int owner_write(void *v,uintptr_t a,uint32_t value)
 {
-    assert(v==&d && d.in_step);unsigned id,offset;
+    assert(v==&d && DOMAINS_IN_STEP);unsigned id,offset;MODEL_GUARD();
     assert(ppu_block(a,&id,&offset) && offset!=8);++d.ppu_writes;trace(1,a,value);
     if(m.access_ns)pmic_model_cost(&m,m.access_ns);
     d.ppu[id][offset/4]=value;
@@ -108,8 +116,8 @@ static int owner_write(void *v,uintptr_t a,uint32_t value)
 }
 /* The native notify skips a wake from the service task itself, which handles
  * its own submissions within the same step. */
-static void owner_notify(void *v)
-{assert(v==&d);if(d.in_step){++d.self_notifies;return;}++d.notifies;d.notified=1;}
+MODEL_UNSANITIZED static void owner_notify(void *v)
+{assert(v==&d);MODEL_GUARD();if(DOMAINS_IN_STEP){++d.self_notifies;return;}++d.notifies;d.notified=1;}
 static void domains_model_setup(uint32_t divider,uint64_t wire_us)
 {
     (void)model_unused;
@@ -126,12 +134,23 @@ static void domains_model_setup(uint32_t divider,uint64_t wire_us)
     const struct a733_power_domain_ops ops={owner_read,owner_write,owner_notify};
     assert(a733_power_domains_init(&d.owner,&m.provider,&ops,&d,&d.config));
 }
-/* One service step as the provider task. */
+/* One service step as the provider task. Under MODEL_THREADS the step
+ * consumes the notification before it runs, so that a notification during
+ * the step causes another step. */
 static uint32_t service_step(void)
 {
-    const uint64_t start=m.now;
-    m.worker=1;d.in_step=1;uint32_t ticks=a733_power_service_step(&d.owner);d.in_step=0;m.worker=0;
-    ++d.steps;d.notified=0;if(ticks==1)++d.tick_waits;
+    uint64_t start;
+    {MODEL_GUARD();start=m.now;
+#ifdef MODEL_THREADS
+    d.notified=0;
+#endif
+    }
+    PMIC_WORKER(&m)=1;DOMAINS_IN_STEP=1;uint32_t ticks=a733_power_service_step(&d.owner);DOMAINS_IN_STEP=0;PMIC_WORKER(&m)=0;
+    MODEL_GUARD();
+#ifndef MODEL_THREADS
+    d.notified=0;
+#endif
+    ++d.steps;if(ticks==1)++d.tick_waits;
     if(m.now-start>d.longest_step_us)d.longest_step_us=m.now-start;
     d.wake_at=ticks==UINT32_MAX ? UINT64_MAX : m.now+(uint64_t)ticks*TICK_US;
     return ticks;

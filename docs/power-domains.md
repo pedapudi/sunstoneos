@@ -363,17 +363,37 @@ the cost model.
 The [live accelerator composition check](../checks/accelerator-shared-owner.py)
 exercises the actual NPU startup, GPU power and resource manager, PMIC consumers,
 rail ledger, clock registry and domain owner together. Five focused sanitizer
-cases cover overlapping domain-4/domain-5 admission, each domain's local timeout,
+cases interleave the tasks on one thread. They cover overlapping domain-4/domain-5 admission, each domain's local timeout,
 shared PMIC transport failure, and, with the PMIC bus at 100 kHz, domain-4
 admission on DCDC2 verified while the owner still reads DCDC4. They also verify that local NPU stop retains
 its domain, PLL and rail ownership while the GPU shuts down. Domain-local failure
 can leave the other admitted consumer progressing; global transport uncertainty
 retains ownership and prevents further device access.
 
-Evidence is under `accelerator-shared-owner-20261024/snapshot/manifest.json`.
-Hardware effects, task context and scheduling are modeled. These cases establish
-shared-owner behavior, not firmware drain, thermal orchestration, multicore
-concurrency or physical operation. No production change was needed.
+Two further cases run the two retirements on three host threads, one for each
+core of the image's placement: the power service (core 0), the NPU bootstrap
+(core 1) and the GPU retirement (core 6). Each case runs 200 times from a fresh
+boot, with random delays from a recorded seed. In the first, the GPU powers off
+and releases its resource lease while an NPU job is in flight; in the second, the
+NPU's local stop runs while the GPU retirement is still running. Until its job
+completes, the NPU thread checks continuously that the PCK clock gate, the NPU
+AHB and MBUS master gates, PLL_NPU and its lock, the domain-4 row and the NPU's
+PCK lease all stay in place. After both retirements the end state is the one the
+single-thread case asserts. Each model register access takes one model lock,
+and driver code runs outside it, so the drivers' own atomic locks and the
+platform register lock serialize the threads. The cases pass under AddressSanitizer and with no ThreadSanitizer
+report, and the check requires the retirements to overlap in a minimum number of
+runs. Two mutants of the GPU power-off sequence fail the first case with the
+invariant they break. One closes the PCK clock gate in its last step, before the
+GPU resource lease is released. The other closes the GPU AHB gate with the
+vendor helper's field mask `0x010000ff`, which also clears the NPU AHB gate.
+
+Evidence for the single-thread cases is under
+`accelerator-shared-owner-20261024/snapshot/manifest.json`. Hardware effects,
+task context and scheduling are modeled. These cases establish shared-owner
+behavior and the concurrent composition of the two retirements on the host;
+they do not establish firmware drain, thermal orchestration or physical
+operation. No production change was needed.
 
 ## Board evidence required
 
