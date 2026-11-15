@@ -368,10 +368,13 @@ class TwoCores:
         for address, size in words:
             self.hooks.append(uc.hook_add(UC_HOOK_MEM_WRITE, self._access, 'writer', address, address + size - 1))
             self.hooks.append(uc.hook_add(UC_HOOK_MEM_READ, self._access, 'reader', address, address + size - 1))
+        # Unicorn compiles hook calls into translated code, so code translated before these hooks never calls them.
+        uc.ctl_flush_tb()
 
     def close(self):
         for hook in self.hooks:
             self.uc.hook_del(hook)
+        self.uc.ctl_flush_tb()
 
     def _access(self, uc, access, address, size, value, side):
         if self.side == side:
