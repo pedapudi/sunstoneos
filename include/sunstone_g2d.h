@@ -4,6 +4,7 @@
  * ("devices": {"required": ["g2d"]}); the session grants it with SS_DEVICE_G2D. One OS owner task does every register
  * access (apps/os/g2d.c, docs/g2d-os.md). Every call returns at once: 1 done, 0 not yet (repeat the identical call after
  * ss_g2d_wait), -1 refused or failed. One request is in flight. */
+#include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
@@ -72,6 +73,12 @@ struct ss_g2d_info {
      * system-counter ticks since the request. */
     uint32_t status_reads;
     uint32_t status_word[SS_G2D_STATUS_SAMPLES], status_ticks[SS_G2D_STATUS_SAMPLES];
+    /* The power owner's supply verification (its clock, microseconds): the time verification may start (the provider
+     * start plus A733_POWER_SUPPLY_SETTLE_US, or the provider start when the settle is skipped); the first wake of the
+     * first time the open found DCDC2 verified, an upper bound on the verification time because the power owner keeps
+     * no time of its own; and 1 when os_g2d_start marked the supply settled. */
+    uint64_t verify_at_us, verified_seen_us;
+    uint32_t settled_supply, reserved;
 };
 /* After close: the module clock, bus gate and reset, DE_SYS reset and domain words, read back after the sequence. */
 struct ss_g2d_closed {
@@ -81,6 +88,49 @@ struct ss_g2d_closed {
     uint32_t de_di_open, reserved;
     uint64_t closed_ticks;
 };
+/* A surface: width by height pixels of one of the eight 32-bit RGB orders (format 0 ARGB8888 to 7 BGRX8888, the
+ * vendor's codes), rows stride bytes apart, starting offset bytes into one of the application's large regions
+ * (manifest.json "large_regions"; ss_large_base gives its address). The output's region must be writable. */
+struct ss_g2d_surface {
+    uint32_t region, format;
+    uint64_t offset;
+    uint32_t width, height, stride, reserved;
+};
+enum { SS_G2D_FILL = 1 };
+/* One operation. Fill writes color (ARGB, 32 bits) to the w by h rectangle at dx, dy of the output; source, sx and sy
+ * are zero. The rest of the output is unchanged. */
+struct ss_g2d_job {
+    uint32_t op, color;
+    struct ss_g2d_surface source, output;
+    uint32_t sx, sy, dx, dy, w, h, reserved[2];
+};
+#define SS_G2D_DONE_MAGIC UINT32_C(0x44443247) /* "G2DD" */
+/* The record of one operation. Times are system-counter ticks. */
+struct ss_g2d_done {
+    uint32_t magic, bytes;
+    uint32_t rcq_status;       /* G2D 0x24 read by the interrupt handler before it acknowledged task end */
+    uint32_t reset_word;       /* G2D 0x08 read by the handler before its mixer reset pulse */
+    uint32_t status_after;     /* G2D 0x24 read by the owner after the handler */
+    uint32_t irq_count;        /* G2D interrupts taken since the open */
+    uint32_t iommu_scan;       /* 1: no IOMMU fault for master 10 after the operation */
+    uint32_t output_iova;      /* device address of the output surface's first byte */
+    uint32_t iommu_attached;   /* 1: this operation attached master 10 (the open's first operation) */
+    /* At the first attach, before any write, also when it refused: ENABLE, INT_STATUS, L1 and L2 status of bank 0 then
+     * bank 1, and the micro bypass of USB (master 0) and G2D (master 10). */
+    uint32_t iommu_bank_words[8];
+    uint32_t iommu_bypass[2];
+    uint32_t iommu_fault[10];      /* master 10's fault record (a733_iommu_owner_fault order) */
+    /* The IOMMU owner's first failure (step, register offset, value read back), its last refusal (1 clock lease, 2
+     * entry state), and interrupts taken with no operation armed. */
+    uint32_t iommu_fault_step, iommu_fault_word, iommu_fault_read, iommu_refused, stray_interrupts;
+    uint64_t submit_ticks, launch_ticks, irq_ticks, done_ticks;
+    uint64_t attach_us;            /* time the IOMMU attach took, 0 when no attach was made */
+    uint64_t surface_physical, directory_physical;
+};
+_Static_assert(sizeof(struct ss_g2d_done) == 192 && offsetof(struct ss_g2d_done, submit_ticks) == 136,
+               "apps/g2d-check/host.py decodes this layout");
+/* Run one operation on the open engine and wait for its completion interrupt; done receives the record. */
+int ss_g2d_run(const struct ss_g2d_job *job, struct ss_g2d_done *done);
 /* Power, clock and reset the engine (the vendor's g2d_open order) and read its identity. */
 int ss_g2d_open(struct ss_g2d_info *info);
 /* Gate and reset the engine (the vendor's g2d_release order). The DE_SYS reset is asserted only when the DE and DI
