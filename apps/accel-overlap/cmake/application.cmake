@@ -13,3 +13,8 @@ add_sunstone_application(accel-overlap
   MANIFEST "${SUNSTONE_ACCEL_OVERLAP_MANIFEST}"
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/.."
   INPUTS "${CMAKE_CURRENT_LIST_DIR}/../result.h" "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/program.h")
+# The streaming sweep (main.c, ACCEL_OVERLAP_SWEEP): both accelerators under five streaming sets, with a dependent-load chase.
+option(SUNSTONE_ACCEL_OVERLAP_SWEEP "Build accel-overlap as the streaming sweep" OFF)
+if(SUNSTONE_ACCEL_OVERLAP_SWEEP)
+  target_compile_definitions(accel-overlap PRIVATE ACCEL_OVERLAP_SWEEP=1)
+endif()

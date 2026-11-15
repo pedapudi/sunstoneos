@@ -7,7 +7,13 @@
  * (one job at a time, a blocking wait, the completion latency of every job) and a pipelined segment of one second (the job
  * rate at the declared depth). Every GPU output of the serial segment and the last of the pipelined one is compared with
  * its arithmetic result; every NPU output of the serial segment and the last of the pipelined one is compared with the
- * simulator reference. The first difference ends the session with a failure record. */
+ * simulator reference. The first difference ends the session with a failure record.
+ *
+ * Built with ACCEL_OVERLAP_SWEEP, the five phases instead run both accelerators pipelined together for one second each, with
+ * outputs checked as above, under a different set of streaming workers: none, core 2, cores 2-4, cores 2-5 and 7, and core 7
+ * alone. A chase task on core 0 times dependent loads through the chase region during every phase, so each phase gives the
+ * loaded DRAM latency beside the accelerators' job rates and the streaming bandwidth (docs/designs/concurrent-accel.md,
+ * "Stage 1b"). */
 #include "accel_overlap-app.h"
 #include "sunstone_app.h"
 #include "sunstone_npu_queue.h"
@@ -33,19 +39,37 @@
 #define HISTOGRAM_SHIFT 1u
 #define NPU_CORE 1u
 #define MAIN_CORE 6u
+#define ALL_STREAMS ((1u << STREAM_WORKERS) - 1u)
 
 static const unsigned stream_core[STREAM_WORKERS] = {2, 3, 4, 5, 7};
+#ifndef ACCEL_OVERLAP_SWEEP
 static const uint32_t phase_devices[ACCEL_OVERLAP_PHASES] = {
     ACCEL_OVERLAP_GPU, ACCEL_OVERLAP_NPU, ACCEL_OVERLAP_GPU | ACCEL_OVERLAP_NPU,
     ACCEL_OVERLAP_GPU | ACCEL_OVERLAP_NPU | ACCEL_OVERLAP_STREAM,
     ACCEL_OVERLAP_GPU | ACCEL_OVERLAP_NPU | ACCEL_OVERLAP_STREAM | ACCEL_OVERLAP_PLL_CYCLES};
-
+#else
+/* Streaming sets (bit w: the worker on stream_core[w]): none, core 2, cores 2-4, cores 2-5 and 7, core 7 alone. */
+static const uint32_t phase_streams[ACCEL_OVERLAP_PHASES] = {0x00, 0x01, 0x07, ALL_STREAMS, 0x10};
+#define CHASE_CORE 0u
+#define CHASE_LINE 64u
+#define CHASE_LOADS 64u
+static struct accel_overlap_sweep_result sweep_result;  /* its base is copied from result at the end */
+static uint32_t chase_histogram[HISTOGRAM];
+static atomic_uint chase_run, chase_done, chase_ready;
+static StaticTask_t chase_tcb;
+static StackType_t chase_stack[1024];
+static TaskHandle_t chase_task;
+static struct accel_overlap_sweep *chase_phase;
+#endif
 static struct accel_overlap_result result;
-static uint32_t gpu_histogram[2][HISTOGRAM], npu_histogram[2][HISTOGRAM];
+#ifndef ACCEL_OVERLAP_SWEEP
+static uint32_t gpu_histogram[2][HISTOGRAM];
+#endif
+static uint32_t npu_histogram[2][HISTOGRAM];
 
 /* Commands from the main task to the NPU producer and the streaming workers. */
 enum { NPU_IDLE, NPU_SERIAL, NPU_PIPELINED, NPU_CONTINUOUS, NPU_EXIT };
-static atomic_uint npu_command, npu_done, npu_stop, stream_run, stream_stopped;
+static atomic_uint npu_command, npu_done, npu_stop, stream_run, stream_stopped, stream_mask;
 static atomic_uint_fast64_t pipeline_end, stream_sweeps;
 static atomic_uint gpu_outstanding;     /* GPU jobs submitted and not yet collected */
 static atomic_uint npu_ready;
@@ -125,6 +149,8 @@ static void stream_worker(void *argument)
     for (;;) {
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         if (atomic_load_explicit(&npu_command, memory_order_acquire) == NPU_EXIT) break;
+        /* Only the workers of the phase's set run and report their stop. */
+        if (!(atomic_load_explicit(&stream_mask, memory_order_acquire) >> w & 1u)) continue;
         while (atomic_load_explicit(&stream_run, memory_order_acquire)) {
             if (portGET_CORE_ID() != stream_core[w]) fail(0x010, portGET_CORE_ID());
             for (size_t i = 0; i < count; ++i) {
@@ -140,24 +166,94 @@ static void stream_worker(void *argument)
     }
     vTaskSuspend(NULL);
 }
-static void stream_start(void)
+static void stream_start(uint32_t mask)
 {
     atomic_store_explicit(&stream_sweeps, 0, memory_order_relaxed);
     atomic_store_explicit(&stream_stopped, 0, memory_order_relaxed);
+    atomic_store_explicit(&stream_mask, mask, memory_order_relaxed);
     atomic_store_explicit(&stream_run, 1, memory_order_release);
-    for (unsigned w = 0; w < STREAM_WORKERS; ++w) xTaskNotifyGive(stream_task[w]);
+    for (unsigned w = 0; w < STREAM_WORKERS; ++w)
+        if (mask >> w & 1u) xTaskNotifyGive(stream_task[w]);
 }
 static void stream_stop(void)
 {
     atomic_store_explicit(&stream_run, 0, memory_order_release);
+    const unsigned workers = (unsigned)__builtin_popcount(atomic_load_explicit(&stream_mask, memory_order_relaxed));
     const uint64_t began = now();
-    while (atomic_load_explicit(&stream_stopped, memory_order_acquire) != STREAM_WORKERS) {
+    while (atomic_load_explicit(&stream_stopped, memory_order_acquire) != workers) {
         live();
         if (now() - began > 24000000u) fail(0x012, atomic_load(&stream_stopped));
         (void)ulTaskNotifyTake(pdTRUE, 10);
     }
     current->sweeps = atomic_load_explicit(&stream_sweeps, memory_order_relaxed);
 }
+
+#ifdef ACCEL_OVERLAP_SWEEP
+/* The chase (core 0): the first word of every 64-byte line of the chase region holds the address of the next line, in one
+ * cycle through all lines (Sattolo's shuffle gives a single cycle), so each load waits for the one before and no prefetcher
+ * can predict the next address. */
+static void chase_task_entry(void *unused)
+{
+    (void)unused;
+    const struct ss_grant *grant = ss_grant();
+    uint8_t *base = grant->regions[ACCEL_OVERLAP_REGION_CHASE].base;
+    const size_t lines = grant->regions[ACCEL_OVERLAP_REGION_CHASE].bytes / CHASE_LINE;
+    if (portGET_CORE_ID() != CHASE_CORE || lines < 2) fail(0x080, (uint32_t)lines);
+    for (size_t i = 0; i < lines; ++i) *(uintptr_t *)(base + i * CHASE_LINE) = (uintptr_t)(base + i * CHASE_LINE);
+    uint64_t x = now() | 1u;
+    for (size_t i = lines - 1; i > 0; --i) {
+        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+        const size_t j = (size_t)(x % i);
+        uintptr_t *a = (uintptr_t *)(base + i * CHASE_LINE), *b = (uintptr_t *)(base + j * CHASE_LINE);
+        const uintptr_t t = *a; *a = *b; *b = t;
+    }
+    /* One walk of the cycle: it returns to the first line after exactly every line. */
+    uintptr_t p = (uintptr_t)base;
+    uint64_t steps = 0;
+    do { p = *(volatile uintptr_t *)p; ++steps; } while (p != (uintptr_t)base && steps <= lines);
+    if (steps != lines) fail(0x081, (uint32_t)steps);
+    sweep_result.chase_lines = steps;
+    atomic_store_explicit(&chase_ready, 1, memory_order_release);
+    xTaskNotifyGive(main_task);
+    for (;;) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (atomic_load_explicit(&npu_command, memory_order_acquire) == NPU_EXIT) break;
+        if (!atomic_load_explicit(&chase_run, memory_order_acquire)) continue;
+        struct accel_overlap_sweep *c = chase_phase;
+        reset(&c->chase, chase_histogram);
+        c->loads_per_sample = CHASE_LOADS;
+        const uint64_t began = now();
+        while (atomic_load_explicit(&chase_run, memory_order_acquire)) {
+            const uint64_t t = now();
+            for (unsigned k = 0; k < CHASE_LOADS; ++k) p = *(volatile uintptr_t *)p;
+            record(&c->chase, chase_histogram, now() - t);
+            c->loads += CHASE_LOADS;
+        }
+        c->chase_ticks = now() - began;
+        summarise(&c->chase, chase_histogram);
+        atomic_store_explicit(&chase_done, 1, memory_order_release);
+        xTaskNotifyGive(main_task);
+    }
+    vTaskSuspend(NULL);
+}
+static void chase_begin(struct accel_overlap_sweep *c)
+{
+    chase_phase = c;
+    atomic_store_explicit(&chase_done, 0, memory_order_relaxed);
+    atomic_store_explicit(&chase_run, 1, memory_order_release);
+    xTaskNotifyGive(chase_task);
+}
+static void chase_end(void)
+{
+    atomic_store_explicit(&chase_run, 0, memory_order_release);
+    const uint64_t began = now();
+    while (!atomic_load_explicit(&chase_done, memory_order_acquire)) {
+        live();
+        if (now() - began > 24000000u) fail(0x082, 0);
+        (void)ulTaskNotifyTake(pdTRUE, 10);
+    }
+}
+#endif
 
 /* The NPU producer (core 1). */
 static struct ss_npu_queue *queue;
@@ -345,6 +441,7 @@ static void gpu_collect(uint32_t sequence)
     if (r != GPU_QUEUE_OK || record.result != GPU_QUEUE_OK || record.sequence != sequence) fail(0x041, (uint32_t)r);
     atomic_fetch_sub_explicit(&gpu_outstanding, 1, memory_order_release);
 }
+#ifndef ACCEL_OVERLAP_SWEEP
 static void gpu_serial(struct accel_overlap_device *d)
 {
     reset(&d->wake, gpu_histogram[0]);
@@ -368,6 +465,7 @@ static void gpu_serial(struct accel_overlap_device *d)
     summarise(&d->wake, gpu_histogram[0]);
     summarise(&d->trip, gpu_histogram[1]);
 }
+#endif
 /* Jobs in flight may not share an output range (drivers/gpu/pvr_compute_fast.c, conflicts): each of the GPU_QUEUE_DEPTH jobs
  * in flight writes its own slot of the output lease, a whole number of cache lines apart. */
 #define GPU_SLOT_BYTES 320u
@@ -404,6 +502,7 @@ static void gpu_pipelined(struct accel_overlap_device *d)
         if (differs) { ++d->mismatches; fail(0x043, slot << 8 | differs); }
     }
 }
+#ifndef ACCEL_OVERLAP_SWEEP
 /* One close and reopen of the GPU: firmware stop and power off (PLL_GPU0 off), then power on and firmware start, while the
  * NPU producer keeps jobs in flight. A checked serial job follows each reopen. */
 static void gpu_cycle(void)
@@ -430,6 +529,7 @@ static void gpu_cycle(void)
     const struct ss_npu_queue_pll_watch w = queue->pll;
     if (w.unlocked || w.first_site) fail(0x053, w.first_site << 28 | (w.first_word & 0x0fffffffu));
 }
+#endif
 
 static int at_top(void)
 {
@@ -469,12 +569,18 @@ void accel_overlap_init(void)
             stream_stack[w], &stream_tcb[w], 1ul << stream_core[w]);
         if (!stream_task[w]) ss_fail(0x064);
     }
+#ifdef ACCEL_OVERLAP_SWEEP
+    if (!(g->worker_cores >> CHASE_CORE & 1u) || g->regions[ACCEL_OVERLAP_REGION_CHASE].bytes < (16u << 20)) ss_fail(0x065);
+    chase_task = ss_task_create_static_affinity_set(chase_task_entry, "chase", sizeof(chase_stack) / sizeof(chase_stack[0]),
+        NULL, 2, chase_stack, &chase_tcb, 1ul << CHASE_CORE);
+    if (!chase_task) ss_fail(0x066);
+#endif
 }
 
 void accel_overlap_main(const struct ss_grant *grant)
 {
     main_task = xTaskGetCurrentTaskHandle();
-    if (!(grant->devices & SS_DEVICE_GPU) || grant->region_count != 5 ||
+    if (!(grant->devices & SS_DEVICE_GPU) || grant->region_count != 6 ||
         grant->regions[ACCEL_OVERLAP_REGION_GPU_INPUT].bytes < GPU_ELEMENTS * 8u ||
         grant->regions[ACCEL_OVERLAP_REGION_GPU_OUTPUT].bytes < GPU_QUEUE_DEPTH * 320u) fail(0x070, grant->region_count);
     gpu_in = grant->regions[ACCEL_OVERLAP_REGION_GPU_INPUT].base;
@@ -504,13 +610,42 @@ void accel_overlap_main(const struct ss_grant *grant)
     }
     result.stream_workers = STREAM_WORKERS;
     result.stream_bytes_per_worker = STREAM_BYTES;
+#ifdef ACCEL_OVERLAP_SWEEP
+    began = now();
+    while (!atomic_load_explicit(&chase_ready, memory_order_acquire)) {
+        live();
+        if (now() - began > 240000000u) fail(0x078, 0);
+        (void)ulTaskNotifyTake(pdTRUE, 10);
+    }
+    for (phase_index = 0; phase_index < ACCEL_OVERLAP_PHASES; ++phase_index) {
+        struct accel_overlap_phase *p = &result.phase[phase_index];
+        struct accel_overlap_sweep *c = &sweep_result.sweep[phase_index];
+        current = p;
+        c->stream_mask = phase_streams[phase_index];
+        p->devices = ACCEL_OVERLAP_GPU | ACCEL_OVERLAP_NPU | (c->stream_mask ? ACCEL_OVERLAP_STREAM : 0u);
+        const uint64_t start = now();
+        chase_begin(c);
+        if (c->stream_mask) stream_start(c->stream_mask);
+        atomic_store_explicit(&npu_stop, 1, memory_order_release);
+        atomic_store_explicit(&pipeline_end, now() + PIPELINE_TICKS, memory_order_release);
+        npu_begin(NPU_PIPELINED);
+        gpu_pipelined(&p->gpu);
+        npu_end(NPU_PIPELINED);
+        if (c->stream_mask) { stream_stop(); p->stream_ticks = now() - start; }
+        chase_end();
+        p->ticks = now() - start;
+        p->throttled = (uint32_t)ss_throttled();
+        if (p->throttled) fail(0x076, p->throttled);
+        live();
+    }
+#else
     for (phase_index = 0; phase_index < ACCEL_OVERLAP_PHASES; ++phase_index) {
         struct accel_overlap_phase *p = &result.phase[phase_index];
         current = p;
         p->devices = phase_devices[phase_index];
         const int gpu = p->devices & ACCEL_OVERLAP_GPU, npu = p->devices & ACCEL_OVERLAP_NPU;
         const uint64_t start = now();
-        if (p->devices & ACCEL_OVERLAP_STREAM) stream_start();
+        if (p->devices & ACCEL_OVERLAP_STREAM) stream_start(ALL_STREAMS);
         if (p->devices & ACCEL_OVERLAP_PLL_CYCLES) {
             atomic_store_explicit(&npu_stop, 0, memory_order_release);
             npu_begin(NPU_CONTINUOUS);
@@ -540,14 +675,25 @@ void accel_overlap_main(const struct ss_grant *grant)
         if (p->throttled) fail(0x076, p->throttled);
         live();
     }
+#endif
     phase_index = ACCEL_OVERLAP_PHASES;
     npu_begin(NPU_EXIT);
     for (unsigned w = 0; w < STREAM_WORKERS; ++w) xTaskNotifyGive(stream_task[w]);
+#ifdef ACCEL_OVERLAP_SWEEP
+    xTaskNotifyGive(chase_task);
+#endif
     npu_end(NPU_EXIT);
     if (gpu_queue_close(context, 4000) != GPU_QUEUE_OK) fail(0x077, 0);
     result.final_top = (uint32_t)at_top();
     result.magic = ACCEL_OVERLAP_MAGIC; result.version = ACCEL_OVERLAP_VERSION; result.bytes = sizeof(result);
     result.phases = ACCEL_OVERLAP_PHASES;
+#ifdef ACCEL_OVERLAP_SWEEP
+    result.version = ACCEL_OVERLAP_SWEEP_VERSION;
+    sweep_result.base = result;
+    sweep_result.base.bytes = sizeof(sweep_result);
+    ss_finish(&sweep_result, sizeof(sweep_result));
+#else
     ss_finish(&result, sizeof(result));
+#endif
 }
 void platform_puts(const char *text) { (void)text; ss_fail(0x8f0); }

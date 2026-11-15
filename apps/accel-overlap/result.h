@@ -6,6 +6,7 @@
 
 #define ACCEL_OVERLAP_MAGIC UINT32_C(0x4c564f41) /* "AOVL" */
 #define ACCEL_OVERLAP_VERSION 1u
+#define ACCEL_OVERLAP_SWEEP_VERSION 2u  /* the streaming sweep build (ACCEL_OVERLAP_SWEEP): struct accel_overlap_sweep_result */
 #define ACCEL_OVERLAP_VECTORS_MAGIC UINT32_C(0x56564f41) /* "AOVV" */
 #define ACCEL_OVERLAP_PHASES 5u
 /* Phase devices (struct accel_overlap_phase.devices). */
@@ -53,6 +54,22 @@ struct accel_overlap_result {
     struct accel_overlap_pll pll;
     struct accel_overlap_phase phase[ACCEL_OVERLAP_PHASES];
 };
+/* The streaming sweep build: each phase runs both accelerators pipelined with a set of streaming workers (stream_mask, bit w
+ * for the worker on stream_core[w]) and a dependent-load chase on core 0. A chase sample times loads_per_sample loads, each
+ * of which takes its address from the line the previous one read, in one cycle through every 64-byte line of the chase
+ * region in random order. */
+struct accel_overlap_sweep {
+    uint32_t stream_mask, loads_per_sample;
+    struct accel_overlap_distribution chase;    /* ticks of one sample */
+    uint64_t loads, chase_ticks;                /* every load of the phase and the span that timed them */
+};
+struct accel_overlap_sweep_result {
+    struct accel_overlap_result base;           /* version ACCEL_OVERLAP_SWEEP_VERSION; the pll cycles stay zero */
+    uint64_t chase_lines;                       /* the cycle's length, walked once before the first phase */
+    struct accel_overlap_sweep sweep[ACCEL_OVERLAP_PHASES];
+};
+_Static_assert(sizeof(struct accel_overlap_sweep) == 56 && sizeof(struct accel_overlap_sweep_result) == 1488,
+               "host.py decodes this layout");
 _Static_assert(sizeof(struct accel_overlap_distribution) == 32 && sizeof(struct accel_overlap_device) == 88 &&
                sizeof(struct accel_overlap_phase) == 216 && sizeof(struct accel_overlap_pll) == 72 &&
                sizeof(struct accel_overlap_result) == 1200, "host.py decodes this layout");
