@@ -318,6 +318,31 @@ listed under stage 1b, read without writes. That limiter bounds bytes per period
 loss that follows bytes weakly. A counter run that measures outstanding requests and latency per master would show
 whether a byte limit can help before any limiter write.
 
+## The GPU add waits on memory four times per task
+
+Alone, the stage-1c GPU add ran 4.48 ms per job and moved 0.70 GB/s. The time comes from the program and the
+dispatch, as host analysis of the program and the queue shows:
+
+- **Dispatch.** A job runs 8,192 workgroups, each one 32-lane task. The BXM-4-64 MC1 has one cluster, 64 USC slots
+  and at most 156 USC tasks (pinned Mesa `src/imagination/common/device_info/bxm-4-64.h`). Less the 103 µs per-job
+  overhead that a three-task job measured in stage 1, each task takes 535 ns, 539 GPU clocks at 1008 MHz.
+- **Program.** The compiled `apps/queue-add/vector_add.cl` is 28 instruction groups with 10 temps. It loads the
+  argument words, `a[i]` and `b[i]`, and stores the sum, each through one DMA access of 4 bytes per lane (12 for the
+  arguments). The pinned compiler's scheduler (`pco_schedule.c`) puts a data-fence wait after every DMA access and an
+  extra fence after the store, so a task waits on memory four times in series. Only other resident tasks overlap
+  those waits.
+- **GPU mapping.** Both leases use 256 KiB pages with the SLC-bypass bit set and the cache-coherent bit clear
+  (`platform/a733/gpu_queue.c`), so every load that misses the GPU's own cache and every write-through store goes to
+  DRAM. The mapping is ordinary memory, not device memory.
+- **Clock.** Power-on programs PLL_GPU0 to 1008 MHz and the GPU clock to that source with divider 1, and checks both
+  by readback. The session held no performance grant, so nothing changed the rate, and the GPU supply read 960 mV,
+  the 1008 MHz point, at return. The run recorded no per-phase clock.
+
+If the waits bound the task, 535 ns equals four memory round trips divided by the resident tasks, 134 ns per round
+trip per resident task. Neither factor is measured. The NSI counters of the GPU port give the round trip and the
+request size. No vendor figure for this GPU's buffer bandwidth exists in the datasheet, the manual or the pinned GPU
+sources.
+
 ## Stage 2: DMA completion timing
 
 DMA is a separate later stage. Its known work:
