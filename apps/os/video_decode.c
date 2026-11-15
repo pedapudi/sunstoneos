@@ -61,6 +61,7 @@ static struct {
     unsigned pck_client,initialized,closed; /* closed: the decoder is closed for this power lifetime */
     RECORD(struct vdec_check_record info;)
     atomic_uint phase,request,quiesce_wanted,quiesced;
+    atomic_uint close_started; /* 1 once a close has started since the last open: a FAULT service gets one close */
     unsigned op;int result;
     uint32_t fault_step,fault_value;
     uint64_t limit;
@@ -204,7 +205,10 @@ static void copy_record(void)
     i->entry_at=r->entry_at;i->entered_at=r->entered_at;i->on_at=r->on_at;i->hold_a_at=r->hold_a_at;
     i->locked_at=r->locked_at;i->hold_b_at=r->hold_b_at;
     i->version_high=(uint32_t)(p->version>>32);i->version_low=(uint32_t)p->version;
-    i->cold_phase=p->cold_step;i->failed=p->unit.failed|p->unit.locked<<1;
+    i->cold_phase=p->cold_step;
+    i->failed=p->unit.failed|p->unit.locked<<1|p->unit.uncertain<<2|p->unit.late<<3;
+    i->vcu_before=r->vcu[0];i->vcu_set=r->vcu[1];
+    i->fault_step=vd.fault_step;i->fault_value=vd.fault_value;
     i->measured=providers.domains.measure_transitions;
     if(a733_power_domain_state(&vd.row)!=A733_POWER_ROW_PENDING){
         const struct a733_power_transition *t=&vd.row.transition;
@@ -214,9 +218,20 @@ static void copy_record(void)
     }
 #endif
 }
+/* A fault after the first write (docs/video-decode-os.md, "Faults after the first write"): the service enters FAULT
+ * with the binding's failing access in the record, keeps its leases and gates, and starts nothing new. Its close, from
+ * the application or the quiesce, then runs once (do_close). */
+static int fault(unsigned step,uint32_t value)
+{
+    RECORD(const struct a733_video_unit *u=&vd.platform.decoder.unit;
+        vd.info.refused_address=(uint32_t)u->last_address;vd.info.refused_word=u->last_word;)
+    copy_record();
+    return fail(step,value);
+}
 static int do_open(void)
 {
     atomic_store(&vd.phase,OPENING);
+    atomic_store(&vd.close_started,0);
     RECORD(memset(&vd.info,0,sizeof(vd.info));vd.info.magic=VDEC_CHECK_INFO_MAGIC;vd.info.bytes=sizeof(vd.info);
         vd.info.requested_ticks=ss_counter_ticks();)
     vd.fault_step=0;vd.fault_value=0;
@@ -242,9 +257,12 @@ static int do_open(void)
             copy_record();
             /* Nothing written before hold A: a refusal there leaves the decoder as it was. */
             if(p->cold_step<2u){refuse(p->requested?VD_STEP_ROW:VD_STEP_ENTRY,p->cold_step|s<<8);goto refused;}
-            return fail(VD_STEP_COLD,p->cold_step|s<<8);
+            return fault(VD_STEP_COLD,p->cold_step|s<<8);
         }
-        if(!timely()){copy_record();return fail(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);}
+        if(!timely()){
+            if(p->cold_step>=2u)return fault(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);
+            copy_record();return fail(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);
+        }
         if(s==A733_POWER_ROW_PENDING&&p->requested){
             if(!row_limit)row_limit=now_us()+A733_POWER_PCK_BOUND_US+4000;
             if(now_us()>=row_limit){copy_record();return fail(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);}
@@ -255,15 +273,14 @@ static int do_open(void)
         }
     }
     RECORD(vd.info.started_ticks=ss_counter_ticks();
-        if(!read_words(vd.info.started)){copy_record();return fail(VD_STEP_STARTED_WORDS,0);})
+        if(!read_words(vd.info.started))return fault(VD_STEP_STARTED_WORDS,0);)
     /* The identity words through the binding's read call, then its identity admission (prepare's first call). */
     uint32_t id[3];
     if(ops->read(&vd.platform,vd.token,0xf0,&id[0],vd.limit)!=1||ops->read(&vd.platform,vd.token,0xe0,&id[1],vd.limit)!=1||
-       ops->read(&vd.platform,vd.token,0xe4,&id[2],vd.limit)!=1){copy_record();return fail(VD_STEP_IDENTITY,1);}
+       ops->read(&vd.platform,vd.token,0xe4,&id[2],vd.limit)!=1)return fault(VD_STEP_IDENTITY,1);
     RECORD(vd.info.feature=id[0];vd.info.identity_high=id[1];vd.info.identity_low=id[2];)
-    if(ops->prepare(&vd.platform,vd.token,&no_job,NULL,0,0,vd.limit)!=0||!vd.platform.decoder.version){
-        copy_record();return fail(VD_STEP_IDENTITY,2);
-    }
+    if(ops->prepare(&vd.platform,vd.token,&no_job,NULL,0,0,vd.limit)!=0||!vd.platform.decoder.version)
+        return fault(VD_STEP_IDENTITY,2);
     copy_record();
     atomic_store(&vd.phase,OPEN);
     return 1;
@@ -271,30 +288,47 @@ refused:
     atomic_store(&vd.phase,CLOSED);
     return -1;
 }
+/* The close of an open service, and the one close of a FAULT service
+ * (docs/designs/failure-return-audit.md, "A faulted device service closes before it reports"): the binding's vendor
+ * order, module gate, bus gate, reset, then PLL_VE0, each write read back. The close writes only CCU words, so no
+ * decoder register is touched whatever state the fault left. A FAULT service's close keeps the first fault in the
+ * record and, when every step reads back, ends CLOSED; a step that fails leaves it FAULT. */
 static int do_close(void)
 {
+    const unsigned faulted=atomic_load(&vd.phase)==FAULT;
+    atomic_store(&vd.close_started,1);
     atomic_store(&vd.phase,CLOSING);
     vd.limit=lease_now()+VD_CALL_US;
     if(vd.limit>session_deadline())vd.limit=session_deadline();
+    RECORD(const uint32_t at_fault=vd.info.failed;)
     for(;;){
-        const int r=a733_video_decoder_quiesce(&vd.platform.decoder,vd.limit);
+        const int r=faulted?a733_video_decoder_fault_close(&vd.platform.decoder,vd.limit):
+            a733_video_decoder_quiesce(&vd.platform.decoder,vd.limit);
         if(r==1)break;
-        if(r<0||!timely()){copy_record();return fail(VD_STEP_CLOSE,(uint32_t)r);}
+        if(r<0||!timely()){
+            copy_record();RECORD(if(faulted)vd.info.failed=at_fault;)
+            return fail(VD_STEP_CLOSE,(uint32_t)r);
+        }
+        if(faulted)pause_us(VD_BUSY_US);
     }
-    RECORD(if(!read_words(vd.info.closed)){copy_record();return fail(VD_STEP_CLOSED_WORDS,0);}
+    RECORD(vd.info.fault_closed=faulted;
+        if(!read_words(vd.info.closed)){copy_record();return fail(VD_STEP_CLOSED_WORDS,0);}
         vd.info.closed_ticks=ss_counter_ticks();)
     copy_record();
+    RECORD(if(faulted)vd.info.failed=at_fault;)
     vd.closed=1;
     atomic_store(&vd.phase,CLOSED);
-    return 1;
+    return faulted?-1:1;
 }
+/* An open service, or a FAULT one whose close has not started. */
+static int closable(unsigned phase){return phase==OPEN||(phase==FAULT&&!atomic_load(&vd.close_started));}
 static void serve(void)
 {
     if(atomic_load_explicit(&vd.request,memory_order_acquire)!=POSTED)return;
     const unsigned phase=atomic_load(&vd.phase);
     int r=-1;
     if(vd.op==OPEN_OP)r=phase==CLOSED&&!vd.closed?do_open():phase==OPEN?1:-1;
-    else if(vd.op==CLOSE_OP)r=phase==OPEN?do_close():phase==CLOSED?1:-1;
+    else if(vd.op==CLOSE_OP)r=closable(phase)?do_close():phase==CLOSED?1:-1;
     vd.result=r;
     atomic_store_explicit(&vd.request,DONE,memory_order_release);
     os_application_wake_task(vd.waiter);
@@ -306,7 +340,7 @@ static void os_video_decode_task(void *unused)
     for(;;){
         serve();
         if(atomic_load(&vd.quiesce_wanted)&&atomic_load(&vd.request)!=POSTED){
-            if(atomic_load(&vd.phase)==OPEN)(void)do_close();
+            if(closable(atomic_load(&vd.phase)))(void)do_close();
             if(atomic_load(&vd.phase)==CLOSED)atomic_store(&vd.quiesced,1);
         }
         (void)sunstone_deadline_wait_until(now_us()+10000000);
@@ -318,9 +352,10 @@ void os_video_decode_irq(void){}
 
 int os_video_decode_task_privileged(void (*entry)(void *),void *context){return !context&&entry==os_video_decode_task;}
 int os_video_decode_pins(struct a733_pin_handoff *pins){return pins!=NULL;}
+/* A FAULT service first gets its close: DONE once it is CLOSED, FAULT (site 0x941) when a close step failed. */
 static enum os_quiesce_result quiesce_step(struct os_quiesce *q)
 {
-    if(atomic_load(&vd.phase)==FAULT){
+    if(atomic_load(&vd.phase)==FAULT&&atomic_load(&vd.close_started)){
         (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x941,
             vd.fault_step<<24|(vd.fault_value&0xffffff),SUNSTONE_CRUMB_HERE());
         return OS_QUIESCE_FAULT;
@@ -385,7 +420,8 @@ int ss_video_decode_fault(uint32_t *step,uint32_t *value)
     if(value)*value=vd.fault_value;
     return vd.fault_step?1:0;
 }
-static int ready(void){return atomic_load(&vd.request)==DONE||atomic_load(&vd.phase)==FAULT;}
+static int ready(void)
+{const unsigned r=atomic_load(&vd.request);return r==DONE||(r!=POSTED&&atomic_load(&vd.phase)==FAULT);}
 void ss_video_decode_wait(uint32_t wait_us)
 {
     const uint64_t until=now_us()+(wait_us?wait_us:1);

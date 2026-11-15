@@ -1,6 +1,6 @@
 /* vdec-check: the video decoder board check on the SunstoneOS interface (include/sunstone_video_decode.h,
  * docs/video-decode-os.md) and its stage-1 record (apps/vdec-check/record.h). Stage 1 opens the decoder, which powers PCK600 domain 2, cold-starts it with PLL_VE0 at
- * 624 MHz and reads its identity, closes it again, and returns the record and any fault. apps/vdec-check/host.py
+ * 624 MHz and reads its identity, closes it again (also after a failed open), and returns the record and any fault. apps/vdec-check/host.py
  * decodes the result. */
 #include "vdec_check-app.h"
 #include "sunstone_video_decode.h"
@@ -36,6 +36,9 @@ void vdec_check_main(const struct ss_grant *grant)
         result.close_result = (uint32_t)finish_call(ss_video_decode_close);
         result.status = (int)result.close_result == 1 ? VD_CHECK_OPENED : VD_CHECK_CLOSE_FAILED;
     } else {
+        /* After a fault the close runs the service's one fault close, which keeps the fault and lets the session
+         * end normally; after a refusal with no write it returns 1 at once. */
+        result.close_result = (uint32_t)finish_call(ss_video_decode_close);
         result.status = VD_CHECK_REFUSED;
     }
     (void)ss_video_decode_fault(&result.fault_step, &result.fault_value);

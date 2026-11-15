@@ -17,29 +17,49 @@ The reference is the vendor VE driver `cedar_ve.c` and the clock framework (`ccu
 | Module parent PLL_VE0 (mux 1), divider 1, gate closed | `clk_set_parent` at probe, `cedar_ve.c` 1789; parent list `ccu-sun60iw2.c` 965-981 | `0xa88` selector and divider `0x01000000`, gate closed. |
 | PLL_VE0 at 624 MHz: LDO, factors, enable, lock enable, LOCK wait, output gate | `setup_ve_freq`, `cedar_ve.c` 351-366; `ccu_gate.c` 157-211; lock wait `ccu_common.c` 47-64 | Factors `0x00204d00` (N=78, P0=3) written before the enable, as the manual's enable method 2 orders them; one lock wait with the kernel's bounds (three reads in a row with LOCK, at most 100 reads, 3 µs apart, then 20 µs); output gate; readback `0xf9204d00`. |
 | Module gate (`0xa88` bit 31) last | `enable_cedar_hw_clk_module`, `cedar_ve.c` 416-472 | Same; `0xa88` then reads `0x81000000`. |
-| Cold VCU pulse at `0x01c0e804`, bits 0 and 4 set then cleared | `set_vcu_en_regmode_to1_to0`, `cedar_ve.c` 388-405 (`CONFIG_ARCH_SUN60IW2`) | Same, then the identity words at `+0xf0`, `+0xe0` and `+0xe4`. |
+| Cold VCU pulse at `0x01c0e804`, bits 0 and 4 set then cleared | `set_vcu_en_regmode_to1_to0`, `cedar_ve.c` 388-405 (`CONFIG_ARCH_SUN60IW2`): read, write with the bits set, read, write with them clear; no readback check | Same, with no readback check: no source documents how the pulse bits read back (the manual has no VE register section). The two words read are recorded. Then the identity words at `+0xf0`, `+0xe0` and `+0xe4`. |
 | Close: module gate, bus gate, reset, then PLL_VE0 output gate, lock enable, enable and LDO | `disable_cedar_hw_clk_module`, `disable_cedar_hw_clk_reset`; `ccu_pll_gate_helper_disable`, `ccu_gate.c` 40-69 | Same order in one register-lock hold. PLL_VE0 ends at `0x01204d00`. Domain 2 stays ON and the critical gates stay as they are. |
 
-The open adds checks that the vendor driver does not make, each read before the first write: reset asserted and bus and module gates closed, `0x1b10 & 0x30001 == 0x20000` (CM_VE_DEC_CFG with its module mode disabled and its status field at POWER_ON), the fabric and parent clocks, the 15 boot ROM words, and INTID 81 neither enabled, pending nor active. A refusal at any of these writes nothing. A failure after the first write marks the service FAULT, keeps every token and gate as it is, and makes the session quiesce report fault site `0x941` with the failing step in bits 31:24 and its value in bits 23:0.
+The open adds checks that the vendor driver does not make, each read before the first write: reset asserted and bus and module gates closed, `0x1b10 & 0x30001 == 0x20000` (CM_VE_DEC_CFG with its module mode disabled and its status field at POWER_ON), the fabric and parent clocks, the 15 boot ROM words, and INTID 81 neither enabled, pending nor active. A refusal at any of these writes nothing. A failure after the first write is handled as the next section describes.
+
+## Faults after the first write
+
+The service follows the rule in [the failure-return audit](designs/failure-return-audit.md#a-faulted-device-service-closes-before-it-reports): a faulted device service closes before it reports.
+
+1. A failure after the first write puts the service in FAULT. The open returns -1, and `ss_video_decode_fault` gives the step and value. The service keeps its tokens and gates and starts nothing new.
+2. The application's close, or the session quiesce if it comes first, runs the close once. This is the binding's `a733_video_decoder_fault_close`, in the vendor order of the table above, with each write read back. The close writes only CCU words, so it touches no decoder register whatever state the fault left. Steps that find their gate or PLL field already closed rewrite it unchanged.
+3. When every step reads back, the service is CLOSED and stays closed for the power lifetime. The close answers -1, the fault stays in `ss_video_decode_fault`, and the quiesce reports DONE. The session therefore ends with a normal return and its result record.
+4. Two cases make the service stay FAULT, and the quiesce then reports fault site `0x941`, with the failing step in bits 31:24 and its value in bits 23:0:
+   - a close step whose readback differs;
+   - a binding failure whose effect is unknown: an access or a register-lock operation that did not return 1. The close touches nothing in that case.
+
+The binding keeps the address and word of its latest access, so the record names the word a refused comparison judged. It also keeps why the unit failed: on a value, late on a deadline, or uncertain.
+
+[checks/os-vdec-fault-return.py](../checks/os-vdec-fault-return.py) executes the image's own quiesce registry, owner task and binding, starting from the state that the stage-1 run `1794712072331160946-bd447f26` left when hold B refused:
+- the quiesce or an application close closes the decoder, and the registry reaches DONE within the 3 s bound with no fault note;
+- a close step that does not hold, or an uncertain failure, stays FAULT at site `0x941`.
+
+The image of that run fails the first two cases.
 
 ## The stage-1 record
 
-The class interface carries no register dump. An image built with `SUNSTONE_VIDEO_DECODE_MEASURE` (the vdec-check image) also keeps the stage-1 record, `struct vdec_check_record` in apps/vdec-check/record.h, which the application copies with `vdec_check_record` after each call (496 bytes):
+The class interface carries no register dump. An image built with `SUNSTONE_VIDEO_DECODE_MEASURE` (the vdec-check image) also keeps the stage-1 record, `struct vdec_check_record` in apps/vdec-check/record.h, which the application copies with `vdec_check_record` after each call (520 bytes):
 
 - 20 platform words read under the register lock at open before any write, after the cold start, and after the close: the PLL reference, the RTC oscillator word, the AHB, NSI and MBUS clocks, PLL_VE0 and its pattern words, the PLL gate configuration and status, `0x1b10`, the module word, the reset and bus gate word, the three critical gates, the PCK600 bus clock (R_CCU `0x1ac`) and the GIC enable, pending and active words for INTID 81;
-- the cold start's own record: the critical gates at entry and before the reset release, the `0x5e4` word written and read back, and the number of PLL lock reads;
+- the cold start's own record: the critical gates at entry and before the reset release, the `0x5e4` word written and read back, the number of PLL lock reads, and the two `0x804` words the VCU pulse read before its set and clear writes;
+- after a fault: the step and value, the unit's failed, mutex-held, uncertain and late flags, the address and word of the binding's latest access before the close, and whether the fault close completed (the closed words are then the words after it);
 - the identity words and the admitted compound version;
 - the domain-2 row's answer, the power authority word at that answer, and whether the owner measured transitions back to back;
 - the binding's phase times, the owner's row request and answer times, and the system counter at the open request, the started decoder and the close;
 - domain 2's transition record as the power-domain owner published it with the row's latest answer (`transition` in `struct a733_power_domain_row`).
 
-apps/vdec-check/host.py decodes the 528-byte result of the vdec-check application, which is the record behind a 32-byte header, and lists every departure from the stage-1 prediction.
+apps/vdec-check/host.py decodes the 552-byte result of the vdec-check application, which is the record behind a 32-byte header, and lists every departure from the stage-1 prediction.
 
 ## Board stages
 
 Each stage is one run on port 3-1 of the image `sunstone-a733-os-vdec-check` (`-DSUNSTONE_APPLICATION=vdec-check`).
 
-1. **Power, PLL and identity.** Open, then close; no decode. The image calls `a733_power_domains_measure_transitions()`, so the power-domain owner reads status back to back from each PCK600 command to its target or the 10,000 µs bound. That spin runs in the PMIC service task, priority 3 on core 0. For up to 10 ms it holds off band-1 tasks on core 0, core 0's WFI, other PMIC requests and other domains' row answers; higher-priority tasks and interrupts still preempt it. Each command overwrites its domain's record, and the owner publishes the record with each answer to the domain-2 row. A run therefore yields at most one sample: one when domain 2 reads OFF at entry, none when it is adopted ON. Domain 2 stays ON across the close, so at most one sample comes per board power cycle; domain 5 is not a stand-in.
+1. **Power, PLL and identity.** Open, then close (also after a failed open, so that a fault is closed and the record returned); no decode. The image calls `a733_power_domains_measure_transitions()`, so the power-domain owner reads status back to back from each PCK600 command to its target or the 10,000 µs bound. That spin runs in the PMIC service task, priority 3 on core 0. For up to 10 ms it holds off band-1 tasks on core 0, core 0's WFI, other PMIC requests and other domains' row answers; higher-priority tasks and interrupts still preempt it. Each command overwrites its domain's record, and the owner publishes the record with each answer to the domain-2 row. A run therefore yields at most one sample: one when domain 2 reads OFF at entry, none when it is adopted ON. Domain 2 stays ON across the close, so at most one sample comes per board power cycle; domain 5 is not a stand-in.
 2. **JPEG.** One baseline JPEG decode compared with the pinned vendor-library reference; INTID 81 masked again at the close.
 3. **H.264.** One frame compared with the same reference.
 

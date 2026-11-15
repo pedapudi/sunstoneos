@@ -15,7 +15,9 @@ extern "C" {
 /* Open: power, cold start and identity. */
 int ss_video_decode_open(void);
 /* Close: the quiesce (module gate, bus gate, reset, then PLL_VE0 disabled; domain 2 stays ON). The decoder then stays
- * closed for the rest of the board's power lifetime: a later open is refused. */
+ * closed for the rest of the board's power lifetime: a later open is refused. After an open that failed past its first
+ * write, close runs the same steps once and returns -1 with the fault kept (ss_video_decode_fault); the session can
+ * then end normally. */
 int ss_video_decode_close(void);
 /* 1 with the step and value of the check that refused or failed, 0 when none, -1 when the device is not granted. */
 int ss_video_decode_fault(uint32_t *step, uint32_t *value);

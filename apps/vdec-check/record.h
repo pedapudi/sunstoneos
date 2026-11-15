@@ -48,7 +48,14 @@ struct vdec_check_record {
     uint32_t feature, identity_high, identity_low, version_high, version_low, cold_phase, failed;
     /* The domain-2 row's answer and the power authority word read at that answer; 1 when the owner measured
      * transitions back to back (stage 1). */
-    uint32_t row_state, authority, measured, reserved;
+    uint32_t row_state, authority, measured, fault_closed;
+    /* A fault after the first write: the service's fault step and value, and the address and word of the binding's
+     * latest access before the close, which is the word a refused comparison judged. failed above holds the unit's
+     * failed (bit 0), mutex held (1), uncertain (2) and late (3) flags at the fault. fault_closed is 1 when the
+     * binding then closed the decoder, and closed[] holds the words after that close. */
+    uint32_t fault_step, fault_value, refused_address, refused_word;
+    /* VE+0x804 read before the VCU pulse's set write and before its clear write. */
+    uint32_t vcu_before, vcu_set;
     /* Binding clock (microseconds): start and end of the entry hold, the ON answer, end of hold A, end of the lock
      * wait, end of hold B. */
     uint64_t entry_at, entered_at, on_at, hold_a_at, locked_at, hold_b_at;

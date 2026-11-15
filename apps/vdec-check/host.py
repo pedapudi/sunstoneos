@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host side of vdec-check: decode the 768-byte result record and list departures from the stage-1 prediction.
+"""Host side of vdec-check: decode the result record and list departures from the stage-1 prediction.
 
 The record is the 32-byte header and struct vdec_check_record (apps/vdec-check/record.h) that
 apps/vdec-check/main.c returns. decode() returns the fields. failures() names every departure from the stage-1
@@ -7,8 +7,12 @@ prediction in docs/video-decode-os.md: the open and close succeed, the entry wor
 the binding depends on them, the 0x5e4 open reads back 0x40306, PLL_VE0 reads 0xf9204d00 once started and 0x01204d00
 after the close, the module word is 0x81000000 started and 0x01000000 closed, reset and bus gate are released only
 while open, the identity is one the binding lists, and domain 2 answers ON either adopted or after one measured
-command. The entry words that the binding does not depend on, the status bits outside the low nibble and 0x1b10
-after the close are reported, not judged.
+command. The entry words that the binding does not depend on, the status bits outside the low nibble, 0x1b10
+after the close and the two VE+0x804 words of the VCU pulse are reported, not judged.
+
+A fault after the first write closes the decoder and still returns the record: failures() then names the fault step,
+the unit's failure flags and the address and word of the failing access, and judges the words after that close
+against the close prediction (module gate, reset and bus gate closed, PLL_VE0 disabled).
 """
 import struct
 
@@ -16,7 +20,7 @@ HEADER = struct.Struct('<8I')
 WORDS = ('pll_ref', 'rtc_osc', 'ahb', 'nsi', 'mbus', 'pll_ve0', 'pll_ve0_p0', 'pll_ve0_p1', 'pll_gates', 'pll_status',
          'auto', 'module', 'bgr', 'ahb_gates', 'mbus_gates', 'mclk_gates', 'rccu_pck', 'gicd_enable', 'gicd_pending',
          'gicd_active')
-INFO = struct.Struct('<2I' + '20I' * 3 + '9I7I4I' + '6Q2Q3Q')
+INFO = struct.Struct('<2I' + '20I' * 3 + '9I7I4I6I' + '6Q2Q3Q')
 TRANSITION = struct.Struct('<12I4Q')
 TRANSITION_FIELDS = ('domain', 'policy_before', 'status_before', 'policy_written', 'first_word', 'pending_word',
                      'reached_word', 'all_and', 'all_or', 'reads', 'spin_reads', 'commands', 'command_at', 'first_at',
@@ -31,6 +35,7 @@ STEPS = {0: 'none', 1: 'rail', 2: 'clock', 3: 'pck-lease', 4: 'supply', 5: 'conf
 VERSIONS = (0x0003332100021321, 0x0003331000021320, 0x0003052000012011)
 TICKS_PER_US = 24
 INTID_81 = 1 << 17
+FAILED_FLAGS = ('failed', 'mutex-held', 'uncertain', 'late')
 
 
 def decode(payload):
@@ -54,9 +59,14 @@ def decode(payload):
      out['failed']) = v[i:i + 7]
     out['version'] = high << 32 | low
     i += 7
-    row_state, out['authority'], out['measured'], _ = v[i:i + 4]
+    row_state, out['authority'], out['measured'], out['fault_closed'] = v[i:i + 4]
     out['row_state'] = ROW.get(row_state, row_state)
     i += 4
+    (record_step, out['record_fault_value'], out['refused_address'], out['refused_word'], out['vcu_before'],
+     out['vcu_set']) = v[i:i + 6]
+    out['record_fault_step'] = STEPS.get(record_step, record_step)
+    out['failed_flags'] = [name for k, name in enumerate(FAILED_FLAGS) if out['failed'] >> k & 1]
+    i += 6
     times = dict(zip(('entry_at', 'entered_at', 'on_at', 'hold_a_at', 'locked_at', 'hold_b_at', 'row_request_us',
                       'row_on_us', 'requested_ticks', 'started_ticks', 'closed_ticks'), v[i:i + 11]))
     out['times'] = times
@@ -89,6 +99,13 @@ def failures(d):
     want(d['info_magic'] == INFO_MAGIC and d['info_bytes'] == SIZE - HEADER.size, 'record header differs')
     if d['info_magic'] != INFO_MAGIC:
         return out
+    if d['fault_closed']:
+        c = d['closed']
+        out.append(f"fault {d['record_fault_step']} {d['record_fault_value']:#x} closed by the binding: unit "
+                   f"{'/'.join(d['failed_flags']) or 'not failed'}, last access {d['refused_address']:#010x} read "
+                   f"{d['refused_word']:#010x}")
+        want(c['module'] & 1 << 31 == 0 and c['bgr'] & 0x40004 == 0 and c['pll_ve0'] & 0xe8000000 == 0,
+             f"after the fault close: module {c['module']:#x}, reset/bus {c['bgr']:#x}, PLL_VE0 {c['pll_ve0']:#010x}")
     e, s, c = d['entry'], d['started'], d['closed']
     want(e['pll_ve0'] == 0x41305a00, f"PLL_VE0 at entry {e['pll_ve0']:#010x}, predicted 0x41305a00 (FEL)")
     want(e['module'] == 0 and e['bgr'] & 0x40004 == 0, f"module {e['module']:#x} or reset/bus {e['bgr']:#x} at entry")
@@ -105,7 +122,8 @@ def failures(d):
          f"0x5e4 written {d['mclk_written']:#x}, read back {d['mclk_readback']:#x}, predicted 0x40306 both")
     want(d['gates_a1'][2] & 1 << 18 and d['gates_a1'][:2] == d['gates_entry'][:2], f"A1 gates {d['gates_a1']}")
     want(3 <= d['lock_reads'] <= 100, f"lock reads {d['lock_reads']}")
-    want(d['cold_phase'] == 5 and d['failed'] == 0, f"cold phase {d['cold_phase']}, failed {d['failed']}")
+    want(d['cold_phase'] == 5 and d['failed'] == 0,
+         f"cold phase {d['cold_phase']}, failed {'/'.join(d['failed_flags']) or 0}")
     want(d['version'] in VERSIONS and d['feature'] in (0, 0x16670040),
          f"identity {d['version']:#018x}, feature {d['feature']:#x}")
     want(s['pll_ve0'] == 0xf9204d00, f"PLL_VE0 started {s['pll_ve0']:#010x}, predicted 0xf9204d00")
