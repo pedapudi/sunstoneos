@@ -14,7 +14,9 @@ task-only functions of TASK_ONLY. It then requires:
 2. every C and C++ unit with a reachable function is compiled with -mgeneral-regs-only (compile_commands.json and the
    linker map of the build), so the compiler cannot add SIMD there, including inlined memcpy and memset;
 3. each function of TASK_ONLY whose address the image takes has that address taken only in the units its entry names.
-   These functions reach FP code; their callers are tasks, which run with their own FP context.
+   These functions reach FP code; their callers are tasks, which run with their own FP context, the boot code
+   before the scheduler starts, or a secondary core's power-on entry at EL3. An entry names the unit that defines the function, so a static name that several
+   units define (observe, worker) excludes only that unit's function.
 
 The walk includes the panic path (configASSERT calls platform_panic) and the fault entries, so printf, memchr and the
 other FP users of newlib are proven unreachable from them as well. Four mutations must each fail: an FP instruction
@@ -46,6 +48,7 @@ GATE_RUNS = [[
     '--image', '{build:card-profile}', '{elf:card-profile}',
     '--image', '{build:ret-npu-load}', '{elf:ret-npu-load}',
     '--image', '{build:ret-gpu}', '{elf:ret-gpu}',
+    '--image', '{build:ret-g2d}', '{elf:ret-g2d}',
     '--image', '{build:ret-latency}', '{elf:ret-latency}',
     '--image', '{build:ret-radio-scan}', '{elf:ret-radio-scan}',
     '--image', '{build:ret-walks-cached}', '{elf:ret-walks-cached}',
@@ -57,11 +60,36 @@ CHECK_INPUTS = ('patches/freertos-smp-asm.patch', 'patches/freertos-mask-returns
                 'platform/a733-smp-cached/platform.c', 'platform/a733-smp-cached/irq_table.c',
                 'platform/a733-smp-cached/continue.S', 'kernel/scheduler', 'drivers', 'docs/driver-validation.md')
 VECTORS = 'a733_cached_el1_vectors'
-# Functions that reach FP code and whose addresses only task code uses: name -> (units that may take the address, why).
+# Functions that reach FP code and whose addresses only task code, boot code or the secondary cores' EL3 entry uses:
+# name -> (the unit that defines it, the units that may take its address, why).
+APP = 'apps/cpu-npu-concurrency/main.c'
 TASK_ONLY = {
-    'latency_main': (('sunstone-tables.c',), 'the latency application main, which the OS starts as the application task'),
-    'loader': (('apps/os/large_load.c',), 'the large-region loader task entry; it hashes with the SHA2 instructions'),
-    'sink_consume': (('apps/os/large_load.c',), 'the FAT32 sink of the loader task, which it calls from its own reads'),
+    'a733_cpu_secondary_continue': ('continue.S', ('platform/a733/cpu_entry_native.c',),
+                                    'the EL3 continuation that a powered-on secondary core branches to from '
+                                    'a733_cpu_secondary_entry; it parks unless it runs at EL3, and its boot path reaches '
+                                    'os_application_prepare'),
+    'a733_cpu_secondary_entry': ('platform/a733/cpu_entry.S', ('platform/a733/cpu_entry_native.c', 'boot.c'),
+                                 'the reset entry of the secondary cores, which the boot code gives the power '
+                                 'controller as each core\'s start address; it parks unless it runs at EL3'),
+    'cpu_npu_load_init': (APP, ('sunstone-tables.c',), 'the init hook of the CPU and NPU load application, which '
+                          'os_application_prepare calls at boot before the scheduler starts'),
+    'cpu_npu_load_main': (APP, ('sunstone-tables.c',), 'the CPU and NPU load application main, which the OS starts as '
+                          'the application task'),
+    'latency_main': ('apps/latency/native.c', ('sunstone-tables.c',),
+                     'the latency application main, which the OS starts as the application task'),
+    'loader': ('apps/os/large_load.c', ('apps/os/large_load.c',),
+               'the large-region loader task entry; it hashes with the SHA2 instructions'),
+    'observe': (APP, (APP,), 'the NPU observer of the CPU and NPU load application, registered by its init hook; '
+                'only the NPU service worker task calls it (drivers/npu/npu_service.c worker, apps/os/npu-observe.c '
+                'sample)'),
+    'os_application_prepare': ('apps/os/application.c', ('apps/os/start.c',),
+                               'the application preparation, which board_application_start calls directly at boot '
+                               'before the scheduler starts; start.c takes its address only for the failure note'),
+    'sink_consume': ('apps/os/large_load.c', ('apps/os/large_load.c',),
+                     'the FAT32 sink of the loader task, which it calls from its own reads'),
+    'table_walks_main': ('apps/table-walks/main.c', ('sunstone-tables.c',),
+                         'the table-walks application main, which the OS starts as the application task'),
+    'worker': (APP, (APP,), 'the cpu-gemm task entry of the CPU and NPU load application, which its init hook creates'),
 }
 FP_REGISTER = re.compile(r'^[qdshbv]\d+$')
 
@@ -80,7 +108,7 @@ class Image:
                      if s['sh_flags'] & 4 and s['sh_type'] == 'SHT_PROGBITS' and s['sh_size']]
         self.data = [(s['sh_addr'], s.data()) for s in elf.iter_sections()
                      if s['sh_type'] == 'SHT_PROGBITS' and s['sh_flags'] & 2 and not s['sh_flags'] & 4]
-        self.names, self.sized, self.address = {}, {}, {}
+        self.names, self.sized, self.address, self.symbols = {}, {}, {}, collections.defaultdict(set)
         for section in elf.iter_sections():
             if section.header.sh_type != 'SHT_SYMTAB':
                 continue
@@ -94,6 +122,8 @@ class Image:
                 if kind == 'STT_FUNC' and symbol['st_size']:
                     self.sized[value] = symbol['st_size']
                 self.address.setdefault(symbol.name, value)
+                if kind == 'STT_FUNC':
+                    self.symbols[symbol.name].add(value)
         self.starts = sorted(self.names)
         self.functions = set(self.sized)
         self.units = self.read_map(build)
@@ -139,6 +169,10 @@ class Image:
         ranges.sort()
         self.range_starts = [r[0] for r in ranges]
         return ranges
+
+    def defined(self, name, unit):
+        """The addresses of the functions called name that unit defines."""
+        return {a for a in self.symbols.get(name, ()) if unit in (self.unit(a) or '')}
 
     def unit(self, address):
         index = bisect.bisect_right(self.range_starts, address) - 1
@@ -298,7 +332,7 @@ def vector_entries(image):
 
 def walk(image, task_only, cache):
     """Reachable function -> (the caller it was first reached from, how)."""
-    excluded = {image.address[name] for name in task_only if name in image.address}
+    excluded = {a for name, (unit, _, _) in task_only.items() for a in image.defined(name, unit)}
     candidates = sorted(a for a in image.taken if a not in excluded)
     seen, stack, indirect_done = {}, [(root, None, 'vector') for root in sorted(vector_entries(image))], False
     while stack:
@@ -356,12 +390,11 @@ def unit_problems(image, seen, commands, build):
 def task_only_problems(image, task_only, cache):
     """Each TASK_ONLY function present has its address taken only in its declared units."""
     found = []
-    for name, (allowed, _) in task_only.items():
-        if name not in image.address:
-            continue
-        for unit in image.taken.get(image.address[name], ()):
-            if not unit or not any(part in unit for part in allowed):
-                found.append('%s is task-only, but %s takes its address' % (name, unit))
+    for name, (defined, allowed, _) in task_only.items():
+        for address in image.defined(name, defined):
+            for unit in image.taken.get(address, ()):
+                if not unit or not any(part in unit for part in allowed):
+                    found.append('%s is task-only, but %s takes its address' % (name, unit))
     return found
 
 
@@ -395,7 +428,7 @@ def main():
         transfers = sum(len(context_transfers(image.disassembler, list(image.disassembler.disasm(
             image.words(a, image.extent(a)), a)))) for a in seen if a in image.names and
             image.name(a) in ('FreeRTOS_IRQ_Handler', 'FreeRTOS_SWI_Handler'))
-        reaching = sorted(n for n in TASK_ONLY if n in image.address and image.address[n] in image.taken)
+        reaching = sorted(n for n, (unit, _, _) in TASK_ONLY.items() if image.defined(n, unit) & set(image.taken))
         mutations = []
         commands = json.loads((build / 'compile_commands.json').read_text())
         # 1: an FP instruction (FMOV D0, XZR) planted at the entry of a function that only an indirect call reaches.
