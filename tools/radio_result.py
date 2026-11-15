@@ -15,7 +15,7 @@ ASSOC_BYTES = 48
 SCAN_COUNTS_BYTES = 16   # struct a733_radio_scan_counts, present when head flags bit 10 is set
 RSN_BYTES = 16           # struct a733_radio_rsn, present when head flags bit 11 is set
 FAULT_BYTES = 16         # struct aic8800_fault_site, present when head flags bit 12 is set
-TRACE_BYTES = 24         # struct aic8800_transport_trace, present when head flags bit 13 is set; the last section
+TRACE_BYTES = 28         # struct aic8800_transport_trace, present when head flags bit 13 is set; the last section
 # AIC8800_SITE file codes (include/aic8800_security.h).
 SITE_FILES = {0: 'other', 1: 'aic8800_supplicant.c', 2: 'aic8800_supplicant_os.c', 3: 'aic8800_sae.c',
               4: 'aic8800_sdio_transport.c', 5: 'aic8800_security.c'}
@@ -240,7 +240,8 @@ RECORD_KINDS = ['unclaimed', 'print', 'unsupported-data', 'malformed-unclaimed']
 def decode_transport_trace(raw):
     """The transport trace (include/aic8800_fault_site.h): what the bus did after the last command write."""
     (tx_id, tx_flags, credit, tx_age_ms, rx_records, responses, data, data_cfms, others, aggregates, status_reads,
-     last_id, phase, last_status, queued, kinds, held_type, data_cfm, irq_wakes, irq) = struct.unpack('<H2BHH6BH8B', raw)
+     last_id, phase, last_status, queued, kinds, held_type, data_cfm, irq_wakes, irq, slow_id, slow_ms) = struct.unpack(
+        '<H2BHH6BH8BHH', raw)
     records = queued & 15
     return {
         'tx_id': tx_id, 'tx_submitted': bool(tx_flags & 1), 'tx_completed': bool(tx_flags & 2),
@@ -258,7 +259,8 @@ def decode_transport_trace(raw):
         'interrupts': irq_wakes >> 4, 'wakes': irq_wakes & 15,
         'host_saw_sdio_latch': bool(irq & 1), 'controller_read': bool(irq & 2),
         'controller_sdio_latch': bool(irq & 4) if irq & 2 else None,
-        'controller_sdio_unmasked': bool(irq & 8) if irq & 2 else None, 'gic_masked': bool(irq & 16)}
+        'controller_sdio_unmasked': bool(irq & 8) if irq & 2 else None, 'gic_masked': bool(irq & 16),
+        'slowest_confirmed_id': slow_id or None, 'slowest_confirmation_ms': slow_ms if slow_id else None}
 
 
 if __name__ == '__main__':

@@ -219,6 +219,20 @@ static void wipe_pmk(struct board_radio *r);
 static void wipe_secrets(struct board_radio *r);
 /* The board's failure bound on the failure shutdown, past the platform's own 2 s deadline. */
 #define FAILURE_SHUTDOWN_BOUND_US 3000000u
+/* The transport trace for the record (include/aic8800_fault_site.h), at a failure or at authorization. */
+static void capture_trace(struct board_radio *r,struct aic8800_transport_trace *trace)
+{
+    unsigned masked=0;uint64_t interrupts=0,wakes=0;
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    /* A write completed in the current pass has no wait after it: its counts are zero. */
+    masked=r->events.masked;
+    if(r->session.transport.trace_tx_at==r->trace_tx_at){
+        interrupts=r->events.interrupts-r->trace_interrupts;wakes=r->events.wakes-r->trace_wakes;}
+#endif
+    uint32_t raw=0,mask=0;unsigned controller=a733_radio_platform_sdio_irq_view(&r->platform,&raw,&mask);
+    aic8800_transport_trace_capture(trace,&r->session.transport,
+        r->session.dispatcher.initialized?&r->session.dispatcher:0,masked,interrupts,wakes,controller,raw,mask);
+}
 static enum board_radio_result retain(struct board_radio *r)
 {
     uint64_t now=0;
@@ -229,17 +243,7 @@ static enum board_radio_result retain(struct board_radio *r)
         if(r->config.associate&&r->config.report_memory.allocate&&r->session.transport.security){
             struct aic8800_fault_site site;struct aic8800_transport_trace trace;
             aic8800_fault_site_capture(&site,&r->session.transport,&r->session.supplicant,(unsigned)(now/1000u)&0xffffu);
-            unsigned masked=0;uint64_t interrupts=0,wakes=0;
-#ifdef SUNSTONE_A733_RADIO_IRQ
-            /* A write completed in the failing pass has no wait after it: its counts are zero. */
-            masked=r->events.masked;
-            if(r->session.transport.trace_tx_at==r->trace_tx_at){
-                interrupts=r->events.interrupts-r->trace_interrupts;wakes=r->events.wakes-r->trace_wakes;}
-#endif
-            uint32_t raw=0,mask=0;unsigned controller=a733_radio_platform_sdio_irq_view(&r->platform,&raw,&mask);
-            aic8800_transport_trace_capture(&trace,&r->session.transport,
-                r->session.dispatcher.initialized?&r->session.dispatcher:0,masked,interrupts,wakes,controller,raw,mask);
-            a733_radio_report_fault_site(&r->report,&site,&trace);
+            capture_trace(r,&trace);a733_radio_report_fault_site(&r->report,&site,&trace);
         }
     }
     unsigned was_failed=atomic_exchange_explicit(&r->failed,1,memory_order_acq_rel);
@@ -656,8 +660,10 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
             return retain(r);
         if(r->config.associate){
             if(r->session.wifi.link==AIC8800_WIFI_SECURED&&r->session.supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED){
-                /* The stage's end: authorized, no address requested. */
+                /* The stage's end: authorized, no address requested. The trace keeps the slowest confirmation. */
                 r->assoc.stage=6;r->assoc.ms_authorized=(uint32_t)(now/1000u)&0xffffu;
+                if(r->config.report_memory.allocate){struct aic8800_transport_trace trace;capture_trace(r,&trace);
+                    a733_radio_report_trace(&r->report,&trace);}
                 wipe_pmk(r);r->stage=SCANNED;report_progress(r);return publish(r,BOARD_RADIO_SCANNED);
             }
         }else if(r->session.wifi.link==AIC8800_WIFI_SECURED&&

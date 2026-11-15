@@ -367,6 +367,9 @@ int main(int argc,char **argv)
         uint64_t written=transport.trace_tx_at;
         if(ms<6000u){
             assert(supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&wifi.link==AIC8800_WIFI_SECURED&&key_adds==2&&ports==1);
+            /* The record's trace names the slowest confirmation: the pairwise key add, about argv[3] ms. */
+            fprintf(stderr,"bound %u: slowest %u after %u ms\n",ms,transport.trace_slow_id,transport.trace_slow_ms);
+            assert(transport.trace_slow_id==36&&transport.trace_slow_ms+10u>=ms&&transport.trace_slow_ms<=ms+10u);
             printf("command bound: a key confirmation %u ms after the write is accepted\n",ms);return 0;
         }
         assert(transport.state==AIC8800_TRANSPORT_FAULT&&supplicant.state==AIC8800_SUPPLICANT_FAULT&&key_adds==1);

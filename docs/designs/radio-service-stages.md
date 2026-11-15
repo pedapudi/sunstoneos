@@ -36,7 +36,7 @@ a 232-byte head that gives the total length and the access point count, then one
 44-byte entry per access point, then the 16-byte scan counts when head flags
 bit 10 is set, then the 48-byte association tail when bit 9 is set, then the
 16-byte RSN summary when bit 11 is set, then the 16-byte fault site when bit 12
-is set, then the 24-byte transport trace when bit 13 is set. The head carries the record version
+is set, then the 28-byte transport trace when bit 13 is set. The head carries the record version
 (3 since the scan counts and the RSN summary). The image exports the version it
 writes as `os_radio_result_version`, and admission refuses an image whose
 version the runner's `tools/radio_result.py` does not read, naming both
@@ -186,9 +186,11 @@ confirmation's length and status. `checks/aic8800-supplicant.py` covers both
 cases (`key-timeout` and `key-failure`), and `checks/radio-result-decode.py`
 covers the decoding.
 
-The transport trace (`struct aic8800_transport_trace`, written with the fault
-site) records what the bus did after the last command write, so an unanswered
-confirmation says whether anything came back:
+The transport trace (`struct aic8800_transport_trace`) records what the bus
+did after the last command write, so an unanswered confirmation says whether
+anything came back. The image writes it with the fault site, and also alone
+when the security stage ends authorized, so a slow confirmation that still
+arrived in time leaves its latency in the record. It holds:
 
 - the command's message id, whether its CMD53 write was submitted and
   completed, and the flow-control value that admitted it;
@@ -202,13 +204,18 @@ confirmation says whether anything came back:
   whether the host saw the latch, and the radio's GIC interrupts and owner
   wakes since the write;
 - the dispatcher's queued events and diagnostic records by kind, the held
-  record's transport type, and the status of the last data confirmation.
+  record's transport type, and the status of the last data confirmation;
+- the request id of the slowest security command that was confirmed, and the
+  time from its write to its confirmation in milliseconds.
 
 The `window:events` variants of `checks/aic8800-supplicant.py` give three
 distinct traces for a key add: `silent` (nothing came: no records, latch
 clear), `unserviced` (the reply sits in the card behind a raised interrupt the
 owner never serviced: no records, latch set) and `other` (another message came:
-records counted, the last response id named).
+records counted, the last response id named). The `key-bound` case holds the
+key add's confirmation for a given time: at 5900 ms it is accepted and the
+authorized trace names it as the slowest, and at 6100 ms the stage stops with
+reason deadline.
 
 ## Entropy and credentials gate association only
 

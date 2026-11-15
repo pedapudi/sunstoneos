@@ -40,7 +40,9 @@ _Static_assert(sizeof(struct aic8800_fault_site)==16,"fault site section");
  * of the last data confirmation's status (bit 0 sent, 1 retry required, 2 software retry required, 3 acknowledged).
  * irq: bit 0 the host saw the controller's SDIO interrupt latch set and has not acknowledged it, 1 the controller
  * was read at capture, 2 its SDIO interrupt latch (RINT bit 16) was then set, 3 that interrupt was unmasked (IMASK
- * bit 16), 4 the radio's GIC interrupt is masked. */
+ * bit 16), 4 the radio's GIC interrupt is masked. slow_id and slow_ms: the slowest security confirmation accepted
+ * in the stage, as its request's message id (0 none) and the ms from that request's write to the confirmation. The
+ * trace is also written when the stage ends authorized, without a fault site. */
 struct aic8800_transport_trace {
     uint16_t tx_id;
     uint8_t tx_flags, credit;
@@ -48,8 +50,9 @@ struct aic8800_transport_trace {
     uint8_t rx_kind[4], rx_aggregates, status_reads;
     uint16_t rx_last_id;
     uint8_t phase, last_status, queued, queued_kinds, held_type, data_cfm, irq_wakes, irq;
+    uint16_t slow_id, slow_ms;
 };
-_Static_assert(sizeof(struct aic8800_transport_trace)==24,"transport trace section");
+_Static_assert(sizeof(struct aic8800_transport_trace)==28,"transport trace section");
 #ifdef SUNSTONE_AIC8800_FAULT_SITE_CAPTURE
 #include "aic8800_sdio_transport.h"
 #include "aic8800_data.h"
@@ -86,7 +89,7 @@ static inline void aic8800_transport_trace_capture(struct aic8800_transport_trac
 {
     *o=(struct aic8800_transport_trace){.tx_id=t->trace_tx_id,.credit=t->trace_credit,.rx_records=t->trace_rx_records,
         .rx_aggregates=t->trace_rx_aggregates,.status_reads=t->trace_status_reads,.rx_last_id=t->trace_rx_last_id,
-        .phase=t->phase,.last_status=t->raw_rx_status,.held_type=255u,
+        .phase=t->phase,.last_status=t->raw_rx_status,.held_type=255u,.slow_id=t->trace_slow_id,.slow_ms=t->trace_slow_ms,
         .irq_wakes=(uint8_t)(aic8800_trace_nibble(interrupts)<<4|aic8800_trace_nibble(wakes))};
     for(unsigned i=0;i<4;++i)o->rx_kind[i]=t->trace_rx_kind[i];
     const struct sunxi_sdio *h=t->card?t->card->host:0;

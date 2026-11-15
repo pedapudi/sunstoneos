@@ -32,7 +32,7 @@ struct a733_radio_result_head {
     uint64_t magic;
     uint32_t version, bytes, head_bytes, ap_entry_bytes;
     uint32_t stage, failed, failure_stage, flags; /* flags: bit0 guard asked, bit1 guard observed, bit2 BLDO5 needs power-on (the rails showed it off; the writes ran only once the stage reaches powered), bit3 the orderly shutdown reached down with every step read back (a failure runs the failure shutdown of bits 5 and 6 instead, so a failed run leaves it clear), bit4 BLDO5 was already on (guard
- * accepted it), bit5 the failure shutdown ran, bit6 every step of it that applied read back matched, bit7 the first-run guard refused before any write (fail_site then holds 0x400 | PG bits << 4 | unmet mask, shifted into the line field), bit9 an association tail follows the access point list (struct a733_radio_assoc), bit8 the failure left nothing powered (a refusal, or a failure shutdown that finished with every readback matched) and ended without a reset, bit12 a fault site section (struct aic8800_fault_site) follows the RSN summary, bit13 a transport trace (struct aic8800_transport_trace) follows the fault site section */
+ * accepted it), bit5 the failure shutdown ran, bit6 every step of it that applied read back matched, bit7 the first-run guard refused before any write (fail_site then holds 0x400 | PG bits << 4 | unmet mask, shifted into the line field), bit9 an association tail follows the access point list (struct a733_radio_assoc), bit8 the failure left nothing powered (a refusal, or a failure shutdown that finished with every readback matched) and ended without a reset, bit12 a fault site section (struct aic8800_fault_site) follows the RSN summary, bit13 a transport trace (struct aic8800_transport_trace) is the last section: after the fault site on a failure, or alone when the association stage ends authorized */
     uint32_t pad_power[4];                         /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL */
     struct a733_radio_result_rail rails[A733_RADIO_RESULT_RAILS];
     uint32_t rail_count, platform_stage, ocr, selected_ocr;
@@ -136,6 +136,8 @@ void a733_radio_report_rsn(struct a733_radio_report *,const struct a733_radio_rs
  * The trace is the record's last section. */
 void a733_radio_report_fault_site(struct a733_radio_report *,const struct aic8800_fault_site *,
     const struct aic8800_transport_trace *);
+/* Set the transport trace alone (head flags bit 13), when the stage ended without a fault; a trace already set is kept. */
+void a733_radio_report_trace(struct a733_radio_report *,const struct aic8800_transport_trace *);
 /* Set the association tail (and head flags bit 9). */
 void a733_radio_report_association(struct a733_radio_report *,const struct a733_radio_assoc *);
 void a733_radio_report_firmware(struct a733_radio_report *);

@@ -673,6 +673,11 @@ static void parse(struct aic8800_sdio_transport *t, uint64_t now)
         }
         if(t->security && t->codec_result == AIC8800_CODEC_UNRELATED) {
             t->codec_result=aic8800_security_response(t->security,t,&r,now);
+            if(t->codec_result==AIC8800_CODEC_OK&&t->security->state==AIC8800_SECURITY_DONE&&(t->trace_tx_flags&2u)&&
+                now>=t->trace_tx_at&&t->config.ticks_per_ms){
+                uint64_t ms=(now-t->trace_tx_at)/t->config.ticks_per_ms;if(ms>65535u)ms=65535u;
+                if(!t->trace_slow_id||ms>t->trace_slow_ms){t->trace_slow_id=t->trace_tx_id;t->trace_slow_ms=(uint16_t)ms;}
+            }
             if(t->security->state==AIC8800_SECURITY_FAULT) {
                 t->unrelated=r;t->held=1;fail(t,AIC8800_TRANSPORT_DATA_ERROR);return;
             }

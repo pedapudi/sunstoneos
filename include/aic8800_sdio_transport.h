@@ -84,6 +84,8 @@ struct aic8800_sdio_transport {
      * clock when that write completed. rx_kind: command responses, data, data confirmations, prints and others. */
     uint64_t trace_tx_at;
     uint16_t trace_tx_id, trace_rx_records, trace_rx_last_id;
+    /* The slowest security confirmation accepted so far: its request's message id and ms from that write. */
+    uint16_t trace_slow_id, trace_slow_ms;
     uint8_t trace_tx_flags, trace_credit, trace_rx_kind[4], trace_rx_aggregates, trace_status_reads;
     uint8_t tx[AIC8800_TRANSPORT_TX_BYTES], rx[AIC8800_TRANSPORT_RX_BYTES];
 };

@@ -511,7 +511,9 @@ int main(void)
             report->rsn.flags==(1u|8u|16u));
         uint8_t record[512];size_t bytes=a733_radio_report_encode(report,record,sizeof(record));
         assert(bytes==a733_radio_report_bytes(report)&&bytes==sizeof(report->head)+2*sizeof(struct a733_radio_result_ap)+
-            sizeof(struct a733_radio_scan_counts)+sizeof(struct a733_radio_assoc)+sizeof(struct a733_radio_rsn));
+            sizeof(struct a733_radio_scan_counts)+sizeof(struct a733_radio_assoc)+sizeof(struct a733_radio_rsn)+
+            sizeof(struct aic8800_transport_trace));
+        assert(report->has_trace&&!report->has_fault&&(record[37]&32u)&&!memcmp(record+bytes-28,&report->trace,28));
         for(size_t i=0;i+8<=bytes;++i)assert(memcmp(record+i,cred_ssid,8)&&memcmp(record+i,cred_pmk,8));
         a733_radio_report_release(&app.report);
         /* No candidate, and a missing credential, end as a retained failure with the record. */
@@ -599,7 +601,14 @@ int main(void)
             switch(path){
             case OK:
                 app.session.wifi.link=AIC8800_WIFI_SECURED;app.session.supplicant.state=AIC8800_SUPPLICANT_AUTHORIZED;
+                app.session.transport.trace_slow_id=36;app.session.transport.trace_slow_ms=5900;
                 assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED&&app.stage==SCANNED);
+                if(assoc.associate){
+                    /* Authorized: the trace alone names the slowest confirmation. */
+                    assert(app.report.has_trace&&!app.report.has_fault&&app.report.trace.slow_id==36&&app.report.trace.slow_ms==5900);
+                    uint8_t encoded[1024];size_t n=a733_radio_report_encode(&app.report,encoded,sizeof(encoded));
+                    assert(n&&!(encoded[37]&16u)&&(encoded[37]&32u)&&!memcmp(encoded+n-28,&app.report.trace,28));
+                }
                 app.session.transport.pending=0;app.session.transport.held=0;app.platform.host.state=SUNXI_SDIO_READY;shutdown_ok=1;
                 assert(board_radio_shutdown(&app,5000));
                 do end=board_radio_poll(&app);while(end==BOARD_RADIO_SCANNED);
@@ -613,7 +622,7 @@ int main(void)
                 app.session.supplicant.actions[0].kind=AIC8800_SUPPLICANT_KEY;app.session.supplicant.action_active=1;
                 app.session.supplicant.completed=1;
                 app.session.transport.trace_tx_id=36;app.session.transport.trace_tx_flags=3;app.session.transport.trace_credit=4;
-                app.session.transport.trace_status_reads=1;app.session.transport.irq_wait=1;
+                app.session.transport.trace_status_reads=1;app.session.transport.irq_wait=1;irq_views=0;
                 time_us=app.operation_deadline+1;end=board_radio_poll(&app);
                 const struct a733_radio_report *failed=&app.report;const struct aic8800_fault_site *f=&failed->fault;
                 assert(failed->has_fault&&f->security==AIC8800_SECURITY_WAITING&&f->expected_cfm==37&&!f->cfm_bytes&&
@@ -623,7 +632,7 @@ int main(void)
                 assert(failed->has_trace&&irq_views==1&&tr->tx_id==36&&(tr->tx_flags&(1u|2u|8u))==(1u|2u|8u)&&tr->credit==4&&
                     tr->status_reads==1&&!tr->rx_records&&(tr->irq&(2u|4u|8u))==(2u|4u|8u)&&tr->held_type==255u);
                 assert(n==a733_radio_report_bytes(failed)&&(encoded[37]&16u)&&(encoded[37]&32u)&&
-                    !memcmp(encoded+n-24,tr,24)&&!memcmp(encoded+n-40,f,16));
+                    !memcmp(encoded+n-28,tr,28)&&!memcmp(encoded+n-44,f,16));
                 break;}
             case STARTUP_DEADLINE:time_us=assoc.startup_deadline_us;end=board_radio_poll(&app);break;
             case BOARD_FAILED:end=board_radio_external_failure(&app);break;

@@ -148,7 +148,9 @@ void a733_radio_report_rsn(struct a733_radio_report *r,const struct a733_radio_r
 {r->rsn=*s;r->has_rsn=1;}
 void a733_radio_report_fault_site(struct a733_radio_report *r,const struct aic8800_fault_site *f,
     const struct aic8800_transport_trace *t)
-{if(!r->has_fault){r->fault=*f;r->has_fault=1;if(t){r->trace=*t;r->has_trace=1;}}}
+{if(!r->has_fault){r->fault=*f;r->has_fault=1;if(t&&!r->has_trace){r->trace=*t;r->has_trace=1;}}}
+void a733_radio_report_trace(struct a733_radio_report *r,const struct aic8800_transport_trace *t)
+{if(!r->has_trace){r->trace=*t;r->has_trace=1;}}
 static unsigned suite(const uint8_t *p,uint8_t *flags)
 {
     if(p[0]==0x00&&p[1]==0x0f&&p[2]==0xac)return p[3];

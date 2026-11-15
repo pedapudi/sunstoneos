@@ -117,10 +117,10 @@ def main():
     assert decoded['transport_trace'] is None
     # The transport trace (flags bit 13) follows the fault site: a key add written and completed, then nothing read.
     traced = bytearray(faulted)
-    struct.pack_into('<I', traced, 12, len(RECORD) + len(entry) + 16 + 48 + 16 + 16 + 24)
+    struct.pack_into('<I', traced, 12, len(RECORD) + len(entry) + 16 + 48 + 16 + 16 + 28)
     struct.pack_into('<I', traced, 36, head_flags | 1024 | 512 | 2048 | 4096 | 8192)
-    trace = struct.pack('<H2BHH6BH8B', 36, 1 | 2 | 8, 4, 1000, 0, 0, 0, 0, 0, 0, 1, 0, 19, 0, 0x01, 0, 255, 0x09,
-                        0x01, 2 | 8)
+    trace = struct.pack('<H2BHH6BH8BHH', 36, 1 | 2 | 8, 4, 1000, 0, 0, 0, 0, 0, 0, 1, 0, 19, 0, 0x01, 0, 255, 0x09,
+                        0x01, 2 | 8, 0, 0)
     decoded = radio_result.decode(bytes(traced) + entry + struct.pack('<4I', 3, 12, 2, 4) + tail + rsn + site + trace)
     assert decoded['fault_site']['expected_cfm'] == 37 and decoded['rsn']['group'] == 'TKIP', decoded
     assert decoded['transport_trace'] == {
@@ -131,7 +131,17 @@ def main():
         'queued_records': 1, 'queued_record_kinds': ['unclaimed'], 'held_type': None,
         'data_cfm': {'sent': True, 'retry': False, 'software_retry': False, 'acknowledged': True},
         'interrupts': 0, 'wakes': 1, 'host_saw_sdio_latch': False, 'controller_read': True,
-        'controller_sdio_latch': False, 'controller_sdio_unmasked': True, 'gic_masked': False}, decoded['transport_trace']
+        'controller_sdio_latch': False, 'controller_sdio_unmasked': True, 'gic_masked': False,
+        'slowest_confirmed_id': None, 'slowest_confirmation_ms': None}, decoded['transport_trace']
+    # Authorized: the trace alone, after the RSN summary, naming the slowest confirmation (a key add, 5.9 s).
+    alone = bytearray(full)
+    struct.pack_into('<I', alone, 12, len(RECORD) + len(entry) + 16 + 48 + 16 + 28)
+    struct.pack_into('<I', alone, 36, head_flags | 1024 | 512 | 2048 | 8192)
+    slow = trace[:-4] + struct.pack('<HH', 36, 5900)
+    decoded = radio_result.decode(bytes(alone) + entry + struct.pack('<4I', 3, 12, 2, 4) + tail + rsn + slow)
+    assert decoded['fault_site'] is None and decoded['rsn']['group'] == 'TKIP', decoded
+    assert decoded['transport_trace']['slowest_confirmed_id'] == 36 and \
+        decoded['transport_trace']['slowest_confirmation_ms'] == 5900, decoded['transport_trace']
     assert not any(word in key for key in decoded['transport_trace'] for word in ('bssid', 'frequency', 'rssi', 'ssid'))
     assert radio_result.decode(bytes(full) + entry + struct.pack('<4I', 3, 12, 2, 4) + tail + rsn)['fault_site'] is None
     struct.pack_into('<I', full, 8, 4)
