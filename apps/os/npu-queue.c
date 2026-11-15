@@ -93,9 +93,61 @@ static void request(void *unused)
     extern void os_npu_queue_notify(void);
     os_npu_queue_notify();
 }
+#ifdef SUNSTONE_NPU_WAKE_TIMING
+extern uint64_t npu_irq_entry_counter; /* platform/a733/npu_irq.c */
+#endif
+#ifdef SUNSTONE_ACCEL_PLL_WATCH
+#include "a733_gpu_pll_watch.h"
+#include "a733_mmio.h"
+/* PLL_NPU around the GPU's PLL writes (struct ss_npu_queue_pll_watch). The GPU task on its core and the NPU interrupt on the
+ * queue's core both add to this record, so every field changes by an atomic operation and no lock is taken; progress copies
+ * it into the ring. READY is the ring's open state (runtime/npu_app_queue.c). */
+static struct ss_npu_queue_pll_watch pll_watch;
+static unsigned pll_pending;
+#define RING_READY 3u
+#define PLL_LOCK (UINT32_C(1)<<28)
+static void pll_observe(uint32_t word,uint32_t site)
+{
+    uint32_t reference=0;
+    if(!__atomic_compare_exchange_n(&pll_watch.reference,&reference,word,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))
+        __atomic_fetch_or(&pll_watch.diff,word^reference,__ATOMIC_RELAXED);
+    else reference=word;
+    __atomic_store_n(&pll_watch.last,word,__ATOMIC_RELAXED);
+    if(!(word&PLL_LOCK))__atomic_fetch_add(&pll_watch.unlocked,1,__ATOMIC_RELAXED);
+    uint32_t none=0;
+    if((word!=reference||!(word&PLL_LOCK))&&
+       __atomic_compare_exchange_n(&pll_watch.first_site,&none,site,0,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED))
+        __atomic_store_n(&pll_watch.first_word,word,__ATOMIC_RELAXED);
+}
+void a733_gpu_pll_watch(uint32_t clear,uint32_t set,uint32_t npu_before,uint32_t npu_after)
+{
+    (void)clear;(void)set;
+    if(atomic_load_explicit(&ring.state,memory_order_acquire)!=RING_READY)return;
+    __atomic_fetch_add(&pll_watch.writes,1,__ATOMIC_RELAXED);
+    if(atomic_load_explicit(&ring.active,memory_order_acquire))__atomic_fetch_add(&pll_watch.in_flight,1,__ATOMIC_RELAXED);
+    pll_observe(npu_before,1);pll_observe(npu_after,2);
+    __atomic_store_n(&pll_pending,1,__ATOMIC_RELEASE);
+}
+static void pll_completion(void)
+{
+    if(__atomic_exchange_n(&pll_pending,0,__ATOMIC_ACQ_REL)){
+        __atomic_fetch_add(&pll_watch.completions,1,__ATOMIC_RELAXED);
+        pll_observe(a733_mmio_read32_dsb_sy_both(A733_PLL_NPU_ADDRESS),3);
+    }
+    struct ss_npu_queue_pll_watch *w=&ring.pll;
+    w->reference=__atomic_load_n(&pll_watch.reference,__ATOMIC_ACQUIRE);w->diff=__atomic_load_n(&pll_watch.diff,__ATOMIC_RELAXED);
+    w->last=__atomic_load_n(&pll_watch.last,__ATOMIC_RELAXED);w->unlocked=__atomic_load_n(&pll_watch.unlocked,__ATOMIC_RELAXED);
+    w->writes=__atomic_load_n(&pll_watch.writes,__ATOMIC_RELAXED);w->in_flight=__atomic_load_n(&pll_watch.in_flight,__ATOMIC_RELAXED);
+    w->completions=__atomic_load_n(&pll_watch.completions,__ATOMIC_RELAXED);
+    w->first_site=__atomic_load_n(&pll_watch.first_site,__ATOMIC_ACQUIRE);w->first_word=__atomic_load_n(&pll_watch.first_word,__ATOMIC_RELAXED);
+}
+#endif
 static void notify(void *unused,uintptr_t producer,int isr)
 {
     (void)unused;if(!producer||in_svc)return;
+#ifdef SUNSTONE_NPU_WAKE_TIMING
+    if(isr)ring.wake.irq=npu_irq_entry_counter;
+#endif
     /* The SVC's producer is already running and observes failure on return.
      * No task-level notification/critical section may unmask this exception. */
     if(isr)vTaskNotifyGiveFromISR((TaskHandle_t)producer,irq_woken);
@@ -247,6 +299,9 @@ static void progress(void *unused,BaseType_t *woken)
             if(direct.idle_wait_ticks>w->max_ticks)w->max_ticks=direct.idle_wait_ticks;
             direct.idle_wait_ticks=0;
         }
+#ifdef SUNSTONE_ACCEL_PLL_WATCH
+        pll_completion();
+#endif
         if(direct.traffic_ready){
             struct ss_npu_queue_traffic *t=&ring.traffic;
             ++t->jobs;t->read8+=direct.traffic[0];t->write8+=direct.traffic[1];

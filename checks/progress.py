@@ -73,8 +73,10 @@ class Check(unittest.TestCase):
         self.assertEqual(len(rows), len(inventory))
         self.assertEqual(parser['status'], 'ok')
         by_name = {row['name']: row for row in rows}
-        self.assertNotIn('board', by_name['DMA and device address translation']['evidence'])
-        self.assertIn('host', by_name['DMA and device address translation']['evidence'])
+        self.assertNotIn('board', by_name['Display engine']['evidence'])
+        self.assertIn('host', by_name['Display engine']['evidence'])
+        # Cyclic DMA0 transfers for the I2S0 loopback have board records (docs/status/memory-dma.md).
+        self.assertIn('board', by_name['DMA and device address translation']['evidence'])
         self.assertIn('board', by_name['CPU cores']['evidence'])
         self.assertTrue(all(row['qualification'] == 'unqualified' for row in rows))
         self.assertTrue(by_name['GPU']['details'][0]['markdown'])

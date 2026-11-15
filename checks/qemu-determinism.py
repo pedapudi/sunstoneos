@@ -17,6 +17,8 @@ import subprocess
 import sys
 import threading
 
+import harness  # noqa: E402
+
 GATE_RUNS = [['--build', '{build:latency-control-idle-model}', '--output', '{output}']]
 CACHE = Path.home() / '.cache/sunstoneos'
 COPIES, BUSY = 6, 12
@@ -37,7 +39,7 @@ def main():
     logs = {}
 
     def run(index):
-        result = subprocess.run(command, capture_output=True, text=True, timeout=600)
+        result = harness.run_qemu(command, 600)
         logs[index] = result.stdout + result.stderr
     try:
         threads = [threading.Thread(target=run, args=(i,)) for i in range(COPIES)]

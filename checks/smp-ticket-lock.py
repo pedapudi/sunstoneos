@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import subprocess
 
+import harness
 from harness import CACHE, environment
 
 CHECK_INPUTS = ['patches/freertos-smp-c.patch', 'patches/freertos-smp-macro.patch',
@@ -210,7 +211,7 @@ def qemu_checks(build, emulator, output, cpus):
                        "-accel", "tcg,thread=multi", "-cpu", cpu, "-smp", str(cores), "-m", "128M",
                        "-nographic", "-monitor", "none", "-semihosting-config", "enable=on,target=native",
                        "-device", f"loader,file={image.resolve()},cpu-num=0", "-d", "in_asm", "-D", str(trace)]
-            result = subprocess.run(command, capture_output=True, text=True, timeout=300, env=environment())  # a hang bound only; the guest asserts no time
+            result = harness.run_qemu(command, 300, env=environment())  # a hang bound only; the guest asserts no time
             log = result.stdout + result.stderr
             (output / (cpu + "-" + name + ".run.log")).write_text(log)
             assert result.returncode == 0 and marker in log and "FAIL" not in log, (cpu, name, log)

@@ -36,11 +36,11 @@ Native mappings, privileged reservation pools, cache maintenance, DMA0 services 
 
 **Software evidence:** host, emulator.
 
-**Board-qualified scope:** None.
+**Board-qualified scope:** Cyclic DMA0 transfers for the internal I2S0 loopback pass three returning runs on port 3-3: continuous loopback with cancel, drain, close and reopen rounds, a held capture copy across a raw-ring overrun, and the return of both DMA0 channels (`1793561347028719264-5a2bab37`, `1793561377196205560-f9163edf`, `1793561406349236252-f1275fd8` in [audio.jsonl](../evidence/audio.jsonl); [audio status](audio.md)).
 
-DMA0, DMA1 and IOMMU operations have no physical qualification. Host checks pass for descriptor bounds, DMA0 admission, retained-allocation exclusion and IOMMU table construction. FreeRTOS emulator checks pass for DMA service ownership and cyclic shutdown ordering. DMA0 supports bounded descriptor chains, 35-bit addressing, polled and interrupt completion, copied and cyclic receive services.
+The DMA0 RAM-copy service, DMA1 and IOMMU operations have no physical qualification; the one DMA0 copy run, `1793603527212274330-dcf070c1`, was refused before launch. Host checks pass for descriptor bounds, DMA0 admission, retained-allocation exclusion and IOMMU table construction. FreeRTOS emulator checks pass for DMA service ownership and cyclic shutdown ordering. DMA0 supports bounded descriptor chains, 35-bit addressing, polled and interrupt completion, copied and cyclic receive services.
 
-DMA0 needs physical channel, controller and data-access authority and transfer tests. DMA1 is blocked by an unresolved CPUS request and DRAM encoding. Native master exclusion, drain, installation and translation need physical evidence; no transfer above 4 GiB is qualified. DMA-engine load on the memory system needs a captured DMA session record. See [memory map](../memory-protection.md), [DMA](../dma.md), [IOMMU](../iommu.md) and [storage](storage.md) for the physical SD DMA reads.
+The DMA0 RAM-copy service needs physical channel, controller and data-access authority and transfer tests. DMA1 is blocked by an unresolved CPUS request and DRAM encoding. Native master exclusion, drain, installation and translation need physical evidence; no transfer above 4 GiB is qualified. DMA-engine load on the memory system needs a captured DMA session record. See [memory map](../memory-protection.md), [DMA](../dma.md), [IOMMU](../iommu.md) and [storage](storage.md) for the physical SD DMA reads.
 
 ## Evidence
 

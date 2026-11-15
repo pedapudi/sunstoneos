@@ -39,6 +39,8 @@ The recognition owner runs on core 6 and a worker on core 7 at priority 3, with 
 
 The thermal owner is the only sampler and CPU clock owner. Fresh NORMAL readings admit NPU work, and hot or stale readings request its terminal local stop within five seconds. The GPU recognizer closes a healthy session between completed calls at THROTTLE and reopens its retained backing at NORMAL. CRITICAL or either uncertain accepted-device failure ends the board lifetime, and an unaccepted GPU refusal keeps its CPU fallback. NPU completion retains its stopped resources, GPU CLOSE does not release those leases, and the NPU's immutable report, live atomic stopped proof and finite wait and deadline checks stay intact.
 
+In the returning lifetime both retirements run before the ROM return, and admission grants the NPU in a GPU build. The [shared-owner check](../../checks/accelerator-shared-owner.py) runs the GPU retirement (power off, then release of its resource lease) and the NPU retirement (a job in flight, then local stop) on concurrent host threads in both orders. Throughout the NPU job, the PCK clock gate, the NPU AHB and MBUS master gates, PLL_NPU and the domain-4 row stay in place and the NPU's PCK lease stays live. After both retirements, the shared gate words and PMIC selectors are unchanged, the NPU keeps its tokens and the GPU lease is released. This is a host result; no board run has retired both devices in one lifetime.
+
 ## Qualified figures
 
 | Figure | Value | Record |

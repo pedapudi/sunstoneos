@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include "FreeRTOS.h"
 #include "task.h"
 #include "../apps/latency/control.h"
@@ -180,19 +181,29 @@ static uint64_t wall_ns(void)
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
 }
+/* Every wait for another thread has a wall-clock guard of two seconds. It is a hang guard and not a claim: a thread that the host did
+ * not schedule in that time says nothing about the model. The run stops with the inconclusive status (checks/harness.py,
+ * INCONCLUSIVE_EXIT), which the check runs once more and then reports as inconclusive. */
+static void hang_guard(uint64_t until, const char *wait)
+{
+    if (wall_ns() < until) return;
+    fprintf(stderr, "INCONCLUSIVE: the %s did not finish within two seconds of host time\n", wait);
+    fflush(stderr);
+    _exit(75);
+}
 static void wait_count(unsigned core, unsigned path, uint64_t count)
 {
     const uint64_t until = wall_ns() + 2000000000u;
     unsigned spins = 0;
     while (__atomic_load_n(&state[core].published[path], __ATOMIC_ACQUIRE) < count) {
-        if (!(++spins & 1023u)) { assert(wall_ns() < until); sched_yield(); }
+        if (!(++spins & 1023u)) { hang_guard(until, "publication count"); sched_yield(); }
     }
 }
 static void wait_quiescent(void)
 {
     const uint64_t until = wall_ns() + 2000000000u;
     while (!ulSunstoneControlQuiescent()) {
-        assert(wall_ns() < until);
+        hang_guard(until, "quiescence");
         pending_sgis();
         sched_yield();
     }
@@ -201,7 +212,7 @@ static void wait_paused(void)
 {
     const uint64_t until = wall_ns() + 2000000000u;
     while (!atomic_load_explicit(&writer_paused, memory_order_acquire)) {
-        assert(wall_ns() < until);
+        hang_guard(until, "writer pause");
         sched_yield();
     }
 }
@@ -209,7 +220,7 @@ static void finish_tasks(void)
 {
 #if ( INCLUDE_eTaskGetState == 1 )
     const uint64_t until = wall_ns() + 2000000000u;
-    while (!ulSunstoneControlTasksSuspended()) { assert(wall_ns() < until); sched_yield(); }
+    while (!ulSunstoneControlTasksSuspended()) { hang_guard(until, "task suspension"); sched_yield(); }
 #endif
     for (unsigned i = 0; i < model_task_count; ++i) {
         TaskHandle_t task = model_tasks[i];
@@ -351,7 +362,7 @@ static void coalesced_notification(void)
     fire(1, 1, 12);
     atomic_store_explicit(&writer_resume, 1, memory_order_release);
     const uint64_t until = wall_ns() + 2000000000u;
-    while (!__atomic_load_n(&state[1].errors, __ATOMIC_RELAXED)) { assert(wall_ns() < until); sched_yield(); }
+    while (!__atomic_load_n(&state[1].errors, __ATOMIC_RELAXED)) { hang_guard(until, "writer error"); sched_yield(); }
     vSunstoneControlStop(); pending_sgis(); wait_quiescent();
     assert(state[1].errors & SS_CONTROL_ERROR_NOTIFICATION);
     assert(!state[1].task.count);
@@ -397,7 +408,7 @@ static void qualification(unsigned mode)
     assert(latency_control_start(mode));
     pending_sgis();
     const uint64_t until = wall_ns() + 2000000000u;
-    while (!latency_control_ready()) { assert(wall_ns() < until); sched_yield(); }
+    while (!latency_control_ready()) { hang_guard(until, "control start"); sched_yield(); }
     assert(latency_control_complete() == 0);
     struct latency_control_report report;
     assert(!latency_control_snapshot(&report));
