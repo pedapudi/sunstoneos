@@ -69,7 +69,10 @@ enum { A733_POWER_DOMAIN_UNKNOWN, A733_POWER_DOMAIN_OFF, A733_POWER_DOMAIN_ON_WA
 /* The latest admission and PCK600 transition of one domain, service task
  * only; it adds no register access. It exists to size A733_POWER_PCK_SPIN_US
  * from board data and is deleted once that is done, at the latest on
- * 2026-12-14.
+ * 2026-12-14. The samples are domain-2 OFF-to-ON transitions, at most one per
+ * board power cycle, since domain 2 stays ON across the decoder's close and is
+ * adopted afterwards; domain 5 is not a stand-in. The 50 us spin stays as it
+ * is until three such samples have accumulated over later power lifetimes.
  *
  * The owner fails a transition at any status read whose bits 3:0 are neither
  * the starting value nor the target, so a successful one reads the starting
