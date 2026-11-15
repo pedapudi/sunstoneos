@@ -107,18 +107,25 @@ struct ss_g2d_surface {
     uint64_t offset;
     uint32_t width, height, stride, reserved;
 };
-enum { SS_G2D_FILL = 1, SS_G2D_BLIT = 2 };
+enum { SS_G2D_FILL = 1, SS_G2D_BLIT = 2, SS_G2D_ROTATE = 3 };
+enum { SS_G2D_FLIP_H = 1, SS_G2D_FLIP_V = 2 };
 /* One operation. The rest of the output is unchanged.
  * - Fill writes color (ARGB, 32 bits) to the w by h rectangle at dx, dy of an ARGB8888 output; source, sx and sy are
  *   zero.
  * - Blit copies the w by h rectangle at sx, sy of the source to dx, dy of the output, converting from the source's
  *   format to the output's (the native builder's copy, docs/g2d.md). The source and the output have the same width,
  *   height and stride; they may name the same region. color is zero. The engine reads the source through a read-only
- *   mapping. What a conversion writes to an X byte (formats 4 to 7) is not yet established on the board. */
+ *   mapping. What a conversion writes to an X byte (formats 4 to 7) is not yet established on the board.
+ * - Rotate copies the w by h rectangle at sx, sy of the source to dx, dy of the output through the rotate module
+ *   (docs/g2d-os.md#rotate-module), turned by degrees (0, 90, 180 or 270) and flipped by flip (SS_G2D_FLIP_H,
+ *   SS_G2D_FLIP_V), without the blender and without converting: the source and the output have the same format, and
+ *   each its own width, height and stride. The output rectangle is h by w for 90 and 270 degrees. The output stride
+ *   is a multiple of 8 bytes. color is zero, and the result is undefined where the two rectangles share memory.
+ * degrees and flip are zero for a fill and a blit. */
 struct ss_g2d_job {
     uint32_t op, color;
     struct ss_g2d_surface source, output;
-    uint32_t sx, sy, dx, dy, w, h, reserved[2];
+    uint32_t sx, sy, dx, dy, w, h, degrees, flip;
 };
 #define SS_G2D_DONE_MAGIC UINT32_C(0x44443247) /* "G2DD" */
 /* The record of one operation. Times are system-counter ticks. */
@@ -151,8 +158,15 @@ struct ss_g2d_done {
     uint64_t submit_ticks, launch_ticks, irq_ticks, done_ticks;
     uint64_t attach_us;            /* time the IOMMU attach took, 0 when no attach was made */
     uint64_t surface_physical, directory_physical;
+    /* A rotate: ROT_CTL (G2D + 0x28000) read back before the start bit, and read by the owner after the handler;
+     * ROT_INT read by the handler before it acknowledged the finish, and by the owner after; ROT_TIMEOUT after the
+     * operation (recorded only). All 0 for a fill or a blit. */
+    uint32_t rot_ctl, rot_ctl_after, rot_int, rot_int_after, rot_timeout;
+    /* Finishes of the block the operation did not start (the mixer during a rotate, the rotator during a fill or a
+     * blit): each is masked at its block and counted (include/a733_g2d_irq.h); the first one's status word. */
+    uint32_t stray_finishes, stray_word, reserved;
 };
-_Static_assert(sizeof(struct ss_g2d_done) == 216 && offsetof(struct ss_g2d_done, submit_ticks) == 160,
+_Static_assert(sizeof(struct ss_g2d_done) == 248 && offsetof(struct ss_g2d_done, submit_ticks) == 160,
                "apps/g2d-check/host.py decodes this layout");
 /* Run one operation on the open engine and wait for its completion interrupt; done receives the record. */
 int ss_g2d_run(const struct ss_g2d_job *job, struct ss_g2d_done *done);

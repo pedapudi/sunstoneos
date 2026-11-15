@@ -10,6 +10,7 @@ facts, `merge` folds measured facts into docs/hardware/a733-facts.json, and the
 
   hw_facts.py gen                      rewrite include/a733_hw_facts_table.inc
   hw_facts.py init                     write docs/hardware/a733-facts.json with only the observed seeds
+  hw_facts.py catalogue                add an unmeasured entry for each catalogued fact the facts file lacks
   hw_facts.py decode BIN [--merge JSON --queue-entry ID ...]
   hw_facts.py expect OUT.json          the board word expectation for a returned table
 """
@@ -27,10 +28,10 @@ SCHEMA = 'sunstone-a733-facts-v1'
 MAGIC = 0x3146574833373341  # "A733HWF1" little-endian
 VERSION = 1
 HEADER_BYTES, SLOT_BYTES = 64, 16
-CORES, CORE_SLOTS, SHARED_SLOTS = 8, 64, 96
+CORES = 8
 SHARED_OFFSET = HEADER_BYTES
-CORE_OFFSET = SHARED_OFFSET + SHARED_SLOTS * SLOT_BYTES
-TABLE_BYTES = CORE_OFFSET + CORES * CORE_SLOTS * SLOT_BYTES
+# The slot counts, the core block offset and the table size follow from the catalogue below (build()): the C side
+# counts the same generated slot table (include/a733_hw_facts.h), so neither side has a slot count of its own.
 PLATFORM_A733, PLATFORM_QEMU_OS = 1, 2
 PLATFORMS = {PLATFORM_A733: 'a733-board', PLATFORM_QEMU_OS: 'qemu-os-board'}
 HEADER = struct.Struct('<Q10I16x')  # magic version bytes platform cores shared core shared_off core_off stride done
@@ -146,6 +147,42 @@ SHARED_REGS = [
 ]
 ID_SPI_STATE, ID_SPI_ROUTER, ID_SPI_REQUEST = 0x0110, 0x0111, 0x0112
 ID_NPU_WORD = 0x0130
+# The CPU memory path (docs/designs/concurrent-accel.md, "The AXI2HIF limiter in the vendor driver"). Core 0 reads these
+# words in this order, previously read words before first reads: the CCU's DRAM0 clock (0x0c00), its gate and reset (0x0c0c) and PLL_DDR
+# (0x0020, with its two pattern words); the CPU path select CPU_DA_DDR_CTRL_REG; then both AXI2HIF bridges, +0x00 to
+# +0x6c (bridge 0's were read in the DRAM training capture on port 3-1), then their counters +0x80 to +0x94 (vendor
+# sunxi-nsi.h CPU_CHL0_PMU_*). +0x70 to +0x7c are not read: no source names them. The bridge words are read only when
+# the DRAM0 clock (bit 31), its bus gate (bit 0) and reset (bit 16) are open and the path select is nonzero, the test
+# the vendor driver makes (sunxi-nsi.c:1304); otherwise their slots are skipped. The virtual board skips the group.
+ID_MEMPATH_WORD = 0x0131
+MEMPATH_CCU = (0x02002c00, 0x02002c0c, 0x02002020, 0x02002028, 0x0200202c)
+MEMPATH_SELECT = 0x08000200
+AXI2HIF_BRIDGES = (0x0a030000, 0x0a040000)
+AXI2HIF_WORDS = tuple(range(0x00, 0x70, 4))
+AXI2HIF_COUNTERS = tuple(range(0x80, 0x98, 4))
+MEMPATH_WORDS = (MEMPATH_CCU + (MEMPATH_SELECT,) + tuple(b + o for b in AXI2HIF_BRIDGES for o in AXI2HIF_WORDS) +
+                 tuple(b + o for b in AXI2HIF_BRIDGES for o in AXI2HIF_COUNTERS))
+MEMPATH_SOURCES = {
+    0x02002c00: 'CCU DRAM0_CLK (0x0c00): gate 31, source 26:24, divider M 4:0 (ccu-sun60iw2.c dram0_clk); the AXI2HIF clock',
+    0x02002c0c: 'CCU DRAM0_BGR (0x0c0c): bus gate 0, reset 16 (ccu-sun60iw2.c dram0_bus_clk, RST_BUS_DRAM0)',
+    0x02002020: 'CCU PLL_DDR_CTRL (0x0020): enable 31, lock 28, output divider M 22:20, N 15:8; 24 MHz x (N+1)/(M+1)',
+    0x02002028: 'CCU PLL_DDR_PAT0 (0x0028)', 0x0200202c: 'CCU PLL_DDR_PAT1 (0x002c)',
+    0x08000200: 'CPU_DA_DDR_CTRL_REG: bit 0 sends CPU traffic through the AXI2HIF bridges',
+}
+AXI2HIF_NAMES = {0x20: 'PMU_EN', 0x24: 'PMU_CLR', 0x28: 'PMU_PER', 0x2c: 'QOS_CFG', 0x30: 'IAG_MODE', 0x34: 'PRI_CFG',
+                 0x38: 'INPUT_OUTPUT_CFG', 0x48: 'BAND_WIDTH_LIMIT(total)', 0x4c: 'SATURATION_LIMIT(total)',
+                 0x50: 'BAND_WIDTH_LIMIT(read)', 0x54: 'SATURATION_LIMIT(read)', 0x58: 'BAND_WIDTH_LIMIT(write)',
+                 0x5c: 'SATURATION_LIMIT(write)', 0x80: 'CHL0_PMU_REQ_R', 0x84: 'CHL0_PMU_REQ_W', 0x88: 'CHL0_PMU_DATA_R',
+                 0x8c: 'CHL0_PMU_DATA_W', 0x90: 'CHL0_PMU_LAT_R', 0x94: 'CHL0_PMU_LAT_W'}
+
+
+def mempath_source(address):
+    if address in MEMPATH_SOURCES:
+        return MEMPATH_SOURCES[address]
+    bridge = AXI2HIF_BRIDGES.index(address & ~0xffff)
+    offset = address & 0xffff
+    name = AXI2HIF_NAMES.get(offset)
+    return 'AXI2HIF%d +%#04x%s' % (bridge, offset, ' ' + name + ' (vendor sunxi-nsi.h CPU_' + name + ')' if name else '')
 # Write tests of the redistributor priority byte of PPI 27 and PPI 30 on the capturing core, with the
 # value the cached platform writes next in the same boot; aux returns the written value.
 ID_PPI_WRITE = 0x0140
@@ -207,7 +244,6 @@ def build():
             descriptions.append(dict(name=f'gic.redist.intid{intid}.priority', source=f'GICR_IPRIORITYR{word} byte {byte}',
                                      view=view('redist'), scope='core', width=8, lo=byte * 8, hi=byte * 8 + 7, rule='zero-raz'))
         add(core, 'core', (0x004a, word), descriptions)
-    assert len(core) <= CORE_SLOTS, len(core)
 
     for ident, name, source, width, fields in SHARED_REGS:
         add(shared, 'shared', (ident, 0), raw_and_fields(name, source, 'dist', 'shared', width, fields))
@@ -236,11 +272,16 @@ def build():
     for address in NPU_WORDS:
         add(shared, 'shared', (ID_NPU_WORD, address), [
             dict(name=f'mmio.{address:#010x}', source=f'MMIO word {address:#010x}', view=view('mmio'), scope='shared', width=32, lo=0, hi=31)])
-    assert len(shared) <= SHARED_SLOTS, len(shared)
+    for address in MEMPATH_WORDS:
+        add(shared, 'shared', (ID_MEMPATH_WORD, address), [
+            dict(name=f'mmio.{address:#010x}', source=mempath_source(address), view=view('mmio'), scope='shared', width=32, lo=0, hi=31)])
     return core, shared, facts
 
 
 CORE_SPECS, SHARED_SPECS, FACTS = build()
+CORE_SLOTS, SHARED_SLOTS = len(CORE_SPECS), len(SHARED_SPECS)
+CORE_OFFSET = SHARED_OFFSET + SHARED_SLOTS * SLOT_BYTES
+TABLE_BYTES = CORE_OFFSET + CORES * CORE_SLOTS * SLOT_BYTES
 
 
 def table_inc():
@@ -558,16 +599,22 @@ def merge(document, header, facts, queue_entry, image_sha256, port=None):
         index.pop((fact['name'], 'all'), None)
         index.pop((fact['name'], None), None)
         index[key] = item
+    document['facts'] = list(index.values())
+    return annotate(catalogued(document))
+
+
+def catalogued(document):
+    """The document in catalogue order, with an unmeasured entry for every catalogued fact it does not hold yet."""
     names = {}
-    for (name, core), item in index.items():
-        names.setdefault(name, []).append(item)
+    for item in document['facts']:
+        names.setdefault(item['name'], []).append(item)
     ordered = []
     for blank in blank_facts():
-        ordered.extend(sorted(names.pop(blank['name'], []), key=lambda e: (e['core'] == 'all', e['core'] if isinstance(e['core'], int) else -1)))
+        ordered.extend(sorted(names.pop(blank['name'], [blank]), key=lambda e: (e['core'] == 'all', e['core'] if isinstance(e['core'], int) else -1)))
     for rest in names.values():
         ordered.extend(rest)
     document['facts'] = ordered
-    return annotate(document)
+    return document
 
 
 # ---------------------------------------------------------------------------
@@ -685,6 +732,7 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('gen')
     commands.add_parser('init')
+    commands.add_parser('catalogue', help='add an unmeasured entry for each catalogued fact the facts file lacks')
     d = commands.add_parser('decode')
     d.add_argument('table', type=Path)
     d.add_argument('--merge', type=Path)
@@ -697,6 +745,8 @@ def main():
     elif args.command == 'init':
         FACTS_JSON.parent.mkdir(exist_ok=True)
         FACTS_JSON.write_text(json.dumps(seeded_document(), indent=1) + '\n')
+    elif args.command == 'catalogue':
+        FACTS_JSON.write_text(json.dumps(catalogued(load_document()), indent=1) + '\n')
     else:
         header, facts = decode(args.table.read_bytes())
         print(json.dumps(dict(header=header, facts=len(facts))))
