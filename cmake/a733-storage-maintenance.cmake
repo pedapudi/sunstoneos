@@ -96,6 +96,7 @@ get_target_property(storage_compile_options a733-smp-cached-diagnostic COMPILE_O
 string(TOUPPER "${CMAKE_BUILD_TYPE}" storage_config)
 sunstone_portable_text(storage_flags "${CMAKE_C_FLAGS};${CMAKE_C_FLAGS_${storage_config}};${CMAKE_ASM_FLAGS};${CMAKE_ASM_FLAGS_${storage_config}};${storage_compile_options}")
 set(storage_identity "storage-maintenance-1;${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};armv8-a;O2;WBWA;8;${storage_flags}")
+sunstone_sort_inputs(storage_inputs)
 foreach(input IN LISTS storage_inputs)
   file(SHA256 "${input}" storage_digest)
   string(APPEND storage_identity "${storage_digest}")

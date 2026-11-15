@@ -68,6 +68,7 @@ set(i2s_inputs ${i2s_application_inputs} ${i2s_sources} ${i2s_headers} ${storage
  "${i2s_root}/platform/a733-smp-supervised/boot.patch" "${SUNSTONE_I2S_RECORDED_WAV}")
 list(REMOVE_DUPLICATES i2s_inputs)
 set(i2s_identity "native-i2s-1;${i2s_application_identity};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;I2S0;16kHz;mono;S16;USB0-sink;supervised-retained")
+sunstone_sort_inputs(i2s_inputs)
 foreach(input IN LISTS i2s_inputs)
  file(SHA256 "${input}" i2s_digest)
  string(APPEND i2s_identity "${i2s_digest}")
