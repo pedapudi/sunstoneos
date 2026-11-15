@@ -267,8 +267,11 @@ static int do_open(void)
         })
         if(r==1)break;
         if(r==A733_VIDEO_OPEN_REFUSED){
-            /* Nothing written: the decoder is as it was. */
-            copy_record();refuse(s!=A733_POWER_ROW_IDLE?VD_STEP_ROW:VD_STEP_ENTRY,p->cold_step|s<<8);goto refused;
+            /* Nothing written: the decoder is as it was. A refusal at the binding's deadline leaves it not failed;
+             * with the row still pending, that is the row's timeout, as at the service's own bound below. */
+            const unsigned step=s==A733_POWER_ROW_IDLE?VD_STEP_ENTRY:
+                s==A733_POWER_ROW_PENDING&&!p->unit.failed?VD_STEP_ROW_TIMEOUT:VD_STEP_ROW;
+            copy_record();refuse(step,p->cold_step|s<<8);goto refused;
         }
         if(r<0)return fault(VD_STEP_COLD,p->cold_step|s<<8);
         if(s==A733_POWER_ROW_PENDING){

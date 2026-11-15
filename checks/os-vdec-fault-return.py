@@ -35,6 +35,9 @@ words and the published nonsecure boot ROM mapped:
   A733_POWER_SUPPLY_BUDGET_US + one tick, anchored at the PMIC startup deadline or now); once DCDC2 is verified,
   on the PCK600 bound plus two ticks. Past that bound the open is refused with step VD_STEP_ROW_TIMEOUT: the service
   ends CLOSED with no register written and no close, and the binding drops the open's deadline so that a reopen runs.
+- row-wait-deadline: the same open, but the call deadline (VD_CALL_US) passes during the supply wait, so the binding
+  refuses the open at its deadline with the row still pending. The service records the same step,
+  VD_STEP_ROW_TIMEOUT, and ends the same way.
 - record-layout: every member offset of the board record (struct vdec_check_record, with the binding's cold record
   and the owner's transition record embedded) in apps/vdec-check/host.py equals the image's DWARF, so the host
   decodes the bytes the image returns.
@@ -63,6 +66,7 @@ ROM_SHA256 = '95be69c916846a8259578565f3193a6b9ab0625294d5374f3dc6c2f667fc6169'
 FEL = {0x220: 0x41305a00, 0x22c: 0x30000000, 0x580: 0x80000000, 0x588: 0x80000000, 0x5c0: 0x110103ff,
        0x5e0: 0xf1055803, 0x5e4: 0x4, 0x1b10: 0x00020000, 0x1918: 0x00030003, 0x1998: 0x00030000}
 SETTLE_US, BUDGET_US, PCK_BOUND_US, TICK_US = 5160, 100000, 10000, 1000
+CALL_US = 500000  # VD_CALL_US, the open's deadline
 DCDC2_VERIFIED = 1 << 2
 BOUND_US, PASS_US = 3_000_000, 10_000
 # The pages a733_video_unit_native_map checks, once per boot, each with one write translation (drivers/video/
@@ -250,7 +254,8 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         (name, 'the binding refused its configuration')
     if row_wait:
         return row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call=lambda: call(
-            image.address('os_video_decode_task', UNIT), 0, stack=STACKS + 0x40000), ccu=ccu, others=others, vd=vd)
+            image.address('os_video_decode_task', UNIT), 0, stack=STACKS + 0x40000), ccu=ccu, others=others, vd=vd,
+            at_deadline=row_wait == 'deadline')
     # The decoder as hold B's refusal left it.
     put(unit_field('failed'), 1)
     for field, value in (('pll_inherited', PLL_INHERITED), ('pll_state', 1), ('pll_started', 1), ('pll_locked', 1),
@@ -328,8 +333,9 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     }
 
 
-def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu, others, vd):
-    """The open of a CLOSED service whose row the owner never answers: the two bounds, then the refusal."""
+def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu, others, vd, at_deadline=False):
+    """The open of a CLOSED service whose row the owner never answers: the two bounds, then the refusal; or, with
+    at_deadline, the supply wait, then the refusal of the binding at the open's deadline."""
     L = image.layouts
     put(vd + layout['initialized'], 1)
     put(vd + layout['rail'] + L['a733_rail_token']['id'], 1, 8)
@@ -360,15 +366,19 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
     task_call()
     target, at = state['waits'][-1]
     rows.append(target - at)                                   # before verification: the supply budget
-    put(authority, get(authority) | DCDC2_VERIFIED)
-    resume()                                                   # verified: the PCK600 bound
-    state['time'] += PCK_BOUND_US + 2 * TICK_US
-    resume()                                                   # past it: refused, then the idle block
+    if at_deadline:
+        state['time'] += CALL_US + TICK_US
+        resume()                                               # past the open's deadline: refused, then the idle block
+    else:
+        put(authority, get(authority) | DCDC2_VERIFIED)
+        resume()                                               # verified: the PCK600 bound
+        state['time'] += PCK_BOUND_US + 2 * TICK_US
+        resume()                                               # past it: refused, then the idle block
     supply, verified = SETTLE_US + BUDGET_US + TICK_US, PCK_BOUND_US + 2 * TICK_US
     problems = []
     if not supply - 100 <= rows[0] <= supply:
         problems.append(f'before verification the wait must be the supply budget, {supply} us: {rows[0]} us')
-    if not verified - 100 <= rows[1] <= verified:
+    if not at_deadline and not verified - 100 <= rows[1] <= verified:
         problems.append(f'after verification the wait must be the PCK600 bound plus two ticks, {verified} us: {rows[1]} us')
     if get(vd + layout['request']) != enums['DONE'] or get(vd + layout['result']) != 0xffffffff:
         problems.append('the open must be answered -1')
@@ -381,7 +391,7 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
     unit = vd + layout['decoder'] + L['a733_video_decoder']['unit']
     if get(unit + L['a733_video_unit']['deadline'], 8) or get(unit + L['a733_video_unit']['failed']):
         problems.append('the refused open must leave the binding with no deadline and not failed, so a reopen runs')
-    return {'case': 'row-wait', 'waits_us': rows, 'passes': len(state['waits']), 'elapsed_us': state['time'],
+    return {'case': 'row-wait-deadline' if at_deadline else 'row-wait', 'waits_us': rows, 'passes': len(state['waits']), 'elapsed_us': state['time'],
             'phase': get(vd + layout['phase']), 'recorded_fault_step': get(vd + layout['fault_step']),
             'ccu_writes': [(hex(a), hex(v)) for a, v in ccu.writes], 'problems': problems, 'passed': not problems,
             'notes': [(hex(s), hex(v)) for s, v in state['notes']]}
@@ -430,10 +440,11 @@ def main():
     rows.append({'case': 'record-layout', 'passed': not problems, 'problems': problems})
     if problems:
         failures.append('record-layout')
-    row = run_case(image, parts, layout, enums, 'row-wait', row_wait=True)
-    rows.append(row)
-    if not row['passed']:
-        failures.append('row-wait')
+    for name, how in (('row-wait', True), ('row-wait-deadline', 'deadline')):
+        row = run_case(image, parts, layout, enums, name, row_wait=how)
+        rows.append(row)
+        if not row['passed']:
+            failures.append(name)
     for name, options in cases:
         row = run_case(image, parts, layout, enums, name, **options)
         problems = []
