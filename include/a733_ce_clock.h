@@ -24,7 +24,15 @@ struct a733_ce_clock {
     enum a733_ce_clock_state state;
     unsigned held,writes;
     unsigned fail_line; /* The source line of the first failure; zero while healthy. */
+    /* For the first failure record: CCU 0x5e4 as read at entry, the last value read of CE_CLK (0xac0), CE_BGR (0xac4)
+     * and 0x5e4, and whether the last write callback refused. */
+    uint32_t entry_mbus,seen_clk,seen_bgr,seen_mbus;
+    unsigned write_refused;
 };
+/* The first failure record's aux bits for a bring-up failure (include/sunstone_crumb.h, group CE): bits 3:0 the last
+ * CE_BGR read (bits 0, 1, 16, 17), bits 12:4 the last CE_CLK read (bits 4:0, 26:24, 31), bit 13 the last write was
+ * refused by the write callback. */
+uint32_t a733_ce_clock_fail_aux(const struct a733_ce_clock *);
 /* Zero once. One designated task under the existing CE pool mutex. The caller
  * already owns CE exclusively and OSC/REF/PERI0/FABRIC continuously. Initial
  * both-world exclusion, prior DMA resolution and CCU write permission are

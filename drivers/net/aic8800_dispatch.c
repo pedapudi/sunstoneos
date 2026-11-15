@@ -7,6 +7,8 @@
 #include "aic8800_firmware.h"
 #include "a733_range.h"
 #include <string.h>
+/* A scan event copies the frame into the event payload; the scan parser bounds the frame (aic8800_wifi.c, scan_result). */
+_Static_assert(AIC8800_WIFI_FRAME_BYTES<=AIC8800_DATA_ETHERNET_BYTES,"a scan frame fits the dispatcher event payload");
 static uint16_t le16(const uint8_t *p){return (uint16_t)((unsigned)p[0]|(unsigned)p[1]<<8);}
 static uint32_t le32(const uint8_t *p){return (uint32_t)le16(p)|(uint32_t)le16(p+2)<<16;}
 static void increment(uint64_t *v){if(*v!=UINT64_MAX)++*v;}

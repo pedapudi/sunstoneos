@@ -106,6 +106,11 @@
 #define SUNSTONE_CRUMB_QUIESCE_G2D 0xfu
 #define SUNSTONE_CRUMB_QUIESCE_VIDEO_DECODE 0x10u
 #define SUNSTONE_CRUMB_FAIL_USB0 0xbu       /* USB0 guard; layout in sunstone_usb0_stop.h */
+/* CE clock bring-up failure (apps/os/ce_probe.c, drivers/crypto/a733_ce_clock.c). The site's line field is the failing
+ * line of a733_ce_clock.c and its aux is a733_ce_clock_fail_aux(): bits 3:0 the last CE_BGR read (bits 0, 1, 16, 17),
+ * bits 12:4 the last CE_CLK read (bits 4:0, 26:24, 31), bit 13 the last write was refused. FAR holds the last CCU 0x5e4
+ * read and ELR the 0x5e4 word read at entry: both are register words, not addresses (ESR bit 31 clear). */
+#define SUNSTONE_CRUMB_FAIL_CE 0xdu
 /* Frozen finite NPU images use group 8. The host distinguishes their defined
  * finite return producers from CPU retention using the launched image ELF. */
 /* NPU first-failure layouts, independent of progress stages. Register offsets
