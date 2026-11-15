@@ -69,6 +69,11 @@ void latency_init(void)
 {
     const struct ss_grant *grant = ss_grant();
     if (!grant || grant->main_core != 6 || grant->worker_cores != 0xbf) ss_fail(0xb02);
+#ifdef SUNSTONE_LATENCY_NPU
+    /* The NPU ring's producer, the NPU's owner tasks and its interrupt on CPU0 (cmake/a733-os.cmake), and the traffic,
+     * models and vectors regions of manifest-npu.json. */
+    if (grant->npu_core != LATENCY_NPU_CORE || grant->region_count != 3) ss_fail_value(LATENCY_NPU_FAIL_GRANT, grant->npu_core);
+#endif
     uint64_t frequency;
     __asm__ volatile("mrs %0,cntfrq_el0" : "=r"(frequency));
     ss_latency_init(frequency);

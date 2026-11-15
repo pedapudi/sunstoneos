@@ -908,8 +908,8 @@ int os_npu_start(void)
     /* The low boot mode of the grant's performance service: the NPU starts at its 492 MHz point. */
     if(os_perf_enabled()&&os_perf_boot_mode()==2&&!a733_npu_startup_rate(&npu.device->startup,492))return REFUSE();
     creating=1;
-    npu.bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"os-npu-boot",STACK,NULL,4,npu.device->stacks[0],&npu.device->tasks[0],2);
-    npu.client=xTaskCreateStaticAffinitySet(os_npu_client_task,"os-npu-app",STACK,NULL,3,npu.device->stacks[1],&npu.device->tasks[1],2);
+    npu.bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"os-npu-boot",STACK,NULL,4,npu.device->stacks[0],&npu.device->tasks[0],OS_NPU_AFFINITY);
+    npu.client=xTaskCreateStaticAffinitySet(os_npu_client_task,"os-npu-app",STACK,NULL,3,npu.device->stacks[1],&npu.device->tasks[1],OS_NPU_AFFINITY);
     creating=0;
     /* Under the ring the graphs are loaded when it opens, after the scheduler has started (npu_runtime_load_resident):
      * hashing and assembling megabytes would outlast the second that the secondary cores wait for the primary core. */
@@ -917,8 +917,8 @@ int os_npu_start(void)
     uint64_t now;
     if(!npu.bootstrap||!npu.client)return REFUSE();
     if(!a733_npu_startup_bind_task(&npu.device->startup,npu.bootstrap))return REFUSE();
-    if(!(os_npu_session_queued(g)?npu_runtime_bind_resident(&RT,&npu.device->startup,npu.client,4,2):
-         npu_runtime_bind(&RT,&npu.device->startup,clients,4,2)))return REFUSE();
+    if(!(os_npu_session_queued(g)?npu_runtime_bind_resident(&RT,&npu.device->startup,npu.client,4,OS_NPU_AFFINITY):
+         npu_runtime_bind(&RT,&npu.device->startup,clients,4,OS_NPU_AFFINITY)))return REFUSE();
     if(!os_npu_irq_bind(&RT))return REFUSE();
     if(os_npu_diagnostic_bind&&!os_npu_diagnostic_bind(&RT))return REFUSE();
     if(npu.end>(UINT64_MAX>>3)-5000000||!clock_now(&now))return REFUSE();
