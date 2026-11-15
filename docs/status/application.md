@@ -65,8 +65,10 @@ unqualified.
    NPU relu rate by 54% (entry `1794707177945351013-cb244af9`). A sweep of streaming sets (entry
    `1794709286170370328-b5d81897`) shows that the loss grows with the number of concurrent CPU streams more than with the
    bytes they move: one A76 stream at 7.6 GB/s costs the NPU 29%, three A55 streams at 7.0 GB/s cost it 48%. The vendor
-   sets no quality-of-service value for these masters, so the open levers are the CPU-side bandwidth limiter and the job
-   structure ([design](../designs/concurrent-accel.md#stage-1b-the-loss-follows-the-number-of-cpu-streams)).
+   sets no quality-of-service value for these masters. A 262,144-element add and a 360,448-byte relu lose more, 68-69% at the
+   stage-1 set, and three interleaved areas on one core cost about the same as one at fewer bytes (entry
+   `1794711666388475314-76dd9c8e`). An add with four elements per lane runs the GPU alone at 676 jobs/s, three times the one-element add
+   (entry `1794714617637336813-d6d9ac0d`). The open levers are the CPU-side bandwidth limiter and per-master request counters ([design](../designs/concurrent-accel.md#stage-1c-larger-jobs-lose-more-under-cpu-streaming)).
 5. Qualify returning accelerator execution; [NPU status](npu.md) lists the finite images that already pass.
 6. Add broader application inputs, native audio input, autonomous card boot, fault recovery and concurrent thermal qualification.
 7. Qualify continued resident supervision after application completion and autonomous card boot. The bounded hello-compute diagnostic passes over FEL with no USB0 grant; it intentionally stops renewal after successful completion. Ordinary resident builds continue supervision, with host evidence. USB0-granted FEL sessions still need ROM takeover admission and current rail readbacks ([entry contract and open work](../designs/resident-fel.md), [physical evidence](../evidence/application.jsonl)).

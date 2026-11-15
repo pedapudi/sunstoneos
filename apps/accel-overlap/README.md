@@ -30,5 +30,17 @@ devices pipelined under five sets of streaming workers, with a dependent-load ch
 latency. Its result is 1,488 bytes (version 2), and host.py applies the stage-1b predictions and decision rule to it
 ([design](../../docs/designs/concurrent-accel.md#stage-1b-the-loss-follows-the-number-of-cpu-streams)).
 
+Adding `--define SUNSTONE_ACCEL_OVERLAP_LARGE=ON` with `--manifest manifest-large.json` builds the larger-job sweep:
+262,144-element GPU adds in four 1 MiB output slots and a 1024x176 relu (the graphs directory names the `relu-large`
+fixture), in nine phases that add device-alone controls and three interleaved streams on one core. Each GPU phase ends
+with two serial jobs per slot, one with a one-line sync range and one with the whole slot, which time the output cache
+maintenance. Its result is 2,944 bytes (version 3).
+
+`--define SUNSTONE_ACCEL_OVERLAP_WIDTH=ON`, with the same manifest, builds the GPU-width run: the larger-job build with
+the add of [add4/vector_add4.cl](add4/vector_add4.cl), in which each lane adds four consecutive elements, and only the
+GPU-alone phase. A job runs 2,048 workgroups. [add4/program.h](add4/program.h) holds the compiled program and
+[add4/sources.json](add4/sources.json) its compiler record; `apps/gpu-program/compile.py compile --profile 3
+--queue-program` reproduces it. The result keeps the 2,944-byte layout with version 4 and the later phases zero.
+
 A failure ends the session with `ss_fail_value`: the low 12 bits name the check in [main.c](main.c), bits 16 to 19 the
 phase (5 after the last phase), and the value the measured operand.
