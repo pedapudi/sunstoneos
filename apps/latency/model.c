@@ -12,6 +12,13 @@ void *ss_task_create_static_affinity_set(void (*entry)(void *), const char *name
                                         (StaticTask_t *)tcb, (UBaseType_t)affinity);
 }
 
+#ifdef SUNSTONE_LATENCY_PRECISE
+/* The precise wakes' deadline wait takes notification index 1, so that the
+ * phase starts' gives on index 0 (apps/latency/workload.c, start_own) cannot
+ * end it, as the OS gives an application task's waits their own index. */
+_Static_assert(configTASK_NOTIFICATION_ARRAY_ENTRIES >= 2, "a deadline notification index");
+unsigned sunstone_deadline_notify_index(void) { return 1; }
+#endif
 #ifdef SUNSTONE_LATENCY_CPU_ONLY
 /* The CPU control has no DMA client; these hooks stand for the board image's absence of one. */
 void latency_dma_model_tick(void) {}
@@ -121,9 +128,14 @@ static void controller(void *argument)
          * for them while the recorder is still armed; every other core must arm none for a wake CPU0 released. */
         bool pings = false;
         for (unsigned pair = 0; pair < LATENCY_CAUSE_PING_PAIRS; ++pair) pings |= result.ping.pair[pair].target_core == core;
+#ifdef SUNSTONE_LATENCY_PRECISE
+        /* A precise wake comes from CPU0's deadline interrupt, so a core outside the release mask may arm nothing. */
+        if (core && (SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u)) configASSERT(pings || !w->arms);
+#else
         if (core) configASSERT((SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u) ? (pings || !w->arms) : w->arms != 0);
         /* Their timer samples, kept until the woken task ran, were recorded. */
         if (core && !(SUNSTONE_LATENCY_RELEASE_MASK >> core & 1u)) configASSERT(result.core[core].metric[SS_LAT_IRQ].count);
+#endif
 #endif
     }
     configASSERT(result.wake_segments.release_mask == SUNSTONE_LATENCY_RELEASE_MASK);

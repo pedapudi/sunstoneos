@@ -35,7 +35,8 @@ import harness
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--build', '{build:latency-cause-model}', '--output', '{output}'],
              ['--build', '{build:latency-wake-model}', '--output', '{output}'],
-             ['--build', '{build:latency-local-model}', '--output', '{output}']]
+             ['--build', '{build:latency-local-model}', '--output', '{output}'],
+             ['--build', '{build:latency-precise-model}', '--output', '{output}']]
 TARGET = 'latency-partitioned-pmu-model'
 CACHE = harness.CACHE
 MUTATION = ("            status = wait_turn(2u * i + 1, deadline);\n            if (status != LATENCY_CAUSE_PING_OK) break;",

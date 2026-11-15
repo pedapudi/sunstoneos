@@ -232,6 +232,7 @@ def run_case(image, parts, fields, enums, name, verified=None, answer=None, sess
 
     hooks = {
         'sunstone_deadline_register': lambda m: ret(m, 1),
+        'sunstone_deadline_register_index': lambda m: ret(m, 1),
         'sunstone_deadline_now_us': lambda m: ret(m, state['time']),
         'sunstone_deadline_wait_until': wait,
         'a733_counter_clock_now': clock_out,

@@ -56,7 +56,11 @@ elseif(SUNSTONE_APPLICATION STREQUAL "g2d-rotate")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/g2d-rotate/manifest.json")
   add_sunstone_image(sunstone-a733-os-g2d-rotate LIFETIME ${os_lifetime} APPLICATION g2d-rotate)
 elseif(SUNSTONE_APPLICATION STREQUAL "g2d-convert")
-  # The camera-frame conversion stage: NV16 to ARGB8888 and scaling for model input (docs/g2d-os.md#camera-frame-conversion).
+  # The camera-frame conversion stage: packed YUYV to RGB and scaling for model input, with the Lanczos vertical variant
+  # (docs/g2d-os.md#packed-conversion-stage).
+  if(NOT SUNSTONE_G2D_CONVERT_VARIANTS)
+    message(FATAL_ERROR "g2d-convert programs the Lanczos vertical variant: configure with -DSUNSTONE_G2D_CONVERT_VARIANTS=ON")
+  endif()
   add_sunstone_application(g2d-convert
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/g2d-convert/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/g2d-convert/manifest.json")
@@ -221,6 +225,9 @@ elseif(SUNSTONE_APPLICATION STREQUAL "table-walks")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/manifest.json"
     INPUTS "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/privilege.c"
     INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/table-walks")
+  # The exception-code walk (checks/irq-general-regs.py) counts the walk worker, a task entry whose address the
+  # application takes, among the targets of indirect calls, so these sources keep the OS's general-register flag.
+  target_compile_options(table-walks PRIVATE "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")
   add_sunstone_image(sunstone-a733-os-table-walks LIFETIME ${os_lifetime} APPLICATION table-walks)
   target_sources(sunstone-a733-os-table-walks PRIVATE "${SUNSTONE_SOURCE_ROOT}/apps/table-walks/privilege.c")
   target_link_options(sunstone-a733-os-table-walks PRIVATE -Wl,--wrap=os_application_task_privileged)
@@ -292,6 +299,10 @@ elseif(SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/gpu-lifecycle/manifest.json"
     INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/gpu-lifecycle"
       "${SUNSTONE_SOURCE_ROOT}/apps/gpu-queue-peer")
+  # The exception-code walk (checks/irq-general-regs.py) counts the peer's entry, which the owner table holds, among
+  # the targets of indirect calls, so the peer keeps the OS's general-register flag.
+  set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/apps/gpu-queue-peer/main.c" PROPERTIES
+    COMPILE_OPTIONS -mgeneral-regs-only)
   target_compile_definitions(gpu-lifecycle PRIVATE
     GPU_LIFECYCLE_PEER=$<BOOL:${SUNSTONE_GPU_LIFECYCLE_PEER}>
     GPU_LIFECYCLE_FAIL_AFTER_SUBMIT=$<BOOL:${SUNSTONE_GPU_LIFECYCLE_FAIL_AFTER_SUBMIT}>

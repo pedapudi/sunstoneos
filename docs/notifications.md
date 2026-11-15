@@ -8,15 +8,19 @@ The indices are defined in [include/sunstone_notify.h](../include/sunstone_notif
 
 | Index | Name | Users |
 | --- | --- | --- |
-| 0 | `SS_NOTIFY_OWN` | The owning task. For an application task, the application alone: no OS, SDK or runtime code gives or takes it. For an OS service task, that service |
+| 0 | `SS_NOTIFY_OWN` | The owning task. For an application task, the application alone: no OS, SDK or runtime code gives or takes it. For an OS service task, that service. The G2D and video decoder owners take it only where they block for an input: the application's request and the quiesce |
 | 1 | `SS_NOTIFY_REQUEST_WAIT` | A caller sleeping for a request that an OS service serves for it: the SD owner's callers (`apps/os/sd_owner.c`); legacy GPU diagnostic tasks also use this index |
-| 2 | `SS_NOTIFY_DEADLINE` | The waits of an application task inside the runtime and the OS: the deadline wait (timer interrupt and device hints), `ss_large_wait` and the OS waits that register with `os_wake`. Native GPU fence and lifecycle waits also use it. A wait takes only this index on its way out |
+| 2 | `SS_NOTIFY_DEADLINE` | The waits of an application task inside the runtime and the OS: the deadline wait (timer interrupt and device hints), `ss_large_wait` and the OS waits that register with `os_wake`. Native GPU fence and lifecycle waits also use it. The G2D and video decoder owners' deadline waits use it too, given by their device interrupt and their power row's wake. A wait takes only this index on its way out |
 
 The deadline wait obtains its index from `sunstone_deadline_notify_index()`. The default is index 0 (an OS service
 task keeps its own); `apps/os/application.c` returns index 2 for a task that carries the application tag, which the
 main task receives when the application starts and every task it creates inherits. The SD owner is an OS task that
 the OS start list creates, and it carries no application tag.
 The trusted GPU peer is created by the OS without that address-space tag.
+An OS service task that registers with `sunstone_deadline_register_index` uses the index it names in every deadline
+wait instead. The G2D and video decoder owners name index 2: each blocks on index 0 with no timeout for its next
+input, and a deadline wait on index 0 inside a close or an operation would take an input's notification on its way
+out and leave the owner blocked with the input unserved.
 Its explicit task identity selects index 2 for startup and fence waits; the
 startup-ready publication also gives index 2. OS service tasks keep index 0.
 
