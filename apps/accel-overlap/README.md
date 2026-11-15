@@ -40,7 +40,8 @@ maintenance. Its result is 2,944 bytes (version 3).
 the add of [add4/vector_add4.cl](add4/vector_add4.cl), in which each lane adds four consecutive elements, and only the
 GPU-alone phase. A job runs 2,048 workgroups. [add4/program.h](add4/program.h) holds the compiled program and
 [add4/sources.json](add4/sources.json) its compiler record; `apps/gpu-program/compile.py compile --profile 3
---queue-program` reproduces it. The result keeps the 2,944-byte layout with version 4 and the later phases zero.
+--queue-program --inline-arguments` reproduces it. Like the one-element add, it receives its arguments in unified
+registers once per task. The result keeps the 2,944-byte layout with version 4 and the later phases zero.
 
 `--define SUNSTONE_ACCEL_OVERLAP_COUNTERS=ON`, with the OS option `SUNSTONE_ACCEL_NSI_COUNTERS=ON` and `--manifest
 manifest-counters.json`, builds the NSI counter run. Its graphs directory names four relu graphs of 1,024 rows, in

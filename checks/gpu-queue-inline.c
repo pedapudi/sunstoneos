@@ -6,7 +6,9 @@
  * An emulator runs the ordinary task's DOUT instructions over the data the
  * CDM fetches and fills the unified registers of all 32 lanes. Each program's
  * compiler record (sources.json, passed by checks/gpu-queue-inline.py) must
- * then agree with them: the local index in the register the compiler
+ * then agree with them. The GRID record is the compiler's GRID profile
+ * contract, because no program in this repository uses that ABI; the
+ * GRID_INLINE records are the shipped queue programs. Agreement means the local index in the register the compiler
  * allocated, every explicitly read register written by a constant, and the
  * register count within the CDM's unified allocation. The job's binding
  * addresses and count must reach the registers the kernel source reads.
@@ -152,10 +154,18 @@ static struct record parse(char **argv)
 
 int main(int argc, char **argv)
 {
-    /* argv: two records, GRID (the width add) then GRID_INLINE (the inline add): abi local_start local_count mask vtxins */
-    if (argc != 11) return 2;
-    const struct record grid = parse(argv + 1), inl = parse(argv + 6);
-    assert(grid.abi == GPU_QUEUE_ABI_GRID && inl.abi == GPU_QUEUE_ABI_GRID_INLINE);
+    /* argv: the GRID contract record, then one or more GRID_INLINE program records, five words each:
+     * abi local_start local_count mask vtxins */
+    if (argc < 11 || (argc - 1) % 5) return 2;
+    const unsigned programs = (unsigned)(argc - 6) / 5;
+    struct record inline_records[8];
+    if (programs > sizeof(inline_records) / sizeof(inline_records[0])) return 2;
+    const struct record grid = parse(argv + 1);
+    assert(grid.abi == GPU_QUEUE_ABI_GRID);
+    for (unsigned i = 0; i < programs; ++i) {
+        inline_records[i] = parse(argv + 6 + 5 * i);
+        assert(inline_records[i].abi == GPU_QUEUE_ABI_GRID_INLINE);
+    }
     const struct gpu_queue_lease_info lease[2] = {{.address = 0x4800000000ull, .bytes = 4u << 20},
                                                   {.address = 0x4900000000ull, .bytes = 2u << 20}};
     const uint64_t slot_gpu = 0xda00000400ull;
@@ -180,33 +190,36 @@ int main(int argc, char **argv)
             if (l.value[lane][grid.local_start] != lane) fail("GRID local index", lane);
         ++cases;
     }
-    /* The other ABI's program on this slot must disagree. */
-    {
+    /* Every inline program on this slot must disagree. */
+    for (unsigned i = 0; i < programs; ++i) {
         const int before = failures;
         quiet = 1;
-        int ok = emulate(s.bytes, s.bytes + SLOT_CDM, &l) && agree(&inl, &l);
+        int ok = emulate(s.bytes, s.bytes + SLOT_CDM, &l) && agree(&inline_records[i], &l);
         quiet = 0;
-        if (ok || failures == before) { fail("inline program accepted on a GRID slot", 0); }
+        if (ok || failures == before) { fail("inline program accepted on a GRID slot", i); }
         else { failures = before; ++cases; }
     }
 
     /* GRID_INLINE: block bytes 0-7 in 0-1, binding 0 in 2-3, bytes 8-15 in 4-5, the local index in 6. */
     create(&s, GPU_QUEUE_ABI_GRID_INLINE, slot_gpu, binding0);
-    if (job(&s, GPU_QUEUE_ABI_GRID_INLINE, slot_gpu, lease, &j) && emulate(s.bytes, s.bytes + SLOT_CDM, &l) &&
-        agree(&inl, &l)) {
-        /* vector_add4_inline.cl reads binding 1 from 0-1, the output from 2-3, the count from 4 and the mode from 5. */
+    /* The shipped programs read binding 1 from 0-1, the output from 2-3, the count from 4, and the counter
+     * build's add its mode from 5. */
+    if (job(&s, GPU_QUEUE_ABI_GRID_INLINE, slot_gpu, lease, &j) && emulate(s.bytes, s.bytes + SLOT_CDM, &l)) {
         if (pair(&l, 0) != binding1 || pair(&l, 2) != binding0 || l.value[7][4] != count || l.value[7][5] != 1)
             fail("GRID_INLINE job registers", 0);
-        for (unsigned lane = 0; lane < LANES; ++lane)
-            if (l.value[lane][inl.local_start] != lane) fail("GRID_INLINE local index", lane);
         for (unsigned i = SLOT_ARGUMENTS; i < sizeof(s.bytes); ++i)
             if (s.bytes[i]) fail("GRID_INLINE wrote the argument block", i);
-        ++cases;
+        for (unsigned i = 0; i < programs; ++i) {
+            if (!agree(&inline_records[i], &l)) continue;
+            for (unsigned lane = 0; lane < LANES; ++lane)
+                if (l.value[lane][inline_records[i].local_start] != lane) fail("GRID_INLINE local index", lane);
+            ++cases;
+        }
     }
     {
         const int before = failures;
         quiet = 1;
-        int ok = emulate(s.bytes, s.bytes + SLOT_CDM, &l) && agree(&grid, &l);
+        int ok = emulate(s.bytes, s.bytes + SLOT_CDM, &l) && agree(&grid, &l);   /* the GRID contract */
         quiet = 0;
         if (ok || failures == before) { fail("GRID program accepted on an inline slot", 0); }
         else { failures = before; ++cases; }
@@ -219,7 +232,7 @@ int main(int argc, char **argv)
     memcpy(k.arguments, &count2, 4);
     memcpy(k.arguments + 4, &mode2, 4);
     if (job(&s, GPU_QUEUE_ABI_GRID_INLINE, slot_gpu, lease, &k) && emulate(s.bytes, s.bytes + SLOT_CDM, &l) &&
-        agree(&inl, &l)) {
+        agree(&inline_records[0], &l)) {
         if (pair(&l, 0) != lease[1].address + 0x80040 || pair(&l, 2) != binding0 || l.value[7][4] != count2 ||
             l.value[7][5] != mode2)
             fail("second GRID_INLINE job registers", 0);

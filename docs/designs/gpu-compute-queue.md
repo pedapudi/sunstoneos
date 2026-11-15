@@ -110,7 +110,7 @@ Profile 3 of `compile.py` admits programs with two 64-bit pointer arguments in u
 - **Unified registers 0-1:** the job's argument block, holding the GPU addresses of bindings 1 to n-1 as 64-bit words, then the job's argument bytes.
 - **Unified registers 2-3:** the GPU address of binding 0 (the second pointer register).
 
-The mimus kernel reads this layout: a 32-byte record with the weight and code addresses first and four shape words after them, and the output region in the second pointer (`shaders/pvr_mimus_linear.cl`).
+The mimus kernel reads this layout: a 32-byte record with the weight and code addresses first and four shape words after them, and the output region in the second pointer (`shaders/pvr_mimus_linear.cl`). Every lane of a GRID program loads the record itself, so a task makes 32 requests for the same bytes.
 
 A program that uses the inline argument ABI (`GPU_QUEUE_ABI_GRID_INLINE`, `compile.py --inline-arguments`) receives the argument block itself, so no lane loads its arguments from memory:
 
@@ -119,7 +119,7 @@ A program that uses the inline argument ABI (`GPU_QUEUE_ABI_GRID_INLINE`, `compi
 - **Unified registers 4-5:** block bytes 8-15; bytes past the block's end read as zero.
 - **Unified register 6:** the flat local index.
 
-The PDS dispatch program writes these registers once per task, with one extra data write (`DOUTW`) for registers 4-5. Such a job may carry at most 16 block bytes (`GPU_QUEUE_INLINE_BYTES`), for example one binding address and 8 argument bytes. The limit comes from the job page: the dispatch program fills all 16 instruction words of its 64-byte code line. `checks/gpu-queue-inline.py` runs the job writer's PDS data and program through an emulator of the PDS data and dispatch instructions, and compares the registers they write with the registers each compiled program reads.
+The PDS dispatch program writes these registers once per task, with one extra data write (`DOUTW`) for registers 4-5. The queue programs in this repository use this ABI: the one-element add (`apps/queue-add/vector_add.cl`), the four-elements-per-lane add (`apps/accel-overlap/add4/vector_add4.cl`) and the counter build's two-mode add (`apps/accel-overlap/add4inline`). On the board, loading the four-elements-per-lane add's arguments once per task instead of in every lane ran it 1.54 times as fast ([concurrent-accel.md](concurrent-accel.md#arguments-once-per-task)). Such a job may carry at most 16 block bytes (`GPU_QUEUE_INLINE_BYTES`), for example one binding address and 8 argument bytes. The limit comes from the job page: the dispatch program fills all 16 instruction words of its 64-byte code line. `checks/gpu-queue-inline.py` runs the job writer's PDS data and program through an emulator of the PDS data and dispatch instructions, and compares the registers they write with the registers each compiled program reads.
 
 A program descriptor (`struct gpu_queue_program`) carries the code, its length (at most 8,128 bytes, the limit of `compile.py --session`), the compiler's temporary count, coefficient count and local size, and the three digests the compiler manifest records. The queue checks the descriptor's fields at creation. It cannot check the code's memory behavior: programs are trusted, and source admission is an offline review step (`include/pvr_compute_package.h:26-31`). The local-memory ABI is in [gpu-compute-local-memory.md](gpu-compute-local-memory.md).
 
