@@ -63,9 +63,10 @@ Admission of an ON request, in order:
 2. The rail token belongs to the row's owner and holds the supply.
 3. Domain-level reads: the PPU clock and the master gates in the domain's
    profile, CCU `0x5c0` and `0x5e0` bits 5 and 11, 6 and 18, 7 and 16 for
-   domains 1, 4 and 5. Domain 2 has no gates in its profile: its gates
-   (`0x5c0` bit 0, `0x5e0` bit 14, and `0x5e4` bit 18) are `CLK_IS_CRITICAL`
-   (ccu-sun60iw2.c lines 622, 663 and 689), and the decoder handles them. A
+   domains 1, 4 and 5. Domain 2 has no gates in its profile: its three gates
+   are `CLK_IS_CRITICAL`, and the decoder handles them
+   ([video-platform.md](video-platform.md#cold-startup-identifies-a-fixed-rom-profile-before-power-on),
+   "The MBUS clock gate"). A
    domain whose profile sets `gates_after_on`, domain 5 alone, reads the PPU
    clock alone for an ON from OFF: a TOP5 OFF
    closed the GPU AHB master gate on a board, and the GPU controller

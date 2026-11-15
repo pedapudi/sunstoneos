@@ -247,9 +247,10 @@ phase; see [pmic-access.md](pmic-access.md).
 ## Left out
 
 - Domains 3 and 10: their writers are outside this design, and no image
-  links two writers of one of them. The delay row has three writers: the
-  owner, HDMI and DisplayPort (`checks/power-domains-tree.py`). HDMI and DisplayPort power domain 10
+  links two writers of one of them. HDMI and DisplayPort power domain 10
   themselves; CLDO2 and CLDO5, which only domain 10 needs, are not verified.
+  The delay row therefore has three writers: the owner, HDMI and DisplayPort
+  (`checks/power-domains-tree.py`).
 - Power-off of domains 1 and 4, which have several masters; no caller needs it.
 - The S_TWI0 packet engine and both interrupts: delivery is unqualified, and
   the spin is capped at 1 ms per step at a few requests per second.

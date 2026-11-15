@@ -382,16 +382,6 @@ unchanged, and the binding records the written and read words. A word that
 already holds the whole key is not written. This is the binding's only gate
 write; it never writes `0x5c0` or `0x5e0`.
 
-**Quiesce.** `a733_video_decoder_close(p, d, 0)` runs under one lock hold, in the
-vendor's order (`cedar_ve.c` `disable_cedar_hw_clk_module` and
-`disable_cedar_hw_clk_reset`, `ccu_gate.c` `ccu_pll_gate_helper_disable`):
-module gate off, bus gate off, reset asserted, then PLL_VE0's output gate,
-lock enable, enable and LDO cleared, which leaves `0x01204d00` with the board's
-bit 24. Domain 2 stays ON and the critical gates stay as they are. That end
-state is an admitted entry state for the next power lifetime. Within one
-lifetime the quiesced decoder stays closed: every later acquire returns -1
-with no register access.
-
 **Write policy.** `a733_video_platform_write_policy` admits `0xa8c` bits 18 and
 2; `0xa88` bit 31 alone while the gate is open, and the selector and divider
 while it is closed; PLL_VE0 with owned bits `0xf870ff02` while none of its
@@ -408,15 +398,29 @@ records why it failed: `uncertain` for an access or lock operation that did not
 return exactly 1, `late` for a deadline found passed. It also keeps the address
 and word of its latest access.
 
-**Fault close.** `a733_video_decoder_close(p, d, 1)` runs the quiesce's close
-steps, in the same order with each write read back, on a unit that failed on a
-value or a deadline. A late failure inside a hold closes in that hold;
-otherwise the close takes the lock first. A unit whose failure was uncertain is
-never touched. The close writes only CCU words, so the state a fault left
-(PLL enabled with its output open or closed, the module gate open or closed)
-needs no decoder access. A close step whose readback differs fails the unit
-with the lock released. On success the decoder stays closed for the power
-lifetime. The OS service calls this close once after a fault
+### Close
+
+`a733_video_decoder_close(p, d, faulted)` is the decoder's one close, for a
+started decoder (`faulted` 0, the quiesce) and for one that failed
+(`faulted` 1). It runs under one lock hold, in the vendor's order
+(`cedar_ve.c` `disable_cedar_hw_clk_module` and `disable_cedar_hw_clk_reset`,
+`ccu_gate.c` `ccu_pll_gate_helper_disable`): module gate off, bus gate off,
+reset asserted, then PLL_VE0's output gate, lock enable, enable and LDO
+cleared, each write read back. That leaves `0x01204d00` with the board's bit
+24. Domain 2 stays ON and the critical gates stay as they are, so the end state
+is an admitted entry state for the next power lifetime.
+
+- The close writes only CCU words, so the state a fault left (PLL enabled with
+  its output open or closed, the module gate open or closed) needs no decoder
+  access.
+- After a fault, a unit that failed on a value or a deadline is closed. A late
+  failure inside a hold closes in that hold; otherwise the close takes the lock
+  first. A unit whose failure was uncertain is never touched.
+- A close step whose readback differs fails the unit with the lock released.
+- Within one power lifetime the closed decoder stays closed: every later open
+  or acquire returns -1 with no register access.
+
+The OS service calls the close at most once
 ([video-decode-os.md](video-decode-os.md#faults-after-the-first-write)).
 
 The A733 kernel performs the cold VCU pulse without inspecting compound identity.

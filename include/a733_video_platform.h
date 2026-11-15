@@ -124,17 +124,11 @@ int a733_video_decoder_init(struct a733_video_decoder *,const struct a733_video_
  * late access (in any hold, the entry hold included), so a733_video_decoder_close(..., 1) must close it. */
 enum { A733_VIDEO_OPEN_REFUSED = -1, A733_VIDEO_OPEN_FAULT = -2 };
 int a733_video_decoder_open(struct a733_video_decoder *,uint64_t d);
-/* The close of a started decoder (faulted 0) or of one that failed (faulted 1), under one register-lock hold, in the
- * vendor's order (cedar_ve.c disable_cedar_hw_clk_module and disable_cedar_hw_clk_reset, ccu_gate.c
- * ccu_pll_gate_helper_disable): module gate off, bus gate off, reset asserted, then PLL_VE0's output gate, lock
- * enable, enable and LDO cleared. Every write is a read-modify-write with readback. Domain 2 stays ON and the critical
- * gates stay as they are. The caller ensures no job is outstanding. d is a new deadline for this call.
- * faulted 0 refuses a failed unit or a held lock with no access. faulted 1 closes a unit that failed on a value it
- * read completely or on a deadline; one whose failure was uncertain (an access or mutex operation with an unknown
- * effect) is never touched, and a late failure inside a hold closes in that hold. 1 closed: the decoder is closed for
- * the rest of its power lifetime, every later acquire or open returns -1 with no register access, and after a fault
- * the unit stays failed; 0 effect-free busy lock, call again; -1 refused: a close step whose readback differs fails
- * the unit. */
+/* The close of a started decoder (faulted 0) or of one that failed (faulted 1), in the vendor's order under one
+ * register-lock hold; docs/video-platform.md, "Close", describes the steps and which failed units it touches. The
+ * caller ensures no job is outstanding; d is a new deadline for this call. faulted 0 refuses a failed unit or a held
+ * lock with no access. 1 closed for the rest of the power lifetime (after a fault the unit stays failed); 0 effect-free
+ * busy lock, call again; -1 refused: an uncertain unit, untouched, or a close step whose readback differs. */
 int a733_video_decoder_close(struct a733_video_decoder *,uint64_t d,unsigned faulted);
 /* Pure scope derivation; requires the exclusive scopes below and the exact
  * shared result.
