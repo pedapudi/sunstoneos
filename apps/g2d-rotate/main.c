@@ -136,8 +136,10 @@ void g2d_rotate_main(const struct ss_grant *grant)
         *o = (struct g2d_rotate_op){.degrees = plan[k][0], .sx = G2D_ROTATE_SX, .sy = G2D_ROTATE_SY,
             .dx = plan[k][1], .dy = plan[k][2], .w = G2D_ROTATE_W, .h = G2D_ROTATE_H};
         job = (struct ss_g2d_job){.op = SS_G2D_ROTATE,
-            .source = {G2D_ROTATE_LARGE_SOURCE, 0, 0, G2D_ROTATE_WIDTH, G2D_ROTATE_HEIGHT, G2D_ROTATE_STRIDE, 0},
-            .output = {G2D_ROTATE_LARGE_SURFACE, 0, 0, G2D_ROTATE_WIDTH, G2D_ROTATE_HEIGHT, G2D_ROTATE_STRIDE, 0},
+            .source = {.region = G2D_ROTATE_LARGE_SOURCE, .width = G2D_ROTATE_WIDTH, .height = G2D_ROTATE_HEIGHT,
+                       .stride = G2D_ROTATE_STRIDE},
+            .output = {.region = G2D_ROTATE_LARGE_SURFACE, .width = G2D_ROTATE_WIDTH, .height = G2D_ROTATE_HEIGHT,
+                       .stride = G2D_ROTATE_STRIDE},
             .sx = o->sx, .sy = o->sy, .dx = o->dx, .dy = o->dy, .w = o->w, .h = o->h, .degrees = o->degrees,
             .flip = o->flip};
         o->result = (uint32_t)finish_call(run_call, &o->done);

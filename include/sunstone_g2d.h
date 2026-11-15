@@ -99,33 +99,54 @@ struct ss_g2d_closed {
     uint32_t de_di_open, reserved;
     uint64_t closed_ticks;
 };
-/* A surface: width by height pixels of one of the eight 32-bit RGB orders (format 0 ARGB8888 to 7 BGRX8888, the
- * vendor's codes), rows stride bytes apart, starting offset bytes into one of the application's large regions
- * (manifest.json "large_regions"; ss_large_base gives its address). The output's region must be writable. */
+/* A surface: width by height pixels starting offset bytes into one of the application's large regions (manifest.json
+ * "large_regions"; ss_large_base gives its address), rows stride bytes apart. The output's region must be writable.
+ * format is one of the eight 32-bit RGB orders (0 ARGB8888 to 7 BGRX8888, the vendor's codes), 4 bytes a pixel, or
+ * SS_G2D_FORMAT_NV16, a source of SS_G2D_CONVERT only: one byte of luma a pixel at offset, and a second plane of
+ * interleaved chroma pairs, one pair for two pixels, chroma_stride bytes a row, at chroma_offset in the same region.
+ * chroma_offset and chroma_stride are zero for an RGB surface. Offsets and strides are multiples of 4. */
 struct ss_g2d_surface {
     uint32_t region, format;
     uint64_t offset;
     uint32_t width, height, stride, reserved;
+    uint64_t chroma_offset;
+    uint32_t chroma_stride, reserved1;
 };
-enum { SS_G2D_FILL = 1, SS_G2D_BLIT = 2, SS_G2D_ROTATE = 3 };
+/* The vendor's YUV422UVC_V1U1V0U0 (sunxi-g2d.h): a luma plane and a plane of chroma pairs. The vendor names the bytes
+ * of a 32-bit word from the most significant, as in ARGB8888, whose bytes are B, G, R, A in memory; read that way the
+ * chroma plane holds U0, V0, U1, V1 in memory, the NV16 order. Board stage 7 measures the order
+ * (docs/g2d-os.md#camera-frame-conversion). */
+#define SS_G2D_FORMAT_NV16 UINT32_C(0x24)
+enum { SS_G2D_FILL = 1, SS_G2D_BLIT = 2, SS_G2D_ROTATE = 3, SS_G2D_CONVERT = 4 };
 enum { SS_G2D_FLIP_H = 1, SS_G2D_FLIP_V = 2 };
+/* The colour space of a YUV source: ITU-R BT.601 or BT.709, with luma in 16..235 (limited) or 0..255 (full). The
+ * RGB output is always full range, 0..255. */
+enum { SS_G2D_CSC_BT601_LIMITED = 1, SS_G2D_CSC_BT601_FULL = 2, SS_G2D_CSC_BT709_LIMITED = 3,
+       SS_G2D_CSC_BT709_FULL = 4 };
 /* One operation. The rest of the output is unchanged.
  * - Fill writes color (ARGB, 32 bits) to the w by h rectangle at dx, dy of an ARGB8888 output; source, sx and sy are
  *   zero.
  * - Blit copies the w by h rectangle at sx, sy of the source to dx, dy of the output, converting from the source's
  *   format to the output's (the native builder's copy, docs/g2d.md). The source and the output have the same width,
  *   height and stride; they may name the same region. color is zero. The engine reads the source through a read-only
- *   mapping. What a conversion writes to an X byte (formats 4 to 7) is not yet established on the board.
+ *   mapping. A source pixel whose alpha byte is 0 is written as 0x00000000: use a blit where alpha is coverage. What a
+ *   conversion writes to an X byte (formats 4 to 7) is not yet established on the board.
  * - Rotate copies the w by h rectangle at sx, sy of the source to dx, dy of the output through the rotate module
  *   (docs/g2d-os.md#rotate-module), turned by degrees (0, 90, 180 or 270) and flipped by flip (SS_G2D_FLIP_H,
  *   SS_G2D_FLIP_V), without the blender and without converting: the source and the output have the same format, and
  *   each its own width, height and stride. The output rectangle is h by w for 90 and 270 degrees. The output stride
  *   is a multiple of 8 bytes. color is zero, and the result is undefined where the two rectangles share memory.
- * degrees and flip are zero for a fill and a blit. */
+ *   Every pixel is copied exactly, its alpha byte included: a rotate at 0 degrees is the exact copy, for camera
+ *   frames and packed sensor data.
+ * - Convert reads the w by h rectangle at sx, sy of an SS_G2D_FORMAT_NV16 source, converts it from the colour space
+ *   csc (SS_G2D_CSC_*) to the output's RGB order, and scales it to the ow by oh rectangle at dx, dy of the output
+ *   (docs/g2d-os.md#camera-frame-conversion). sx is even. color, degrees and flip are zero.
+ * degrees and flip are zero for a fill and a blit; ow, oh and csc are zero for every operation but a convert. */
 struct ss_g2d_job {
     uint32_t op, color;
     struct ss_g2d_surface source, output;
     uint32_t sx, sy, dx, dy, w, h, degrees, flip;
+    uint32_t ow, oh, csc, reserved;
 };
 #define SS_G2D_DONE_MAGIC UINT32_C(0x44443247) /* "G2DD" */
 /* The record of one operation. Times are system-counter ticks. */

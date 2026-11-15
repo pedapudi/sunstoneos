@@ -253,8 +253,11 @@ static void monitor(void *unused)
                 struct line s = {.used = 0};
                 TaskHandle_t owner = os_sd_owner_task ? os_sd_owner_task() : 0;
                 put(&s, "TASK-SPACE main="); put_dec(&s, xTaskGetApplicationTaskTag(os_application_main_task()) != 0);
+                /* The cores of OS services created without an affinity: the service core only (include/os_space.h). */
+                put(&s, " thermal_cores="); put_dec(&s, vTaskCoreAffinityGet(os_thermal_task_handle()));
                 if (owner) {
                     put(&s, " sdowner="); put_dec(&s, xTaskGetApplicationTaskTag(owner) != 0);
+                    put(&s, " sdowner_cores="); put_dec(&s, vTaskCoreAffinityGet(owner));
                     put(&s, " sdentry="); put_dec(&s, os_sd_owner_entry_ttbr() != os_space_kernel_ttbr);   /* 1: it began in a space */
                 }
                 flush(&s);

@@ -4,7 +4,7 @@ pyusb==1.3.1
 pyelftools==0.33
 # Disassembles linked entry code in the SMP model (a733-smp-cached.py and its users).
 capstone==5.0.9
-# AES key-wrap vectors in aic8800-supplicant.py.
+# Optional: aic8800-supplicant.py checks its fixed AES key-wrap answers against this package when it is installed.
 cryptography==46.0.5
 # npu-conv-reference.py and tools/npu-*-fixture.py run inside the pinned NPU
 # compiler image (docs/npu-compiler.md), not in this environment. That image
