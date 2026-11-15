@@ -31,6 +31,13 @@
 #else
 #define OS_WITH_HEADSET(...)
 #endif
+/* The video decoder service likewise (SUNSTONE_A733_OS_VIDEO_DECODE): an image links it when its application declares
+ * the video-decode device. */
+#ifdef SUNSTONE_A733_OS_VIDEO_DECODE
+#define OS_WITH_VIDEO_DECODE(...) __VA_ARGS__
+#else
+#define OS_WITH_VIDEO_DECODE(...)
+#endif
 #ifdef SUNSTONE_A733_OS_GPU
 #define OS_WITH_GPU(...) __VA_ARGS__
 #else
@@ -80,7 +87,7 @@
     X("i2c", os_i2c, os_i2c_start, OS_ALWAYS) \
     X("rtc", os_rtc, os_rtc_start, OS_ALWAYS) \
     X("g2d", os_g2d, os_g2d_start, OS_ALWAYS) \
-    X("video-decode", os_video_decode, os_video_decode_start, OS_ALWAYS) \
+    X("video-decode", os_video_decode, os_video_decode_start, OS_WITH_VIDEO_DECODE) \
     X("gpu-queue", os_gpu_queue, os_gpu_queue_start_entry, OS_WITH_GPU)
 
 /* X(NAME, name, window_us, grant, with): a task the supervisor watches, after the board's five and the application

@@ -1458,6 +1458,26 @@ def run_reference(args):
     return {'path': path, 'anchor': anchor}
 
 
+def source_revisions(host_tree):
+    """The revision of the source the image ran from, and the daemon's own, as separate fields.
+
+    git_revision is the revision of the tree the image was prepared from (--host-tree: the geometry, the session and the return
+    validation come from it); with no host tree the image and the daemon share the board-queue checkout. git_revision_source says which,
+    git_revision_dirty whether that tree had uncommitted changes to tracked files, and daemon_git_revision is HEAD of the board-queue
+    checkout whose code ran the queue (the revision of the stage-1 decoder record was this one, not the image's)."""
+    def head(tree):
+        revision = subprocess.run(['git', '-C', str(tree), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+        status = subprocess.run(['git', '-C', str(tree), 'status', '--porcelain', '--untracked-files=no'], capture_output=True, text=True)
+        return revision, bool(status.stdout.strip())
+    daemon, daemon_dirty = head(ROOT)
+    if host_tree:
+        image, dirty = head(Path(host_tree).resolve())
+        source = 'host-tree'
+    else:
+        image, dirty, source = daemon, daemon_dirty, 'daemon-checkout'
+    return {'git_revision': image, 'git_revision_source': source, 'git_revision_dirty': dirty, 'daemon_git_revision': daemon}
+
+
 def run_image(args, backend=Live):
     started = time.monotonic()
     pressure_start = host_priority.pressure()
@@ -1468,7 +1488,7 @@ def run_image(args, backend=Live):
               'outcome': 'host-error', 'first_failure': None, 'durations': {},
               'evidence_path': str(evidence.resolve()), 'result_path': str((evidence/'result.json').resolve()),
               'quarantined': False, 'launch_attempted': False, 'time': time.time(), 'host_pressure': {'start': pressure_start},
-              'git_revision': subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'], capture_output=True,text=True).stdout.strip()}
+              **source_revisions(getattr(args, 'host_tree', None))}
     result['dram_mode'] = 'preserved' if images.preserving(args) else 'development'
     result['reference'] = run_reference(args)
     owner = None

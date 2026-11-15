@@ -339,6 +339,9 @@ endforeach()
 list(APPEND os_added apps/os/quiesce.c apps/os/cpu-return.c apps/os/cpu-return-el0.S apps/os/cpu-return-spi.c apps/os/cpu-return-entry.c)
 list(APPEND os_include_dirs "${os_build}")
 list(APPEND os_external_inputs "${os_qualification}/runtime.h" "${os_build}/cpu-return-runtime.h")
+# The video decoder service (apps/os/video_decode.c) runs the decoder platform binding. Both are an object library
+# that an image links only when its application declares the video-decode device (cmake/sunstone-image.cmake); the
+# USB JPEG option links the binding into the core instead.
 if(SUNSTONE_A733_OS_USB_JPEG)
   list(APPEND os_added apps/os/usb-jpeg-native.c apps/jpeg/input.c
     drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c
@@ -413,7 +416,7 @@ list(REMOVE_DUPLICATES os_sources)
 # Device implementations are separate object libraries. Each selected owner
 # receives the same OS configuration; the core itself holds shared services.
 set(os_service_targets)
-foreach(service audio headset gpu npu radio)
+foreach(service audio headset gpu npu radio video-decode)
   set(service_sources)
   foreach(source IN LISTS os_sources)
     set(selected FALSE)
@@ -427,6 +430,8 @@ foreach(service audio headset gpu npu radio)
       set(selected TRUE)
     elseif(service STREQUAL "radio" AND source MATCHES "/apps/os/radio[^/]*\\.c$")
       set(selected TRUE)
+    elseif(service STREQUAL "video-decode" AND source MATCHES "/apps/os/video_decode\\.c$")
+      set(selected TRUE)
     endif()
     if(selected)
       list(APPEND service_sources "${source}")
@@ -437,7 +442,16 @@ foreach(service audio headset gpu npu radio)
     add_library(sunstone-a733-os-${service} OBJECT EXCLUDE_FROM_ALL ${service_sources})
     target_link_libraries(sunstone-a733-os-${service} PRIVATE sunstone-os-settings)
     list(APPEND os_external_inputs ${service_sources})
-    if(service STREQUAL "headset")
+    if(service STREQUAL "video-decode")
+      # Linked per image, by the application's manifest, with the decoder binding unless the core already has it.
+      if(NOT SUNSTONE_A733_OS_USB_JPEG)
+        target_sources(sunstone-a733-os-video-decode PRIVATE "${os_root}/drivers/video/a733_video_platform.c"
+          "${os_root}/drivers/video/a733_video_unit.c")
+        list(APPEND os_external_inputs "${os_root}/drivers/video/a733_video_platform.c"
+          "${os_root}/drivers/video/a733_video_unit.c")
+      endif()
+      target_compile_definitions(sunstone-a733-os-video-decode PRIVATE SUNSTONE_A733_OS_VIDEO_DECODE=1)
+    elseif(service STREQUAL "headset")
       # Linked per image, by the application's manifest (cmake/sunstone-image.cmake), not into every image.
       target_compile_definitions(sunstone-a733-os-headset PRIVATE SUNSTONE_A733_OS_HEADSET=1
         SUNSTONE_BLUETOOTH_HEADSET=1 SUNSTONE_BLUETOOTH_CAPTURE_PROFILE=1 SUNSTONE_BLUETOOTH_MSBC=1)

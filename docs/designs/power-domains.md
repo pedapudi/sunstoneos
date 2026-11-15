@@ -1,7 +1,7 @@
 # Design: one power-domain owner and one PMIC service task
 
-Status: **implemented and host-tested** for domains 1, 4 and 5 and the service
-task; **qualified on the board** only for the PMIC snapshot step times of the
+Status: **implemented and host-tested** for domains 1, 2, 4 and 5 and the
+service task, with the video decoder on its domain-2 row; **qualified on the board** only for the PMIC snapshot step times of the
 service (bundle 6, read-only); **open** for domain transitions on the board.
 [docs/power-domains.md](../power-domains.md) describes the component.
 [power-authority.md](power-authority.md) covers the rail ledger, the state
@@ -246,9 +246,11 @@ phase; see [pmic-access.md](pmic-access.md).
 
 ## Left out
 
-- Domains 2, 3 and 10: their writers are outside this design, and no image
+- Domains 3 and 10: their writers are outside this design, and no image
   links two writers of one of them. HDMI and DisplayPort power domain 10
   themselves; CLDO2 and CLDO5, which only domain 10 needs, are not verified.
+  The delay row therefore has three writers: the owner, HDMI and DisplayPort
+  (`checks/power-domains-tree.py`).
 - Power-off of domains 1 and 4, which have several masters; no caller needs it.
 - The S_TWI0 packet engine and both interrupts: delivery is unqualified, and
   the spin is capped at 1 ms per step at a few requests per second.
