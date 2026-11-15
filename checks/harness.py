@@ -441,6 +441,76 @@ def hook_addresses(uc, addresses, callback):
     return addresses
 
 
+class TwoCores:
+    """Run two code paths of one emulated image as two cores would, switching between them at chosen accesses.
+
+    A writer (such as a service's owner task) and a reader (such as its quiesce step on the supervisor's core) share some
+    words. Each store by the writer to a shared word and each load by the reader of one is an event. run() takes a
+    schedule (a, k, b): the writer runs until just after its a-th event (a = 0: before it starts), the reader until just
+    after its k-th event (k = 0: no pause), the writer on until just after its b-th event (b <= a: no further step), then
+    the reader to its end and the writer to its end. Trying every (a, k, b) covers each place the reader's loads can fall
+    among the writer's stores, including a pair of loads that straddles one or more stores.
+
+    A pause takes effect at the next instruction, through a code hook: Unicorn stops before a code hook's instruction
+    with the program counter correct, while a stop requested from a memory hook leaves the counter at the accessing
+    instruction. The memory hooks therefore only count."""
+
+    def __init__(self, uc, words, sentinel, budget=5_000_000):
+        from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ
+        self.uc, self.sentinel, self.budget = uc, sentinel, budget
+        self.side, self.count, self.target, self.pending, self.paused = None, {'writer': 0, 'reader': 0}, None, False, False
+        self.hooks = [uc.hook_add(UC_HOOK_CODE, self._code)]
+        for address, size in words:
+            self.hooks.append(uc.hook_add(UC_HOOK_MEM_WRITE, self._access, 'writer', address, address + size - 1))
+            self.hooks.append(uc.hook_add(UC_HOOK_MEM_READ, self._access, 'reader', address, address + size - 1))
+        # Unicorn compiles hook calls into translated code, so code translated before these hooks never calls them.
+        uc.ctl_flush_tb()
+
+    def close(self):
+        for hook in self.hooks:
+            self.uc.hook_del(hook)
+        self.uc.ctl_flush_tb()
+
+    def _access(self, uc, access, address, size, value, side):
+        if self.side == side:
+            self.count[side] += 1
+            if self.count[side] == self.target:
+                self.pending = True
+
+    def _code(self, uc, address, size, data):
+        if self.pending:
+            self.pending, self.paused = False, True
+            uc.emu_stop()
+
+    def _resume(self, side, context, target, ended):
+        """Run side from its saved context; return its context when it paused, None when it ended."""
+        from unicorn.arm64_const import UC_ARM64_REG_PC
+        self.side, self.target, self.pending, self.paused = side, target, False, False
+        self.uc.context_restore(context)
+        self.uc.emu_start(self.uc.reg_read(UC_ARM64_REG_PC), self.sentinel, count=self.budget)
+        self.side = None
+        if self.paused:
+            return self.uc.context_save()
+        assert ended(), (side, 'neither paused nor ended')
+        return None
+
+    def run(self, writer, reader, schedule, writer_ended, reader_ended):
+        """writer and reader are saved contexts at their entries; each *_ended() says whether that side finished."""
+        a, k, b = schedule
+        self.count = {'writer': 0, 'reader': 0}
+        if writer is not None and a > 0:
+            writer = self._resume('writer', writer, a, writer_ended)
+        if reader is not None:
+            reader = self._resume('reader', reader, k or None, reader_ended)
+        if writer is not None and b > a:
+            writer = self._resume('writer', writer, b, writer_ended)
+        if reader is not None:
+            reader = self._resume('reader', reader, None, reader_ended)
+        if writer is not None:
+            writer = self._resume('writer', writer, None, writer_ended)
+        return dict(self.count)
+
+
 def save(path, value):
     Path(path).write_text(json.dumps(value, indent=2) + '\n')
 

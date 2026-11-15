@@ -141,7 +141,16 @@ DCDC1 and CLDO1 are not changed. Clock, pin and rail reservations remain held
 through the return.
 
 A completed scan can report DONE only after DOWN readbacks, PMIC request
-retirement and credential cleanup. An uncertain transfer, write, ownership or readback retains
+retirement and credential cleanup.
+A scan station that fails after its first write runs the failure shutdown
+instead. It drives PM1 low, retires the SDC1 interrupt, gates the module and
+bus clocks with the reset asserted, and powers BLDO5 off and reaps the PMIC
+request, reading back each step. When every step matches, the radio's quiesce
+step reports DONE and the fault returns inside the radio record
+([failure return](failure-return-audit.md)). The SDIO host moves data through
+its CPU FIFO with DMA disabled, so a transport fault leaves no bus master to
+stop first. A step that does not read back, or a headset session whose
+Bluetooth client never released the module, keeps FAULT with the failure site. An uncertain transfer, write, ownership or readback retains
 FAULT. Full-station and association sessions also own the crypto engine (CE);
 radio shutdown supplies no CE drain proof, so their registered result retains
 FAULT value `0x905`.

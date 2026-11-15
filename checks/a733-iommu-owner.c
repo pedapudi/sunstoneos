@@ -20,8 +20,13 @@
  * 11 a detach scans the master's fault words before it bypasses the master (case 8);
  * 12 a later attach that fails among its masters' micro writes leaves them attached, so one detach of every master
  *    bypasses them all, flushes them, disables both banks and releases every table and the clock lease;
- * 13 a first attach of the ISP master (2) writes prefetch 0 to both banks, and a later master that needs prefetch
- *    0x3007f is refused with no register access.
+ * 13 G2D attaches first, then CSI (master 1, bank 0): both attach, and the first attach wrote bank 0's prefetch word
+ *    0x30079 (the CSI and ISP bits clear) and bank 1's 0x3007f; the later attach writes neither word, and each
+ *    master's pages walk from its own bank;
+ * 14 CSI and ISP (masters 1 and 2) attach first, then G2D: the same two words, written once by the first attach, and
+ *    the same walks, so attach order does not change what either bank prefetches;
+ * 15 a model in which both banks' prefetch offsets name one register: the first attach faults at the readback of
+ *    bank 0's word after bank 1's write, recording 0x3007f read, and the detach still releases everything.
  * Built with -DMUTANT_SECOND_DIRECTORY (checks/a733-iommu-owner.py), the decoder's attach installs a second
  * directory; case 2 or 3 must fail. */
 #include "a733_iommu_owner.h"
@@ -40,6 +45,7 @@ static uint32_t regs[REGS / 4];
 static uint64_t now;
 static int clock_held, clock_takes;
 static uint32_t stuck_offset = UINT32_MAX, stuck_value; /* case 9: this register keeps stuck_value */
+static int prefetch_shared;                           /* case 15: 0x2c and 0x1002c name one register */
 struct access { char op; uint32_t offset, value; };
 static struct access trace[4096];
 static unsigned traced;
@@ -61,6 +67,7 @@ static int wr(void *c, uint32_t off, uint32_t v)
     (void)c;
     if(off >= REGS || (off & 3)) return -1;
     regs[off / 4] = off == stuck_offset ? stuck_value : v;
+    if(prefetch_shared && (off == 0x2c || off == 0x1002c)) regs[0x2c / 4] = regs[0x1002c / 4] = v;
     if(traced < 4096) trace[traced++] = (struct access){'W', off, v};
     return 1;
 }
@@ -175,18 +182,20 @@ int main(void)
         unsigned i = mark, k;
         for(k = 0; k < sizeof(want) / sizeof(want[0]); ++k, ++i)
             CHECK(trace[i].op == want[k].op && trace[i].offset == want[k].offset);
-        /* Each write then its readback; the flush requests have none. USB (master 0) is set to bypass. */
-        const struct { uint32_t off, value; int back; } seq[] = {
-            {0x20, dirw, 1}, {0x10020, dirw, 1}, {0x2c, 0x3007f, 1}, {0x1002c, 0x3007f, 1},
-            {0x40, 1, 1}, {0x10040, 1, 1}, {0x60, 1, 1}, {0x10060, 1, 1}, {0x80, 0, 1}, {0x10080, 0, 1},
-            {0x430, 0, 1}, {mic + 0x30, 0, 1}, {0x404, 1, 1}, {mic + 4, 0, 1},
-            {0x30, 3, 0}, {0x418, 1, 0}, {0x10030, 3, 0}, {mic + 0x18, 1, 0},
-            {0x30, 0, 1}, {0x10030, 0, 1}, {0x1c, 0x7fff0003, 1}, {0x1001c, 0x7fff0003, 1}, {0x14, 1, 1}, {0x10014, 1, 1},
+        /* Each write then its readback; the flush requests have none. USB (master 0) is set to bypass. Bank 0's
+         * prefetch word is read again after bank 1's is written. */
+        const struct { uint32_t off, value; int back; uint32_t again; } seq[] = {
+            {0x20, dirw, 1, 0}, {0x10020, dirw, 1, 0}, {0x2c, 0x30079, 1, 0}, {0x1002c, 0x3007f, 1, 0x2c},
+            {0x40, 1, 1, 0}, {0x10040, 1, 1, 0}, {0x60, 1, 1, 0}, {0x10060, 1, 1, 0}, {0x80, 0, 1, 0}, {0x10080, 0, 1, 0},
+            {0x430, 0, 1, 0}, {mic + 0x30, 0, 1, 0}, {0x404, 1, 1, 0}, {mic + 4, 0, 1, 0},
+            {0x30, 3, 0, 0}, {0x418, 1, 0, 0}, {0x10030, 3, 0, 0}, {mic + 0x18, 1, 0, 0},
+            {0x30, 0, 1, 0}, {0x10030, 0, 1, 0}, {0x1c, 0x7fff0003, 1, 0}, {0x1001c, 0x7fff0003, 1, 0}, {0x14, 1, 1, 0}, {0x10014, 1, 1, 0},
         };
         for(k = 0; k < sizeof(seq) / sizeof(seq[0]); ++k) {
             CHECK(i < traced && trace[i].op == 'W' && trace[i].offset == seq[k].off && trace[i].value == seq[k].value);
             ++i;
             if(seq[k].back) { CHECK(i < traced && trace[i].op == 'R' && trace[i].offset == seq[k].off); ++i; }
+            if(seq[k].again) { CHECK(i < traced && trace[i].op == 'R' && trace[i].offset == seq[k].again); ++i; }
         }
         CHECK(i == traced);
         CHECK(o.entry.recorded == 1 && o.entry.bypass[0] == 0 && o.entry.bypass[10] == 0);
@@ -306,19 +315,35 @@ int main(void)
         CHECK(wrote(0x10400 + 0x18, mark) && wrote(0x10600 + 0x18, mark) && wrote(0x10c00 + 0x18, mark));
         CHECK(regs[0x14 / 4] == 0 && regs[0x10014 / 4] == 0 && !clock_held && releases == allocations);
     }
-    /* 13 */
+    /* 13 and 14: both attach orders of G2D and the camera masters end with the same fixed prefetch words. */
+    for(unsigned order = 0; order < 2; ++order) {
+        static struct a733_iommu_owner q;
+        memset(&q, 0, sizeof(q)); memset(regs, 0, sizeof(regs));
+        CHECK(a733_iommu_owner_init(&q, &ops, NULL) == 1);
+        const struct a733_iommu_span camera[] = {{0x20000000, 0x53000000, 0x2000, A733_IOMMU_READ | A733_IOMMU_WRITE}};
+        const uint16_t cameras = order ? (1u << 1) | (1u << 2) : 1u << 1;
+        mark = traced;
+        CHECK((order ? a733_iommu_owner_attach(&q, cameras, camera, 1) : a733_iommu_owner_attach(&q, 1u << 10, g2d, 3)) == 1);
+        CHECK(wrote(0x2c, mark) && wrote(0x1002c, mark) && regs[0x2c / 4] == 0x30079 && regs[0x1002c / 4] == 0x3007f);
+        mark = traced;
+        CHECK((order ? a733_iommu_owner_attach(&q, 1u << 10, g2d, 3) : a733_iommu_owner_attach(&q, cameras, camera, 1)) == 1);
+        CHECK(!wrote(0x2c, mark) && !wrote(0x1002c, mark) && regs[0x2c / 4] == 0x30079 && regs[0x1002c / 4] == 0x3007f);
+        CHECK(!(regs[0x2c / 4] & 6) && (regs[0x1002c / 4] & (1u << 4)));
+        CHECK(q.state == A733_IOMMU_OWNER_ACTIVE && q.attached == (cameras | 1u << 10) && q.refused_word == 0);
+        CHECK(walks(10, g2d, 3) && walks(1, camera, 1) && (!order || walks(2, camera, 1)));
+        CHECK(a733_iommu_owner_detach(&q, cameras | 1u << 10) == 1 && !clock_held && releases == allocations);
+    }
+
+    /* 15 */
     {
         static struct a733_iommu_owner q;
-        memset(regs, 0, sizeof(regs));
+        memset(&q, 0, sizeof(q)); memset(regs, 0, sizeof(regs));
         CHECK(a733_iommu_owner_init(&q, &ops, NULL) == 1);
-        const struct a733_iommu_span isp[] = {{0x40000000, 0x53000000, 0x2000, A733_IOMMU_READ | A733_IOMMU_WRITE}};
-        mark = traced;
-        CHECK(a733_iommu_owner_attach(&q, 1u << 2, isp, 1) == 1);
-        CHECK(wrote(0x2c, mark) && wrote(0x1002c, mark) && regs[0x2c / 4] == 0 && regs[0x1002c / 4] == 0);
-        mark = traced;
-        CHECK(a733_iommu_owner_attach(&q, 1u << 10, g2d, 3) == -1 && q.refused_word == 3 && traced == mark);
-        CHECK(q.state == A733_IOMMU_OWNER_ACTIVE && a733_iommu_owner_detach(&q, 1u << 2) == 1);
-        CHECK(!clock_held && releases == allocations);
+        prefetch_shared = 1;
+        CHECK(a733_iommu_owner_attach(&q, 1u << 10, g2d, 3) == -1);
+        CHECK(q.state == A733_IOMMU_OWNER_FAULT && q.fault_step == 2 && q.fault_word == 0x2c && q.fault_read == 0x3007f);
+        prefetch_shared = 0;
+        CHECK(a733_iommu_owner_detach(&q, 1u << 10) == 1 && !clock_held && releases == allocations);
     }
 
     printf("%s: %u register accesses, %u table allocations, %u directories\n", failures ? "FAIL" : "PASS", traced,
