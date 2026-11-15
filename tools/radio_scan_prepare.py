@@ -124,13 +124,19 @@ def profile_bytes(prefix, evidence, firmware, stage_limit=0):
     struct.pack_into('<QQ', raw, PROFILE['binding_timeout_us'], 5000000, 1000000)
     if stage_limit == ASSOCIATE_STAGE:
         # The time budget against the 50 s startup deadline (firmware confirmed near 16.7 s of session time): scan 10 s,
-        # authentication and association 8 s, four-way handshake 8 s, 2 s of supplicant command bound at 1 s; the stage stops
-        # at the session deadline whichever is first. The entropy is UNQUALIFIED (bring-up only): byte 1 declares it.
+        # authentication and association 8 s, the security stage 14 s; the stage stops at the session deadline whichever
+        # is first. The entropy is UNQUALIFIED (bring-up only): byte 1 declares it.
         raw[ENTROPY_UNQUALIFIED_OFFSET] = 1
-        struct.pack_into('<Q', raw, PROFILE['command_timeout_us'], 1000000)
+        # Each supplicant command (EAPOL transmit, key add, port open) waits up to 6 s for its confirmation: the
+        # reference's RWNX_80211_CMD_TIMEOUT_MS for SDIO (aic8800_fdrv/rwnx_cmds.h), scaled by its queue size, which is
+        # 1 with one command outstanding as here. The security stage (14 s) covers a handshake of up to 8 s and the
+        # pairwise key add's full wait after it, so that wait ends at the security worker's own deadline. The runtime
+        # lease renews 7 s before its end, more than one command's bound, so a lease never cuts a command's wait short.
+        struct.pack_into('<Q', raw, PROFILE['command_timeout_us'], 6000000)
         struct.pack_into('<Q', raw, PROFILE['refill_timeout_us'], 8000000)     # authentication and association
         struct.pack_into('<Q', raw, PROFILE['association_timeout_us'], 10000000)   # bounds the scan
-        struct.pack_into('<Q', raw, PROFILE['security_timeout_us'], 8000000)   # the four-way handshake
+        struct.pack_into('<Q', raw, PROFILE['security_timeout_us'], 14000000)  # the security stage
+        struct.pack_into('<QQ', raw, PROFILE['runtime_lease_us'], 20000000, 7000000)
         return bytes(raw)
     struct.pack_into('<Q', raw, PROFILE['association_timeout_us'], 20000000)   # bounds the scan
     return bytes(raw)

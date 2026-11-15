@@ -294,12 +294,13 @@ struct lifetime {
      * bits reading zero; an edit of the entry words. */
     uint32_t policy,status;unsigned ack_us,stall,fault,pll;uint32_t pll_entry;unsigned key_zero;
     void (*edit)(struct model *);
-    unsigned service; /* the OS service's open (apps/os/video_decode.c) instead of the JPEG job */
+    unsigned service; /* the OS service's open (apps/os/video_decode.c), then its decode, instead of the JPEG job */
     unsigned vcu,irq_pending,stuck; /* struct cold_model */
     unsigned fault_close; /* after a refused start, the service's fault close (a733_video_decoder_close, faulted) */
     unsigned late; /* struct cold_model */
     unsigned early; /* the open starts before the owner's first step, so the row waits for supply verification */
     unsigned refuse_first; /* service: the first open reaches its own deadline with the row pending, then a reopen */
+    unsigned log; /* service: print the decode's writes */
 };
 struct outcome {
     int result;unsigned writes,owner_ppu_writes,owner_commands,decoder_pck_reads,polls_after_on;
@@ -326,14 +327,14 @@ static void fel_words(struct cold_model *c,const struct lifetime *l)
 /* One power lifetime: a fresh owner and decoder. ccu_in, when given,
  * replaces the CCU words (a later lifetime); ppu_in the domain-2 nibbles.
  * Runs the JPEG job and, when it completes and quiesce is set, the quiesce. */
-/* The OS service's open (apps/os/video_decode.c, do_open): the decoder's own open, called until it ends, on a
- * decoder with no codec binding. Open, it has read the identity block and released the register lock. One deadline
- * for every call. */
+/* The OS service's open (apps/os/video_decode.c, do_open): the decoder's own open, called until it ends, on the
+ * JPEG binding's decoder, which it admits once before the start. Open, it has read the identity block, released the
+ * register lock and dropped its deadline. One deadline for every call. */
 static const struct a733_video_jpeg_job no_job;
 static int service_open(struct a733_video_decoder *p,uint64_t d)
 {
     const int r=a733_video_decoder_open(p,d);
-    if(r==1)assert(p->version==version&&!p->unit.locked&&
+    if(r==1)assert(p->version==version&&!p->unit.locked&&p->admitted&&!p->unit.deadline&&
         ((uint64_t)(p->unit.identity[1]&0xfffff)<<32|(p->unit.identity[2]&0xfffff))==version);
     return r;
 }
@@ -390,12 +391,12 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
         bad.row=0;assert(!a733_video_platform_init(&q,&bad,&ops,c));
     }
     struct a733_video_platform p={0};assert(a733_video_platform_init(&p,&config,&ops,c));
-    /* The service's decoder has no codec binding: the unit's operations alone. */
-    static struct a733_video_decoder service;service=(struct a733_video_decoder){0};
-    const struct a733_video_unit_ops unit_ops={cold_now,cold_enter,cold_leave,cold_read,cold_codec_write,cold_now};
-    if(l->service)assert(a733_video_decoder_init(&service,&config,&unit_ops,c));
-    struct a733_video_decoder *const dec=l->service?&service:&p.decoder;
-    struct a733_video_jpeg_job job={jpeg_bytes,jpeg_n,0x81000000,65536,0x82000000,2048,0x83000000,1024};
+    struct a733_video_decoder *const dec=&p.decoder;
+    /* The service decodes into the buffers the board's image maps (apps/os/video_decode.c, buffer): one page each,
+     * the first device addresses after IOVA_BASE (apps/os/iommu.c), each with an unmapped page on either side. */
+    struct a733_video_jpeg_job job=l->service?
+        (struct a733_video_jpeg_job){jpeg_bytes,jpeg_n,0x10001000,4096,0x10004000,4096,0x10007000,4096}:
+        (struct a733_video_jpeg_job){jpeg_bytes,jpeg_n,0x81000000,65536,0x82000000,2048,0x83000000,1024};
     struct a733_video_jpeg_run run={0};assert(a733_video_jpeg_begin(&run,a733_video_platform_jpeg_ops(),&p,&job,100000));
     const unsigned ppu_writes=d.ppu_writes;
     int result=0;unsigned polls=0,on_poll=0,checked_poll=0;
@@ -412,7 +413,7 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
             assert(!m->writes&&!m->lock&&!dec->unit.deadline&&!dec->unit.failed&&dec->requested);
             refused_first=1;result=0;continue;
         }
-        result=l->service?service_open(dec,run.deadline):a733_video_jpeg_poll(&run);
+        result=l->service?service_open(dec,run.deadline-1):a733_video_jpeg_poll(&run);
         if(!checked_poll&&dec->checked)checked_poll=polls;
         /* The service answers the row; the decoder's owner task blocks on
          * the row's wake meanwhile. */
@@ -423,6 +424,23 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
         }
     }
     assert(polls<20000);
+    /* The service's decode after its open: the run's own deadline, the decoder found admitted (once) and started, so
+     * the executor programs and completes the picture: 659 programming writes, the disable and the acknowledgment. */
+    if(l->service&&result==1) {
+        assert(m->admissions==1&&!dec->unit.deadline);
+        unsigned n=0;int r=0;
+        while(!(run.state==A733_VIDEO_JPEG_PROGRAM&&!run.index)&&(r=a733_video_jpeg_poll(&run))==0&&++n<20000){}
+        assert(r==0&&run.state==A733_VIDEO_JPEG_PROGRAM);
+        const unsigned from=m->writes;
+        while((r=a733_video_jpeg_poll(&run))==0&&++n<20000){}
+        assert(r==1&&run.state==A733_VIDEO_JPEG_DONE&&m->writes-from==661&&m->admissions==1&&m->drain>=1);
+        printf("service decode: writes%u drains%u\n",m->writes-from,m->drain);
+        if(l->log) {
+            printf("format_old %08x\n",run.format_old);
+            for(unsigned i=from;i<m->writes;++i)
+                printf("write %u %08x %u %08x\n",i-from,m->events[i].address-VE,m->events[i].width,m->events[i].value);
+        }
+    }
     /* The image reads domain 2's transition from its row, which the owner copies with each answer: it equals the
      * owner's own record. */
     if(a733_power_domain_state(&c->row)!=A733_POWER_ROW_PENDING) {
@@ -558,7 +576,12 @@ int main(int argc,char **argv)
         }
         printf("case%u result%d writes%u owner_ppu_writes%u\n",test,o.result,o.writes,o.owner_ppu_writes);
     }
-    if(argc==4){puts("PASS: local-reset decoder version cold start");return 0;}
+    if(argc==4){
+        /* The service's open, decode and close with the board's decoder identity, its writes printed. */
+        const struct lifetime l={.ack_us=10,.pll=PLL_LOCKS,.pll_entry=FEL_PLL,.service=1,.log=1};
+        assert(lifetime(&c,&l,0,0,1).result==1);
+        puts("PASS: local-reset decoder version cold start");return 0;
+    }
     /* Cases 7-22 at the vendor operating point from the FEL words, domain
      * 0/0. Each row gives the PLL entry word, the scenario, whether the start
      * completes, the PLL writes and the final PLL word. */

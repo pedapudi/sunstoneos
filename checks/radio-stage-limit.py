@@ -6,6 +6,7 @@ Run it with the venv python that board.py needs (pyelftools)."""
 import argparse
 import pathlib
 import sys
+import struct
 
 root = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root / 'tools'))
@@ -59,6 +60,10 @@ for limit in prep.STAGE_LIMITS:
     if limit == prep.ASSOCIATE_STAGE:
         # Firmware is confirmed near 16.7 s of session time; scan, join and handshake must fit the 50 s startup deadline.
         assert 17_000_000 + budget[0] + budget[1] + budget[2] < 50_000_000
+        # The stages nest: the security stage holds an 8 s handshake and one full command wait, and the runtime lease
+        # renews before a command's wait could reach its end.
+        lease, margin = struct.unpack_from('<QQ', profile, prep.PROFILE['runtime_lease_us'])
+        assert budget[3] == 6_000_000 and budget[2] >= 8_000_000 + budget[3] and budget[3] < margin < lease, (budget, margin)
 # Submit refuses the association stage without a credential name, before any file or device is touched.
 try:
     board.check_wifi_stage(parse('--radio-stage-limit', '5'))
