@@ -10,7 +10,9 @@ follow, and the decoder must name each:
 - -DSWAP_TURN, an engine whose 90 turns counter-clockwise and 270 clockwise: the models are ccw and cw, still inverse
   to each other, and the prediction fails.
 - -DFAIL_DEGREES=90, an engine whose 90-degree rotate times out: rotate 3 has result -1 with step 62 in the record,
-  rotate 4 has no record, and the first two keep their models.
+  its rectangle is measured and named untouched, rotate 4 has no record, and the first two keep their models.
+- -DONE_PIXEL, an engine that changes one pixel of every rectangle: no rotate matches a model, and the decoder
+  reports that without failing.
 
 Usage: g2d-rotate-host.py --output DIR"""
 import argparse
@@ -77,17 +79,21 @@ def main():
     failed = host.decode(build_and_run(a.output, 'timeout-90', ['-DFAIL_DEGREES=90']))
     fops = failed['ops']
     if failed['status'] != 'run failed' or failed['fault_step'] != 62 or (fops[2]['result'], fops[2]['degrees']) != (-1, 90) \
-            or [o.get('model') for o in fops[:2]] != ['identity/exact', 'rot180/exact'] or fops[3]['run'] or \
+            or [o.get('model') for o in fops[:3]] != ['identity/exact', 'rot180/exact', 'untouched'] or fops[3]['run'] or \
             fops[3]['done'] is not None or failed['crc']['source_unchanged'] is not None or failed['predicted']:
         problems.append(f'the timed-out 90-degree rotate was not named: {failed["status"]}, {failed["fault_step"]}, '
                         f'{[(o["result"], o["degrees"], o.get("model")) for o in fops]}')
+    unmatched = host.decode(build_and_run(a.output, 'one-pixel', ['-DONE_PIXEL']))
+    if [o.get('model') for o in unmatched['ops']] != [None] * 4 or unmatched['exact'] or unmatched['predicted'] or \
+            unmatched['status'] != 'done' or 'output_matches' in unmatched['crc']:
+        problems.append(f'the unmatched rectangles were not reported: {[o.get("model") for o in unmatched["ops"]]}')
     (a.output / 'result.json').write_text(json.dumps({'passed': not problems, 'problems': problems, 'record': record,
                                                       'reference': reference, 'zeroed': zeroed, 'swap_turn': swapped,
-                                                      'timeout_90': failed}, indent=2) + '\n')
+                                                      'timeout_90': failed, 'one_pixel': unmatched}, indent=2) + '\n')
     if problems:
         sys.exit('FAIL ' + '; '.join(problems))
     print(f"PASS g2d-rotate plan and decoder agree: models {[o['model'] for o in ops]}, output {crc['output']}; the "
-          f"zeroing engine, the swapped turn and the timed-out 90-degree rotate are named")
+          f"zeroing engine, the swapped turn, the timed-out 90-degree rotate (untouched) and unmatched rectangles are named")
 
 
 if __name__ == '__main__':

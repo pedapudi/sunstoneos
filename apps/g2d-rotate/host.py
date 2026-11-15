@@ -20,7 +20,9 @@ The prediction is exact at every degree, because the rotate module does not pass
 predicted are identity for 0 and rot180 for 180. The vendor source does not say which way degree field 1 (90) turns:
 the prediction is cw for 90 and ccw for 270, and the stage passes on the four exact models with 90 and 270 inverse to
 each other. The decoder also checks the five sampled words of each rectangle (its corners and the pixel before its
-first) against the matched model, and gives the whole-surface CRC-32 that follows from the matched models.
+first) against the matched model, and gives the whole-surface CRC-32 that follows from the matched models. A rotate
+that failed is measured and matched as well, so its record shows whether the engine wrote the rectangle (untouched
+means it did not). A rectangle that matches no model has model None.
 """
 import struct
 import zlib
@@ -175,7 +177,8 @@ def runs(payload, at):
              'plan_matches': (degrees, flip, sx, sy, dx, dy, w, h) == (planned[0], 0, SX, SY, planned[1], planned[2], W, H)
              or not result,
              'rect_crc': f'0x{crc:08x}'}
-        if signed == 1:
+        if result:
+            # Measured for a failed rotate too (apps/g2d-rotate/main.c): untouched shows the engine never wrote.
             candidates = models(source, background, planned[0], planned[1], planned[2])
             o['model'] = next((n for n, rows in candidates.items() if rect_crc(rows) == crc), None)
             o['predicted_model'] = PREDICTED[planned[0]]
@@ -201,7 +204,7 @@ def runs(payload, at):
         out['crc']['expected_output'] = f'0x{expected:08x}'
         out['crc']['output_matches'] = output_crc == expected
     placements = {o.get('degrees'): (o.get('model') or '/').split('/') for o in ops}
-    out['exact'] = done and all(o.get('model', '').endswith('/exact') for o in ops)
+    out['exact'] = done and all((o.get('model') or '').endswith('/exact') for o in ops)
     out['inverse_90_270'] = done and INVERSE.get(placements[90][0]) == placements[270][0]
     out['predicted'] = done and all(o.get('model') == o.get('predicted_model') for o in ops)
     return out

@@ -3,7 +3,8 @@
  * 0 and 180 degrees as the identity and a half turn, 90 degrees clockwise and 270 counter-clockwise. Built with
  * -DZEROED, a source pixel with alpha 0 is written as 0x00000000. Built with -DSWAP_TURN, 90 degrees turns
  * counter-clockwise and 270 clockwise. Built with -DFAIL_DEGREES=n, the rotate by n degrees fails at step 62 (a
- * timeout) and writes nothing. ss_finish writes the result to the file named by the first argument. */
+ * timeout) and writes nothing. Built with -DONE_PIXEL, one pixel of every rectangle has a bit changed, so no model
+ * matches. ss_finish writes the result to the file named by the first argument. */
 #include "g2d_rotate-app.h"
 #include "sunstone_g2d.h"
 #include <stdio.h>
@@ -67,6 +68,9 @@ int ss_g2d_run(const struct ss_g2d_job *j, struct ss_g2d_done *done)
             memcpy(&v, src + (size_t)(j->sy + y) * j->source.stride + (size_t)(j->sx + x) * 4, 4);
 #ifdef ZEROED
             if(!(v >> 24)) v = 0;
+#endif
+#ifdef ONE_PIXEL
+            if(r == 1 && c == 2) v ^= 0x00010000;                 /* one pixel that no model gives */
 #endif
             memcpy(out + (size_t)(j->dy + r) * j->output.stride + (size_t)(j->dx + c) * 4, &v, 4);
         }

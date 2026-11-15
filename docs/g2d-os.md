@@ -142,12 +142,13 @@ Images with the stray's enable left on, with no write-back of the finish, or wit
 
 ### First rotate stage
 
-[g2d-rotate](../apps/g2d-rotate/main.c) rotates one 96 by 40 ARGB8888 rectangle of the "source" region at (24, 16) by 0, 180, 90 and 270 degrees, in that order, into four disjoint rectangles of the "surface" region. Both surfaces are 400 by 260 at stride 1664 and are filled from seed 0x3c6ef372. After each rotate the application records the output rectangle's CRC-32, its four corners and the pixel before it. It stops at the first rotate that fails. The rectangle holds 11 pixels with alpha 0, so an exact copy and the blender's zeroing give different CRC-32 values.
+[g2d-rotate](../apps/g2d-rotate/main.c) rotates one 96 by 40 ARGB8888 rectangle of the "source" region at (24, 16) by 0, 180, 90 and 270 degrees, in that order, into four disjoint rectangles of the "surface" region. Both surfaces are 400 by 260 at stride 1664 and are filled from seed 0x3c6ef372. After each rotate the application records the output rectangle's CRC-32, its four corners and the pixel before it. It does so after a rotate that fails as well, so the record shows whether the engine wrote the rectangle, and then it stops. The rectangle holds 11 pixels with alpha 0, so an exact copy and the blender's zeroing give different CRC-32 values.
 
-[The decoder](../apps/g2d-rotate/host.py) names the model that each rectangle matches: a placement (identity, half turn, a mirror, clockwise, counter-clockwise or a transpose) with a pixel rule (exact, zeroed or opaque), or the background left unchanged. All 13 candidates of each rotate have distinct CRC-32 values. [g2d-rotate-host.py](../checks/g2d-rotate-host.py) builds the application on the host and checks the decoder against a CPU rotate and three mutant engines.
+[The decoder](../apps/g2d-rotate/host.py) names the model that each rectangle matches: a placement (identity, half turn, a mirror, clockwise, counter-clockwise or a transpose) with a pixel rule (exact, zeroed or opaque), or the background left unchanged. All 13 candidates of each rotate have distinct CRC-32 values, and a rectangle that matches none is reported as unmatched. [g2d-rotate-host.py](../checks/g2d-rotate-host.py) builds the application on the host and checks the decoder against a CPU rotate and three mutant engines.
 
 The stage measures what the vendor source does not settle:
 - which way degree field 1 (90) turns;
 - whether ROT_CTL bit 31 clears itself;
-- whether a rotate sets anything in 0x24;
-- whether clearing ROT_INT bit 16 lowers the rotator's part of the line.
+- whether a rotate sets anything in 0x24.
+
+The stage runs no mixer operation, so no stray occurs. Whether clearing ROT_INT bit 16 lowers the rotator's part of the line stays model-only until a stage that runs a mixer job and a rotate together.

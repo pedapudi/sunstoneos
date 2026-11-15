@@ -2,8 +2,8 @@
  * 40 ARGB8888 rectangle of the large region "source" into four disjoint rectangles of the large region "surface", by
  * 0, 180, 90 and 270 degrees in that order, with no flip. After each rotate it takes the CRC-32 of the output
  * rectangle (its rotated width times 4 bytes of each of its rows, top to bottom) and the output words at the
- * rectangle's four corners and just before its first pixel. It stops at the first rotate that fails, so the record
- * names that rotate and its degrees, then closes the engine and returns the open, rotate and close records with the
+ * rectangle's four corners and just before its first pixel, also after a rotate that fails. It stops at the first
+ * rotate that fails, so the record names that rotate and its degrees, then closes the engine and returns the open, rotate and close records with the
  * CRC-32 of both surfaces before and after. Both surfaces' contents come from one seed, from which
  * apps/g2d-rotate/host.py computes every candidate output and decodes the result. */
 #include "g2d_rotate-app.h"
@@ -141,11 +141,8 @@ void g2d_rotate_main(const struct ss_grant *grant)
             .sx = o->sx, .sy = o->sy, .dx = o->dx, .dy = o->dy, .w = o->w, .h = o->h, .degrees = o->degrees,
             .flip = o->flip};
         o->result = (uint32_t)finish_call(run_call, &o->done);
-        if ((int)o->result != 1) {
-            failed = 1;
-            (void)ss_g2d_fault(&result.fault_step, &result.fault_value);
-            break;
-        }
+        /* Measured after a failed rotate too: the output lines were invalidated before the launch, so the rectangle
+         * shows whether the engine wrote it. */
         const int swap = o->degrees == 90 || o->degrees == 270;
         const uint32_t ow = swap ? o->h : o->w, oh = swap ? o->w : o->h;
         const uint8_t *first = surface + (size_t)o->dy * G2D_ROTATE_STRIDE + (size_t)o->dx * 4;
@@ -157,6 +154,10 @@ void g2d_rotate_main(const struct ss_grant *grant)
         o->sample[2] = word(surface, o->dx, o->dy + oh - 1);
         o->sample[3] = word(surface, o->dx + ow - 1, o->dy + oh - 1);
         o->sample[4] = word(surface, o->dx - 1, o->dy);
+        if ((int)o->result != 1) {
+            failed = 1;
+            (void)ss_g2d_fault(&result.fault_step, &result.fault_value);
+        }
     }
     if (!failed) {
         result.plan.output_crc = crc32(0, surface, bytes);
