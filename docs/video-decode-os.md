@@ -77,3 +77,11 @@ The stage-1 prediction, from the port 3-3 FEL dump and the host model:
 | Domain 2 | row ON; either adopted at policy and status 8, or one command from 0 to 8 measured within 10,000 µs |
 | `0x1b10` at entry and after the close | `0x20000`: module mode disabled, status POWER_ON (recorded after the close, not judged) |
 | `0x5e4` bits 1, 8 and 9 (encoder, CSI and ISP MBUS clock gates) | set by the open and still set after the close |
+
+Run `1794714415147688285-6b3ec3f5` on port 3-1 matched every row and returned normally in 21.8 s:
+
+- The entry words were those of run `1794709569136470404-9a7b6a30`, so the watchdog reset that ended the hold-B failure restored the decoder's CCU words.
+- `0x5e4` was written and read back as `0x40306`; the lock wait took 3 reads.
+- The identity was `0x0003331000021320` with `+0xf0` reading `0`.
+- Domain 2 was adopted ON at policy and status 8, with no command and no sample.
+- `0x804` read `0x5555aaaa` both before and after the write that sets bits 0 and 4: the pulse bits read zero. The exact readback in the image of run `1794712072331160946-bd447f26` therefore refused hold B.

@@ -287,8 +287,11 @@ Stage 1 on the board measures the entry hold (`entry_at` to `entered_at`),
 hold A (`on_at` to `hold_a_at`), the lock wait (`hold_a_at` to `locked_at`)
 and hold B (`locked_at` to `hold_b_at`) in the binding's cold record
 (`struct a733_video_cold_record`), in microseconds; apps/vdec-check/host.py
-reports them as `durations_us`. Those measurements replace the 1 µs per access
-assumption in this budget.
+reports them as `durations_us`. Run `1794714415147688285-6b3ec3f5` on port
+3-1, with CPU-L at 494 MHz, measured the entry hold at 75 µs, hold A at 59 µs,
+the lock wait at 12 µs and hold B at 99 µs. Hold B therefore takes about
+2.4 µs per native access, not 1 µs, and a band-2 task that needs the register
+lock waits up to about 100 µs behind the decoder at that clock.
 
 ## Memory authority and physical qualification remain required
 
