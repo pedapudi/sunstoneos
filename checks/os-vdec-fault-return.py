@@ -631,7 +631,7 @@ def record_layout(image):
     r = L['video_decode_check_result']
     if (r['done'], r['info'], r['pixels']) != (host.HEADER.size, host.HEADER.size + host.DONE_SIZE,
                                                host.HEADER.size + host.DONE_SIZE + host.RECORD_SIZE):
-        problems.append('the result is not the 32-byte header, the answer, the record and the pixels')
+        problems.append('the result is not the 64-byte header, the answer, the record and the pixels')
     if not host.fixture_header_matches(Path(__file__).resolve().parents[1]):
         problems.append('apps/vdec-check/fixture.h differs from apps/jpeg/fixture.py')
     return problems

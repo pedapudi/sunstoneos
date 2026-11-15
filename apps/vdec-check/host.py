@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Host side of vdec-check: decode the result and list departures from the stage-2 prediction.
 
-The result is the 32-byte header, the decode's answer (struct ss_video_decode_done, include/sunstone_video_decode.h),
-struct vdec_check_record (apps/vdec-check/record.h) and the 2,304 decoded bytes that apps/vdec-check/main.c returns.
+The result is the 64-byte header (with the CPU operating points before the open), the decode's answer
+(struct ss_video_decode_done, include/sunstone_video_decode.h), struct vdec_check_record (apps/vdec-check/record.h) and the 2,304 decoded bytes that apps/vdec-check/main.c returns.
 decode() returns the fields. failures() names every departure from the stage-2 prediction in docs/video-decode-os.md.
 
 The decode: it succeeds; the 2,304 bytes, the answer's SHA-256 and the record's SHA-256 all equal the pinned
@@ -27,7 +27,7 @@ against the close prediction (module gate, reset and bus gate closed, PLL_VE0 di
 import hashlib
 import struct
 
-HEADER = struct.Struct('<8I')
+HEADER = struct.Struct('<10I3Q')
 WORDS = ('pll_ref', 'rtc_osc', 'ahb', 'nsi', 'mbus', 'pll_ve0', 'pll_ve0_p0', 'pll_ve0_p1', 'pll_gates', 'pll_status',
          'auto', 'module', 'bgr', 'ahb_gates', 'mbus_gates', 'mclk_gates', 'rccu_pck', 'gicd_enable', 'gicd_pending',
          'gicd_active')
@@ -115,6 +115,8 @@ STEPS = {0: 'none', 1: 'rail', 2: 'clock', 3: 'pck-lease', 4: 'supply', 5: 'conf
          33: 'closed-words', 34: 'close-gic', 35: 'close-detach'}
 VERSIONS = (0x0003332100021321, 0x0003331000021320, 0x0003052000012011)
 TICKS_PER_US = 24
+# The reviewed top points (tools/cpu-reviewed-points.json) and the DSU's: CPU-L, CPU-B, DSU MHz; CPU-L, CPU-B mV.
+TOP_POINTS = (1794, 2002, 1274, 1000, 1050)
 INTID_81 = 1 << 17
 FAILED_FLAGS = ('failed', 'mutex-held', 'uncertain', 'late')
 
@@ -122,15 +124,18 @@ FAILED_FLAGS = ('failed', 'mutex-held', 'uncertain', 'late')
 def decode(payload):
     if len(payload) != SIZE:
         raise ValueError(f'vdec-check result is {len(payload)} bytes, not {SIZE}.')
-    (magic, stage, status, open_result, close_result, fault_step, fault_value, decode_result) = \
-        HEADER.unpack_from(payload)
+    (magic, stage, status, open_result, close_result, fault_step, fault_value, decode_result, clock_ready, _,
+     clock0, clock1, clock_ticks) = HEADER.unpack_from(payload)
     if magic != CHECK_MAGIC or stage != 2:
         raise ValueError('vdec-check result has an unknown header.')
     signed = lambda x: x - (1 << 32) if x >> 31 else x
     out = {'stage': stage, 'status': STATUS.get(status, status), 'open_result': signed(open_result),
            'close_result': signed(close_result), 'decode_result': signed(decode_result),
            'fault_step': STEPS.get(fault_step >> 24 if fault_step >> 24 else fault_step, fault_step),
-           'fault_value': fault_value}
+           'fault_value': fault_value,
+           'clock': {'ready': clock_ready, 'cpu_l_mhz': clock0 & 0xffff, 'cpu_b_mhz': clock0 >> 16 & 0xffff,
+                     'core': clock0 >> 32 & 0xff, 'transitions': clock0 >> 40, 'cpu_l_mv': clock1 & 0xffff,
+                     'cpu_b_mv': clock1 >> 16 & 0xffff, 'dsu_mhz': clock1 >> 32, 'wait_us': clock_ticks / TICKS_PER_US}}
     done = unpack(payload, HEADER.size, DONE)
     done['sha256'] = bytes(done['sha256']).hex()
     out['done'] = done
@@ -249,6 +254,9 @@ def failures(d, write_log=None):
          f"status {d['status']}, open {d['open_result']}, decode {d['decode_result']}, close {d['close_result']}, "
          f"fault {d['fault_step']} {d['fault_value']:#x}")
     want(d['info_magic'] == INFO_MAGIC and d['info_bytes'] == RECORD_SIZE, 'record header differs')
+    k = d['clock']
+    want(k['ready'] == 1 and (k['cpu_l_mhz'], k['cpu_b_mhz'], k['dsu_mhz'], k['cpu_l_mv'], k['cpu_b_mv']) ==
+         TOP_POINTS, f"clocks {k}, predicted ready at CPU-L 1794 MHz 1000 mV, CPU-B 2002 MHz 1050 mV, DSU 1274 MHz")
     if d['info_magic'] != INFO_MAGIC:
         return out
     if d['fault_closed']:
