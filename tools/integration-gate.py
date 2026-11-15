@@ -309,6 +309,17 @@ def main(argv=None):
     # the process exits.
     slot_config = gate_slots.load_config()
     gate_slots.reserve_cpus(slot_config)       # the gate and everything it starts stay off the CPU of the USB interrupt
+    if not args.full and args.priority == gate_slots.WORKER and args.jobs is not None:
+        # A worker gate gets its slot's share of the host's cores. The slots run side by side, so a --jobs above the share does not
+        # speed this gate up beyond the cores it may use: it oversubscribes the host for the landing gate and every other worker, whose
+        # QEMU runs and model timeouts then fail on load alone (load average 64 to 70 on 24 cores, 2026-11-14). Landing gates and --full
+        # keep their own rules.
+        share = gate_slots.jobs_per_slot(slot_config, gate_slots.slot_count(slot_config))
+        if args.jobs > share:
+            parser.error('--jobs %d is above the share of a worker gate, %d (the usable cores divided across the %d gate slots, '
+                         'tools/gate-slots.json): the slots run side by side, and more jobs than the share oversubscribe the host for '
+                         'every other gate. Leave --jobs out or pass at most %d.'
+                         % (args.jobs, share, gate_slots.slot_count(slot_config), share))
     if args.full:
         gate_lock = take_gate_lock(cache, 'gate-full.lock')        # the full suite blocks no landing and uses no slot
         slots, build_jobs = 1, 12

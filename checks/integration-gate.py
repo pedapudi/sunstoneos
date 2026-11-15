@@ -721,6 +721,28 @@ exec "$REAL" "$@"
         self.assertNotIn('Stopped at first failure', summary)
         self.assertTrue((self.sandbox / 'build/gate-case/timing.txt').is_file())
 
+    def test_a_worker_gate_refuses_jobs_above_its_slot_share(self):
+        sys.path.insert(0, str(ROOT / 'tools'))
+        import gate_slots
+        config = gate_slots.load_config()
+        share = gate_slots.jobs_per_slot(config, gate_slots.slot_count(config))
+        above = share + 1
+        refused = self.run_gate('--reason', 'Too many jobs', '--affected', 'HEAD~1..HEAD', '--priority', 'worker', '--jobs', str(above),
+                                label='jobs-above')
+        self.assertEqual(refused.returncode, 2, refused.stdout + refused.stderr)
+        self.assertIn('--jobs %d is above the share of a worker gate, %d' % (above, share), refused.stderr)
+        self.assertFalse((self.sandbox / 'gate-queue').exists() and any((self.sandbox / 'gate-queue').iterdir()),
+                         'the refused gate queued for a slot')
+        # at the share, a landing gate above it, and the full suite keep their own rules
+        accepted = self.run_gate('--reason', 'At the share', '--affected', 'HEAD~1..HEAD', '--priority', 'worker', '--jobs', str(share),
+                                 label='jobs-at-share')
+        self.assertNotIn('is above the share', accepted.stderr)
+        landing = self.run_gate('--reason', 'Landing', '--affected', 'HEAD~1..HEAD', '--priority', 'landing', '--jobs', str(above),
+                                label='jobs-landing')
+        self.assertNotIn('is above the share', landing.stderr)
+        full = self.run_gate('--reason', 'Full', '--full', '--priority', 'worker', '--jobs', str(above), label='jobs-full')
+        self.assertNotIn('is above the share', full.stderr)
+
     def test_fail_fast_stops_at_the_first_failure_in_order(self):
         self.full_catalogue()
         self.env['GATE_TEST_FAIL_ALL'] = 'checks/pmic-tree.py,checks/check-index.py'

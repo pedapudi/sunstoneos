@@ -332,7 +332,10 @@ N and the share of cores a slot gives its builds and checks come from [tools/gat
 constants in the code: the host's cores and memory, the cores that other work on the host keeps busy, the memory kept free, and the
 mean cores and peak resident memory of one gate, all measured with a sampler on the process tree of gates that held the lock.
 `slot_count` takes the fewer of what the cores (usable cores divided by the mean cores of a gate) and the memory allow;
-`jobs_per_slot` divides the usable cores across the slots. Change a measurement there, not the code, when the host or the gate changes.
+`jobs_per_slot` divides the usable cores across the slots. A worker gate that passes `--jobs` above that share is refused before it queues
+(`integration-gate.py: error: --jobs 12 is above the share of a worker gate, ...`): the slots run side by side, so more jobs than the share
+oversubscribe the host for every other gate (a load average of 64 to 70 on 24 cores on 2026-11-14, from worker gates run with `--jobs 12` and
+`--jobs 6` beside a landing gate, behind the QEMU and model timeouts of that day). A landing gate and `--full` keep their own rules. Change a measurement there, not the code, when the host or the gate changes.
 
 The steps whose result depends on wall time hold the exclusive `~/.cache/sunstoneos/gate-timing.lock` while they run and run alone in
 their gate: the soak, `smp-ticket-lock.py`, `tick-footprint-budget.py`, `gpu-conformance.py`, `land.py`, `submit-wait.py` and the `SERIAL_CHECKS`. The two CPU/NPU
