@@ -60,6 +60,7 @@ struct aic8800_supplicant {
     uint8_t sae_own[6], sae_bssid[6], pmkid[16];
     uint8_t sae_group, sae_rejected, sae_rounds, sae_accepted;
     uint8_t initialized,entered,head,count,action_active,completed,port_pending,retire_closed;
+    uint16_t stop_site; /* AIC8800_SITE of the first stop, for the record */
 };
 /* Fresh zero storage, copied immutable config/PMK/observed AP RSN. Single native
  * RSN owner; all calls occur under transport serialization. No credentials are
@@ -105,7 +106,9 @@ void aic8800_supplicant_sae_clear(struct aic8800_supplicant *);
  * disconnection (link DOWN) the station's port and pairwise key are gone with
  * it, so only group keys are deleted. Refused during unresolved roaming. */
 int aic8800_supplicant_retire(struct aic8800_supplicant *,uint64_t,uint64_t);
-void aic8800_supplicant_stop(struct aic8800_supplicant *);
+/* Fault; the first stop keeps its site (AIC8800_SITE, include/aic8800_security.h). */
+void aic8800_supplicant_stop_at(struct aic8800_supplicant *,unsigned site);
+#define aic8800_supplicant_stop(s) aic8800_supplicant_stop_at((s),AIC8800_SITE)
 /* Private external-library OS entry. No global entropy fallback is provided. */
 int aic8800_supplicant_os_enter(struct aic8800_supplicant *);
 void aic8800_supplicant_os_leave(struct aic8800_supplicant *);

@@ -94,6 +94,14 @@ def main():
             run('host-digest', [a.cc, *common, '-fsanitize=address,undefined', '-MMD', '-MF',
                 str(out / 'host-digest.d'), '-c', 'drivers/storage/storage_digest.c', '-o', str(digest_object)])
         artifacts.append(digest_object)
+        # The scan events of board-radio come from the real codec, Wi-Fi scan parser and dispatcher.
+        producers = []
+        for source in ['drivers/net/aic8800_sdio_codec.c', 'drivers/net/aic8800_wifi.c', 'drivers/net/aic8800_dispatch.c']:
+            obj = out / ('host-' + Path(source).stem + '.o')
+            run('host-' + Path(source).stem, [a.cc, *common, '-fsanitize=address,undefined', '-MMD', '-MF',
+                str(out / ('host-' + Path(source).stem + '.d')), '-c', source, '-o', str(obj)])
+            artifacts.append(obj)
+            producers.append(str(obj))
         for name in (['board-radio-listener'] if a.listener_only else ['board-radio', 'board-radio-session']):
             artifact = out / name
             obj = out / (name + '.o')
@@ -102,7 +110,7 @@ def main():
                 '-c', 'checks/' + name + '.c', '-o', str(obj)])
             artifacts.append(obj)
             run(name + '-link', [a.cc, '-fsanitize=address,undefined', '-Wl,--gc-sections',
-                str(obj), str(digest_object), '-o', str(artifact)])
+                str(obj), str(digest_object), *(producers if name != 'board-radio-session' else []), '-o', str(artifact)])
             artifacts.append(artifact)
         for index, source in enumerate([] if a.listener_only else ['apps/board/radio.c', 'drivers/net/a733_radio_session.c',
                                         'drivers/net/aic8800_sdio_transport.c',

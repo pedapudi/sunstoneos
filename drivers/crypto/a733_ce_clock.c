@@ -17,7 +17,11 @@ static int live(struct a733_ce_clock *p)
     return a733_deadline_admit(t,&p->last_now,p->config.deadline_us);
 }
 static int read32(struct a733_ce_clock *p,uintptr_t a,uint32_t *v)
-{return p->held&&live(p)&&p->ops.read(p->cookie,a,v)==1&&live(p);}
+{
+    if(!p->held||!live(p)||p->ops.read(p->cookie,a,v)!=1)return 0;
+    if(a==CCU+0xac0)p->seen_clk=*v;else if(a==CCU+0xac4)p->seen_bgr=*v;else if(a==CCU+0x5e4)p->seen_mbus=*v;
+    return live(p);
+}
 static int bits(struct a733_ce_clock *p,uintptr_t a,uint32_t mask,uint32_t want)
 {uint32_t v;return read32(p,a,&v)&&(v&mask)==want;}
 static int update(struct a733_ce_clock *p,uintptr_t a,uint32_t mask,uint32_t want)
@@ -26,7 +30,9 @@ static int update(struct a733_ce_clock *p,uintptr_t a,uint32_t mask,uint32_t wan
     if(!read32(p,a,&old)||!live(p))return 0;
     uint32_t value=(old&~mask)|(want&mask);
     ++p->writes; /* A refused callback may still leave write completion uncertain. */
-    return p->ops.write(p->cookie,a,value)==1&&live(p)&&read32(p,a,&got)&&got==value;
+    if(p->ops.write(p->cookie,a,value)!=1){p->write_refused=1;return 0;}
+    p->write_refused=0;
+    return live(p)&&read32(p,a,&got)&&got==value;
 }
 static int parents(struct a733_ce_clock *p)
 {
@@ -85,6 +91,7 @@ int a733_ce_clock_provision(struct a733_ce_clock *p,const struct a733_ce_config 
     /* The neighbors of the CE's MBUS gate (bit 2 of CCU 0x5e4) belong to other modules and are preserved as they are. */
     uint32_t mbus;
     if(!read32(p,CCU+0x5e4,&mbus))return failed(p);
+    p->entry_mbus=mbus;
     const uint32_t neighbors=mbus&0x40302;
     /* The CE is found enabled at entry on the board (CE_CLK_REG 0x81000000, CE_BGR_REG 0x00030003, runs
      * 1793756349340594212-e9227edb): nothing says the boot ROM left its DMA idle, so an enabled CE is first taken
@@ -93,23 +100,38 @@ int a733_ce_clock_provision(struct a733_ce_clock *p,const struct a733_ce_config 
      * the predecessor's DMA. A CE that is already held in reset and gated is brought up directly. */
     if(parents(p)&&bits(p,CCU+0xac0,0x8700001f,0x81000000)&&bits(p,CCU+0xac4,0x30003,0x30003)&&
        (mbus&4)){
-        if(!update(p,CCU+0xac4,2,0)||!update(p,CCU+0x5e4,4,0)||!update(p,CCU+0xac0,BIT(31),0)||
-           !update(p,CCU+0xac4,1,0)||!update(p,CCU+0xac4,0x30000,0)||
-           !update(p,CCU+0xac0,0x8700001f,0))return failed(p);
+        /* One fail line per step here and below, so the first failure record names the step. */
+        if(!update(p,CCU+0xac4,2,0))return failed(p);
+        if(!update(p,CCU+0x5e4,4,0))return failed(p);
+        if(!update(p,CCU+0xac0,BIT(31),0))return failed(p);
+        if(!update(p,CCU+0xac4,1,0))return failed(p);
+        if(!update(p,CCU+0xac4,0x30000,0))return failed(p);
+        if(!update(p,CCU+0xac0,0x8700001f,0))return failed(p);
     }
     /* Reset-held and gated, the CE's MBUS gate closed, the neighbors as found. */
-    if(!parents(p)||!bits(p,CCU+0xac0,0x8700001f,0)||
-       !bits(p,CCU+0xac4,0x30003,0)||!bits(p,CCU+0x5e4,0x40306,neighbors))return failed(p);
-    if(!update(p,CCU+0xac0,0x8700001f,0x01000000)||
-       !update(p,CCU+0xac4,0x30000,0x30000)||
-       !update(p,CCU+0xac4,1,1)||
-       !update(p,CCU+0xac0,BIT(31),BIT(31))||
-       !update(p,CCU+0x5e4,4,4)||!update(p,CCU+0xac4,2,2)||
-       !parents(p)||!bits(p,CCU+0xac0,0x8700001f,0x81000000)||
-       !bits(p,CCU+0xac4,0x30003,0x30003)||!bits(p,CCU+0x5e4,0x40306,neighbors|4)||!live(p))return failed(p);
+    if(!parents(p))return failed(p);
+    if(!bits(p,CCU+0xac0,0x8700001f,0))return failed(p);
+    if(!bits(p,CCU+0xac4,0x30003,0))return failed(p);
+    if(!bits(p,CCU+0x5e4,0x40306,neighbors))return failed(p);
+    if(!update(p,CCU+0xac0,0x8700001f,0x01000000))return failed(p);
+    if(!update(p,CCU+0xac4,0x30000,0x30000))return failed(p);
+    if(!update(p,CCU+0xac4,1,1))return failed(p);
+    if(!update(p,CCU+0xac0,BIT(31),BIT(31)))return failed(p);
+    if(!update(p,CCU+0x5e4,4,4))return failed(p);
+    if(!update(p,CCU+0xac4,2,2))return failed(p);
+    if(!parents(p))return failed(p);
+    if(!bits(p,CCU+0xac0,0x8700001f,0x81000000))return failed(p);
+    if(!bits(p,CCU+0xac4,0x30003,0x30003))return failed(p);
+    if(!bits(p,CCU+0x5e4,0x40306,neighbors|4))return failed(p);
+    if(!live(p))return failed(p);
     p->ops.leave(cookie);p->held=0;
     if(!live(p))return failed(p);
     p->state=A733_CE_CLOCK_READY;return 1;
+}
+uint32_t a733_ce_clock_fail_aux(const struct a733_ce_clock *p)
+{
+    const uint32_t b=p->seen_bgr,c=p->seen_clk;
+    return (b&3u)|(b>>14&12u)|(c&31u)<<4|(c>>24&7u)<<9|(c>>31)<<12|(p->write_refused?1u:0)<<13;
 }
 int a733_ce_clock_retire(struct a733_ce_clock *p)
 {

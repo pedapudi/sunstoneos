@@ -1,5 +1,6 @@
 /* Native bounded worker. Published register and protocol references are pinned
  * in docs/radio-transport.md; no Linux driver code or allocation is used. */
+#define AIC8800_SITE_FILE 4u
 #include "aic8800_sdio_transport.h"
 #include "aic8800_firmware.h"
 #include "aic8800_runtime.h"
@@ -39,10 +40,10 @@ static int independent(const struct aic8800_sdio_transport *t, const void *p, si
     }
     return 1;
 }
-static void fail(struct aic8800_sdio_transport *t, enum aic8800_transport_error e)
+static void fail_at(struct aic8800_sdio_transport *t, enum aic8800_transport_error e, unsigned site)
 {
     if (t->state == AIC8800_TRANSPORT_FAULT) return;
-    t->error = e; t->state = AIC8800_TRANSPORT_FAULT;
+    t->error = e; t->state = AIC8800_TRANSPORT_FAULT; t->fail_site = (uint16_t)site;
     if(t->security) aic8800_security_stop(t->security,t);
 #ifdef SUNSTONE_AIC8800_RSN
     if(t->supplicant) aic8800_supplicant_stop(t->supplicant);
@@ -59,6 +60,7 @@ static void fail(struct aic8800_sdio_transport *t, enum aic8800_transport_error 
                     SUNXI_SDIO_TIMEOUT : SUNXI_SDIO_CARD_ERROR);
     t->last_result = t->card->host->result;
 }
+#define fail(t, e) fail_at((t), (e), AIC8800_SITE)
 static int observe(struct aic8800_sdio_transport *t, uint64_t *now)
 {
     if (!sunxi_sdio_time(t->card->host, now)) { fail(t, AIC8800_TRANSPORT_HOST_ERROR); return 0; }

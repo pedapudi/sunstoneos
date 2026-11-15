@@ -213,8 +213,12 @@ void os_ce_probe_step(void)
     if(!ce.started||ce.finished||ce.retired)return;
     int r=a733_ce_probe_step(&ce.probe);
     if(r<0){
-        /* The record names the failing stage; so does the crumb, like the radio's. */
-        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD)|SUNSTONE_CRUMB_FAIL_RETURN,
+        /* A bring-up failure after admission names the clock step and the CE words (group CE, include/sunstone_crumb.h);
+         * the record survives the watchdog that follows a retained write. Any other failure names the failing stage. */
+        if((ce.probe.record.failure_stage&0xffu)==A733_CE_PROBE_CLOCKED&&ce.clock.fail_line&&!ce.denied)
+            board_fail_note(SUNSTONE_CRUMB_FAIL_CE<<12|(ce.clock.fail_line&0xfffu)|a733_ce_clock_fail_aux(&ce.clock)<<16,
+                ce.clock.seen_mbus,(const void *)(uintptr_t)ce.clock.entry_mbus);
+        else board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD)|SUNSTONE_CRUMB_FAIL_RETURN,
             ce.probe.record.failure_stage,__builtin_return_address(0));
     }
     if(r)publish();

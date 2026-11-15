@@ -44,7 +44,7 @@ int gpu_queue_context_create(const struct gpu_queue_context_config *c,uint32_t t
  struct gpu_queue_context *ctx,struct gpu_queue_lease_info *info)
 {
  ++creates;assert(ticks==4000 && c->job_us==200000 && c->lease_count==2);
- assert(c->program->abi==GPU_QUEUE_ABI_GRID && c->program->local_size[0]==32);
+ assert(c->program->abi==GPU_QUEUE_ABI_GRID_INLINE&&c->program->local_size[0]==32);
  assert(c->lease[0].region==GPU_LIFECYCLE_REGION_OUTPUT && c->lease[1].region==GPU_LIFECYCLE_REGION_INPUT);
  if(mode==2)return GPU_QUEUE_REFUSED;
  *ctx=(struct gpu_queue_context){.generation=19};
