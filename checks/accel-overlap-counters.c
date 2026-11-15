@@ -3,8 +3,9 @@
  * written through the C layout so that checks/accel-overlap-counters.py can decode it with apps/accel-overlap/host.py.
  * Every phase latches like the board: period k's count appears at its end and holds until the next. Job counts follow a
  * steady rate while each period's traffic grows by 0.1%, so consecutive periods differ. argv[1] is the
- * output path, argv[2] the form of the writes at 144 values per row ("A", "B", "C", or "none" for counts that fit no
- * form), argv[3] the factor on the 176 control's write units (1 repeats run 3bc9fbc0). */
+ * output path, argv[2] the outcome of the relu at 144 values per row with a 320-byte output stride ("a125", "beats",
+ * "tile", or "none" for counts that fit no outcome), argv[3] the factor on the 176 control's write units (1 repeats run
+ * 3bc9fbc0). */
 #include "result.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,13 +64,15 @@ int main(int argc, char **argv)
     phase(2, ACCEL_OVERLAP_GPU, 0, 0, 1080.2, 0, (struct traffic){37219, 32797, 136118, 131096});
     phase(3, ACCEL_OVERLAP_NPU, 0, 0, 10189, 1, (struct traffic){3228, 2688, 36145, 32765 * control});
     phase(4, ACCEL_OVERLAP_NPU, 0, 1, 14654, 1, (struct traffic){3100, 2048, 24884, 20480});
-    /* At 144: A writes 3 requests of 10 units per row, B one request of 10 units per 64 values, C 32 units per row;
-     * "none" scales the 176 counts by 144 / 176. The rate follows the job-time fit, 14.3 us + 2.63 ns per write unit. */
-    double rq = 2688.0 * 144 / 176, dt = 32765.0 * 144 / 176;
-    if (!strcmp(form, "A")) { rq = 3072; dt = 30720; }
-    else if (!strcmp(form, "B")) { rq = 2304; dt = 23040; }
-    else if (!strcmp(form, "C")) { rq = 2690; dt = 32768; }
-    phase(5, ACCEL_OVERLAP_NPU, 0, 2, 1e6 / (14.3 + 0.00263 * dt), 1, (struct traffic){3100, rq, 28000, dt});
+    /* The stride graph: 180 units per 8 rows (a125), 192 units in 24 requests (beats), or the compiled 144 graph's 208
+     * units at its 12,189 jobs/s (tile); "none" writes 200 units per 8 rows. Alignment rates follow the job-time fit,
+     * 14.3 us + 2.63 ns per write unit. */
+    double rq = 2304, dt = 128.0 * 200, rate = 0;
+    if (!strcmp(form, "a125")) { rq = 2304; dt = 23040; }
+    else if (!strcmp(form, "beats")) { rq = 3072; dt = 24576; }
+    else if (!strcmp(form, "tile")) { rq = 2304; dt = 26623; rate = 12189; }
+    if (!rate) rate = 1e6 / (14.3 + 0.00263 * dt);
+    phase(5, ACCEL_OVERLAP_NPU, 0, 2, rate, 1, (struct traffic){2844, rq, 30003, dt});
     phase(6, ACCEL_OVERLAP_NPU, 0, 3, 8189, 1, (struct traffic){5149, 4097, 45373, 40968});
     phase(7, ACCEL_OVERLAP_STREAM, 0x01, 0, 0, 0, (struct traffic){0});
     FILE *f = fopen(argv[1], "wb");

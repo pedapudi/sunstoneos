@@ -754,6 +754,59 @@ at a 320-byte stride keeps the tile layout and moves each row to a 64-byte bound
 alignment, it falls; if it follows the tile segments, it stays at 28 units per 8 rows. That run would execute a graph changed after
 compilation, so it needs its own approval. The tile planner stays unchanged.
 
+### Stride 320: row alignment or tile segments
+
+A run of the 144-value relu with each output row padded to 320 bytes separates the two remaining causes of the
+excess write units. [tools/npu-row-stride.py](../../tools/npu-row-stride.py) changes the compiled graph's output row
+stride (descriptor word 17, bits 0-15, a confirmed field) from 288 to 320 bytes. It also widens the output tensor
+record to 160 x 1,024 values, so the OS allocates 327,680 bytes of output rows. Every other descriptor word and the
+input keep their compiled values. Each row then starts on a 64-byte boundary, and the tile layout is unchanged.
+
+**Simulator check.** `tools/npu-row-stride.py simulate` runs the changed graph in the SDK simulator with its output
+prefilled with the byte `0xa5`, which as a 16-bit value is negative, so no relu output can produce it. The output was
+widened to the slot's 532,480-byte write window. The first 288 bytes of every row equal the compiled graph's output,
+the 32 padding bytes of every row keep the pattern, and none of the 204,800 bytes past 320 x 1,024 changed. The board
+graph, with the 327,680-byte output, passes the same checks and is byte-identical to the simulated one.
+
+**Containment.** The OS layout gives the changed graph a 331,776-byte output allocation: 81 pages, 327,680 bytes plus
+the runtime's 64, rounded up. Each graph holds its own slot, and a slot's write window is 532,480 bytes, the image's
+tensor bound of 528,384 bytes (set by the 256-value relu) plus 64, rounded up to pages. The window holds only this
+graph's output, since the graph has no memory pool. A write past the window faults in the NPU MMU. A stray write
+inside the window but past the allocation lands only in this slot's own unused pages, which no other graph or task
+maps. The simulator check covered the whole window.
+
+**Prefill and cache maintenance.** For a graph whose reference is longer than its input, the application fills the
+output tensor with `0xa5` once at registration and marks it dirty. The queue cleans and invalidates every dirty range
+to the point of coherency before the graph's first job ([npu_app_queue.c](../../runtime/npu_app_queue.c),
+`clean_dirty`, called from `ss_npu_queue_submit`; the cache operation is `CPU_CLEAN_INVALIDATE` in
+[npu-queue.c](../../apps/os/npu-queue.c)). Before the CPU reads an output, `ss_npu_queue_acquire_handle` cleans and
+invalidates it again, and the output check runs after that call. [checks/npu-app-queue.c](../../checks/npu-app-queue.c)
+covers both steps: the first submit cleans each output once, and an acquire cleans the outputs again. The reference
+holds the relu's 288 bytes and 32 bytes of `0xa5` in every row, so the check compares the valid bytes and the padding.
+
+**Predictions per 8 rows**, with 128 times these per job. The controls and the void rule are those of the width-144
+run, and the stride graph takes phase 5. The write units decide within 1%:
+
+| Outcome | Write units | Write requests | Jobs/s |
+| --- | --- | --- | --- |
+| Alignment, 1.25 units per 16 bytes | 180 (23,040 per job) | not predicted | 12,684-14,020 |
+| Alignment, 16-byte beats plus 2 per request, 3 requests per row | 192 (24,576) | 24, which confirms this form | 12,035-13,302 |
+| Tile segments | 208 (26,623), as the compiled 144 graph | reported | 11,580-12,798 |
+
+Both alignment forms give 160, 240 and 320 units at 128, 192 and 256 values per row. They differ when a row ends
+partway through a 128-byte request. The alignment rates come from the job-time fit; the tile rate is the compiled
+144 graph's measured 12,189 jobs/s, within 5%. The input is unchanged, so the reads are reported against the compiled
+graph's 22 requests and 232 units per 8 rows.
+
+**What each outcome changes in the tile planner:**
+
+- **Alignment:** the planner pads every output row stride to a multiple of 64 bytes. At 144 values per row that saves
+  13.5% (180) or 7.7% (192) of the write units, for 11% more output memory. The second width is 176 at a 384-byte
+  stride: 220 units per 8 rows (1.25 units per 16 bytes) or 240 (beats plus 2 per request), against 256 at the
+  compiled stride.
+- **Tile segments:** padding does not help, and the planner stays unchanged.
+- **No outcome:** the planner stays unchanged.
+
 ## Stage 2: DMA completion timing
 
 DMA is a separate later stage. Its known work:

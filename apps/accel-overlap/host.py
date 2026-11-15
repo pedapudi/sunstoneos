@@ -17,11 +17,11 @@ LARGE_BYTES = 2944
 # record (result.h: struct accel_overlap_counter_result). Each phase counts five 100 ms periods on both ports.
 COUNTERS_VERSION = 6
 COUNTERS_BYTES = 2944 + 88 + 8 * 808
-COUNTER_NAMES = ('idle', 'gpu-per-lane', 'gpu-once', 'npu-w176', 'npu-w128', 'npu-w144', 'npu-w256', 'core-2')
+COUNTER_NAMES = ('idle', 'gpu-per-lane', 'gpu-once', 'npu-w176', 'npu-w128', 'npu-w144s320', 'npu-w256', 'core-2')
 COUNTER_DEVICES = (0, 1, 1, 2, 2, 2, 2, 4)
 COUNTER_MODES = (0, 0, 0, 0, 0, 0, 0, 0x01)
 COUNTER_PHASE_MODES = (0, 1, 0, 0, 1, 2, 3, 0)   # the GPU mode or the NPU graph index (main.c, counter_modes)
-NPU_WIDTHS = {'npu-w176': 176, 'npu-w128': 128, 'npu-w144': 144, 'npu-w256': 256}
+NPU_WIDTHS = {'npu-w176': 176, 'npu-w128': 128, 'npu-w144s320': 144, 'npu-w256': 256}
 PERIODS = 5
 PERIOD_TICKS = 2400000   # 60,000,000 cycles of the 600 MHz NSI clock: 100 ms
 COUNTER_WORDS = ('rq_rd', 'rq_wr', 'dt_rd', 'dt_wr', 'la_rd', 'la_wr')
@@ -370,7 +370,7 @@ def decode_counters(raw):
     return r
 
 
-# Predictions (docs/designs/concurrent-accel.md, "Width 144"), per job in 16-byte units. The controls repeat run
+# Predictions (docs/designs/concurrent-accel.md, "Stride 320"), per job in 16-byte units. The controls repeat run
 # 1794731628675614053-3bc9fbc0 (image from 3c1d021c7): its GPU counts in both modes and its NPU counts and rates at 176,
 # 128 and 256 values per row.
 GPU_PER_LANE = {'rq_rd': 102767, 'dt_rd': 201687, 'rq_wr': 32800, 'dt_wr': 131107}
@@ -382,23 +382,21 @@ NPU_CONTROLS = {'npu-w176': {'rq_wr': 2688, 'dt_wr': 32765, 'jobs_per_second': 1
 # 14.3 us plus 2.63 ns per write unit.
 NPU_JOB_US, NPU_US_PER_UNIT = 14.3, 0.00263
 ROWS = 1024
-# The three forms of the relu's writes at 144 values per row (288 bytes, 32 bytes off a multiple of 64):
-#   A: ceil(width / 64) requests per row, 10 units each (fits 128, 192 and 256; 176 measured 21 per 8 rows, A gives 24);
-#   B: the output in contiguous 64-value chunks, 10 units each (also fits 128, 192 and 256; gives 22 at 176);
-#   C: a row whose bytes are not a multiple of 64 writes one 512-byte unit, as 176 measured; requests not predicted.
-NPU_FORMS = {'A': {'rq_wr': ROWS * 3, 'dt_wr': ROWS * 30},
-             'B': {'rq_wr': ROWS * 144 // 64, 'dt_wr': ROWS * 144 // 64 * 10},
-             'C': {'rq_wr': None, 'dt_wr': ROWS * 32}}
+# The relu at 144 values per row with its output rows at a 320-byte stride (tools/npu-row-stride.py): each row starts on a
+# 64-byte boundary. The outcomes, in write units per job (per 8 rows times 128):
+#   alignment-1.25: rows that start on 64-byte boundaries cost 1.25 units per 16 bytes, as the aligned widths do (180);
+#   alignment-beats: 16-byte beats plus 2 per request, with 3 requests of at most 128 bytes per row (192 units, 24
+#     requests); both alignment forms give 160, 240 and 320 at 128, 192 and 256 values per row;
+#   tile: the excess follows the tile segments and stays at the compiled 144 graph's 208 units, with its rate (run
+#     1794739767299812242-b733706f: 26,623 units and 12,189 jobs/s per job).
+NPU_FORMS = {'alignment-1.25': {'rq_wr': None, 'dt_wr': ROWS // 8 * 180},
+             'alignment-beats': {'rq_wr': ROWS // 8 * 24, 'dt_wr': ROWS // 8 * 192},
+             'tile': {'rq_wr': None, 'dt_wr': 26623, 'jobs_per_second': 12189}}
+STRIDE_PHASE = 'npu-w144s320'
 
 
 def npu_jobs_per_second(units):
     return 1e6 / (NPU_JOB_US + NPU_US_PER_UNIT * units)
-
-
-def npu_read_requests(width):
-    """Read requests per job: the output tiles across a row (127 values wide) plus floor(width / 32) / 4 per row, and 28
-    per job. The rule fits 128, 192 and 256 and gave 3.25 per row at 176 against 3.125 measured."""
-    return ROWS * (-(-width // 127) + (width // 32) / 4) + 28
 
 
 def near(value, wanted, fraction):
@@ -406,8 +404,8 @@ def near(value, wanted, fraction):
 
 
 def models(r):
-    """The decision of the run, in order: a control that misses voids it; then the write units at 144 values per row pick
-    form A, B or C within 1%; then the write requests confirm A or B within 1%."""
+    """The decision of the run, in order: a control that misses voids it; then the stride graph's write units pick one
+    outcome within 1%; then the write requests confirm the alignment-beats form within 1%."""
     p = {ph['name']: ph for ph in r['phases']}
     out = {}
     once, lane = (p.get(n, {}).get('counters', {}).get('per_job') for n in ('gpu-once', 'gpu-per-lane'))
@@ -421,21 +419,22 @@ def models(r):
     for counts, wanted in ((lane, GPU_PER_LANE), (once, GPU_ONCE)):
         if not counts or not all(near(counts[w], v, 0.02) for w, v in wanted.items()):
             controls.append('gpu-per-lane' if wanted is GPU_PER_LANE else 'gpu-once')
-    j = jobs['npu-w144'] or {}
+    j = jobs[STRIDE_PHASE] or {}
     form = 'void' if controls else 'none'
     if not controls and j:
         units = [f for f, v in NPU_FORMS.items() if near(j['dt_wr'], v['dt_wr'], 0.01)]
-        if units and (units[0] == 'C' or near(j['rq_wr'], NPU_FORMS[units[0]]['rq_wr'], 0.01)):
+        if units and (NPU_FORMS[units[0]]['rq_wr'] is None or near(j['rq_wr'], NPU_FORMS[units[0]]['rq_wr'], 0.01)):
             form = units[0]
     out['npu'] = {'form': form, 'controls_missed': controls,
-                  'w144': {w: j.get(w) for w in ('rq_wr', 'dt_wr', 'rq_rd', 'dt_rd', 'jobs_per_second')},
-                  'forms': {f: dict(v, jobs_per_second=round(npu_jobs_per_second(v['dt_wr']))) for f, v in NPU_FORMS.items()},
-                  'read_requests_predicted': npu_read_requests(144)}
+                  'stride': {w: j.get(w) for w in ('rq_wr', 'dt_wr', 'rq_rd', 'dt_rd', 'jobs_per_second')},
+                  'forms': {f: dict(v, jobs_per_second=v.get('jobs_per_second') or round(npu_jobs_per_second(v['dt_wr'])))
+                            for f, v in NPU_FORMS.items()},
+                  'reads_reported_against': {'rq_rd': 2844, 'dt_rd': 30003}}
     return out
 
 
 def counter_checks(r):
-    """The ranges of the width-144 hypothesis (docs/designs/concurrent-accel.md, "Width 144")."""
+    """The ranges of the stride-320 hypothesis (docs/designs/concurrent-accel.md, "Stride 320")."""
     out = []
 
     def check(name, value, low=None, high=None):
@@ -477,12 +476,12 @@ def counter_checks(r):
         for w, v in wanted.items():
             f = 0.05 if w == 'jobs_per_second' else 0.01
             check('%s %s per job' % (name, w), j.get(w), round(v * (1 - f)), round(v * (1 + f)))
-    # The decision: one form at 144 values per row, and that form's rate within 5% of the job-time fit.
+    # The decision: one outcome for the stride graph, and that outcome's rate within 5%.
     n = r['models']['npu']
-    check('npu w144 form decided', n['form'] in NPU_FORMS or None)
+    check('npu stride outcome decided', n['form'] in NPU_FORMS or None)
     if n['form'] in NPU_FORMS:
         rate = n['forms'][n['form']]['jobs_per_second']
-        check('npu-w144 jobs/s', (c['npu-w144']['per_job'] or {}).get('jobs_per_second'), round(rate * 0.95), round(rate * 1.05))
+        check('%s jobs/s' % STRIDE_PHASE, (c[STRIDE_PHASE]['per_job'] or {}).get('jobs_per_second'), round(rate * 0.95), round(rate * 1.05))
     check('gpu checked slot jobs', p[1]['slot_jobs'] + p[2]['slot_jobs'], 8, 8)
     check('core-2 stream sweeps', p[7]['stream_sweeps'], 1)
     check('mismatches', sum(ph[d]['mismatches'] for ph in p for d in ('gpu', 'npu')), 0, 0)
