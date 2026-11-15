@@ -13,7 +13,7 @@ add_sunstone_application(accel-overlap
   MANIFEST "${SUNSTONE_ACCEL_OVERLAP_MANIFEST}"
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/.."
   INPUTS "${CMAKE_CURRENT_LIST_DIR}/../result.h" "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/program.h"
-         "${CMAKE_CURRENT_LIST_DIR}/../add4/program.h")
+         "${CMAKE_CURRENT_LIST_DIR}/../add4/program.h" "${CMAKE_CURRENT_LIST_DIR}/../add4inline/program.h")
 # The streaming sweep (main.c, ACCEL_OVERLAP_SWEEP): both accelerators under five streaming sets, with a dependent-load chase.
 option(SUNSTONE_ACCEL_OVERLAP_SWEEP "Build accel-overlap as the streaming sweep" OFF)
 # The larger-job sweep (ACCEL_OVERLAP_LARGE): 262,144-element GPU adds, a 1024x176 relu (the graphs directory names it), nine
@@ -22,10 +22,10 @@ option(SUNSTONE_ACCEL_OVERLAP_LARGE "Build accel-overlap as the larger-job strea
 # The GPU-width run (ACCEL_OVERLAP_WIDTH): the larger-job build with the four-elements-per-lane add (add4/) and only the
 # GPU-alone phase. It needs manifest-large.json, as the larger-job sweep does.
 option(SUNSTONE_ACCEL_OVERLAP_WIDTH "Build accel-overlap as the GPU-alone run of the four-elements-per-lane add" OFF)
-# The NSI counter calibration (ACCEL_OVERLAP_COUNTERS): the GPU-width build with four phases (idle, the GPU alone, the NPU
-# alone, the core-2 stream alone), each counted on NSI ports 6 and 18 by the OS counter owner, then two 100 ms window probes.
-# It needs manifest-counters.json (manifest-large.json with room for the 10,088-byte result) and the OS built with
-# SUNSTONE_ACCEL_NSI_COUNTERS.
+# The NSI counter periods (ACCEL_OVERLAP_COUNTERS): the GPU-width build on the inline-argument program (add4inline/) with
+# eight phases (idle, the GPU with arguments per lane and once per task, the NPU relu at widths 176, 128, 192 and 256, the
+# core-2 stream), each counted on NSI ports 6 and 18 by the OS counter owner over five 100 ms periods. It needs
+# manifest-counters.json (four graphs and a 4 MiB GPU input region) and the OS built with SUNSTONE_ACCEL_NSI_COUNTERS.
 option(SUNSTONE_ACCEL_OVERLAP_COUNTERS "Build accel-overlap as the NSI port 6 and 18 counter calibration" OFF)
 if(SUNSTONE_ACCEL_OVERLAP_COUNTERS)
   if(NOT SUNSTONE_ACCEL_NSI_COUNTERS)

@@ -38,7 +38,7 @@
         "write",
         "gpu-read"
       ],
-      "bytes": 2097152
+      "bytes": 4194304
     },
     {
       "name": "gpu_output",
@@ -76,7 +76,7 @@
     "depth": 4,
     "leases": 2,
     "bindings": 2,
-    "argument_bytes": 4
+    "argument_bytes": 8
   },
   "deadlines": {
     "run_us": 25000000,

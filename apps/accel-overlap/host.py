@@ -13,15 +13,17 @@ LARGE_VERSION = 3
 # The four-elements-per-lane GPU run (ACCEL_OVERLAP_WIDTH): the larger-job layout with only phase 0, the GPU alone.
 WIDTH_VERSION = 4
 LARGE_BYTES = 2944
-# The NSI counter calibration (ACCEL_OVERLAP_COUNTERS): the larger-job layout with four phases, followed by the counter
-# record (result.h: struct accel_overlap_counter_result).
-COUNTERS_VERSION = 5
-COUNTERS_BYTES = 10088
-COUNTER_NAMES = ('idle', 'gpu-alone', 'npu-alone', 'core-2', 'gpu-window', 'npu-window')
-COUNTER_DEVICES = (0, 1, 2, 4, 1, 2)
-COUNTER_MODES = (0, 0, 0, 0x01, 0, 0)
-COUNTED_PHASES = 4       # counted with CYCLE 0xffffffff on both ports; the last two phases are the window probes
-WINDOW_CYCLES = 60000000 # the probes' period: 100 ms at the 600 MHz NSI clock
+# The NSI counter periods (ACCEL_OVERLAP_COUNTERS): the larger-job layout with eight phases, followed by the counter
+# record (result.h: struct accel_overlap_counter_result). Each phase counts five 100 ms periods on both ports.
+COUNTERS_VERSION = 6
+COUNTERS_BYTES = 2944 + 88 + 8 * 808
+COUNTER_NAMES = ('idle', 'gpu-per-lane', 'gpu-once', 'npu-w176', 'npu-w128', 'npu-w192', 'npu-w256', 'core-2')
+COUNTER_DEVICES = (0, 1, 1, 2, 2, 2, 2, 4)
+COUNTER_MODES = (0, 0, 0, 0, 0, 0, 0, 0x01)
+COUNTER_PHASE_MODES = (0, 1, 0, 0, 1, 2, 3, 0)   # the GPU mode or the NPU graph index (main.c, counter_modes)
+NPU_WIDTHS = {'npu-w176': 176, 'npu-w128': 128, 'npu-w192': 192, 'npu-w256': 256}
+PERIODS = 5
+PERIOD_TICKS = 2400000   # 60,000,000 cycles of the 600 MHz NSI clock: 100 ms
 COUNTER_WORDS = ('rq_rd', 'rq_wr', 'dt_rd', 'dt_wr', 'la_rd', 'la_wr')
 COUNTER_PORTS = (6, 18)
 DATA_UNIT = 16           # bytes per data count of an initiator port (sun60iw2p1.dtsi ia_pmu_data_unit)
@@ -277,56 +279,73 @@ def decode_large(raw, counters=False):
     return r
 
 
-def window_model(samples, window_ticks):
-    """What the counters did across period ends, from one probe's samples of the data counts (DT_RD + DT_WR):
-    'zero' (never counted), 'latched' (held still between steps about one period apart: each step shows the last
-    period's count), 'restarts' (rose at almost every sample and fell back at each period end: each period's count is
-    the peak before a fall), 'stopped' (rose, then held still for more than one and a half periods) or 'free' (rose
-    through every period end)."""
-    v = [s['count'][2] + s['count'][3] for s in samples]
-    t = [s['ticks'] for s in samples]
-    out = {'model': None, 'samples': len(v), 'period_ms': None, 'period_units': None, 'period_counts': None}
-    if len(v) < 8:
-        return out
-    if not any(v):
-        out['model'] = 'zero'
-        return out
-    falls = [i for i in range(1, len(v)) if v[i] < v[i - 1]]
-    changes = [i for i in range(1, len(v)) if v[i] != v[i - 1]]
-    spacing = lambda idx: sorted(t[b] - t[a] for a, b in zip(idx, idx[1:]))
-    median = lambda xs: xs[len(xs) // 2] if xs else None
-    # A latched count changes only at period ends, a few times in the probe and several samples apart, and may rise or
-    # fall at each change; a restarting count changes at almost every sample and falls at each period end; a stopped
-    # count changes at consecutive samples and then not at all.
-    sample_gap = median(sorted(b - a for a, b in zip(t, t[1:])))
-    if len(changes) <= len(v) // 4 and (len(changes) < 2 or median(spacing(changes)) >= 4 * sample_gap):
-        out['model'] = 'latched'
-        gaps = spacing(changes)
-        ends = changes
-    elif falls:
-        out['model'] = 'restarts'
-        gaps = spacing(falls)
-        peaks = [i - 1 for i in falls[1:]]   # the first period started at the probe's begin, after the clear
-        ends = peaks or [falls[0] - 1]
-    else:
-        flat = len(v) - 1 - changes[-1]
-        if t[-1] - t[changes[-1]] > 1.5 * window_ticks and flat:
-            out['model'] = 'stopped'
-            out['period_ms'] = round(t[changes[-1]] / TICKS_PER_US / 1000, 1)
-            return out
-        out['model'] = 'free'
-        return out
-    gap = median(gaps) if gaps else t[(falls or changes)[0]]   # one period end seen: the first period began at 0
-    out['period_ms'] = round(gap / TICKS_PER_US / 1000, 1) if gap else None
-    pick = lambda w: sorted(samples[i]['count'][w] for i in ends)
-    out['period_counts'] = {w: median(pick(k)) for k, w in enumerate(('rq_rd', 'rq_wr', 'dt_rd', 'dt_wr'))}
-    out['period_units'] = median(sorted(v[i] for i in ends))
+def decode_period_phase(raw, base):
+    """One phase's record (struct accel_overlap_period_phase): per bank the latched count of each period, the bracket
+    that shows each sample lies on the right side of its period end, and the jobs that belong to each period."""
+    status, clear0, clear1, mode = struct.unpack_from('<4I', raw, base)
+    begin = struct.unpack_from('<4I', raw, base + 16)
+    gpu_at_begin, npu_at_begin, samples, _ = struct.unpack_from('<4I', raw, base + 32)
+    start, first_begin, end = struct.unpack_from('<3Q', raw, base + 48)
+    value = struct.unpack_from('<12I', raw, base + 72)
+    held = struct.unpack_from('<12I', raw, base + 120)
+    sample = lambda at: dict(zip(('ticks', 'gpu_jobs', 'npu_jobs', 'status'), struct.unpack_from('<4I', raw, at)),
+                             value=struct.unpack_from('<12I', raw, at + 16))
+    pre = [sample(base + 168 + 64 * k) for k in range(PERIODS)]
+    post = [sample(base + 168 + 64 * (PERIODS + k)) for k in range(PERIODS)]
+    q = {'status': status, 'clear_readback': ['0x%08x' % clear0, '0x%08x' % clear1], 'mode': mode, 'samples': samples,
+         'begin_us': [[round(begin[2 * b + i] / TICKS_PER_US, 1) for i in (0, 1)] for b in (0, 1)],
+         'ms': round((end - start) / TICKS_PER_US / 1000, 3) if end > start else None,
+         'warm_ms': round((first_begin - start) / TICKS_PER_US / 1000, 3) if first_begin > start else None}
+    if samples != 2 * PERIODS:
+        return q
+    # Every enable lies inside its BEGIN call: period k ends between begin[0][0] + k periods and begin[1][1] + k periods.
+    early, late = begin[0], begin[3]
+    q['bracket'] = {'pre_before_end': all(pre[k]['ticks'] < early + (k + 1) * PERIOD_TICKS for k in range(PERIODS)),
+                    'post_after_end': all(post[k]['ticks'] > late + (k + 1) * PERIOD_TICKS for k in range(PERIODS)),
+                    'pre_ms_before_end': round(min(early + (k + 1) * PERIOD_TICKS - pre[k]['ticks']
+                                                   for k in range(PERIODS)) / TICKS_PER_US / 1000, 3),
+                    'post_ms_after_end': round(min(post[k]['ticks'] - late - (k + 1) * PERIOD_TICKS
+                                                   for k in range(PERIODS)) / TICKS_PER_US / 1000, 3)}
+    # Jobs at each period end, interpolated between its pre and post samples; the jobs of period k are the difference.
+    end_at = lambda k: (early + late) / 2 + k * PERIOD_TICKS
+    def jobs(device):
+        at = [gpu_at_begin if device == 'gpu_jobs' else npu_at_begin]
+        for k in range(PERIODS):
+            a, b = pre[k], post[k]
+            span = b['ticks'] - a['ticks']
+            f = (end_at(k + 1) - a['ticks']) / span if span > 0 else 0
+            at.append(a[device] + f * (b[device] - a[device]))
+        return [round(y - x, 2) for x, y in zip(at, at[1:])]
+    q['jobs_per_period'] = {'gpu': jobs('gpu_jobs'), 'npu': jobs('npu_jobs')}
+    for b, port in enumerate(COUNTER_PORTS):
+        words = lambda v: dict(zip(COUNTER_WORDS, v[6 * b:6 * b + 6]))
+        periods = [words(post[k]['value']) for k in range(PERIODS)]
+        # A latched count holds from one period end to the next: each pre sample shows the period before, the first zero.
+        stale = sum(1 for k in range(PERIODS) if words(pre[k]['value']) != (periods[k - 1] if k else dict.fromkeys(COUNTER_WORDS, 0)))
+        q['port_%d' % port] = {'periods': periods, 'pre_samples_not_previous_period': stale,
+                               'value': words(value), 'held': words(held)}
+    return q
+
+
+def per_job(q, port, device):
+    """A phase's counts per job on one port, over its five periods, with the mean latency per request."""
+    periods, jobs = q['port_%d' % port]['periods'], sum(q['jobs_per_period'][device])
+    if not jobs:
+        return None
+    total = {w: sum(p[w] for p in periods) for w in COUNTER_WORDS}
+    out = {w: round(total[w] / jobs, 1) for w in COUNTER_WORDS[:4]}
+    out['jobs_per_second'] = round(jobs / (PERIODS * PERIOD_TICKS / TICKS_PER_US / 1e6), 1)
+    out['read_requests_per_second'] = round(total['rq_rd'] / (PERIODS * PERIOD_TICKS / TICKS_PER_US / 1e6))
+    out['la_rd_per_request'] = round(total['la_rd'] / total['rq_rd'], 1) if total['rq_rd'] else None
+    out['la_wr_per_request'] = round(total['la_wr'] / total['rq_wr'], 1) if total['rq_wr'] else None
+    per_period = [round(p['dt_rd'] / j, 1) if j else None for p, j in zip(periods, q['jobs_per_period'][device])]
+    out['dt_rd_per_job_by_period'] = per_period
     return out
 
 
 def decode_counters(raw):
-    """The NSI counter calibration (struct accel_overlap_counter_result). A record whose counter call failed decodes too:
-    the phases after the failure did not run, and the counter record still names the status and the failing address."""
+    """The NSI counter periods (struct accel_overlap_counter_result). A record whose counter call failed decodes too: the
+    phases after the failure did not run, and the counter record still names the status and the failing address."""
     r = decode_large(raw, counters=True)
     at = LARGE_BYTES
     open_status, close_status, fail_address, fail_value = struct.unpack_from('<4I', raw, at)
@@ -335,143 +354,120 @@ def decode_counters(raw):
                      'fail_value': '0x%08x' % fail_value, 'phases_run': len(r['phases']),
                      'reset': {'port_%d' % port: ['0x%08x' % w for w in reset[9 * b:9 * b + 9]]
                                for b, port in enumerate(COUNTER_PORTS)}}
-    for i, phase in enumerate(r['phases'][:COUNTED_PHASES]):
-        base = at + 16 + 72 + 184 * i
-        status, clear0, clear1, _ = struct.unpack_from('<4I', raw, base)
-        live = struct.unpack_from('<12I', raw, base + 16)
-        value = struct.unpack_from('<12I', raw, base + 64)
-        held = struct.unpack_from('<12I', raw, base + 112)
-        begin, live_at, end = struct.unpack_from('<3Q', raw, base + 160)
-        c = {'status': status, 'clear_readback': ['0x%08x' % clear0, '0x%08x' % clear1],
-             'ms': round((end - begin) / TICKS_PER_US / 1000, 3) if end > begin else None,
-             'live_at_fraction': round((live_at - begin) / (end - begin), 3) if live_at and end > begin else None}
-        for b, port in enumerate(COUNTER_PORTS):
-            c['port_%d' % port] = {
-                'value': dict(zip(COUNTER_WORDS, value[6 * b:6 * b + 6])),
-                'live': dict(zip(COUNTER_WORDS, live[6 * b:6 * b + 6])),
-                'held': dict(zip(COUNTER_WORDS, held[6 * b:6 * b + 6]))}
-        phase['counters'] = c
-    for k, phase in enumerate(r['phases'][COUNTED_PHASES:]):
-        base = at + 16 + 72 + 184 * COUNTED_PHASES + 3160 * k
-        status, bank, cycle, count, clear, _ = struct.unpack_from('<6I', raw, base)
-        begin, end = struct.unpack_from('<2Q', raw, base + 24)
-        value = struct.unpack_from('<6I', raw, base + 40)
-        held = struct.unpack_from('<6I', raw, base + 64)
-        samples = [{'ticks': x[0], 'jobs': x[1], 'count': x[2:6]}
-                   for x in (struct.unpack_from('<6I', raw, base + 88 + 24 * n) for n in range(min(count, 128)))]
-        window_ticks = cycle * TICKS_PER_US / 600 if cycle else None
-        q = {'status': status, 'port': COUNTER_PORTS[bank] if bank < 2 else None, 'cycle': cycle,
-             'clear_readback': '0x%08x' % clear, 'ms': round((end - begin) / TICKS_PER_US / 1000, 3) if end > begin else None,
-             'value': dict(zip(COUNTER_WORDS, value)), 'held': dict(zip(COUNTER_WORDS, held)),
-             'series': [[s['ticks'], s['jobs']] + list(s['count']) for s in samples]}
-        q.update(window_model(samples, window_ticks or 2400000))
-        if len(samples) >= 2 and samples[-1]['ticks'] > samples[0]['ticks']:
-            q['jobs_per_second'] = round((samples[-1]['jobs'] - samples[0]['jobs']) * TICKS_PER_US * 1e6 /
-                                         (samples[-1]['ticks'] - samples[0]['ticks']), 1)
-        if q['period_counts'] and q['period_ms'] and q.get('jobs_per_second'):
-            jobs = q['jobs_per_second'] * q['period_ms'] / 1000
-            q['per_job'] = {w: round(n / jobs, 1) for w, n in q['period_counts'].items()}
-        phase['probe'] = q
-    r['calibration'] = calibration(r)
+    for i, phase in enumerate(r['phases']):
+        q = decode_period_phase(raw, at + 88 + 808 * i)
+        if q['mode'] != COUNTER_PHASE_MODES[i]:
+            raise ValueError('Phase %d ran mode %d, not %d.' % (i, q['mode'], COUNTER_PHASE_MODES[i]))
+        phase['counters'] = q
+        if q.get('jobs_per_period'):
+            if phase['name'].startswith('gpu'):
+                q['per_job'] = per_job(q, 6, 'gpu')
+            elif phase['name'].startswith('npu'):
+                q['per_job'] = per_job(q, 18, 'npu')
+    r['models'] = models(r)
     r['checks'] = counter_checks(r)
     r['in_range'] = all(c['ok'] for c in r['checks'])
     return r
 
 
-def calibration(r):
-    """Per-job counts. With a model in which a count can be read before its period ends ('restarts' or 'free'), the
-    counted phases give them over one second; with 'latched', the probes give them from one period's count."""
-    p = r['phases']
-    probes = [ph['probe'] for ph in p[COUNTED_PHASES:]]
-    models = sorted({q['model'] for q in probes if q['model']})
-    out = {'probe_models': models, 'source': None,
-           'gpu_known_read_units_per_job': r['gpu_elements'] * 8 // DATA_UNIT,
-           'gpu_known_write_units_per_job': r['gpu_elements'] * 4 // DATA_UNIT,
-           'npu_known_units_per_job': r['npu_tensor_bytes'] // DATA_UNIT}
-    per = lambda v, jobs: round(v / jobs, 1) if jobs else None
-    if len(p) >= 3 and models and set(models) <= {'restarts', 'free'}:
-        gpu, npu = p[1], p[2]
-        gpu_jobs = gpu['gpu']['pipelined_jobs'] + 2 * gpu['slot_jobs']   # each slot ran a plain and a synced job
-        npu_jobs = npu['npu']['pipelined_jobs']
-        g, n = gpu['counters']['port_6']['value'], npu['counters']['port_18']['value']
-        out.update(source='counted phases', gpu_jobs=gpu_jobs, npu_jobs=npu_jobs,
-                   gpu={w: per(g[w], gpu_jobs) for w in COUNTER_WORDS[:4]},
-                   npu={w: per(n[w], npu_jobs) for w in COUNTER_WORDS[:4]},
-                   gpu_la_rd_per_request=round(g['la_rd'] / g['rq_rd'], 2) if g['rq_rd'] else None,
-                   npu_la_rd_per_request=round(n['la_rd'] / n['rq_rd'], 2) if n['rq_rd'] else None)
-    elif len(probes) == 2 and models == ['latched'] and all(q.get('per_job') for q in probes):
-        out.update(source='window probes', gpu=probes[0]['per_job'], npu=probes[1]['per_job'])
-    if out.get('gpu'):
-        q = out['gpu']['rq_rd'] + out['gpu']['rq_wr'] if None not in (out['gpu']['rq_rd'], out['gpu']['rq_wr']) else None
-        out['gpu_requests_per_job'] = q
-        out['gpu_discriminator'] = (None if q is None else 'line requests: few resident tasks' if q < 100000 else
-                                    'per-lane requests: a per-request limit' if q > 200000 else 'undecided')
+# Predictions (docs/designs/concurrent-accel.md, "Arguments once per task"), per job in 16-byte beats and bursts. The GPU
+# reads its two input vectors as 32,768 four-beat line requests; mode 1 adds one single-beat request per lane for its
+# argument record (65,536); both keep the last run's residual of 4,555 requests and 5,259 beats. Writes are two 8-byte
+# stores per lane at a 16-byte stride: 131,072 beats in 32,768 requests, plus the last run's 65 and 163.
+GPU_PER_LANE = {'rq_rd': 102859, 'dt_rd': 201867, 'rq_wr': 32833, 'dt_wr': 131235}
+GPU_ONCE = {'rq_rd': 37323, 'dt_rd': 136331, 'rq_wr': 32833, 'dt_wr': 131235}
+GPU_PER_LANE_JOBS = 673.2          # the last run's width program
+# A relu row of 2 x width bytes: whole 512-byte units (rows), or 256-byte bursts. Reads add the last run's residual.
+NPU_READ_RESIDUAL = {'dt_rd': 3404, 'rq_rd': 1182}
+
+
+def npu_units(width, rule):
+    row = 2 * width
+    moved = 512 if rule == 'rows' else -(-row // 256) * 256
+    return 1024 * moved // DATA_UNIT
+
+
+def models(r):
+    """The two decisions of the run: the GPU's limit (mode 0 against mode 1) and the NPU's row rule (the write units of the
+    four widths)."""
+    p = {ph['name']: ph for ph in r['phases']}
+    out = {}
+    once, lane = (p.get(n, {}).get('counters', {}).get('per_job') for n in ('gpu-once', 'gpu-per-lane'))
+    if once and lane:
+        ratio = round(once['jobs_per_second'] / lane['jobs_per_second'], 3)
+        out['gpu'] = {'jobs_per_second_ratio': ratio,
+                      'model': 'request rate' if ratio >= 1.5 else 'residency' if ratio <= 1.25 else 'undecided',
+                      'mode_0_read_requests_dropped': round(lane['rq_rd'] - once['rq_rd'], 1)}
+    rules = {}
+    for name, width in NPU_WIDTHS.items():
+        j = p.get(name, {}).get('counters', {}).get('per_job')
+        if not j:
+            continue
+        rules[name] = {'dt_wr': j['dt_wr'], 'rows': npu_units(width, 'rows'), 'bursts': npu_units(width, 'bursts'),
+                       'known': 1024 * 2 * width // DATA_UNIT}
+    def fits(rule):
+        return bool(rules) and all(abs(v['dt_wr'] - v[rule]) <= 0.01 * v[rule] for v in rules.values())
+    out['npu'] = {'widths': rules, 'rule': 'rows' if fits('rows') else 'bursts' if fits('bursts') else
+                  ('none' if len(rules) == len(NPU_WIDTHS) else None)}
     return out
 
 
 def counter_checks(r):
-    """The ranges of the NSI counter hypothesis (docs/designs/concurrent-accel.md, "NSI counters")."""
+    """The ranges of the counter-period hypothesis (docs/designs/concurrent-accel.md, "Arguments once per task")."""
     out = []
 
     def check(name, value, low=None, high=None):
         ok = value is not None and (low is None or value >= low) and (high is None or value <= high)
         out.append({'name': name, 'value': value, 'low': low, 'high': high, 'ok': ok})
 
-    k, p, cal = r['counters'], r['phases'], r['calibration']
+    k, p = r['counters'], r['phases']
     check('counter open status', k['open_status'], 0, 0)
     check('phases run', k['phases_run'], len(COUNTER_NAMES), len(COUNTER_NAMES))
     check('counter close status', k['close_status'], 0, 0)
-    check('counter phase and probe status', sum(1 for ph in p if (ph.get('counters') or ph.get('probe'))['status']), 0, 0)
+    check('counter phase status', sum(1 for ph in p if ph['counters']['status']), 0, 0)
     check('reset enable bits set', sum(int(k['reset']['port_%d' % port][0], 16) & 1 for port in COUNTER_PORTS), 0, 0)
     if len(p) < len(COUNTER_NAMES):
         return out
-    probes = [ph['probe'] for ph in p[COUNTED_PHASES:]]
-    check('probe samples', min(q['samples'] for q in probes), 100, 128)
-    check('probes agree on one model', len(cal['probe_models']) == 1 or None)
-    check('probe model counts', cal['probe_models'][0] in ('restarts', 'latched', 'free') if cal['probe_models'] else None)
-    if cal['probe_models'] and cal['probe_models'][0] in ('restarts', 'latched'):
-        for q in probes:   # the period follows CYCLE at the 600 MHz NSI clock: 100 ms
-            check('port %d probe period ms' % q['port'], q['period_ms'], 90, 110)
-    counted = cal['source'] == 'counted phases'
-    if counted:
-        # The counters hold after the disable.
-        check('counts that moved after the disable', sum(
-            1 for ph in p[:COUNTED_PHASES] for port in COUNTER_PORTS for w in COUNTER_WORDS
-            if ph['counters']['port_%d' % port]['held'][w] != ph['counters']['port_%d' % port]['value'][w]), 0, 0)
-        # Live counting: the data sample at half the phase, on the port of the phase's device.
-        for i, port in ((1, 6), (2, 18)):
-            c = p[i]['counters']['port_%d' % port]
-            total = c['value']['dt_rd'] + c['value']['dt_wr']
-            check('%s port %d live share at half' % (p[i]['name'], port),
-                  round((c['live']['dt_rd'] + c['live']['dt_wr']) / total, 3) if total else None, 0.35, 0.65)
-        # Controls. Idle for 100 ms: under 10,000 data units (160 KB) on either port, 0.1% of the GPU phase's traffic in
-        # 100 ms. The core-2 stream reaches DRAM through the CPU ports: under 100,000 units on either port, 0.05% of its
-        # bytes.
-        for i, limit in ((0, 9999), (3, 99999)):
-            for port in COUNTER_PORTS:
-                v = p[i]['counters']['port_%d' % port]['value']
-                check('%s port %d data units' % (p[i]['name'], port), v['dt_rd'] + v['dt_wr'], 0, limit)
-        # Each accelerator's traffic stays off the other's port: below 1% of its own count.
-        g6, g18 = p[1]['counters']['port_6']['value'], p[1]['counters']['port_18']['value']
-        n6, n18 = p[2]['counters']['port_6']['value'], p[2]['counters']['port_18']['value']
-        check('gpu-alone port 18 share', round((g18['dt_rd'] + g18['dt_wr']) / max(1, g6['dt_rd'] + g6['dt_wr']), 4), 0, 0.01)
-        check('npu-alone port 6 share', round((n6['dt_rd'] + n6['dt_wr']) / max(1, n18['dt_rd'] + n18['dt_wr']), 4), 0, 0.01)
-        check('counted phase longest ms', max(ph['counters']['ms'] or 0 for ph in p[:COUNTED_PHASES]), None, 1200)
-    # Calibration on the known bytes per job (16-byte units), from whichever source the model allows.
-    g, n = cal.get('gpu') or {}, cal.get('npu') or {}
-    rd, wr, nb = cal['gpu_known_read_units_per_job'], cal['gpu_known_write_units_per_job'], cal['npu_known_units_per_job']
-    slack = 1.0 if counted else 1.1   # a probe's period holds about 68 GPU jobs, so its per-job count carries about 2% more
-    check('gpu dt_rd per job', g.get('dt_rd'), round(rd / slack), round(rd * 1.04 * slack))
-    check('gpu dt_wr per job', g.get('dt_wr'), round(wr / slack), round(2 * wr * 1.04 * slack))
-    check('gpu requests per job decide', cal.get('gpu_discriminator') in ('line requests: few resident tasks',
-                                                                          'per-lane requests: a per-request limit') or None)
-    check('npu dt_rd per job', n.get('dt_rd'), round(nb / slack), round(nb * 1.05 * slack))
-    check('npu dt_wr per job', n.get('dt_wr'), round(nb / slack), round(nb * 1.02 * slack))
-    # The accelerators run as in the width run (675.9 jobs/s) and stage 1c (10,183.9 jobs/s), within 10%.
-    check('gpu alone jobs/s', p[1]['gpu']['jobs_per_second'], 608, 744)
-    check('npu alone jobs/s', p[2]['npu']['jobs_per_second'], 9165, 11202)
-    check('gpu checked slot jobs', p[1]['slot_jobs'] + p[4]['slot_jobs'], 8, 8)
-    check('core-2 stream sweeps', p[3]['stream_sweeps'], 1)
+    c = {ph['name']: ph['counters'] for ph in p}
+    check('samples per phase', min(q['samples'] for q in c.values()), 2 * PERIODS, 2 * PERIODS)
+    if any(q['samples'] != 2 * PERIODS for q in c.values()):
+        return out
+    check('pre samples before their period end', sum(1 for q in c.values() if not q['bracket']['pre_before_end']), 0, 0)
+    check('post samples after their period end', sum(1 for q in c.values() if not q['bracket']['post_after_end']), 0, 0)
+    # Latching: every pre sample shows the previous period's count (the first shows zero), in the phases with traffic on
+    # the port. In idle phases a period may repeat the one before, which the rule cannot tell apart.
+    for name, port in (('gpu-per-lane', 6), ('gpu-once', 6), ('npu-w176', 18), ('npu-w256', 18)):
+        check('%s port %d pre samples that are not the previous period' % (name, port),
+              c[name]['port_%d' % port]['pre_samples_not_previous_period'], 0, 0)
+    # Controls: idle and the core-2 stream move under 10,000 units per period on either port (0.05% of a GPU period).
+    for name in ('idle', 'core-2'):
+        for port in COUNTER_PORTS:
+            check('%s port %d data units, largest period' % (name, port),
+                  max(q['dt_rd'] + q['dt_wr'] for q in c[name]['port_%d' % port]['periods']), 0, 9999)
+    # The bridge: mode 1 repeats the last run's width program within 2% per job and 10% in rate. A miss voids the ratio.
+    lane, once = c['gpu-per-lane']['per_job'] or {}, c['gpu-once']['per_job'] or {}
+    for w, v in GPU_PER_LANE.items():
+        check('gpu per-lane %s per job' % w, lane.get(w), round(v * 0.98), round(v * 1.02))
+    check('gpu per-lane jobs/s', lane.get('jobs_per_second'), round(GPU_PER_LANE_JOBS * 0.9), round(GPU_PER_LANE_JOBS * 1.1))
+    # The mechanism: mode 0 drops the 65,536 per-lane requests and their beats; its writes stay those of mode 1.
+    check('gpu once rq_rd per job', once.get('rq_rd'), 35000, 40000)
+    check('gpu once dt_rd per job', once.get('dt_rd'), round(GPU_ONCE['dt_rd'] * 0.98), round(GPU_ONCE['dt_rd'] * 1.03))
+    for w in ('rq_wr', 'dt_wr'):
+        check('gpu once %s per job' % w, once.get(w), round(GPU_ONCE[w] * 0.99), round(GPU_ONCE[w] * 1.01))
+    # The discriminator: the request-rate model gives at least 1.5x, the residency model at most 1.25x.
+    g = r['models'].get('gpu') or {}
+    check('gpu limit decided', g.get('model') in ('request rate', 'residency') or None)
+    # The NPU: each width's writes fit one row rule within 1%, and its reads are that rule's units plus the residual.
+    n = r['models']['npu']
+    check('npu row rule decided', n['rule'] in ('rows', 'bursts') or None)
+    for name, width in NPU_WIDTHS.items():
+        j = c[name]['per_job'] or {}
+        units = npu_units(width, n['rule'] if n['rule'] in ('rows', 'bursts') else 'rows')
+        check('%s dt_rd per job' % name, j.get('dt_rd'), round((units + NPU_READ_RESIDUAL['dt_rd']) * 0.97),
+              round((units + NPU_READ_RESIDUAL['dt_rd']) * 1.03))
+        check('%s jobs/s' % name, j.get('jobs_per_second'), 1000)
+    check('gpu checked slot jobs', p[1]['slot_jobs'] + p[2]['slot_jobs'], 8, 8)
+    check('core-2 stream sweeps', p[7]['stream_sweeps'], 1)
     check('mismatches', sum(ph[d]['mismatches'] for ph in p for d in ('gpu', 'npu')), 0, 0)
     check('chase overflow', sum(ph['chase']['overflow'] for ph in p), 0, 0)
     check('pll_npu unlocked reads', r['pll']['unlocked'], 0, 0)
