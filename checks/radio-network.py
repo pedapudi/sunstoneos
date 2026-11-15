@@ -68,7 +68,7 @@ def main():
         if not a.build_only:
             assert a.qemu
             cmd=[str(a.qemu),"-M","virt,gic-version=3,secure=off,virtualization=off",*harness.QEMU_DETERMINISTIC,"-cpu","cortex-a53","-m","128M","-nographic","-nic","none","-monitor","none","-semihosting-config","enable=on,target=native,arg="+a.case,"-kernel",str(elf)]
-            run=subprocess.run(cmd,capture_output=True,text=True,timeout=harness.qemu_kill_seconds("radio-network"))
+            run=harness.run_qemu(cmd,harness.qemu_kill_seconds("radio-network"))
             result["run"]={"command":cmd,"exit_code":run.returncode,"stdout":run.stdout,"stderr":run.stderr}
     names=["checks/radio-network.c","checks/radio-network.py","cmake/radio-network.cmake",
            "drivers/net/aic8800_network.c","drivers/net/sunstone_net.c","include/aic8800_network.h",

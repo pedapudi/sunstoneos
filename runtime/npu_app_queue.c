@@ -271,9 +271,25 @@ int ss_npu_queue_release(struct ss_npu_queue *q,struct ss_npu_fence f)
 }
 int ss_npu_queue_wait(struct ss_npu_queue *q,struct ss_npu_fence f)
 {
+#ifdef SUNSTONE_NPU_WAKE_TIMING
+    q->wake.resumed=0;
+#endif
     int r=ss_npu_queue_status(q,f);if(r)return r;
     atomic_store_explicit(&q->waiter,f.value,memory_order_release);
-    while(!(r=ss_npu_queue_status(q,f)))q->backend.wait(q->context);
+    while(!(r=ss_npu_queue_status(q,f))){
+        q->backend.wait(q->context);
+#ifdef SUNSTONE_NPU_WAKE_TIMING
+        /* The waiting task runs again: the GPU's wake definition (drivers/gpu/gpu_queue.c, direct_wait), kept only for the
+         * return that finds the fence complete. */
+        uint64_t resumed;
+#ifdef __aarch64__
+        __asm__ volatile("isb\n mrs %0,cntvct_el0":"=r"(resumed)::"memory");
+#else
+        resumed=1;
+#endif
+        if(ss_npu_queue_status(q,f))q->wake.resumed=resumed;
+#endif
+    }
     atomic_store_explicit(&q->waiter,0,memory_order_release);return r;
 }
 int ss_npu_queue_close(struct ss_npu_queue *q)

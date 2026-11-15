@@ -9,6 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
+import harness  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [
@@ -102,8 +103,8 @@ target_compile_options(dma-copy-cached PRIVATE ${{options}} -mgeneral-regs-only)
     def run(name, command, timeout=None):
         commands.append(command)
         try:
-            result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, timeout=timeout, env=environment)
+            result = harness.until_booted(lambda: subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, timeout=timeout, env=environment), lambda done: (done.stdout or '') + (done.stderr or ''))
         except subprocess.TimeoutExpired as error:
             output = error.stdout or b''
             (out / (name + '.log')).write_text(output.decode(errors='replace') if isinstance(output, bytes) else output)

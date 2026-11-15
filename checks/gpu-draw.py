@@ -9,6 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
+import harness  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [
@@ -89,8 +90,8 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
     commands, results = [], {}
     def run(name, command, timeout=None):
         commands.append(command)
-        r = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT, timeout=timeout, env=environment)
+        r = harness.until_booted(lambda: subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=timeout, env=environment), lambda done: (done.stdout or '') + (done.stderr or ''))
         log, suffix = out / (name + '.log'), 0
         while log.exists():
             suffix += 1
