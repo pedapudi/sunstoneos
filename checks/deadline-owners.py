@@ -306,7 +306,6 @@ def analyse(image):
             excluded.add(task)
     for name in terms:
         terms[name] -= excluded | set().union(*shared.values())
-    pool = terms.get('audio', set()) & terms.get('dma', set())
     # Every registering creation of the image must lie in a term, unless excluded.
     unattributed = []
     for here, function, entry, candidates in image.sites:
@@ -317,7 +316,7 @@ def analyse(image):
     covered = set()
     for _, e in everything:
         covered |= image.reach(e)
-    return {'starts': starts, 'terms': terms, 'shared': shared, 'pool': pool, 'excluded': excluded,
+    return {'starts': starts, 'terms': terms, 'shared': shared, 'excluded': excluded,
             'unresolved': unresolved, 'unattributed': unattributed,
             'uncovered': sorted(image.name(f) for f in callers - covered),
             'tasks': len(everything - excluded), 'slots': image.word('sunstone_deadline_slot_count')}
@@ -461,7 +460,6 @@ def main():
     report = {'images': {p: {'slots': r['slots'], 'tasks': r['tasks'], 'starts': sorted(r['starts']),
                              'terms': {n: sorted(r['names'][t] for t in found) for n, found in r['terms'].items()},
                              'shared': {n: sorted(r['names'][t] for t in found) for n, found in r['shared'].items()},
-                             'shared_pool': sorted(r['names'][t] for t in r['pool']),
                              'uncovered_registrations': r['uncovered']} for p, r in results.items()},
               'mutants': {'second-rtc-task': caught, 'raised-rtc-column': caught_raised},
               'refusals': refusals, 'passed': not refusals, 'physical_access': False}
