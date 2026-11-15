@@ -203,6 +203,16 @@ application's options link; `apps/os/os-services.h` lists the terms of that
 sum. `checks/deadline-owners.py` proves each column, and each image's slot
 count, from the linked images.
 
+A wait finds its own slot through its task-local pointer. One read of the task
+register gives both the task and the pointer (`sunstone_task_self_local`,
+`include/sunstone_task_self.h`), and `checks/deadline-self-lookup.py` proves
+from the linked image that the wait makes exactly one such read and masks it to
+the task field. The supervisor reads another task's record under the kernel
+lock, paired with that service's blocked state. It finds the task's slot once,
+by a scan outside the lock, because a slot never changes owner once bound
+(`apps/os/services.c`); `checks/deadline.py` fails any scan made inside a
+critical section.
+
 The application ABI numbers stay where applications read them: the device bits
 in `include/sunstone_app.h` and the extent types in `include/sunstone_session.h`.
 The manifest tool and `apps/os/host.py` parse them from there, and the rows name

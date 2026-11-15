@@ -42,6 +42,14 @@ struct sunstone_deadline_record {
     uint64_t sequence,deadline_us,woken_us;
     unsigned armed,failed;
 };
+/* A record read takes the kernel lock for a few loads. Finding another task's slot is a scan of the slots, so a reader
+ * that pairs the record with its own state under the lock resolves the slot first, outside it: the owner's slot by
+ * sunstone_deadline_owner_slot (a scan; a slot never changes owner once bound), or the caller's own by
+ * sunstone_deadline_self_slot (its task-local pointer). sunstone_deadline_owner_record does both steps. */
+struct sunstone_deadline_slot;
+const struct sunstone_deadline_slot *sunstone_deadline_owner_slot(void *owner);
+const struct sunstone_deadline_slot *sunstone_deadline_self_slot(void);
+int sunstone_deadline_slot_record(const struct sunstone_deadline_slot *,struct sunstone_deadline_record *);
 int sunstone_deadline_owner_record(void *owner,struct sunstone_deadline_record *);
 void sunstone_deadline_owner_progress(void *owner);
 /* Platform backend. Counter microseconds and CNTV compare share an epoch.

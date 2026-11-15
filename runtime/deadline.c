@@ -2,6 +2,7 @@
 #include "task.h"
 #include "sunstone_deadline.h"
 #include "sunstone_deadline_slot.h"
+#include "sunstone_task_self.h"
 #include <stdatomic.h>
 /* One slot for each registering task. Task handles remain valid for this image's lifetime. Each wait uses its owner's
  * slot even when the scheduler migrates the task to another CPU. The OS image's tables allocate the slots and give their
@@ -22,35 +23,48 @@ static atomic_uint rearm_requested;
 #if configNUM_THREAD_LOCAL_STORAGE_POINTERS <= SUNSTONE_DEADLINE_TLS
 #error "the deadline runtime keeps each owner's slot in task-local pointer SUNSTONE_DEADLINE_TLS"
 #endif
-/* Another task's slot, for the supervisor's record reads: a scan, off every wait path. */
+/* A host check names a function that refuses a scan inside a critical section (checks/deadline.py). */
+#ifdef SUNSTONE_DEADLINE_SCAN_CHECK
+void SUNSTONE_DEADLINE_SCAN_CHECK(void);
+#endif
+/* Another task's slot: a scan, off every wait path and outside every critical section. */
 static struct sunstone_deadline_slot *find(TaskHandle_t owner)
 {
+#ifdef SUNSTONE_DEADLINE_SCAN_CHECK
+    SUNSTONE_DEADLINE_SCAN_CHECK();
+#endif
     for(unsigned i=0;i<DEADLINE_SLOTS;++i)
         if(atomic_load_explicit(&slots[i].owner,memory_order_acquire)==owner)return &slots[i];
     return NULL;
 }
 /* The calling task's slot through its task-local pointer, or NULL when there is no current task, the task has not
  * registered, or the pointer names a slot that the task does not own. Only the task itself writes the pointer, once, in
- * sunstone_deadline_register, before its first wait; the kernel reads the caller's own pointer with a plain load, which
- * needs a current task. */
-static struct sunstone_deadline_slot *own(TaskHandle_t self)
+ * bind (sunstone_deadline_register or sunstone_deadline_register_index), before its first wait, so one read of the current task gives both the task and its
+ * pointer (include/sunstone_task_self.h). own sets *self to the calling task, or NULL when there is none. */
+static struct sunstone_deadline_slot *held(TaskHandle_t self,void *local)
 {
-    if(!self)return NULL;
-    struct sunstone_deadline_slot *s=pvTaskGetThreadLocalStoragePointer(NULL,SUNSTONE_DEADLINE_TLS);
-    if(!s)return NULL;
+    struct sunstone_deadline_slot *s=local;
+    if(!self||!s)return NULL;
     if(s<slots||s>=slots+DEADLINE_SLOTS||atomic_load_explicit(&s->owner,memory_order_relaxed)!=self)return NULL;
     return s;
 }
+static struct sunstone_deadline_slot *own(TaskHandle_t *self)
+{
+    void *local;
+    *self=sunstone_task_self_local(SUNSTONE_DEADLINE_TLS,&local);
+    return held(*self,local);
+}
 static int bind(unsigned own_index)
 {
-    TaskHandle_t owner=xTaskGetCurrentTaskHandle();
+    void *local;
+    TaskHandle_t owner=sunstone_task_self_local(SUNSTONE_DEADLINE_TLS,&local);
     if(!owner)return 0;
     /* Bound once. Several owners call this from one task (a service loop, then its retirement callback), so a task that
      * holds its slot gets 1 at once; a pointer at a slot it does not own is refused, and so is a second registration
      * that names another index than the first. */
-    if(pvTaskGetThreadLocalStoragePointer(NULL,SUNSTONE_DEADLINE_TLS)){
-        const struct sunstone_deadline_slot *held=own(owner);
-        return held&&(!own_index||held->own_index==own_index);
+    if(local){
+        const struct sunstone_deadline_slot *slot=held(owner,local);
+        return slot&&(!own_index||slot->own_index==own_index);
     }
     struct sunstone_deadline_slot *s=NULL;
     taskENTER_CRITICAL();
@@ -91,7 +105,8 @@ void sunstone_deadline_rearm(void)
 }
 int sunstone_deadline_wait_until(uint64_t until)
 {
-    struct sunstone_deadline_slot *s=own(xTaskGetCurrentTaskHandle());
+    TaskHandle_t self;
+    struct sunstone_deadline_slot *s=own(&self);
     if(!s)return SUNSTONE_DEADLINE_ERROR;
     if(!until||until>UINT64_MAX/24){
         taskENTER_CRITICAL();s->failed=1;taskEXIT_CRITICAL();
@@ -156,22 +171,33 @@ void sunstone_deadline_irq(void)
     sunstone_deadline_program(earliest());
     portYIELD_FROM_ISR(woken);
 }
+const struct sunstone_deadline_slot *sunstone_deadline_owner_slot(void *owner)
+{
+    return owner?find(owner):NULL;
+}
+const struct sunstone_deadline_slot *sunstone_deadline_self_slot(void)
+{
+    TaskHandle_t self;
+    return own(&self);
+}
+int sunstone_deadline_slot_record(const struct sunstone_deadline_slot *s,struct sunstone_deadline_record *out)
+{
+    if(!s||!out)return 0;
+    taskENTER_CRITICAL();
+    out->sequence=s->sequence;out->deadline_us=s->last_deadline;
+    out->woken_us=s->woken_us;out->failed=s->failed;
+    out->armed=atomic_load_explicit(&s->deadline,memory_order_relaxed)!=0;
+    taskEXIT_CRITICAL();return 1;
+}
 int sunstone_deadline_owner_record(void *owner,struct sunstone_deadline_record *out)
 {
-    if(!owner||!out)return 0;
-    taskENTER_CRITICAL();
-    struct sunstone_deadline_slot *s=find(owner);
-    if(s){
-        out->sequence=s->sequence;out->deadline_us=s->last_deadline;
-        out->woken_us=s->woken_us;out->failed=s->failed;
-        out->armed=atomic_load_explicit(&s->deadline,memory_order_relaxed)!=0;
-    }
-    taskEXIT_CRITICAL();return s!=NULL;
+    return sunstone_deadline_slot_record(sunstone_deadline_owner_slot(owner),out);
 }
 void sunstone_deadline_owner_progress(void *owner)
 {
-    if(owner!=xTaskGetCurrentTaskHandle())return;
-    struct sunstone_deadline_slot *s=own(owner);
+    TaskHandle_t self;
+    struct sunstone_deadline_slot *s=own(&self);
+    if(owner!=self)return;
     taskENTER_CRITICAL();
     if(s)s->failed=0;
     taskEXIT_CRITICAL();
