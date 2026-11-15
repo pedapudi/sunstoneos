@@ -72,7 +72,9 @@ remains retained while the worker waits for the confirmation.
 
 On successful association, the indication must match the selected BSSID,
 frequency, band, and interface. Its access-point index must fit the firmware's
-station limit, and its width must match the admitted 20 MHz profile.
+station limit. The reported width may be any defined channel width (20, 40, 80,
+160 or 80+80 MHz) and is kept in the event: the reference uses it without a check,
+and the firmware may report the access point's own width for this legacy profile.
 The worker reports `ASSOCIATED_OPEN` or `SECURITY_PENDING` according to the
 selected security profile. A nonzero association status is reported with the
 link disconnected; no automatic retry occurs. Connect confirmations reporting

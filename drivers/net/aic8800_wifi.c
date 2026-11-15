@@ -230,7 +230,10 @@ static enum aic8800_codec_result station_response(struct aic8800_wifi *w,
         if(!e.status) {
             const struct aic8800_wifi_channel *c=&w->config.channels[w->target.channel_index];
             for(unsigned i=0;i<6;++i)if(e.bssid[i]!=w->target.bssid[i])goto malformed;
-            if(e.frequency!=c->frequency||e.band!=c->band||e.width!=0||e.ap_index>=w->max_stations)goto malformed;
+            /* The reference uses the reported width as the channel definition without a check (rwnx_msg_rx.c
+             * rwnx_rx_sm_connect_ind); the firmware may report the access point's own width for a legacy
+             * association. Any defined width (20, 40, 80, 160 or 80+80 MHz) is kept in the event. */
+            if(e.frequency!=c->frequency||e.band!=c->band||e.width>4||e.ap_index>=w->max_stations)goto malformed;
             w->ap_index=e.ap_index;w->peer_qos=e.qos;
             station_link(w,w->target.security==AIC8800_WIFI_OPEN?AIC8800_WIFI_ASSOCIATED_OPEN:AIC8800_WIFI_SECURITY_PENDING);
         }else station_link(w,AIC8800_WIFI_LINK_DOWN);
