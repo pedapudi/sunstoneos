@@ -67,15 +67,15 @@ static unsigned opens;
 static const struct os_sd_hw *os_sd_open_owner(void)
 {
     ++opens;
-    if(mode==12||mode==13){
-        assert(sunstone_deadline_register());
-        uint64_t until=now_us()+200000u;
+    if(mode==12||mode==13||mode==15||mode==16)assert(sunstone_deadline_register());
+    if(mode==12||mode==13||mode==15){
+        uint64_t until=now_us()+(mode==15?3000000u:200000u);
         while(now_us()<until)assert(sunstone_deadline_wait_until(until)!=SUNSTONE_DEADLINE_ERROR);
     }
-    return mode==13?NULL:&hardware;
+    return mode==13||mode==15?NULL:&hardware;
 }
 static void board_fail_note(unsigned site,unsigned detail,const void *where)
-{(void)site;(void)detail;(void)where;assert(mode==13&&!ready);++fail_notes;}
+{(void)site;(void)detail;(void)where;assert((mode==13||mode==15)&&!ready);++fail_notes;}
 #define SUNSTONE_CRUMB_FAIL_SITE(group) 1u
 #define SUNSTONE_CRUMB_HERE() ((const void *)1)
 static unsigned diag_word(void){return 0;}
@@ -98,6 +98,10 @@ static void serve(struct request *r)
         assert(sunstone_deadline_register());
         while(!completed)assert(sunstone_deadline_wait_until(now_us()+500000u)!=SUNSTONE_DEADLINE_ERROR);
     }
+    if(mode==16){                     /* a request that takes 2 s: longer than the progress window, inside the piece bound */
+        uint64_t until=now_us()+2000000u;
+        while(now_us()<until)assert(sunstone_deadline_wait_until(until)!=SUNSTONE_DEADLINE_ERROR);
+    }
     finish(r,1);
     if(mode==0)xTaskNotifyGiveIndexed(test_task,SS_NOTIFY_DEADLINE);
 }
@@ -112,7 +116,46 @@ static enum a733_mmc_platform_result fail(struct a733_mmc_platform *p){(void)p;a
 int sunxi_mmc_open(struct sunxi_mmc *p,uint64_t until){(void)p;(void)until;assert(0);return 0;}
 void sunxi_mmc_poll(struct sunxi_mmc *p){(void)p;++core_polls;}
 int sunxi_mmc_recoverable(const struct sunxi_mmc *p){(void)p;return 0;}
+/* The service supervisor (apps/os/services.c) for the progress cases (modes 15 and 16), as checks/deadline-host.c runs
+ * it. The application's progress window is 1 s. */
+#define SUNSTONE_OS_H
+#define SUNSTONE_OS_APPLICATION_H
+#include "../apps/os/os-services.h"
+#define OS_RENEW_US 1000000u
+struct os_service { const char *name; uint64_t window_us; };
+const struct os_service os_services[OS_SERVICES]={
+    {"pmic",1000000},{"usb0",1000000},{"typec",1000000},{"power",1000000},
+    {"usb2",1000000},{"application",1000000},OS_SERVICE_TABLE};
+struct os_session { struct { unsigned workload; uint64_t deadline_us; } board; unsigned granted; };
+static const struct os_session test_session={{0,0},OS_GRANT_USB0};
+uint64_t board_runtime_deadline_us(void){return 100000000u;}
+static const struct os_session *os_session_admitted(void){return &test_session;}
+static int a733_board_host_workload(unsigned workload){(void)workload;return 1;}
+static int os_application_finished(void){return 0;}
+static int os_watchdog_reload(void *owner){(void)owner;return 1;}
+static int os_npu_complete(void){return 0;}
+static const struct { const void *manifest; } ss_application={(void *)1};
+#include "../apps/os/services.c"
+/* The state of the main task's OS wait (apps/os/application.c), whose functions event-sd.py extracts. The main task is
+ * the test task in the progress cases and no task in the others. */
+static TaskHandle_t main_task;
+static atomic_uint main_wake_pending;
+const unsigned os_wake_capacity=4;
+TaskHandle_t os_wake_task[4];
+unsigned os_wake_gave[4];
+static struct { struct { uint64_t deadline_us; } session; } board={{100000000u}};
 #include "event-sd-production.h"
+/* The supervisor's verdict on the application while its main task waits: a sample in the shim's script task, where every
+ * other service reports progress first. */
+static unsigned healthy_samples;
+static void healthy_now(void *unused)
+{
+    (void)unused;unsigned first=OS_SERVICES;
+    for(unsigned i=0;i<OS_SERVICES;++i)if(i!=OS_SERVICE_APPLICATION)board_service_progress(i);
+    const int state=services_state(now_us(),&first);
+    if(state!=1)fprintf(stderr,"supervisor at %llu us: %d, first stale service %u\n",(unsigned long long)now_us(),state,first);
+    assert(state==1);++healthy_samples;
+}
 
 static void event(void *p)
 {
@@ -260,6 +303,21 @@ static void test(void *unused)
         assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_NOTIFIED);
         assert(started[2]==1&&!opens&&now_us()==0u);
         puts("PASS a CPU return before the open answers the waiting task without touching the card");
+    } else if(mode==15||mode==16){
+        /* The main task waits longer than its 1 s progress window, inside the bound: for an open that takes 3 s and fails
+         * (15), or for a request that takes 2 s (16). The supervisor's verdict stays healthy throughout. */
+        main_task=test_task;
+        assert(board_service_deadline_register(OS_SERVICE_APPLICATION));
+        for(unsigned i=0;i<OS_SERVICES;++i)board_service_progress(i);
+        owner=owner_task=host_task_create("sd-owner",owner_main,NULL,2);
+        const uint64_t from=now_us();
+        const unsigned samples=mode==15?5u:3u;
+        for(unsigned i=1;i<=samples;++i)host_run_at(from+i*500000u+250000u,healthy_now,NULL);
+        if(mode==15)assert(start()==0&&ready==-1&&fail_notes==1&&now_us()==from+3000000u);
+        else assert(ss_storage_open_read()==1&&served==1&&unit_sectors==8u&&now_us()==from+2000000u);
+        assert(healthy_samples==samples&&os_services_healthy(now_us())==1);
+        puts(mode==15?"PASS the main task waits 3 s for an open that fails; it hears the failure at once and the supervisor renews throughout":
+                      "PASS the main task waits 2 s for its request; the supervisor renews throughout");
     } else if(mode==8){
         xTaskNotifyGive(test_task); /* The application's index zero remains owned by it. */
         owner=owner_task=host_task_create("sd-async",owner_main,NULL,2);

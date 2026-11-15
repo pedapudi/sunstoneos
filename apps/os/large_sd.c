@@ -38,6 +38,13 @@
 #define SMHC0 UINT32_C(0x04020000)
 #define LIFETIME_US 180000000u
 #define READ_US 500000u
+/* The write-capable open's wait for the PMIC service: 1 ms pauses. */
+#define PMIC_PAUSES 10000u
+#ifdef OS_SD_WRITE
+#define GIC_REARM_TRIES 100u
+_Static_assert(OS_SD_OPEN_BOUND_US >= (PMIC_PAUSES + 1u) * 1000u + 2u * IDENTIFY_US + READ_US + GIC_REARM_TRIES * 1000u,
+               "the main task's bound for the open (sd_hw.h) covers its deadlines");
+#endif
 /* The initial busy retry cadence of sunxi_mmc.c:busy_wait, also used for
  * register conditions whose admitted interface supplies no notification. */
 #define REGISTER_RECHECK_US 100u
@@ -651,7 +658,7 @@ const struct os_large_device *os_large_device(void)
     if(!read_pmic_ready())return DIAGP(2,0);
 #else
     for (unsigned waited = 0; !atomic_load_explicit(&providers.shared.pmic_ready, memory_order_acquire); ++waited) {
-        if (!sd_admission() || waited > 10000 || !board_live(NULL)) return DIAGP(2, waited);
+        if (!sd_admission() || waited > PMIC_PAUSES || !board_live(NULL)) return DIAGP(2, waited);
         sd_pause();
     }
 #endif
@@ -818,6 +825,7 @@ int ss_storage_owner_stats(struct ss_storage_owner_stats *out)
 
 #ifdef OS_SD_WRITE
 #define WRITE_US 2000000u
+_Static_assert(OS_SD_PIECE_BOUND_US == WRITE_US + READ_US, "the main task's bound for a request (sd_hw.h)");
 static uint8_t *blob_copy;                       /* sized from the input at enable time, kept for the image's lifetime */
 
 /* The wait loop: poll, then sleep on the interrupt or a one-shot timer, as the core's hint says. */
@@ -1015,7 +1023,7 @@ const struct os_sd_hw *os_sd_open_owner(void)
     if (!a733_mmc_platform_irq(&platform, 1)) { (void)DIAG(9, 1); return 0; }
     irq_live = 1; irq_owner_on = 1;
     int armed = 0;
-    for (unsigned tries = 0; tries < 100 && !armed; ++tries) {
+    for (unsigned tries = 0; tries < GIC_REARM_TRIES && !armed; ++tries) {
         if(!sd_admission()||!sd_time_left(config.lifetime_deadline_us)){irq_live=0;return 0;}
         int r = gicv3_spi_rearm(&sd_gic);
         if (r < 0) { irq_live = 0; (void)DIAG(9, 2); return 0; }

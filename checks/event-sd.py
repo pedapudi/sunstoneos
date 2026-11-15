@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['apps/os/sd_owner.c', 'apps/os/large_sd.c', 'apps/os/large_load.c',
                 'drivers/storage/a733_mmc_platform.c', 'runtime/deadline.c',
                 'include/sunstone_notify.h', 'apps/os/main.patch', 'apps/board/main.c', 'cmake/patch.cmake', 'tools/sunstone-manifest.py',
-                'checks/event-sd.c', 'checks/event-sd.py', 'checks/os-quiesce-storage.py']
+                'checks/event-sd.c', 'checks/event-sd.py', 'checks/os-quiesce-storage.py', 'apps/os/sd_hw.h',
+                'apps/os/services.c', 'apps/os/application.c', 'apps/os/os-services.h']
 
 
 def function(source, name):
@@ -45,9 +46,9 @@ def short_readiness_context(patch):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--case', action='append', choices=('production', 'idle-mutant', 'ready-mutant', 'manifest', 'platform', 'register', 'async', 'idle', 'patch', 'stats', 'concurrent'))
+    parser.add_argument('--case', action='append', choices=('production', 'idle-mutant', 'ready-mutant', 'manifest', 'platform', 'register', 'async', 'idle', 'patch', 'stats', 'concurrent', 'progress'))
     args = parser.parse_args()
-    selected=set(args.case or ('production','idle-mutant','ready-mutant','manifest','platform','register','patch','stats','concurrent'))
+    selected=set(args.case or ('production','idle-mutant','ready-mutant','manifest','platform','register','patch','stats','concurrent','progress'))
     args.output.mkdir(parents=True, exist_ok=True)
     owner = (ROOT/'apps/os/sd_owner.c').read_text()
     native = (ROOT/'apps/os/large_sd.c').read_text()
@@ -63,9 +64,22 @@ def main():
     states = owner[a:owner.index(';', a) + 1]
     a = owner.index('#define READY_BIT')
     group = owner[a:owner.index('static EventGroupHandle_t ready_group;', a)] + 'static EventGroupHandle_t ready_group;'
-    production = (states+'\n'+group+'\n'+function(platform_source,'controller')+'\n'+waits+'\n'+function(owner,'owner_open_allowed')+'\n'+
-                  function(owner,'publish_ready')+'\n'+
-                  function(owner,'open_card')+'\n'+entry+'\n'+function(owner,'wait_ready')+'\n'+function(owner,'start')+'\n'+
+    def line(source, start):
+        a = source.index(start)
+        return source[a:source.index('\n', a)]
+    hw_header = (ROOT/'apps/os/sd_hw.h').read_text()
+    declared = '\n'.join([line(hw_header, '#define OS_SD_OPEN_BOUND_US'), line(hw_header, '#define OS_SD_PIECE_BOUND_US'),
+                          line(owner, 'static _Atomic(TaskHandle_t) main_waiting;'),
+                          line(owner, 'static _Atomic(struct request *) main_request;')])
+    # The main task's OS wait, from apps/os/application.c; the harness supplies its state.
+    application = (ROOT/'apps/os/application.c').read_text()
+    os_wait = '\n'.join(function(application, n) for n in ('os_application_main_task', 'os_wake', 'os_application_wake_task',
+                         'os_wait_begin', 'os_wait_end', 'application_wait_until_unless', 'os_application_wait_unless'))
+    production = (states+'\n'+group+'\n'+declared+'\n'+os_wait+'\n'+function(platform_source,'controller')+'\n'+waits+'\n'+
+                  function(owner,'owner_open_allowed')+'\n'+function(owner,'publish_ready')+'\n'+
+                  function(owner,'open_card')+'\n'+entry+'\n'+
+                  '\n'.join(function(owner,n) for n in ('bound_from_now','main_wait','open_published','main_request_done'))+'\n'+
+                  function(owner,'wait_ready')+'\n'+function(owner,'start')+'\n'+
                   function(owner,'proxy_poll')+'\n'+function(owner,'finish')+'\n'+function(owner,'post')+'\n'+
                   '\n'.join(function(owner,n) for n in ('writes_enable','reads_open','ss_storage_enable','ss_storage_open_read'))+'\n')
     (args.output/'event-sd-production.h').write_text(production)
@@ -77,7 +91,7 @@ def main():
         (args.output/f'case-{case}.log').write_text(run.stdout+run.stderr)
         assert not run.returncode, (case, run.stdout, run.stderr)
         logs.append(run.stdout.strip())
-    waited = 'xEventGroupWaitBits(ready_group, READY_BIT, pdFALSE, pdTRUE, portMAX_DELAY)'
+    waited = 'xEventGroupWaitBits(ready_group, READY_BIT, pdFALSE, pdTRUE, ticks)'
     assert production.count(waited) == 1, 'wait_ready no longer waits for the ready bit'
     sleep = 'ulTaskNotifyTake(pdTRUE, portMAX_DELAY);'
     assert production.count(sleep) == 1, 'owner_main no longer has its one request wait'
@@ -89,7 +103,7 @@ def main():
         ('pre-open-poll', production.replace(sleep, 'ulTaskNotifyTake(pdTRUE, open ? portMAX_DELAY : pdMS_TO_TICKS(50));'), '0'),
     ]
     # The wait ends at the first notification on the caller's index, as the fourth board submission's wait did.
-    ready = [('ready-ends-at-any-hint', production.replace(waited, 'ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, portMAX_DELAY)'), '2')]
+    ready = [('ready-ends-at-any-hint', production.replace(waited, 'ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, ticks)'), '2')]
     mutants = {}
     for group_name, entries in (('idle-mutant', idle), ('ready-mutant', ready)):
       for name, text, case in entries:
@@ -179,6 +193,29 @@ def main():
             run = subprocess.run([str(mutated), case], capture_output=True, text=True, env=environment(), timeout=30)
             (directory/'result.log').write_text(run.stdout+run.stderr)
             assert run.returncode, name
+            mutants[name] = text
+    if 'progress' in selected:
+        for case in ('15', '16'):           # a slow open, a slow request: the main task's waits longer than its window
+            run=subprocess.run([str(exe),case],capture_output=True,text=True,env=environment(),timeout=30)
+            (args.output/f'case-{case}.log').write_text(run.stdout+run.stderr)
+            assert not run.returncode,run.stdout+run.stderr
+            logs.append(run.stdout.strip())
+        # The main task waits as any other caller does, with no OS wait and so no blocked declaration: the supervisor's
+        # sample past the progress window finds the application stale.
+        main_open = 'if (self == os_application_main_task()) {'
+        main_piece = 'if (xTaskGetCurrentTaskHandle() == os_application_main_task()) {\n        atomic_store(&main_request, r);'
+        for name, text, case in (('open-wait-undeclared', production.replace(main_open, 'if (0) {'), '15'),
+                                 ('request-wait-undeclared', production.replace(main_piece, main_piece.replace(
+                                     'xTaskGetCurrentTaskHandle() == os_application_main_task()', '0')), '16')):
+            assert text != production, name
+            directory = args.output/name
+            directory.mkdir(exist_ok=True)
+            (directory/'event-sd-production.h').write_text(text)
+            mutated = host_rtos.build(directory, sources, 'event-sd', includes=[directory], flags=['-Wno-unused-function'],
+                                      defines=['SUNXI_MMC_READ_ONLY=1'])
+            run = subprocess.run([str(mutated), case], capture_output=True, text=True, env=environment(), timeout=30)
+            (directory/'result.log').write_text(run.stdout+run.stderr)
+            assert run.returncode and 'healthy_now' in run.stderr, (name, run.stdout+run.stderr)
             mutants[name] = text
     if 'stats' in selected:
         run=subprocess.run([str(exe),'11'],capture_output=True,text=True,env=environment(),timeout=30)

@@ -36,6 +36,8 @@ int os_application_deadline(void);
 unsigned os_application_activity_generation(void);
 int os_application_finished(void);
 int os_application_succeeded(void);
+/* The application's main task; NULL before the application starts. */
+TaskHandle_t os_application_main_task(void);
 /* Wake the main task from its OS wait, or keep the wake for its next wait (apps/os/application.c). */
 void os_application_wake_main(void);
 /* The same wake-up for the task that submitted a request, from a task or from an interrupt handler. */

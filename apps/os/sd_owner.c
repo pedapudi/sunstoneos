@@ -18,6 +18,8 @@
 #include "os_space.h"
 #include "os-task.h"
 #include "../board/application.h"
+#include "os.h"
+#include "application.h"
 #include "sunstone_crumb.h"
 #include "fat32_rw.h"
 #include "sunstone_deadline.h"
@@ -159,11 +161,15 @@ static struct os_quiesce storage_quiesce={.owner=OS_QUIESCE_STORAGE,
 int os_sd_quiesce_register(void)
 {return os_quiesce_register(&storage_quiesce);}
 
+/* The waiter is read before `done` is stored, because the request lives on the waiter's stack and is gone once the waiter
+ * sees `done`. The main task waits in its OS wait (post), which a notification on its own index ends. */
 static void finish(struct request *r, int ok)
 {
     TaskHandle_t waiter = r->waiter;
     atomic_store_explicit(&r->done, ok ? 1 : -1, memory_order_release);
-    if (waiter) xTaskNotifyGiveIndexed(waiter, WAIT_INDEX);
+    if (!waiter) return;
+    xTaskNotifyGiveIndexed(waiter, WAIT_INDEX);
+    if (waiter == os_application_main_task()) os_application_wake_task(waiter);
 }
 
 /* The note for a refused request or a failed open (the first-failure record's value): bits 7:0 the stage, 23:8 its detail (the low 16 bits:
@@ -271,10 +277,13 @@ static int owner_open_allowed(void)
 }
 
 /* The open's result for every task that waits for it (start): the result first, then the bit, which wakes every waiter. */
+static _Atomic(TaskHandle_t) main_waiting;      /* the main task while it waits for the open (wait_ready) */
 static void publish_ready(int result)
 {
     atomic_store(&ready, result);
     (void)xEventGroupSetBits(ready_group, READY_BIT);
+    TaskHandle_t m = atomic_load(&main_waiting);
+    if (m) os_application_wake_task(m);
 }
 
 /* Open the card for the first storage call. The open's waits are bounded by the owner's own deadline slot
@@ -335,6 +344,29 @@ static void owner_main(void *unused)
     }
 }
 
+/* The time `bound` from now, or the session's end if that is sooner. */
+static uint64_t bound_from_now(uint64_t bound)
+{
+    const uint64_t now = sunstone_deadline_now_us(), session = board.session.deadline_us;
+    return now < session && session - now > bound ? now + bound : session;
+}
+/* The main task's wait for a condition, up to `limit`, in its OS wait (os_application_wait_unless): the supervisor counts
+ * the main task as blocked up to the limit plus its progress window, so a wait longer than the window does not stop the
+ * watchdog's renewal. The main task reports progress before each wait, as application_wait_for does, so that a wake from
+ * another OS event leaves no stale record between two waits; the limit is fixed, so the waits end at it. */
+static void main_wait(uint64_t limit, int (*done)(void))
+{
+    while (!done() && sunstone_deadline_now_us() < limit) {
+        board_service_progress(OS_SERVICE_APPLICATION);
+        if (os_application_wait_unless(limit, done) == SUNSTONE_DEADLINE_ERROR) return;
+    }
+}
+static _Atomic(struct request *) main_request;      /* the main task's request while it waits for it (post) */
+static int main_request_done(void)
+{
+    struct request *r = atomic_load(&main_request);
+    return r && atomic_load_explicit(&r->done, memory_order_acquire);
+}
 static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
 {
     atomic_fetch_add(&posting,1);
@@ -350,6 +382,14 @@ static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
     if(!posted)return 0;                    /* one request per mailbox */
     xTaskNotifyGive(owner);
     if (!wait) return 1;
+    /* The main task first waits in its OS wait, up to OS_SD_PIECE_BOUND_US (sd_hw.h). The owner holds the request on this
+     * stack until it finishes, so past the bound the main task waits on as any caller does, and the supervisor stops the
+     * watchdog's renewal one progress window later. */
+    if (xTaskGetCurrentTaskHandle() == os_application_main_task()) {
+        atomic_store(&main_request, r);
+        main_wait(bound_from_now(OS_SD_PIECE_BOUND_US), main_request_done);
+        atomic_store(&main_request, NULL);
+    }
     while (!atomic_load_explicit(&r->done, memory_order_acquire)) ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, portMAX_DELAY);
     return atomic_load(&r->done) == 1;
 }
@@ -370,11 +410,24 @@ int os_sd_start(void)
 /* The owner task: for the QEMU check that it holds no application tag. */
 TaskHandle_t os_sd_owner_task(void) { return owner; }
 
-/* Wait for the open's result. The bit is set after the result is stored and is never cleared, and a task notification
- * cannot end an event-group wait. No deadline slot is needed, because the owner's open is bounded by its own. */
+static int open_published(void) { return atomic_load(&ready) != 0; }
+/* Wait for the open's result, up to OS_SD_OPEN_BOUND_US (sd_hw.h); an open that has not finished by then answers 0. The
+ * bit is set after the result is stored and is never cleared, and a task notification cannot end an event-group wait. The
+ * main task waits in its OS wait instead, which the owner ends (publish_ready) and which rechecks the result once it is
+ * registered. The callers hold no deadline slot of their own. */
 static int wait_ready(void)
 {
-    (void)xEventGroupWaitBits(ready_group, READY_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    const uint64_t limit = bound_from_now(OS_SD_OPEN_BOUND_US);
+    TaskHandle_t self = xTaskGetCurrentTaskHandle();
+    if (self == os_application_main_task()) {
+        atomic_store(&main_waiting, self);
+        main_wait(limit, open_published);
+        atomic_store(&main_waiting, NULL);
+    } else {
+        const uint64_t now = sunstone_deadline_now_us();
+        const TickType_t ticks = now < limit ? (TickType_t)((limit - now + 999u) / 1000u * configTICK_RATE_HZ / 1000u) + 1u : 0;
+        (void)xEventGroupWaitBits(ready_group, READY_BIT, pdFALSE, pdTRUE, ticks);
+    }
     return atomic_load(&ready) == 1;
 }
 

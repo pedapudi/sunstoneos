@@ -10,6 +10,16 @@
 struct a733_storage_bounds;
 #define OS_SD_WRITE_PIECE_SECTORS 256u
 #define OS_SD_WRITE_BYTES (OS_SD_WRITE_PIECE_SECTORS * 512u)
+/* How long the main task may wait for the open's result while the supervisor counts it as blocked (sd_owner.c:
+ * wait_ready): the PMIC wait (10,001 pauses of 1 ms), two identifications of 5 s (the second after a reopen at 1.8 V),
+ * the reopen's one-sector read (0.5 s) and the interrupt re-arm (100 pauses), 20.7 s, plus 1.3 s for the time each
+ * pause spends beyond its millisecond. large_sd.c asserts the sum. The close before the reopen is bounded only by the
+ * platform's lifetime deadline, so an open can outlast this bound; its caller then hears no result in time. */
+#define OS_SD_OPEN_BOUND_US UINT64_C(22000000)
+/* The same for a request's wait (sd_owner.c:post): one write piece (2 s) after one loader read served ahead of it
+ * (0.5 s). A piece that needs a recovery, the enable's backup re-read and the close can take longer; for the main task, the
+ * watchdog renewal then stops one progress window after this bound. */
+#define OS_SD_PIECE_BOUND_US UINT64_C(2500000)
 
 struct os_sd_hw {
     const struct os_large_device *device;       /* the read path of the loader: sync metadata reads and pipelined requests */

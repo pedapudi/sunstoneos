@@ -12,9 +12,13 @@ The SD service owns all controller access. Its idle task waits indefinitely for
 a request notification. A caller opening that service waits for an event-group
 bit that the owner sets once the open's result is stored and never clears; a
 task notification cannot end that wait, and a call made after the open returns
-at once. The open itself is bounded by the owner's own deadlines. A request
-wait uses notification index 1, so application index zero remains available to
-the application. Asynchronous loader requests notify the loader
+at once. The open itself is bounded by the owner's own deadlines, and a caller
+waits at most 22 s for it. The main task waits in its OS wait instead, which
+declares it blocked to the service supervisor, so a wait longer than its
+progress window does not stop the watchdog's renewal ([the card
+reference](../sd-card.md#2-layers-and-ownership)). A request wait uses
+notification index 1, so application index zero remains available to the
+application. Asynchronous loader requests notify the loader
 when they finish; their poll callback blocks until that publication.
 
 The read-only loader owns the controller directly. It uses the existing SMHC0
