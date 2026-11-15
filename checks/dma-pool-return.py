@@ -8,6 +8,7 @@ import shlex
 from pathlib import Path
 import shutil
 import subprocess
+import harness  # noqa: E402
 GATE_RUNS = [
     ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld'],
 ]
@@ -95,8 +96,8 @@ set_target_properties(dma-pool-return PROPERTIES SUFFIX ".elf" LINK_DEPENDS "{li
     def run(name, command, timeout=120):
         commands.append(command)
         try:
-            result = subprocess.run(command, cwd=root, text=True, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, timeout=timeout, env=environment)
+            result = harness.until_booted(lambda: subprocess.run(command, cwd=root, text=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, timeout=timeout, env=environment), lambda done: (done.stdout or '') + (done.stderr or ''))
         except subprocess.TimeoutExpired as error:
             data = error.stdout or b''
             (out / (name + '.log')).write_text(data.decode(errors='replace') if isinstance(data, bytes) else data)

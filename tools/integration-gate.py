@@ -63,6 +63,7 @@ VARIANTS = {
 DEPENDENCIES = {'kernel': 'kernel-check', 'soak8': 'smp8-soak-model'}
 CORE_SCRIPTS = ('shared-helpers', 'progress', 'check-index', 'pmic-tree', 'power-domains-tree')
 CORE_CHECKS = (*DEPENDENCIES, *CORE_SCRIPTS)
+INCONCLUSIVE_EXIT = 75        # checks/harness.py: the host stopped the run twice; the check says nothing about the code
 def external_applications(source, paths):
     """Load each selected application's own build targets and check commands."""
     applications = {}
@@ -517,12 +518,12 @@ def main(argv=None):
             with (output / 'commands.txt').open('a') as stream:
                 stream.write(name + ': ' + shlex.join(command) + '\n')
         gate_slots.wait_for_board(cache, note)       # a board run in its FEL work is host-timed: do not start a step beside it
-        started, detail = time.monotonic(), ''
+        started, detail, returncode = time.monotonic(), '', None
         with (output / (name + '.log')).open('w') as log:
             try:
                 result = subprocess.run(command, cwd=source, env=env, stdin=subprocess.DEVNULL, stdout=log,
                                         stderr=subprocess.STDOUT, timeout=timeout)
-                ok = result.returncode == 0
+                ok, returncode = result.returncode == 0, result.returncode
             except subprocess.TimeoutExpired:
                 log.write('\nGate deadline of %d seconds expired.\n' % timeout)
                 ok, detail = False, ' (deadline of %d seconds expired)' % timeout
@@ -531,6 +532,10 @@ def main(argv=None):
                 ok = False
         elapsed = time.monotonic() - started
         verdict = 'PASS' if ok else 'FAIL'
+        if returncode == INCONCLUSIVE_EXIT:
+            # The check ran the guest again and the host still stopped it (checks/harness.py, Inconclusive): neither a pass nor a
+            # failure of the code under test. The gate does not pass; run the step again.
+            verdict, detail = 'INCONCLUSIVE', ' (the host stopped the run; run it again, see ' + name + '.log)'
         if not ok and prose_only(script, (output / (name + '.log')).read_text(errors='replace')):
             verdict = 'WARN'
             detail = ' (documentation or status-record prose; see ' + name + '.log)'
@@ -541,7 +546,7 @@ def main(argv=None):
         if verdict == 'FAIL' and fail_fast:
             note('Stopped at first failure; diagnose it before running only the affected steps with a new label.')
             raise Stop
-        return verdict != 'FAIL'
+        return verdict == 'PASS' or verdict == 'WARN'
 
     def timing(name, script):
         """A step whose result depends on wall time: it runs alone in its gate and holds the host's timing lock."""
@@ -909,7 +914,7 @@ def main(argv=None):
         landing gate runs in CACHE/land-integration) rebuilds into them and would overwrite what the step ran on. A bundle keeps only
         the out- directory of its tree state. kept.json records each failing step's command, as run and pointed at the copies."""
         kept_root, record = output / 'evidence' / 'kept-builds', {}
-        for step in sorted(name for name, verdict in results.items() if verdict == 'FAIL' and name in commands):
+        for step in sorted(name for name, verdict in results.items() if verdict in ('FAIL', 'INCONCLUSIVE') and name in commands):
             sources = []
             for token in commands[step]:
                 for part in token.split('='):
@@ -978,15 +983,22 @@ def main(argv=None):
         return conclude(1)
     failed = sorted(name for name, verdict in results.items() if verdict == 'FAIL')
     skipped = sorted(name for name, verdict in results.items() if verdict == 'SKIP')
+    inconclusive = sorted(name for name, verdict in results.items() if verdict == 'INCONCLUSIVE')
     warned = sorted(name for name, verdict in results.items() if verdict == 'WARN')
-    note('steps: %d passed, %d warned, %d failed, %d skipped; %.0f s' % (
-        sum(v == 'PASS' for v in results.values()), len(warned), len(failed), len(skipped), elapsed))
+    note('steps: %d passed, %d warned, %d failed, %d inconclusive, %d skipped; %.0f s' % (
+        sum(v == 'PASS' for v in results.values()), len(warned), len(failed), len(inconclusive), len(skipped), elapsed))
     (output / 'timing.txt').write_text(''.join('%8.1f %s\n' % (seconds, name) for name, seconds in
                                               sorted(timings, key=lambda item: -item[1])))
     if not unchanged('during the selected steps'):
         return conclude(1)
     if failed or skipped:
         note('FAIL selected integration checks: ' + ', '.join(failed + skipped))
+        if inconclusive:
+            note('INCONCLUSIVE selected integration checks: ' + ', '.join(inconclusive))
+        return conclude(1)
+    if inconclusive:
+        # No step failed, but these said nothing about the code: the gate is not a pass until they run again.
+        note('INCONCLUSIVE selected integration checks: ' + ', '.join(inconclusive) + '; run them again')
         return conclude(1)
     if affected_plan and affected_plan.get('revisions') and not changes:
         # tools/land.py reuses this pass for a landing: the tree it ran on and the checks it selected with their inputs.

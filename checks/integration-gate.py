@@ -61,6 +61,9 @@ if os.environ.get('GATE_TEST_TOUCH'):
 if os.environ.get('GATE_TEST_FAIL') in args or any(x in args for x in os.environ.get('GATE_TEST_FAIL_ALL', '').split(',') if x):
     print(os.environ.get('GATE_TEST_OUTPUT', 'host deadline exceeded'))
     sys.exit(1)
+if any(x in args for x in os.environ.get('GATE_TEST_INCONCLUSIVE', '').split(',') if x):
+    print('INCONCLUSIVE: the wall-clock bound killed the run in 2 attempts')
+    sys.exit(75)
 '''
         for relative in ('bin/cfg.sh', 'venv/bin/python', 'host/usr/lib/llvm-21/bin/cmake'):
             path = self.sandbox / relative
@@ -742,6 +745,26 @@ exec "$REAL" "$@"
         self.assertNotIn('is above the share', landing.stderr)
         full = self.run_gate('--reason', 'Full', '--full', '--priority', 'worker', '--jobs', str(above), label='jobs-full')
         self.assertNotIn('is above the share', full.stderr)
+
+    def test_a_host_stopped_check_is_inconclusive_not_failed_and_the_gate_does_not_pass(self):
+        self.full_catalogue()
+        self.env['GATE_TEST_INCONCLUSIVE'] = 'checks/pmic-tree.py'
+        result = self.run_gate('--reason', 'One inconclusive', '--full')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        summary = (self.sandbox / 'build/gate-case/summary.txt').read_text()
+        self.assertIn('INCONCLUSIVE check-pmic-tree', summary)
+        self.assertNotIn('FAIL check-pmic-tree', summary)
+        self.assertIn('INCONCLUSIVE selected integration checks: check-pmic-tree; run them again', summary)
+        self.assertIn('1 inconclusive', summary)
+        self.assertNotIn('PASS selected', summary)
+        self.assertNotIn('FAIL selected', summary)
+        # a real failure beside it is still reported as one
+        self.env['GATE_TEST_FAIL_ALL'] = 'checks/check-index.py'
+        result = self.run_gate('--reason', 'One inconclusive, one failure', '--full', label='case-two')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        summary = (self.sandbox / 'build/gate-case-two/summary.txt').read_text()
+        self.assertIn('FAIL selected integration checks: check-check-index', summary)
+        self.assertIn('INCONCLUSIVE check-pmic-tree', summary)
 
     def test_fail_fast_stops_at_the_first_failure_in_order(self):
         self.full_catalogue()

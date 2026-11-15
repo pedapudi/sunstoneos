@@ -49,26 +49,139 @@
   ],
   "reserved_cpus_comment": "CPUs that gates and the processes they start never use: the xhci interrupt of the board's USB port is handled almost entirely on CPU 23 (/proc/interrupts, 1.19 million of its interrupts there; 2026-11-13), and the runner's FEL transfers wait on it.",
   "qemu_checks": {
-    "_comment": "Hang backstops for the QEMU runs of the radio checks, which run on one TCG thread with a fixed icount (harness.QEMU_DETERMINISTIC): kill_multiplier times the slowest run of any of the check's cases with 24 copies at once beside 24 busy host processes (48 runs per case, 2026-11-14; a733-radio-session 3.8 s, aic8800-dispatch 1.4 s, radio-network 1.8 s, radio-network-dhcp-dns 7.0 s). latency-cause-model runs on multi-threaded TCG, so it also holds the timing lock (timing_checks): its slowest run was 5.8 s with 8 copies at once beside 24 busy processes (64 of 64 runs passed).",
+    "_comment": "Hang guards for the QEMU runs of the radio checks, which run on one TCG thread with a fixed icount (harness.QEMU_DETERMINISTIC), and of the latency cause model, which runs on multi-threaded TCG and so also holds the timing lock (timing_checks): kill_multiplier times the slowest run of any case of the check with 24 copies at once (8 for the cause model) beside 36 busy host processes, at a load average of 67 to 84 (tools/measure-kill-limits.py, 2026-11-14; each entry's measured record has the runs, the load and the exit statuses). A run past the bound is run once more and a second kill is inconclusive (checks/harness.py, until_booted), so the bound ends a hang and is not a result.",
     "a733-radio-session": {
-      "slowest_loaded_run_seconds": 3.8,
-      "kill_multiplier": 4
+      "slowest_loaded_run_seconds": 7.3,
+      "kill_multiplier": 4,
+      "measured": {
+        "date": "2026-11-14",
+        "runs": 216,
+        "copies": 24,
+        "busy_processes": 36,
+        "load_average": 67,
+        "commands": 9,
+        "exit_statuses": {
+          "0": 170,
+          "1": 23,
+          "2": 23
+        }
+      }
     },
     "aic8800-dispatch": {
-      "slowest_loaded_run_seconds": 1.4,
-      "kill_multiplier": 4
+      "slowest_loaded_run_seconds": 5.3,
+      "kill_multiplier": 4,
+      "measured": {
+        "date": "2026-11-14",
+        "runs": 168,
+        "copies": 24,
+        "busy_processes": 36,
+        "load_average": 70,
+        "commands": 7,
+        "exit_statuses": {
+          "0": 124,
+          "1": 23,
+          "2": 21
+        }
+      }
     },
     "radio-network": {
-      "slowest_loaded_run_seconds": 1.8,
-      "kill_multiplier": 4
+      "slowest_loaded_run_seconds": 5.5,
+      "kill_multiplier": 4,
+      "measured": {
+        "date": "2026-11-14",
+        "runs": 864,
+        "copies": 24,
+        "busy_processes": 36,
+        "load_average": 84,
+        "commands": 36,
+        "exit_statuses": {
+          "0": 302,
+          "1": 283,
+          "2": 279
+        }
+      }
     },
     "radio-network-dhcp-dns": {
-      "slowest_loaded_run_seconds": 7.0,
-      "kill_multiplier": 4
+      "slowest_loaded_run_seconds": 8.4,
+      "kill_multiplier": 4,
+      "measured": {
+        "date": "2026-11-14",
+        "runs": 168,
+        "copies": 24,
+        "busy_processes": 36,
+        "load_average": 75,
+        "commands": 7,
+        "exit_statuses": {
+          "0": 121,
+          "1": 24,
+          "2": 23
+        }
+      }
     },
     "latency-cause-model": {
-      "slowest_loaded_run_seconds": 5.8,
-      "kill_multiplier": 4
+      "slowest_loaded_run_seconds": 9.3,
+      "kill_multiplier": 4,
+      "measured": {
+        "date": "2026-11-14",
+        "runs": 24,
+        "copies": 8,
+        "busy_processes": 36,
+        "load_average": 84,
+        "commands": 1,
+        "exit_statuses": {
+          "0": 21,
+          "1": 3
+        }
+      }
+    }
+  },
+  "host_checks": {
+    "_comment": "Hang guards for the host binaries of the threaded model checks (checks/scheduler-owner.py, checks/scheduler-control-stop.py, checks/accelerator-shared-owner.py): kill_multiplier times the slowest run of any command of the check, each command run 24 at once (8 for the accelerator builds) beside 36 busy host processes (tools/measure-kill-limits.py records the figures with the load average reached). A run past the bound, or a model that stops on its own wall-clock guard (exit status 75), is run once more (checks/harness.py, until_booted) and a second stop is inconclusive, not a failure.",
+    "scheduler-owner": {
+      "slowest_loaded_run_seconds": 22.0,
+      "kill_multiplier": 4,
+      "measured": {
+        "date": "2026-11-14",
+        "runs": 48,
+        "copies": 24,
+        "busy_processes": 36,
+        "load_average": 95,
+        "commands": 1,
+        "exit_statuses": {
+          "0": 48
+        }
+      }
+    },
+    "scheduler-control-stop": {
+      "slowest_loaded_run_seconds": 27.9,
+      "kill_multiplier": 4,
+      "measured": {
+        "date": "2026-11-14",
+        "runs": 480,
+        "copies": 24,
+        "busy_processes": 36,
+        "load_average": 97,
+        "commands": 20,
+        "exit_statuses": {
+          "-6": 120,
+          "0": 360
+        }
+      }
+    },
+    "accelerator-shared-owner": {
+      "kill_multiplier": 4,
+      "slowest_loaded_run_seconds": 177.3,
+      "measured": {
+        "date": "2026-11-14",
+        "runs": 24,
+        "copies": 8,
+        "busy_processes": 36,
+        "load_average": 94,
+        "commands": 3,
+        "exit_statuses": {
+          "0": 24
+        }
+      }
     }
   }
 }

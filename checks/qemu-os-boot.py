@@ -30,6 +30,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import harness
 from harness import CACHE, CLANG, LLD, environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -423,12 +424,8 @@ def boot(elf, raw_session, contract, scenario_bytes, inputs, log, timeout=60, me
                '-cpu', 'cortex-a76', '-smp', '8', '-m', memory, '-nographic', '-monitor', 'none',
                '-semihosting-config', 'enable=on,target=native', '-kernel', elf, *loaders]
     start = time.monotonic()
-    try:
-        done = subprocess.run([str(c) for c in command], capture_output=True, text=True, timeout=timeout)
-        output, status = done.stdout + done.stderr, done.returncode
-    except subprocess.TimeoutExpired as error:
-        output = ((error.stdout or b'') + (error.stderr or b'')).decode(errors='replace')
-        status = 124
+    done = harness.run_qemu([str(c) for c in command], timeout)      # a kill twice is inconclusive (harness.KillInconclusive)
+    output, status = done.stdout + done.stderr, done.returncode
     seconds = time.monotonic() - start
     Path(log).write_text(output)
     return output, status, seconds

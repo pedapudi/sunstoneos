@@ -62,8 +62,8 @@ class Runner:
         command = [str(c) for c in command]
         self.commands.append(command)
         (self.out / 'commands.json').write_text(json.dumps(self.commands, indent=2) + '\n')
-        result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, timeout=timeout)
+        result = harness.until_booted(lambda: subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, timeout=timeout), lambda done: (done.stdout or '') + (done.stderr or ''))
         (self.out / (name + '.log')).write_text(result.stdout)
         if check and result.returncode:
             raise RuntimeError(f'{name} failed ({result.returncode}): {result.stdout[-4000:]}')

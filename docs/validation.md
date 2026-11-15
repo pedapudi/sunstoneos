@@ -263,8 +263,8 @@ They now pass `harness.QEMU_DETERMINISTIC` (`-accel tcg,thread=single -icount sh
 latency-control models, so that guest time follows the instructions executed. Under the same load all 1,392 runs pass and each case writes
 one console output, byte for byte, in all 48 runs; alone the verdict and the output are the same as before. The slowest run beside the
 busy processes was 3.8 s (`a733-radio-session`), 1.4 s (`aic8800-dispatch`), 1.8 s (`radio-network`) and 7.0 s (the DHCP case); the host
-kill limit of each check is 4 times that, recorded per check in `qemu_checks` of [tools/gate-slots.json](../tools/gate-slots.json), and
-only ends a run that hangs. `checks/qemu-icount-audit.py` fails a check that starts a guest without `-icount` unless it is listed with the
+kill limit of each check is 4 times the slowest run, recorded per check in `qemu_checks` of [tools/gate-slots.json](../tools/gate-slots.json)
+(re-measured at a higher load in "A run the host stops"), and only ends a run that hangs: a run it kills is run once more. `checks/qemu-icount-audit.py` fails a check that starts a guest without `-icount` unless it is listed with the
 reason its verdict does not read guest time: `checks/smp-ticket-lock.py` and `tools/check-smp.py` run multi-threaded TCG on purpose, to
 exercise the ticket lock's atomics on cores that run in parallel, and their guests assert no time. The checks `os-npu-graphs`,
 `os-npu-service` and `os-npu-fault` run on `checks/host/host_rtos.c`, whose clock is virtual and whose tasks switch only at their own
@@ -295,7 +295,7 @@ left the model's functional assertions to "its own checks", of which there were 
 - `checks/latency-cause-model.py` runs the image on the multi-threaded guest and requires the PASS line, then rebuilds the image with the
   peer reporting a sequence error after the fourth exchange (the changed copy of `cause-ping.c` compiled with the image's own flags and
   linked with its own link command) and requires the model to fail at its ping assertion. It runs on real threads, so it holds the timing
-  lock (`timing_checks` in `tools/gate-slots.json`), and its kill limit is 4 times the slowest loaded run, 23.2 s.
+  lock (`timing_checks` in `tools/gate-slots.json`), and its kill limit is 4 times the slowest loaded run, 9.3 s (see "A run the host stops").
 
 The model failed on 15 to 25 of 96 runs beside eight busy processes on the multi-threaded guest, in four ways, all from the host's
 scheduling of the vCPUs and none from the ping or the scheduler. The check now passes 96 of 96 runs under the same load, and passed four
@@ -319,6 +319,54 @@ ran out first, the run ended at `workload.c`'s budget failure and the check repo
 that meets the planted sequence error now reports it when it happens (`ss_latency_cause_ping_failed`, a weak no-op outside the model), and
 the check accepts a non-zero exit without the PASS line and either that report or the ping assertion. A run that ends at the budget failure
 without either is repeated, up to three times, in both halves.
+
+### A run the host stops
+
+A guest run or a threaded host model can end without saying anything about the claim of the check that started it, because of the host and
+not the code: three cases in the landing gates of 2026-11-14, all under a load average of 32 to 35 on 24 cores.
+
+- **Boot.** The guests of `platform/qemu-smp` and `platform/qemu-os` give each boot wait (the secondary cores coming online, the primary
+  core's initialisation flag, a register clearing) one second of their own counter. On a loaded host the secondaries take longer, and the
+  guest ended with `FAIL src/platform/qemu-smp/platform.c:0x93` before its application started; the broken-ping half of the latency cause
+  model reported that as "the broken ping did not fail the model". The waits now print `FAIL boot-timeout <wait>` (`register-clear`,
+  `secondary-cpus-online`, `primary-init-flag`) when their second has passed; the bound is the same.
+- **Kill.** `radio-network` was killed by its wall-clock bound after 7.2 s, and a case of `scheduler-control-stop` by its 20 s `timeout`
+  (status 124). With a fixed icount the guest's time follows the instructions it executes, so the bound only guards against a hang; it is
+  not a result.
+- **Hang guard of a threaded model.** `scheduler-owner` and `scheduler-control-stop` wait for other threads with wall-clock deadlines
+  (ten seconds, two seconds). A model run beside a loaded host can have a thread unscheduled for that long.
+
+`checks/harness.py` runs the guest or binary through `run_qemu` (or any launch through `until_booted`), which runs it again after a boot-stage
+failure (three attempts in all), after a kill, and after the model's own hang guard (a model stops on it with status 75,
+`INCONCLUSIVE_EXIT`). A kill or a hang guard that happens twice raises `KillInconclusive`, and a boot failure in every attempt raises
+`BootInconclusive`; both are `Inconclusive`, an `AssertionError`, and a check that does not catch it ends with status 75 and the line
+`INCONCLUSIVE: ...`. `tools/integration-gate.py` reports status 75 as `INCONCLUSIVE <step>`, counts it apart from the failed steps and
+ends with `INCONCLUSIVE selected integration checks: ...; run them again`, which is not a pass. A guest that hangs is killed twice and is
+inconclusive, never a pass, and a failure of the application or the model is returned at the first attempt. Every check and tool that
+runs a QEMU guest with more than one core uses it, and so does every user of a measured kill bound; `checks/qemu-boot-inconclusive.py`
+lists them, feeds the harness a boot-stage log, a kill, a hang guard and a model failure, and fails when a launch site without the harness
+appears. `checks/device-memory-capacity.py` is outside it: its images boot from the ROM, which has no boot wait.
+
+The kill bound is `kill_multiplier` (4) times the slowest run of any case of the check, measured by `tools/measure-kill-limits.py` with
+every command of the check's result file run 24 at once beside 36 busy processes (a load average of 67 to 121, twice the gate's), and
+recorded with the load reached and the exit statuses in `qemu_checks` and `host_checks` of `tools/gate-slots.json`. The figures changed
+from 3.8, 1.4, 1.8, 7.0 and 5.8 s (24 busy processes) to 7.3 (`a733-radio-session`), 5.3 (`aic8800-dispatch`), 5.5 (`radio-network`), 8.4
+(the DHCP case) and 9.3 s (`latency-cause-model`, 8 copies); the host checks measured 22.0 s (`scheduler-owner`, an ASan binary) and 27.9 s
+(`scheduler-control-stop`).
+
+A limit that is part of the claim is not a hang guard, and the threaded models state it in their own progress. `scheduler-owner` no longer
+fails a slot that is not inspected in ten seconds. A drain pass that begins after a hint's publication and finds nothing to inspect has
+inspected every hint published before it began, so a slot still not inspected after two idle passes counted by the owner thread (the pass
+running at the read may have begun before the publication) is a lost hint; no pass count would do, because a strict priority order lets
+other sources' hints overtake a waiting one for as long as they keep arriving (a bound of two sweeps of passes failed the unmodified model).
+The ten seconds remain as a guard that stops the run inconclusive when the owner thread ran no pass at all, and the check builds the model
+with the owner losing one slot's hint in one round and requires it to fail with the idle-pass message in seconds. The same rule applies to
+the shared-owner composition model of the concurrent-accelerator branch, whose deadline "the GPU retirement did not start during the NPU
+job" read the GPU thread's active flag: on a loaded host the GPU thread ran the whole retirement between two looks of the NPU thread, the
+flag was clear again, and the wait ran to its model-time limit (2,009,498 µs against 2,009,497). The retirement has started once it is
+active or done. The latency cause model's ping timed out in 6 of 24 runs at a load average of 84 (host time again: 250 ms for a core the
+host did not schedule); the model prints its statuses and the check runs it again, and reports the claim inconclusive when it timed out in
+all three attempts. A planted sequence error is reported by its peer as status 5 and is never mistaken for it.
 
 ### Gate slots and the timing lock
 

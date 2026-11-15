@@ -13,6 +13,7 @@ import subprocess
 import threading
 import time
 from elftools.elf.elffile import ELFFile
+import harness
 from harness import CACHE, environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,20 +111,25 @@ def main():
             command += ['-device', f'loader,addr=0x{0x47ff0040 + 4 * index:x},data={word},data-len=4']
         if plugin:
             command += ['-plugin', plugin]
-        process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, start_new_session=True)
-        started = time.monotonic()
-        try:
-            stdout, stderr = process.communicate(timeout=QEMU_KILL_SECONDS)
-            with times_lock:
-                times[directory.name] = round(time.monotonic() - started, 2)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            stdout, stderr = process.communicate()
-            (directory / 'qemu.log').write_text(stdout + stderr + '\nQEMU timed out\n')
-            if image.parent != directory:
-                shutil.copy2(image, directory / 'failed.elf')
-            raise AssertionError((image, 'timeout'))
+        def launch():
+            process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True, start_new_session=True)
+            started = time.monotonic()
+            try:
+                stdout, stderr = process.communicate(timeout=QEMU_KILL_SECONDS)
+                with times_lock:
+                    times[directory.name] = round(time.monotonic() - started, 2)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                stdout, stderr = process.communicate()
+                (directory / 'qemu.log').write_text(stdout + stderr + '\nQEMU timed out\n')
+                if image.parent != directory:
+                    shutil.copy2(image, directory / 'failed.elf')
+                raise subprocess.TimeoutExpired(command, QEMU_KILL_SECONDS)
+            return process, stdout, stderr
+
+        # A guest that fails in its boot stage is run again (checks/harness.py, until_booted).
+        process, stdout, stderr = harness.until_booted(launch, lambda result: result[1] + result[2])
         (directory / 'qemu.log').write_text(stdout + stderr)
         if process.returncode and image.parent != directory:
             shutil.copy2(image, directory / 'failed.elf')
@@ -232,6 +238,8 @@ def main():
             directory.mkdir(exist_ok=True)
             try:
                 status, log = execute(build / (model + '.elf'), directory, 8, (PERTURB_SITES[site], turns))
+            except harness.Inconclusive:
+                raise                                   # a kill twice, or a boot-stage failure: the host, not the model
             except AssertionError:
                 return point, 'QEMU timed out'
             if status == 0 and PERTURB_MODELS[model][0] in log and 'FAIL' not in log:
