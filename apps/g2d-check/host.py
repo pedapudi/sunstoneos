@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Host side of g2d-check: the decoder of its 712-byte result and the reference of its fill.
+"""Host side of g2d-check: the decoder of its result and the reference of its two copies.
 
 tools/board.py loads this module with --decoder or --decode-application. decode() reads the result that ss_finish
 returns (struct g2d_check_result in apps/g2d-check/main.c, which embeds struct ss_g2d_info, struct ss_g2d_closed and
-struct ss_g2d_done from include/sunstone_g2d.h), names every recorded word, and compares the board's CRC-32 of the
-surface with expected(), which rebuilds the surface from the recorded seed as main.c does: the background sequence,
-then the fill rectangle in the color. The check takes no input beyond the seed compiled into main.c.
+two struct ss_g2d_done from include/sunstone_g2d.h), names every recorded word, and compares the board's CRC-32 values
+of both surfaces with expected(), which rebuilds them from the recorded seed as main.c does: the source and the output
+background, then operation 1 (ARGB8888 to BGRA8888) and operation 2 (ARGB8888 unconverted) in order. The check takes
+no input beyond the seed compiled into main.c.
 
-The prediction is that the fill writes the color's own alpha byte. The decoder also reports whether the board's
-CRC-32 equals the surface with the rectangle's alpha byte forced to 0xff, which identifies that one failure.
+Converting ARGB8888 to BGRA8888 reverses the bytes of each 32-bit word: both names list channels from the most
+significant byte. The decoder also reports whether the board's output CRC-32 equals the output with both copies
+unconverted, which identifies a conversion that did not happen.
 """
 import struct
 import zlib
@@ -22,9 +24,11 @@ SAMPLES = 8
 HEAD = struct.Struct('<8I')
 INFO = struct.Struct(f'<4I{len(PLATFORM)}I{len(PLATFORM)}I{len(LOCAL)}I4x3Q3Q2I{SAMPLES}I{SAMPLES}I2Q2I')
 CLOSED = struct.Struct('<6IQ')
-RUN = struct.Struct('<16I')
-DONE = struct.Struct('<9I8I2I10I5I7Q')
-SIZE = HEAD.size + INFO.size + CLOSED.size + RUN.size + DONE.size
+PLAN = struct.Struct('<8I')
+OP = struct.Struct('<16I')
+DONE = struct.Struct('<9I8I2I10I5I6I7Q')
+OPS = 2
+SIZE = HEAD.size + INFO.size + CLOSED.size + PLAN.size + OPS * (OP.size + DONE.size)
 CHECK_MAGIC, INFO_MAGIC, DONE_MAGIC = 0x4b433247, 0x49443247, 0x44443247
 STATUS = {1: 'done', 2: 'refused', 3: 'close failed', 4: 'run failed', 5: 'no surface'}
 FAULT = ('bank_status0', 'bank_status1', 'l1_status0', 'l1_status1', 'l2_status0', 'l2_status1',
@@ -46,35 +50,55 @@ def xorshift(x):
 
 
 def plan(seed):
-    """The geometry, rectangle and color main.c draws from the seed, and the sequence state after them."""
-    x, values = seed, []
-    for _ in range(7):
+    """The geometry and both operations main.c draws from the seed, and the sequence state after them."""
+    x, v = seed, []
+    for _ in range(2 + 6 * OPS):
         x = xorshift(x)
-        values.append(x)
-    width = 320 + values[0] % 321
-    height = 180 + values[1] % 181
-    w = 1 + values[2] % width
-    h = 1 + values[3] % height
-    dx = values[4] % (width - w + 1)
-    dy = values[5] % (height - h + 1)
-    return {'width': width, 'height': height, 'stride': width * 4 + 64, 'dx': dx, 'dy': dy, 'w': w, 'h': h,
-            'color': values[6]}, x
+        v.append(x)
+    width, height = 320 + v[0] % 321, 180 + v[1] % 181
+    ops = []
+    for k in range(OPS):
+        w, h = 1 + v[2 + 6 * k] % width, 1 + v[3 + 6 * k] % height
+        ops.append({'w': w, 'h': h, 'sx': v[4 + 6 * k] % (width - w + 1), 'sy': v[5 + 6 * k] % (height - h + 1),
+                    'dx': v[6 + 6 * k] % (width - w + 1), 'dy': v[7 + 6 * k] % (height - h + 1),
+                    'format': 0, 'output_format': 3 if k == 0 else 0})
+    return {'width': width, 'height': height, 'stride': width * 4 + 64, 'ops': ops}, x
 
 
-def expected(seed, opaque=False):
-    """The surface bytes after the fill: the background sequence (one word per 4 bytes, padding included), then the
-    w by h rectangle at dx, dy in the color as one little-endian ARGB8888 word per pixel. With opaque, the rectangle's
-    alpha byte is 0xff."""
+def surfaces(seed):
+    """The source and the output background: the seed's sequence after the plan, one word per 4 bytes, padding
+    included, source first."""
     p, x = plan(seed)
-    out = bytearray(p['stride'] * p['height'])
-    for i in range(0, len(out), 4):
-        x = xorshift(x)
-        struct.pack_into('<I', out, i, x)
-    row = struct.pack('<I', p['color'] | (0xff000000 if opaque else 0)) * p['w']
-    for y in range(p['h']):
-        at = (p['dy'] + y) * p['stride'] + p['dx'] * 4
-        out[at:at + len(row)] = row
-    return p, bytes(out)
+    n = p['stride'] * p['height']
+    out = []
+    for _ in range(2):
+        buf = bytearray(n)
+        for i in range(0, n, 4):
+            x = xorshift(x)
+            struct.pack_into('<I', buf, i, x)
+        out.append(buf)
+    return p, bytes(out[0]), out[1]
+
+
+def convert(word, source_format, output_format, converted=True):
+    """One pixel from the source format to the output format. Only ARGB8888 (0) to ARGB8888 or BGRA8888 (3) is
+    modeled; with converted False the word is copied as it is."""
+    assert source_format == 0 and output_format in (0, 3)
+    if output_format == 0 or not converted:
+        return word
+    return int.from_bytes(word.to_bytes(4, 'little'), 'big')
+
+
+def expected(seed, converted=True, count=OPS):
+    """The plan, the source bytes, and the output bytes after the first count operations."""
+    p, source, out = surfaces(seed)
+    s = p['stride']
+    for op in p['ops'][:count]:
+        for y in range(op['h']):
+            row = struct.unpack_from(f'<{op["w"]}I', source, (op['sy'] + y) * s + op['sx'] * 4)
+            struct.pack_into(f'<{op["w"]}I', out, (op['dy'] + y) * s + op['dx'] * 4,
+                             *(convert(w, op['format'], op['output_format'], converted) for w in row))
+    return p, source, bytes(out)
 
 
 def decode(payload):
@@ -132,43 +156,79 @@ def decode(payload):
     record['closed'] = {'g2d_clk': f'0x{c[0]:08x}', 'g2d_bgr': f'0x{c[1]:08x}', 'de_sys_bgr': f'0x{c[2]:08x}',
                         'pck1_status': f'0x{c[3]:08x}', 'de_di_open': c[4],
                         'closed_us': (c[6] - requested) / TICKS_PER_US if c[6] else None}
-    record['run'] = run(payload, HEAD.size + INFO.size + CLOSED.size)
+    record.update(runs(payload, HEAD.size + INFO.size + CLOSED.size))
     return record
 
 
-def run(payload, at):
-    """The fill record: the seed's plan, the board's CRC against expected(), and the completion record."""
-    r = RUN.unpack_from(payload, at)
-    result, seed, width, height, stride, dx, dy, w, h, color, crc, reserved = r[:12]
+def runs(payload, at):
+    """The plan record, both surfaces' CRC-32 values against expected(), and each operation's record."""
+    seed, width, height, stride, output_crc, source_crc, output_before, source_before = PLAN.unpack_from(payload, at)
+    p, source, reference = expected(seed)
+    _, _, unconverted = expected(seed, converted=False)
+    _, _, background = surfaces(seed)
+    out = {'plan': {'seed': f'0x{seed:08x}', 'width': width, 'height': height, 'stride': stride,
+                    'matches_seed': (width, height, stride) == (p['width'], p['height'], p['stride'])},
+           'crc': {'output': f'0x{output_crc:08x}', 'expected_output': f'0x{zlib.crc32(reference):08x}',
+                   'unconverted_output': f'0x{zlib.crc32(unconverted):08x}',
+                   'source': f'0x{source_crc:08x}', 'expected_source': f'0x{zlib.crc32(source):08x}',
+                   'output_before': f'0x{output_before:08x}', 'expected_output_before': f'0x{zlib.crc32(bytes(background)):08x}',
+                   'source_before': f'0x{source_before:08x}'}}
+    ops, at = [], at + PLAN.size
+    for k in range(OPS):
+        ops.append(operation(payload, at, seed, p, k))
+        at += OP.size + DONE.size
+    out['ops'] = ops
+    done = all(o['result'] == 1 for o in ops)
+    out['crc']['output_matches'] = done and output_crc == zlib.crc32(reference)
+    out['crc']['output_unconverted'] = done and output_crc == zlib.crc32(unconverted)
+    out['crc']['source_unchanged'] = done and source_crc == zlib.crc32(source) == source_before
+    out['crc']['before_match'] = output_before == zlib.crc32(bytes(background)) and source_before == zlib.crc32(source)
+    out['plan']['matches_seed'] = out['plan']['matches_seed'] and all(o['plan_matches_seed'] for o in ops)
+    return out
+
+
+def operation(payload, at, seed, p, k):
+    """Operation k's record: its plan against the seed's, its samples against the output after operations 1 to k + 1
+    (main.c reads them right after the operation), and its completion record."""
+    r = OP.unpack_from(payload, at)
+    result, sx, sy, dx, dy, w, h, fmt, output_format = r[:9]
     sample = r[12:16]
     signed = result - (1 << 32) if result & 0x80000000 else result
-    p, reference = expected(seed)
-    board = {'width': width, 'height': height, 'stride': stride, 'dx': dx, 'dy': dy, 'w': w, 'h': h, 'color': color}
-    out = {'result': signed, 'seed': f'0x{seed:08x}', 'plan': board, 'plan_matches_seed': board == p,
-           'crc': f'0x{crc:08x}', 'expected_crc': f'0x{zlib.crc32(reference):08x}',
-           'crc_matches': signed == 1 and crc == zlib.crc32(reference),
-           'crc_matches_opaque_alpha': signed == 1 and crc == zlib.crc32(expected(seed, opaque=True)[1])}
-    first = p['dy'] * p['stride'] + p['dx'] * 4
-    last = (p['dy'] + p['h'] - 1) * p['stride'] + (p['dx'] + p['w'] - 1) * 4
-    before = first - 4 if p['dx'] else p['dy'] * p['stride'] + p['stride'] - 4
-    pad = p['dy'] * p['stride'] + p['width'] * 4
-    want = [struct.unpack_from('<I', reference, at)[0] for at in (first, last, before, pad)]
+    want = p['ops'][k]
+    board = {'w': w, 'h': h, 'sx': sx, 'sy': sy, 'dx': dx, 'dy': dy, 'format': fmt, 'output_format': output_format}
+    out = {'result': signed, 'plan': board, 'plan_matches_seed': board == want}
+    reference = expected(seed, count=k + 1)[2]
+    s = p['stride']
+    first = want['dy'] * s + want['dx'] * 4
+    last = (want['dy'] + want['h'] - 1) * s + (want['dx'] + want['w'] - 1) * 4
+    before = first - 4 if want['dx'] else want['dy'] * s + s - 4
+    pad = want['dy'] * s + p['width'] * 4
+    expect = [struct.unpack_from('<I', reference, a)[0] for a in (first, last, before, pad)]
     out['samples'] = {name: {'board': f'0x{got:08x}', 'expected': f'0x{exp:08x}'}
-                      for name, got, exp in zip(('first', 'last', 'before', 'padding'), sample, want)}
-    d = DONE.unpack_from(payload, at + RUN.size)
+                      for name, got, exp in zip(('first', 'last', 'before', 'padding'), sample, expect)}
+    out['samples_match'] = signed == 1 and list(sample) == expect
+    out['done'] = done_record(payload, at + OP.size)
+    return out
+
+
+def done_record(payload, at):
+    """One struct ss_g2d_done, or None when the operation left none."""
+    d = DONE.unpack_from(payload, at)
     if d[0] != DONE_MAGIC:
-        out['done'] = None
-        return out
+        return None
     if d[1] != DONE.size:
         raise ValueError(f'ss_g2d_done is {d[1]} bytes, not {DONE.size}.')
     rcq_status, reset_word, status_after, irq_count, scan, output_iova, attached = d[2:9]
     bank, bypass, fault = d[9:17], d[17:19], d[19:29]
     fault_step, fault_word, fault_read, refused, stray = d[29:34]
-    submit, launch, irq, done, attach_us, surface, directory = d[34:41]
-    out['done'] = {
-        'rcq_status': f'0x{rcq_status:08x}', 'reset_word': f'0x{reset_word:08x}',
-        'status_after': f'0x{status_after:08x}', 'irq_count': irq_count, 'iommu_scan': scan,
-        'output_iova': f'0x{output_iova:08x}', 'iommu_attached': attached,
+    update_after, mixer_after, prefetch0, prefetch1, source_iova, reserved = d[34:40]
+    submit, launch, irq, done, attach_us, surface, directory = d[40:47]
+    return {
+        'rcq_status': f'0x{rcq_status:08x}', 'frame_cnt': rcq_status >> 8 & 255, 'reset_word': f'0x{reset_word:08x}',
+        'status_after': f'0x{status_after:08x}', 'update_after': f'0x{update_after:08x}',
+        'mixer_after': f'0x{mixer_after:08x}', 'irq_count': irq_count, 'iommu_scan': scan,
+        'output_iova': f'0x{output_iova:08x}', 'source_iova': f'0x{source_iova:08x}', 'iommu_attached': attached,
+        'iommu_prefetch': {'bank0': f'0x{prefetch0:08x}', 'bank1': f'0x{prefetch1:08x}'},
         'iommu_entry': {f'bank{b}': words(BANK, bank[4 * b:4 * b + 4]) for b in (0, 1)},
         'iommu_bypass_entry': {'usb': bypass[0], 'g2d': bypass[1]},
         'iommu_fault': words(FAULT, fault), 'attach_us': attach_us,
@@ -181,4 +241,3 @@ def run(payload, at):
         'irq_to_done_us': (done - irq) / TICKS_PER_US if done and irq else None,
         'submit_to_done_us': (done - submit) / TICKS_PER_US if done else None,
     }
-    return out

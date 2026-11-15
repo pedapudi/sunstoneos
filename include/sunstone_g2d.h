@@ -96,9 +96,14 @@ struct ss_g2d_surface {
     uint64_t offset;
     uint32_t width, height, stride, reserved;
 };
-enum { SS_G2D_FILL = 1 };
-/* One operation. Fill writes color (ARGB, 32 bits) to the w by h rectangle at dx, dy of the output; source, sx and sy
- * are zero. The rest of the output is unchanged. */
+enum { SS_G2D_FILL = 1, SS_G2D_BLIT = 2 };
+/* One operation. The rest of the output is unchanged.
+ * - Fill writes color (ARGB, 32 bits) to the w by h rectangle at dx, dy of an ARGB8888 output; source, sx and sy are
+ *   zero.
+ * - Blit copies the w by h rectangle at sx, sy of the source to dx, dy of the output, converting from the source's
+ *   format to the output's (the native builder's copy, docs/g2d.md). The source and the output have the same width,
+ *   height and stride; they may name the same region. color is zero. The engine reads the source through a read-only
+ *   mapping. What a conversion writes to an X byte (formats 4 to 7) is not yet established on the board. */
 struct ss_g2d_job {
     uint32_t op, color;
     struct ss_g2d_surface source, output;
@@ -123,11 +128,18 @@ struct ss_g2d_done {
     /* The IOMMU owner's first failure (step, register offset, value read back), its last refusal (1 clock lease, 2
      * entry state), and interrupts taken with no operation armed. */
     uint32_t iommu_fault_step, iommu_fault_word, iommu_fault_read, iommu_refused, stray_interrupts;
+    /* Read by the owner after the handler: G2D 0x28 (RCQ update) and 0x100 (mixer control). */
+    uint32_t update_after, mixer_after;
+    /* After this operation's attach, IOMMU bank 0 and bank 1 prefetch words (0x0390002c, 0x0391002c); 0 when this
+     * operation made no attach. */
+    uint32_t iommu_prefetch[2];
+    uint32_t source_iova;      /* device address of the source surface's first byte; 0 for a fill */
+    uint32_t reserved;
     uint64_t submit_ticks, launch_ticks, irq_ticks, done_ticks;
     uint64_t attach_us;            /* time the IOMMU attach took, 0 when no attach was made */
     uint64_t surface_physical, directory_physical;
 };
-_Static_assert(sizeof(struct ss_g2d_done) == 192 && offsetof(struct ss_g2d_done, submit_ticks) == 136,
+_Static_assert(sizeof(struct ss_g2d_done) == 216 && offsetof(struct ss_g2d_done, submit_ticks) == 160,
                "apps/g2d-check/host.py decodes this layout");
 /* Run one operation on the open engine and wait for its completion interrupt; done receives the record. */
 int ss_g2d_run(const struct ss_g2d_job *job, struct ss_g2d_done *done);

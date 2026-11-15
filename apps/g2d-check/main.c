@@ -1,32 +1,38 @@
 /* g2d-check: the G2D board check on the SunstoneOS interface (include/sunstone_g2d.h, docs/g2d-os.md). It opens the
- * engine, which powers, clocks and resets it and reads its identity; runs one fill into a surface in the application's
- * large region "surface"; closes the engine; and returns the open, run and close records with the CRC-32 of the
- * surface. The surface's background pattern, its geometry, the rectangle and the color all come from one seed, from
- * which apps/g2d-check/host.py computes the expected CRC-32 and decodes the result. */
+ * engine, which powers, clocks and resets it and reads its identity; runs two copies from the large region "source"
+ * into the large region "surface" in one session, the first converting ARGB8888 to BGRA8888 and the second
+ * unconverted into a rectangle that overlaps the first; closes the engine; and returns the open, run and close records
+ * with the CRC-32 of both surfaces before and after. The geometry, both rectangles and both surfaces' contents all
+ * come from one seed, from which apps/g2d-check/host.py computes the expected CRC-32 values and decodes the result. */
 #include "g2d_check-app.h"
 #include "sunstone_g2d.h"
 #include "sunstone_large.h"
 #include <string.h>
 
 #define G2D_CHECK_MAGIC UINT32_C(0x4b433247) /* "G2CK" */
-#define G2D_CHECK_SEED UINT32_C(0x6a09e667)
-#define G2D_CHECK_REGION 0u
+#define G2D_CHECK_SEED UINT32_C(0xbb67ae85)
+#define G2D_CHECK_OPS 2u
 enum {G2D_CHECK_OPENED = 1, G2D_CHECK_REFUSED = 2, G2D_CHECK_CLOSE_FAILED = 3, G2D_CHECK_RUN_FAILED = 4,
       G2D_CHECK_NO_SURFACE = 5};
-struct g2d_check_run {
-    uint32_t result, seed, width, height, stride, dx, dy, w, h, color, crc, reserved;
-    /* After the fill: the rectangle's first and last pixels, the pixel before the first (or the row's last padding
-     * word when the rectangle starts at x 0), and the first row's padding word after the last pixel. */
+/* One operation: its rectangle and formats, its result, and four output words after it: the rectangle's first and
+ * last pixels, the pixel before the first (or the row's last padding word when the rectangle starts at x 0), and the
+ * first row's padding word after the last pixel. */
+struct g2d_check_op {
+    uint32_t result, sx, sy, dx, dy, w, h, format, output_format, reserved[3];
     uint32_t sample[4];
     struct ss_g2d_done done;
+};
+struct g2d_check_plan {
+    uint32_t seed, width, height, stride, output_crc, source_crc, output_before_crc, source_before_crc;
 };
 struct g2d_check_result {
     uint32_t magic, stage, status, open_result, close_result, fault_step, fault_value, reserved;
     struct ss_g2d_info info;
     struct ss_g2d_closed closed;
-    struct g2d_check_run run;
+    struct g2d_check_plan plan;
+    struct g2d_check_op op[G2D_CHECK_OPS];
 };
-_Static_assert(sizeof(struct g2d_check_result) <= 1024, "the result fits the manifest's output_limit");
+_Static_assert(sizeof(struct g2d_check_result) <= 2048, "the result fits the manifest's output_limit");
 
 static uint32_t next(uint32_t *x)
 {
@@ -63,18 +69,33 @@ static int close_call(void *closed) { return ss_g2d_close(closed); }
 static struct ss_g2d_job job;
 static int run_call(void *done) { return ss_g2d_run(&job, done); }
 
-/* Geometry, rectangle and color from the seed (host.py repeats this sequence); the surface's rows carry 64 bytes of
- * padding, which the fill must leave alone. */
-static void plan(struct g2d_check_run *r, uint32_t *x)
+/* Geometry and both rectangles from the seed (host.py repeats this sequence). The surfaces' rows carry 64 bytes of
+ * padding, which the copies must leave alone. Operation 1 converts ARGB8888 (0) to BGRA8888 (3); operation 2 copies
+ * ARGB8888 unconverted. */
+static void plan(struct g2d_check_result *r, uint32_t *x)
 {
-    r->width = 320 + next(x) % 321;          /* 320..640 */
-    r->height = 180 + next(x) % 181;         /* 180..360 */
-    r->stride = r->width * 4 + 64;
-    r->w = 1 + next(x) % r->width;
-    r->h = 1 + next(x) % r->height;
-    r->dx = next(x) % (r->width - r->w + 1);
-    r->dy = next(x) % (r->height - r->h + 1);
-    r->color = next(x);
+    r->plan.width = 320 + next(x) % 321;     /* 320..640 */
+    r->plan.height = 180 + next(x) % 181;    /* 180..360 */
+    r->plan.stride = r->plan.width * 4 + 64;
+    for (unsigned k = 0; k < G2D_CHECK_OPS; ++k) {
+        struct g2d_check_op *o = &r->op[k];
+        o->w = 1 + next(x) % r->plan.width;
+        o->h = 1 + next(x) % r->plan.height;
+        o->sx = next(x) % (r->plan.width - o->w + 1);
+        o->sy = next(x) % (r->plan.height - o->h + 1);
+        o->dx = next(x) % (r->plan.width - o->w + 1);
+        o->dy = next(x) % (r->plan.height - o->h + 1);
+        o->format = 0;
+        o->output_format = k == 0 ? 3 : 0;
+    }
+}
+static uint8_t *region(unsigned index, size_t bytes)
+{
+    int ready;
+    do { ss_progress(); ready = ss_large_wait(index, 100000); } while (ready == 0 && ss_live() >= 0);
+    size_t capacity = 0;
+    uint8_t *base = ready == 1 ? ss_large_base(index, &capacity) : NULL;
+    return base && capacity >= bytes ? base : NULL;
 }
 
 void g2d_check_main(const struct ss_grant *grant)
@@ -82,27 +103,29 @@ void g2d_check_main(const struct ss_grant *grant)
     (void)grant;
     static struct g2d_check_result result;
     result.magic = G2D_CHECK_MAGIC;
-    result.stage = 2;
-    struct g2d_check_run *r = &result.run;
+    result.stage = 3;
     uint32_t x = G2D_CHECK_SEED;
-    r->seed = G2D_CHECK_SEED;
-    plan(r, &x);
-    /* The region has no source: the loader marks it ready after the application starts. */
-    int ready;
-    do { ss_progress(); ready = ss_large_wait(G2D_CHECK_REGION, 100000); } while (ready == 0 && ss_live() >= 0);
-    size_t capacity = 0;
-    uint8_t *surface = ready == 1 ? ss_large_base(G2D_CHECK_REGION, &capacity) : NULL;
-    const size_t bytes = (size_t)r->stride * r->height;
-    if (!surface || capacity < bytes) {
+    result.plan.seed = G2D_CHECK_SEED;
+    plan(&result, &x);
+    const size_t bytes = (size_t)result.plan.stride * result.plan.height;
+    /* The regions have no source: the loader marks them ready after the application starts. */
+    uint8_t *source = region(G2D_CHECK_LARGE_SOURCE, bytes), *surface = region(G2D_CHECK_LARGE_SURFACE, bytes);
+    if (!source || !surface) {
         result.status = G2D_CHECK_NO_SURFACE;
         ss_finish(&result, sizeof(result));
         return;
     }
-    /* The background: the seed's sequence continued, one word per 4 bytes, padding included. */
-    for (size_t i = 0; i < bytes; i += 4) {
-        const uint32_t v = next(&x);
-        memcpy(surface + i, &v, 4);
+    /* The source, then the output's background: the seed's sequence continued, one word per 4 bytes, padding
+     * included. */
+    for (unsigned k = 0; k < 2; ++k) {
+        uint8_t *p = k ? surface : source;
+        for (size_t i = 0; i < bytes; i += 4) {
+            const uint32_t v = next(&x);
+            memcpy(p + i, &v, 4);
+        }
     }
+    result.plan.source_before_crc = crc32(source, bytes);
+    result.plan.output_before_crc = crc32(surface, bytes);
     result.open_result = (uint32_t)finish_call(open_call, &result.info);
     if ((int)result.open_result != 1) {
         result.status = G2D_CHECK_REFUSED;
@@ -110,24 +133,35 @@ void g2d_check_main(const struct ss_grant *grant)
         ss_finish(&result, sizeof(result));
         return;
     }
-    job = (struct ss_g2d_job){.op = SS_G2D_FILL, .color = r->color,
-        .output = {G2D_CHECK_REGION, 0, 0, r->width, r->height, r->stride, 0},
-        .dx = r->dx, .dy = r->dy, .w = r->w, .h = r->h};
-    r->result = (uint32_t)finish_call(run_call, &r->done);
-    if ((int)r->result == 1) {
-        r->crc = crc32(surface, bytes);
-        const size_t first = (size_t)r->dy * r->stride + (size_t)r->dx * 4;
-        const size_t last = (size_t)(r->dy + r->h - 1) * r->stride + (size_t)(r->dx + r->w - 1) * 4;
-        const size_t pad = (size_t)r->dy * r->stride + (size_t)r->width * 4;
-        memcpy(&r->sample[0], surface + first, 4);
-        memcpy(&r->sample[1], surface + last, 4);
-        memcpy(&r->sample[2], surface + (r->dx ? first - 4 : (size_t)r->dy * r->stride + r->stride - 4), 4);
-        memcpy(&r->sample[3], surface + pad, 4);
+    const uint32_t width = result.plan.width, height = result.plan.height, stride = result.plan.stride;
+    int failed = 0;
+    for (unsigned k = 0; k < G2D_CHECK_OPS && !failed; ++k) {
+        struct g2d_check_op *o = &result.op[k];
+        job = (struct ss_g2d_job){.op = SS_G2D_BLIT,
+            .source = {G2D_CHECK_LARGE_SOURCE, o->format, 0, width, height, stride, 0},
+            .output = {G2D_CHECK_LARGE_SURFACE, o->output_format, 0, width, height, stride, 0},
+            .sx = o->sx, .sy = o->sy, .dx = o->dx, .dy = o->dy, .w = o->w, .h = o->h};
+        o->result = (uint32_t)finish_call(run_call, &o->done);
+        if ((int)o->result != 1) {
+            failed = 1;
+            (void)ss_g2d_fault(&result.fault_step, &result.fault_value);
+            break;
+        }
+        const size_t first = (size_t)o->dy * stride + (size_t)o->dx * 4;
+        const size_t last = (size_t)(o->dy + o->h - 1) * stride + (size_t)(o->dx + o->w - 1) * 4;
+        const size_t pad = (size_t)o->dy * stride + (size_t)width * 4;
+        memcpy(&o->sample[0], surface + first, 4);
+        memcpy(&o->sample[1], surface + last, 4);
+        memcpy(&o->sample[2], surface + (o->dx ? first - 4 : (size_t)o->dy * stride + stride - 4), 4);
+        memcpy(&o->sample[3], surface + pad, 4);
     }
-    else (void)ss_g2d_fault(&result.fault_step, &result.fault_value);
+    if (!failed) {
+        result.plan.output_crc = crc32(surface, bytes);
+        result.plan.source_crc = crc32(source, bytes);
+    }
     result.close_result = (uint32_t)finish_call(close_call, &result.closed);
-    result.status = (int)r->result != 1 ? G2D_CHECK_RUN_FAILED :
+    result.status = failed ? G2D_CHECK_RUN_FAILED :
                     (int)result.close_result == 1 ? G2D_CHECK_OPENED : G2D_CHECK_CLOSE_FAILED;
-    if ((int)r->result == 1) (void)ss_g2d_fault(&result.fault_step, &result.fault_value);
+    if (!failed) (void)ss_g2d_fault(&result.fault_step, &result.fault_value);
     ss_finish(&result, sizeof(result));
 }
