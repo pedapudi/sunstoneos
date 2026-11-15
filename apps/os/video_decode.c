@@ -42,7 +42,6 @@
  * The binding's deadline is fixed for the whole cold start. */
 #define VD_CALL_US 500000u
 #define VD_BUSY_US 500u /* the block after the binding gives up on a busy registry or register lock */
-enum phase {CLOSED=OS_DEVICE_CLOSED,OPENING=OS_DEVICE_OPENING,OPEN=OS_DEVICE_OPEN,CLOSING=OS_DEVICE_CLOSING,FAULT=OS_DEVICE_FAULT};
 enum op {OPEN_OP=1,CLOSE_OP};
 enum {POSTED=1,DONE=2};
 /* Fault steps (ss_video_decode_fault). Steps below VD_STEP_WRITES write nothing, so a refusal there leaves the decoder
@@ -78,7 +77,7 @@ static uint64_t owner_us(void){uint64_t t=0;return a733_pmic_now(&providers.shar
 static uint64_t session_deadline(void){return board.session.deadline_us-10000;}
 static int timely(void){uint64_t t=lease_now();return t&&t<vd.limit&&board_live(NULL);}
 static void pause_us(uint32_t us){const uint64_t t=now_us()+us;while(now_us()<t)(void)sunstone_deadline_wait_until(t);}
-static int refuse(unsigned step,uint32_t value){vd.dev.fault_step=step;vd.dev.fault_value=value;return -1;}
+static int refuse(unsigned step,uint32_t value){return os_device_refuse(&vd.dev,step,value);}
 static int fail(unsigned step,uint32_t value){return os_device_fail(&vd.dev,step,value,vd.decoder.unit.uncertain);}
 static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner);}
 /* The bound on the owner's answer to the row (include/a733_power_domains.h): the supply deadline until verification
@@ -225,11 +224,9 @@ static int fault(unsigned step,uint32_t value)
 }
 static int do_open(void)
 {
-    atomic_store(&vd.dev.phase,OPENING);
-    atomic_store(&vd.dev.close_started,0);
+    os_device_open_begin(&vd.dev);
     RECORD(memset(&vd.info,0,sizeof(vd.info));vd.info.magic=VDEC_CHECK_INFO_MAGIC;vd.info.bytes=sizeof(vd.info);
         vd.info.requested_ticks=ss_counter_ticks();)
-    vd.dev.fault_step=0;vd.dev.fault_value=0;
     vd.limit=lease_now()+VD_CALL_US;
     if(vd.limit>session_deadline())vd.limit=session_deadline();
     if(tokens()<0)goto refused;
@@ -278,10 +275,10 @@ static int do_open(void)
     RECORD(vd.info.started_ticks=ss_counter_ticks();
         if(!read_words(vd.info.started))return fault(VD_STEP_STARTED_WORDS,0);)
     copy_record();
-    atomic_store(&vd.dev.phase,OPEN);
+    atomic_store(&vd.dev.phase,OS_DEVICE_OPEN);
     return 1;
 refused:
-    atomic_store(&vd.dev.phase,CLOSED);
+    atomic_store(&vd.dev.phase,OS_DEVICE_CLOSED);
     return -1;
 }
 /* The close of an open service, and the one close of a FAULT service
@@ -310,7 +307,7 @@ static int do_close(void)
     copy_record();
     RECORD(if(faulted)vd.info.failed=at_fault;)
     vd.closed=1;
-    atomic_store(&vd.dev.phase,CLOSED);
+    atomic_store(&vd.dev.phase,OS_DEVICE_CLOSED);
     return faulted?-1:1;
 }
 /* An open service, or a FAULT one whose close has not started. */
@@ -320,8 +317,8 @@ static void serve(void)
     if(atomic_load_explicit(&vd.request,memory_order_acquire)!=POSTED)return;
     const unsigned phase=atomic_load(&vd.dev.phase);
     int r=-1;
-    if(vd.op==OPEN_OP)r=phase==CLOSED&&!vd.closed?do_open():phase==OPEN?1:-1;
-    else if(vd.op==CLOSE_OP)r=closable()?do_close():phase==CLOSED?1:-1;
+    if(vd.op==OPEN_OP)r=phase==OS_DEVICE_CLOSED&&!vd.closed?do_open():phase==OS_DEVICE_OPEN?1:-1;
+    else if(vd.op==CLOSE_OP)r=closable()?do_close():phase==OS_DEVICE_CLOSED?1:-1;
     vd.result=r;
     atomic_store_explicit(&vd.request,DONE,memory_order_release);
     os_application_wake_task(vd.waiter);
@@ -334,7 +331,7 @@ static void os_video_decode_task(void *unused)
         serve();
         if(atomic_load(&vd.dev.quiesce_wanted)&&atomic_load(&vd.request)!=POSTED){
             if(closable())(void)do_close();
-            if(atomic_load(&vd.dev.phase)==CLOSED)atomic_store(&vd.dev.quiesced,1);
+            if(atomic_load(&vd.dev.phase)==OS_DEVICE_CLOSED)atomic_store(&vd.dev.quiesced,1);
         }
         /* Every input notifies this task: an application request, the quiesce and the row's wake. */
         (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
@@ -405,7 +402,7 @@ int ss_video_decode_fault(uint32_t *step,uint32_t *value)
     return vd.dev.fault_step?1:0;
 }
 static int ready(void)
-{const unsigned r=atomic_load(&vd.request);return r==DONE||(r!=POSTED&&atomic_load(&vd.dev.phase)==FAULT);}
+{const unsigned r=atomic_load(&vd.request);return r==DONE||(r!=POSTED&&atomic_load(&vd.dev.phase)==OS_DEVICE_FAULT);}
 void ss_video_decode_wait(uint32_t wait_us)
 {
     const uint64_t until=now_us()+(wait_us?wait_us:1);

@@ -54,7 +54,6 @@ _Static_assert(OS_GPU_CLIENT==7u,"the G2D client choice skips the GPU queue's cl
 #define G2D_MASTER 10u
 #define G2D_RCQ_BYTES 4096u
 #define G2D_RCQ_HEADER_BYTES 128u /* eight 16-byte block headers, the last the zero-dirty terminator */
-enum phase {CLOSED=OS_DEVICE_CLOSED,OPENING=OS_DEVICE_OPENING,OPEN=OS_DEVICE_OPEN,CLOSING=OS_DEVICE_CLOSING,FAULT=OS_DEVICE_FAULT};
 enum op {NONE,OPEN_OP,CLOSE_OP,RUN_OP};
 enum {POSTED=1,DONE=2};
 /* Fault steps (ss_g2d_fault): which check refused or failed. Steps below G2D_STEP_WRITES write nothing, so a refusal
@@ -126,7 +125,7 @@ static int update(uintptr_t a,uint32_t mask,uint32_t value)
     uint32_t v,r;
     return rd(a,&v)&&wr(a,(v&~mask)|value)&&rd(a,&r)&&r==((v&~mask)|value);
 }
-static int refuse(unsigned step,uint32_t value){g2d.dev.fault_step=step;g2d.dev.fault_value=value;return -1;}
+static int refuse(unsigned step,uint32_t value){return os_device_refuse(&g2d.dev,step,value);}
 static int fail(unsigned step,uint32_t value){return os_device_fail(&g2d.dev,step,value,0);}
 static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner);}
 static uint64_t owner_us(void){uint64_t t=0;return a733_pmic_now(&providers.shared.pmic,&t)==1?t:0;}
@@ -233,12 +232,10 @@ static int ccu(unsigned step,uintptr_t a,uint32_t mask,uint32_t value)
 }
 static int do_open(void)
 {
-    atomic_store(&g2d.dev.phase,OPENING);
-    atomic_store(&g2d.dev.close_started,0);
+    os_device_open_begin(&g2d.dev);
     memset(&g2d.info,0,sizeof(g2d.info));
     g2d.info.magic=SS_G2D_INFO_MAGIC;g2d.info.bytes=sizeof(g2d.info);
     g2d.info.requested_ticks=ss_counter_ticks();
-    g2d.dev.fault_step=0;g2d.dev.fault_value=0;
     g2d.limit=lease_now()+G2D_CALL_US;
     if(g2d.limit>session_deadline())g2d.limit=session_deadline();
     if(tokens()<0)goto refused;
@@ -270,8 +267,9 @@ static int do_open(void)
     for(;;){
         const enum a733_power_row_state r=a733_power_domain_state(&g2d.row);
         if(r==A733_POWER_ROW_ON)break;
-        /* A refused row is uncounted and nothing was written: the engine stays closed. */
-        if(r==A733_POWER_ROW_REFUSED){copy_transition();refuse(G2D_STEP_ROW,r);goto refused;}
+        /* A refused row is uncounted and nothing was written: the engine stays closed. The owner made no transition
+         * for this request, so the record's transition stays zero rather than carrying the domain's previous one. */
+        if(r==A733_POWER_ROW_REFUSED){refuse(G2D_STEP_ROW,r);goto refused;}
         if(r!=A733_POWER_ROW_PENDING)return fail(G2D_STEP_ROW,r);
         if(now_us()>=row_limit||!timely())return fail(G2D_STEP_ROW_TIMEOUT,r);
         (void)sunstone_deadline_wait_until(row_limit);
@@ -305,12 +303,12 @@ static int do_open(void)
         if(r!=1)return fail(G2D_STEP_GIC,(uint32_t)r);
     }
     g2d.info.opened_ticks=ss_counter_ticks();
-    atomic_store(&g2d.dev.phase,OPEN);
+    atomic_store(&g2d.dev.phase,OS_DEVICE_OPEN);
     return 1;
 refused:
     /* Nothing was written: the engine stays closed and the leases stay held for the session. The entry words are
      * those read before the refusal, or zero for a refusal before the read. */
-    atomic_store(&g2d.dev.phase,CLOSED);
+    atomic_store(&g2d.dev.phase,OS_DEVICE_CLOSED);
     return -1;
 }
 /* g2d_clock_disable: module clock, bus clock, then the G2D and the shared DE_SYS resets asserted; G2D is the only
@@ -365,7 +363,7 @@ static int do_close(void)
     if(!rd(CCU+0xa40,&g2d.closed.g2d_clk)||!rd(CCU+0xa44,&g2d.closed.g2d_bgr)||!rd(CCU+0xa74,&g2d.closed.de_sys_bgr)||
        !rd(PCK1+8,&g2d.closed.pck1_status))return fail(G2D_STEP_CLOSE+5,0);
     g2d.closed.closed_ticks=ss_counter_ticks();
-    atomic_store(&g2d.dev.phase,CLOSED);
+    atomic_store(&g2d.dev.phase,OS_DEVICE_CLOSED);
     return 1;
 }
 /* An open service, or a FAULT one whose close has not started: the close then runs the vendor order from the state the
@@ -373,7 +371,7 @@ static int do_close(void)
 static int closable(void){return os_device_closable(&g2d.dev,1);}
 /* --- operations ----------------------------------------------------------------------------------------------- */
 const struct large_slot *os_large_slot(unsigned index);
-static int run_refuse(unsigned step,uint32_t value){g2d.dev.fault_step=step;g2d.dev.fault_value=value;return -1;}
+static int run_refuse(unsigned step,uint32_t value){return os_device_refuse(&g2d.dev,step,value);}
 static int zero(const void *p,size_t n){const uint8_t *b=p;for(size_t i=0;i<n;++i)if(b[i])return 0;return 1;}
 /* The large region holding a surface, or null: ready, writable for an output, and the surface's rows inside it. */
 static const struct large_slot *surface_slot(const struct ss_g2d_surface *f,int write)
@@ -492,7 +490,7 @@ static int do_run(void)
     struct ss_g2d_done *d=&g2d.done;
     memset(d,0,sizeof(*d));
     d->magic=SS_G2D_DONE_MAGIC;d->bytes=sizeof(*d);d->submit_ticks=ss_counter_ticks();
-    g2d.dev.fault_step=0;g2d.dev.fault_value=0;
+    os_device_clear_fault(&g2d.dev);
     g2d.limit=lease_now()+G2D_CALL_US;
     if(g2d.limit>session_deadline())g2d.limit=session_deadline();
     if(atomic_load(&g2d.irq_seen)||atomic_load(&g2d.stray))
@@ -588,9 +586,9 @@ static void serve(void)
     if(atomic_load_explicit(&g2d.request,memory_order_acquire)!=POSTED)return;
     const unsigned phase=atomic_load(&g2d.dev.phase);
     int r=-1;
-    if(g2d.op==OPEN_OP)r=phase==CLOSED?do_open():phase==OPEN?1:-1;
-    else if(g2d.op==CLOSE_OP)r=closable()?do_close():phase==CLOSED?1:-1;
-    else if(g2d.op==RUN_OP)r=phase==OPEN?do_run():run_refuse(G2D_STEP_RUN,phase);
+    if(g2d.op==OPEN_OP)r=phase==OS_DEVICE_CLOSED?do_open():phase==OS_DEVICE_OPEN?1:-1;
+    else if(g2d.op==CLOSE_OP)r=closable()?do_close():phase==OS_DEVICE_CLOSED?1:-1;
+    else if(g2d.op==RUN_OP)r=phase==OS_DEVICE_OPEN?do_run():run_refuse(G2D_STEP_RUN,phase);
     g2d.result=r;
     atomic_store_explicit(&g2d.request,DONE,memory_order_release);
     os_application_wake_task(g2d.waiter);
@@ -603,7 +601,7 @@ static void os_g2d_task(void *unused)
         serve();
         if(atomic_load(&g2d.dev.quiesce_wanted)&&atomic_load(&g2d.request)!=POSTED){
             if(closable())(void)do_close();
-            if(atomic_load(&g2d.dev.phase)==CLOSED)atomic_store(&g2d.dev.quiesced,1);
+            if(atomic_load(&g2d.dev.phase)==OS_DEVICE_CLOSED)atomic_store(&g2d.dev.quiesced,1);
         }
         (void)sunstone_deadline_wait_until(now_us()+10000000);
     }
@@ -705,7 +703,7 @@ int ss_g2d_run(const struct ss_g2d_job *job,struct ss_g2d_done *done)
     if(r!=0&&done&&g2d.done.magic==SS_G2D_DONE_MAGIC)*done=g2d.done;
     return r;
 }
-static int ready(void){return atomic_load(&g2d.request)==DONE||atomic_load(&g2d.dev.phase)==FAULT;}
+static int ready(void){return atomic_load(&g2d.request)==DONE||atomic_load(&g2d.dev.phase)==OS_DEVICE_FAULT;}
 void ss_g2d_wait(uint32_t wait_us)
 {
     const uint64_t until=now_us()+(wait_us?wait_us:1);

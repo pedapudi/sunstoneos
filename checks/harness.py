@@ -323,23 +323,33 @@ class Image:
 
 
 def flat_members(type_die):
-    """Member offsets of a DWARF structure type, with the members of each nested structure member at their offset in
-    the outer one (a service's struct os_device_fault, for example). Names must be unique across the levels."""
-    out = {}
-    for c in type_die.iter_children():
-        if c.tag != 'DW_TAG_member' or 'DW_AT_name' not in c.attributes:
-            continue
-        name, at = c.attributes['DW_AT_name'].value.decode(), int(c.attributes['DW_AT_data_member_location'].value)
-        assert name not in out, name
-        out[name] = at
-        t = c.get_DIE_from_attribute('DW_AT_type') if 'DW_AT_type' in c.attributes else None
-        while t is not None and t.tag in ('DW_TAG_typedef', 'DW_TAG_const_type', 'DW_TAG_volatile_type'):
-            t = t.get_DIE_from_attribute('DW_AT_type') if 'DW_AT_type' in t.attributes else None
-        if t is not None and t.tag == 'DW_TAG_structure_type' and name == 'dev':
-            for k, v in flat_members(t).items():
-                assert k not in out, k
-                out[k] = at + v
-    return out
+    """Member offsets of a DWARF structure type, with the members of every nested structure member, at any depth, at
+    their offset in the outer one (a service's struct os_device_fault, for example). Every member is listed under its
+    dotted path ('dev.fault_step'), and also under its own name when that name is unambiguous: a name takes its
+    shallowest member, and a name that two members share at that depth is left out, so a lookup of it fails rather
+    than taking one."""
+    found, paths = {}, {}                          # name -> (depth, offset, members at that depth); path -> offset
+
+    def walk(die, base, depth, prefix):
+        for c in die.iter_children():
+            if c.tag != 'DW_TAG_member' or 'DW_AT_name' not in c.attributes:
+                continue
+            name, at = c.attributes['DW_AT_name'].value.decode(), base + int(c.attributes['DW_AT_data_member_location'].value)
+            paths[prefix + name] = at
+            old = found.get(name)
+            if old is None or depth < old[0]:
+                found[name] = (depth, at, 1)
+            elif depth == old[0]:
+                found[name] = (depth, old[1], old[2] + 1)
+            t = c.get_DIE_from_attribute('DW_AT_type') if 'DW_AT_type' in c.attributes else None
+            while t is not None and t.tag in ('DW_TAG_typedef', 'DW_TAG_const_type', 'DW_TAG_volatile_type',
+                                              'DW_TAG_atomic_type'):
+                t = t.get_DIE_from_attribute('DW_AT_type') if 'DW_AT_type' in t.attributes else None
+            if t is not None and t.tag == 'DW_TAG_structure_type':
+                walk(t, at, depth + 1, prefix + name + '.')
+
+    walk(type_die, 0, 0, '')
+    return {**paths, **{name: at for name, (_, at, count) in found.items() if count == 1}}
 
 
 def instruction_sites(parts, match):

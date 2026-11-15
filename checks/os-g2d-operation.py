@@ -585,7 +585,7 @@ def main():
                     fields['g2d'] = flat_members(typ)
                 if die.tag == 'DW_TAG_enumerator':
                     n, v = die.attributes['DW_AT_name'].value.decode(), die.attributes['DW_AT_const_value'].value
-                    want = {'CLOSED': CLOSED, 'OPEN': OPEN, 'FAULT': FAULT, 'CLOSE_OP': CLOSE_OP, 'RUN_OP': RUN_OP,
+                    want = {'OS_DEVICE_CLOSED': CLOSED, 'OS_DEVICE_OPEN': OPEN, 'OS_DEVICE_FAULT': FAULT, 'CLOSE_OP': CLOSE_OP, 'RUN_OP': RUN_OP,
                             'POSTED': POSTED, 'DONE': DONE, 'G2D_STEP_RUN_ATTACH': STEP_RUN_ATTACH,
                             'G2D_STEP_RUN_CACHE': STEP_RUN_CACHE, 'G2D_STEP_RUN_LAUNCH': STEP_RUN_LAUNCH,
                             'G2D_STEP_RUN_TIMEOUT': STEP_RUN_TIMEOUT, 'A733_IOMMU_OWNER_FAULT': IOMMU_OWNER_FAULT}.get(n)

@@ -21,6 +21,10 @@ Cases (docs/designs/failure-return-audit.md, "A faulted device service closes be
   is RETAINED. The service stays FAULT and reports site 0x921 once; the registry never reaches DONE.
 - close-step-fails: as open-line-pending, but the distributor never reports the line masked during the close
   (step 8). The service stays FAULT with site 0x921.
+- reopen-write-retained: a calendar read fails (step 4, settleable), the close returns the service to CLOSED, the
+  service opens again, and an alarm arm fails after its write (step 6) with the driver RETAINED. The second open began
+  a new fault lifetime, so the close is judged on step 6, not on the earlier lifetime's step 4: the service stays
+  FAULT and reports site 0x921 with step 6. An open that keeps the earlier lifetime's fault closes it and returns DONE.
 - set-refused: a calendar set with day 0 is refused by the driver before any access. The service stays OPEN, with no
   fault recorded, and the quiesce's close returns DONE.
 - quiesce-among-close-stores: as open-line-pending, but the quiesce step that runs during the close is placed at
@@ -71,7 +75,7 @@ class Registers:
 
 
 def run_case(image, parts, layout, enums, name, request, rtc_words, stuck=(), tick_after_open=False, pending=False,
-             close_mask_fails=False, schedule=None):
+             close_mask_fails=False, schedule=None, sequence=()):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -185,6 +189,11 @@ def run_case(image, parts, layout, enums, name, request, rtc_words, stuck=(), ti
     if request:
         op, a, b = request
         results[op] = serve(op, a, b)
+    # Requests made in order, each after its register change: (op, a, b, ticking, stuck words).
+    results['sequence'] = []
+    for op, a, b, ticking, words in sequence:
+        rtc_regs.ticking, rtc_regs.stuck = ticking, set(words)
+        results['sequence'].append((op, serve(op, a, b), get(field('fault_step')), get(field('phase'))))
     fault_after_request = get(field('fault_step'))
     phase_after_request = get(field('phase'))
     driver_after_request = get(driver + layout['a733_rtc']['state'])
@@ -249,7 +258,7 @@ def main():
                 if die.tag == 'DW_TAG_enumerator' and (unit.endswith(UNIT) or 'A733_CLOCK_OK' == die.attributes['DW_AT_name'].value.decode()
                                                        or die.attributes['DW_AT_name'].value.decode().startswith('A733_RTC_')):
                     enums.setdefault(die.attributes['DW_AT_name'].value.decode(), die.attributes['DW_AT_const_value'].value)
-    assert 'rtc' in layout and enums['FAULT'] == 4 and enums['CLOSED'] == 0 and enums['OPEN'] == 2, (sorted(enums))
+    assert 'rtc' in layout and enums['OS_DEVICE_FAULT'] == 4 and enums['OS_DEVICE_CLOSED'] == 0 and enums['OS_DEVICE_OPEN'] == 2, (sorted(enums))
     cases = [
         ('open-line-pending', None, {'pending': True}),
         ('read-incoherent', ('READ_OP', 0, 0), {'tick_after_open': True}),
@@ -257,29 +266,36 @@ def main():
         ('arm-write-fails', ('ARM_OP', 3, 0), {'stuck': (0x20,)}),
         ('close-step-fails', None, {'pending': True, 'close_mask_fails': True}),
         ('set-refused', ('SET_OP', 0, 4 << 16), {}),
+        ('reopen-write-retained', None, {'sequence': (('READ_OP', 0, 0, True, ()), ('CLOSE_OP', 0, 0, False, ()),
+                                                      ('OPEN_OP', KEEP_RC, 0, False, ()), ('ARM_OP', 3, 0, False, (0x20,)))}),
     ]
     rows, failures = [], []
     for name, request, options in cases:
         row = run_case(image, parts, layout, enums, name, request, dict(RTC_WORDS), **options)
         problems = []
-        closes = name not in ('arm-write-fails', 'close-step-fails')
+        closes = name not in ('arm-write-fails', 'close-step-fails', 'reopen-write-retained')
         want = {'read-incoherent': 'A733_RTC_RETAINED', 'armed-line-refused': 'A733_RTC_ARMED',
-                'arm-write-fails': 'A733_RTC_RETAINED'}.get(name)
+                'arm-write-fails': 'A733_RTC_RETAINED', 'reopen-write-retained': 'A733_RTC_RETAINED'}.get(name)
+        if name == 'reopen-write-retained':
+            got = [(op, r, f) for op, r, f, _ in row['results']['sequence']]
+            if got != [('READ_OP', -1, 4), ('CLOSE_OP', 1, 4), ('OPEN_OP', 1, 0), ('ARM_OP', -1, 6)]:
+                problems.append(f'the read must fault at step 4, the close and reopen succeed with the fault cleared, '
+                                f'and the arm fault at step 6: {got}')
         if want and row['driver_after_request'] != enums[want]:
             problems.append(f"the driver must be {want} after the request, not {row['driver_after_request']}")
         if name == 'armed-line-refused' and not row['alarm_enabled']:
             problems.append('the arm must have enabled the alarm')
         if name == 'set-refused':
-            if row['results'].get('SET_OP') != -1 or row['phase_after_request'] != enums['OPEN'] or row['fault_after_request']:
+            if row['results'].get('SET_OP') != -1 or row['phase_after_request'] != enums['OS_DEVICE_OPEN'] or row['fault_after_request']:
                 problems.append('an invalid calendar must be refused with the service open and no fault recorded')
-        elif row['phase_after_request'] != enums['FAULT']:
+        elif row['phase_after_request'] != enums['OS_DEVICE_FAULT']:
             problems.append(f"the request must leave the service FAULT, not phase {row['phase_after_request']}")
         if closes:
             if not row['done_within_bound']:
                 problems.append(f'the registry did not reach DONE within {BOUND_US} us: the return stops at 0x742')
             if row['notes']:
                 problems.append('a closed service must not publish a fault note')
-            if row['phase'] != enums['CLOSED'] or row['fault'] != row['fault_after_request']:
+            if row['phase'] != enums['OS_DEVICE_CLOSED'] or row['fault'] != row['fault_after_request']:
                 problems.append('the service must be CLOSED with its first fault kept')
             if row['clock_releases'] != 1:
                 problems.append('the clock lease must be released once')
@@ -307,7 +323,7 @@ def main():
     races = []
     for schedule in sweep:
         row = run_case(image, parts, layout, enums, *base[:2], dict(RTC_WORDS), **base[2], schedule=schedule)
-        if row['any_fault'] or row['notes'] or not row['done_within_bound'] or row['phase'] != enums['CLOSED']:
+        if row['any_fault'] or row['notes'] or not row['done_within_bound'] or row['phase'] != enums['OS_DEVICE_CLOSED']:
             races.append({'schedule': schedule, 'events': row['events'], 'notes': row['notes'], 'phase': row['phase']})
     rows.append({'case': 'quiesce-among-close-stores', 'writer_events': writer_events, 'schedules': len(sweep),
                  'reported': races[:8], 'passed': not races and writer_events >= 2,

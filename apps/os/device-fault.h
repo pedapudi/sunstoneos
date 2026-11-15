@@ -6,10 +6,11 @@
  * reports; the quiesce reports DONE once the close returns the service to CLOSED, and a board fault otherwise.
  *
  * Two tasks share the words below:
- * - The owner task writes the fault fields, then stores phase FAULT, then, when no close can settle the fault, stores
- *   reported = 1 with release order. A close stores close_started, then CLOSING. The fault fields are never
- *   rewritten after reported is stored: a reported service stays FAULT, and only an open, which a FAULT service
- *   refuses, clears them.
+ * - The owner task writes the fault fields, then stores phase FAULT, then, when no close can settle the fault or once
+ *   a close has started, stores reported = 1 with release order. A close stores close_started, then CLOSING. The
+ *   fault fields are never rewritten after reported is stored: a reported service stays FAULT, and a FAULT service
+ *   refuses the two calls that clear them, an open (os_device_open_begin) and a G2D run (os_device_clear_fault).
+ *   Each open therefore begins one fault lifetime, and a service judges a fault against that lifetime's first.
  * - The quiesce step runs on the supervisor's core while the owner task closes. It loads reported with acquire order
  *   and decides from that word and quiesced alone. Two loads of phase and close_started can fall on either side of
  *   the close's stores, so a step that read them could report while a close that will succeed is running, and the
@@ -22,7 +23,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 
-/* The service phases; each service names its own enumerators with these values. */
+/* The service phases. */
 enum os_device_phase { OS_DEVICE_CLOSED, OS_DEVICE_OPENING, OS_DEVICE_OPEN, OS_DEVICE_CLOSING, OS_DEVICE_FAULT };
 
 struct os_device_fault {
@@ -32,12 +33,30 @@ struct os_device_fault {
     /* 1 once the fault must be reported; see above. */
     atomic_uint reported;
     atomic_uint quiesce_wanted, quiesced;
-    /* The first fault's step and value since the open. */
+    /* The first fault's step and value since the open; written only through the functions below. */
     uint32_t fault_step, fault_value;
     /* The board fault site the quiesce reports (0x9n1), and the owner task the quiesce wakes. */
     uint32_t site;
     TaskHandle_t *owner;
 };
+
+/* No fault recorded: the start of an open, and of a G2D run on an OPEN service. */
+static inline void os_device_clear_fault(struct os_device_fault *f){f->fault_step=0;f->fault_value=0;}
+
+/* The start of an open in the owner task: OPENING, a close not yet started and no fault. */
+static inline void os_device_open_begin(struct os_device_fault *f)
+{
+    atomic_store_explicit(&f->phase, OS_DEVICE_OPENING, memory_order_seq_cst);
+    atomic_store_explicit(&f->close_started, 0, memory_order_seq_cst);
+    os_device_clear_fault(f);
+}
+
+/* A refusal in the owner task, made before any write: records the step and value and leaves the phase to the caller,
+ * which returns the service to CLOSED (an open) or keeps it OPEN (a run). Returns -1. */
+static inline int os_device_refuse(struct os_device_fault *f, unsigned step, uint32_t value)
+{
+    f->fault_step=step;f->fault_value=value;return -1;
+}
 
 /* A failure in the owner task: keeps the first fault, enters FAULT and, when a close has started or unsettled is set
  * (the service's condition under which no close can settle the fault), publishes the report. Returns -1. */

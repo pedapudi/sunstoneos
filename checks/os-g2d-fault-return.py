@@ -207,7 +207,7 @@ def main():
                     layout = flat_members(die.get_DIE_from_attribute('DW_AT_type'))
                 if die.tag == 'DW_TAG_enumerator':
                     steps[die.attributes['DW_AT_name'].value.decode()] = die.attributes['DW_AT_const_value'].value
-    assert layout and steps['FAULT'] == FAULT_PHASE and steps['CLOSED'] == CLOSED_PHASE
+    assert layout and steps['OS_DEVICE_FAULT'] == FAULT_PHASE and steps['OS_DEVICE_CLOSED'] == CLOSED_PHASE
     opened = {0xa40: 0x80000000, 0xa44: 0x00010001, 0xa74: 0x00010000}
     cases = [
         ('fault-after-engine-open', steps['G2D_STEP_TOP'], opened, None),
