@@ -35,6 +35,7 @@ with loader close, but excludes interrupted writes and transport recovery
 | UHS-I SDR104 and SDR50 reads in the OS owner, port 3-3 | qualified on the board | 440,401,920-byte file read back at 46.8 MB/s, 0 mismatches | [SD card reference](../sd-card.md); `1793689311355151182-d43861f7` |
 | Writes at 1.8 V on scratch card 3-3, SDR104 at 150 MHz | qualified on the board | 512 MiB in 42 s, 13.2 MB/s flushed (card-bound), 0 restarts, 0 mismatches on read-back at 46.5 MB/s | [SD card reference](../sd-card.md); `1793692393910115727-f58db0e9`, `1793692075400545011-09988217` |
 | Scratch-card admission (`SSBW0004`) and mode 9 reformat | qualified on the board | format of 15,286,272 bytes | [SD card reference](../sd-card.md) |
+| SD owner created at OS start; one open's result for several waiting tasks | host-tested | board run pending port 3-3: storage-write-test mode 6, predicted to match `1794607200843702122-d2ed7876` | [SD card reference](../sd-card.md#11-measured-performance-and-limits) |
 | DDR50, GPT, multiple volumes | open | | |
 | Resident card bundle and update plans | host-tested | Four authenticated extents; physical qualification remains false | [Card design](../designs/autonomous-card-os.md); `card-boot-typed-bundle-host` |
 | Autonomous OS boot from the card | open | No identified full backup or production slot reservation | [Card design](../designs/autonomous-card-os.md) |
@@ -50,6 +51,10 @@ with loader close, but excludes interrupted writes and transport recovery
 7. Try the busy-clear interrupt (`THLD.BCIG`, `RINTSTS` bits 17 and 13) in place of the DAT0 busy timer, and compare the flush-latency distribution and the owner task's CPU time.
 8. Images that link the SD core without `SUNXI_MMC_READ_ONLY` (the earlier driver probes) are write-capable to the runner and need a rebuild with that definition, or a coordinator approval record, before they run again.
 9. Switch the application's verify to `fwr_read_cursor` and run it on the board.
+10. Let several tasks write one volume: a queue of requests in the SD owner in place of its single application mailbox, and a priority-inheriting lock per mounted volume in `sunstone_fs.c`. Until then one task per volume writes ([limits](../sd-card.md#11-measured-performance-and-limits)).
+11. Run storage-write-test mode 6 on port 3-3 once the port is back, to qualify the owner created at OS start.
+12. Bound every request the main task waits for. `OS_SD_PIECE_BOUND_US` (`apps/os/sd_hw.h`) covers one write piece after one loader read; the enable's re-read of the backup sectors, the close and a piece with recoveries can take longer, and the watchdog's renewal then stops one progress window after the bound. Derive a bound per request kind in `apps/os/sd_owner.c:post`, and add host cases in `checks/event-sd.c` for an open that passes its limit and a request that passes its bound. Run the owner's lock-free handoffs (`post`, `finish`, `publish_ready`) under a pthread harness with ThreadSanitizer.
+13. `checks/gate-slots.py:case_board_hold` failed one gate with `WAITED 0.85` against its minimum of 0.9 s: the waiting process starts its clock after its interpreter has started, while the parent's 1 s hold starts at the spawn, so a loaded host shortens the measured wait. Start the clock before the spawn, or compare against the hold's own release time.
 
 ## Evidence
 

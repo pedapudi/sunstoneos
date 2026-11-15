@@ -49,6 +49,12 @@
 #else
 #define OS_WITH_TLBI(...)
 #endif
+/* The write-capable image's SD0 owner task (apps/os/sd_owner.c, linked with SUNSTONE_A733_OS_SD_WRITE). */
+#ifdef SUNSTONE_A733_OS_SD_WRITE
+#define OS_WITH_SD_WRITE(...) __VA_ARGS__
+#else
+#define OS_WITH_SD_WRITE(...)
+#endif
 
 /* X(NAME, bit, with): a service that a session grants, its bit in the granted set (OS_GRANT_NAME) and the option that
  * links its code (OS_LINKED_NAME is 1 when it is linked). A session cannot grant a service whose code the image lacks.
@@ -80,8 +86,8 @@
  * start function creates, and the tasks those tasks create. The count assumes that each creation call creates one task.
  * checks/deadline-owners.py derives the same number from the linked code of each image and refuses a column that
  * differs. The audio and dma rows both count the DMA0 pool's two tasks (OS_DMA_POOL_OWNERS). The large row counts
- * none: its loader registers only through the SD0 binding (OS_LARGE_SD_DEADLINES), and the SD0 owner has its own term
- * (OS_SD_OWNER_DEADLINES). */
+ * none: its loader registers only through the read-only SD0 binding (OS_LARGE_SD_DEADLINES). The sd row's task, the
+ * write-capable image's SD0 owner, registers when it opens the card for the first storage call. */
 #define OS_START_ROWS(X) \
     X("thermal", os_thermal, os_thermal_start, OS_ALWAYS, 1) \
     X("large", os_large, os_large_start, OS_ALWAYS, 0) \
@@ -95,7 +101,8 @@
     X("rtc", os_rtc, os_rtc_start, OS_ALWAYS, 1) \
     X("g2d", os_g2d, os_g2d_start, OS_ALWAYS, 1) \
     X("video-decode", os_video_decode, os_video_decode_start, OS_WITH_VIDEO_DECODE, 1) \
-    X("gpu-queue", os_gpu_queue, os_gpu_queue_start_entry, OS_WITH_GPU, 1)
+    X("gpu-queue", os_gpu_queue, os_gpu_queue_start_entry, OS_WITH_GPU, 1) \
+    X("sd", os_sd, os_sd_start, OS_WITH_SD_WRITE, 1)
 
 /* X(NAME, name, window_us, grant, with): a task the supervisor watches, after the board's five and the application
  * (OS_SERVICE_NAME, in this order). It must report within window_us, and only when the session grants every service in
@@ -125,24 +132,18 @@ enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICE
  * - the board's four registering tasks (apps/board/main.c): board-usb2, board-radio, board-net and board-watchdog, the
  *   supervisor. board-pmic, board-usb0, board-typec and board-power register none;
  * - the application's main task, and its GPU peer task in an image with the GPU queue (apps/os/application.c);
- * - the large-region loader task in an image that links the loader's SD0 binding (apps/os/large_sd.c,
- *   SUNSTONE_A733_OS_LARGE_SD, set by cmake/sunstone-image.cmake for the image's tables);
- * - the SD0 owner task of a write-capable image (apps/os/sd_owner.c), which the large-region loader or the application
- *   starts;
+ * - the large-region loader task in an image that links the loader's read-only SD0 binding (apps/os/large_sd.c,
+ *   SUNSTONE_A733_OS_LARGE_SD, set by cmake/sunstone-image.cmake for the image's tables). In a write-capable image the
+ *   loader reads through the SD0 owner (the sd row) and registers none;
  * - the background load's tasks (runtime/bg_load.c), a measurement option;
  * - the latency diagnostic's wake tasks in its precise mode (apps/latency/workload.c), a measurement option. */
 #define OS_DMA_POOL_OWNERS 2u
 #define OS_BOARD_DEADLINE_OWNERS 4u
 #define OS_APPLICATION_DEADLINE_OWNERS (1u + OS_WITH_GPU(1u +) 0u)
-#ifdef SUNSTONE_A733_OS_LARGE_SD
+#if defined(SUNSTONE_A733_OS_LARGE_SD) && !defined(SUNSTONE_A733_OS_SD_WRITE)
 #define OS_LARGE_SD_DEADLINES 1u
 #else
 #define OS_LARGE_SD_DEADLINES 0u
-#endif
-#ifdef SUNSTONE_A733_OS_SD_WRITE
-#define OS_SD_OWNER_DEADLINES 1u
-#else
-#define OS_SD_OWNER_DEADLINES 0u
 #endif
 #ifdef SUNSTONE_BG_LOAD
 #include "sunstone_bg_count.h"
@@ -160,8 +161,8 @@ enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICE
 #endif
 #define OS_START_OWNERS_(name, prefix, start, with, owners) with((owners) +)
 #define OS_DEADLINE_OWNERS (OS_START_ROWS(OS_START_OWNERS_) 0u - OS_WITH_DMA(OS_DMA_POOL_OWNERS +) 0u + \
-    OS_BOARD_DEADLINE_OWNERS + OS_APPLICATION_DEADLINE_OWNERS + OS_LARGE_SD_DEADLINES + OS_SD_OWNER_DEADLINES + \
-    OS_BG_DEADLINES + OS_LATENCY_DEADLINES)
+    OS_BOARD_DEADLINE_OWNERS + OS_APPLICATION_DEADLINE_OWNERS + OS_LARGE_SD_DEADLINES + OS_BG_DEADLINES + \
+    OS_LATENCY_DEADLINES)
 /* The supervision table's rows after the application's, and the grant each one needs, indexed by service id. */
 #define OS_SERVICE_ENTRY_(NAME, name, window_us, grant, with) with({name, window_us},)
 #define OS_SERVICE_TABLE OS_SUPERVISED_ROWS(OS_SERVICE_ENTRY_)

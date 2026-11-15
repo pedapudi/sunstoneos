@@ -4,19 +4,22 @@
  * every card operation. It serves two mailboxes, each holding at most one request: the loader's reads (high priority)
  * and the writer's reads and write pieces (low priority). A write piece is at most OS_SD_WRITE_PIECE_SECTORS sectors, and
  * the owner looks at the loader's mailbox between pieces, so a model-loading read waits for at most the piece in flight.
- * Callers sleep on a task notification until the owner finishes their request; the owner sleeps on one until a request
- * arrives. Controller completion and bounded register waits are served inside a request by apps/os/large_sd.c.
+ * Each request lives on its caller's stack, and the caller sleeps on a task notification until the owner finishes it; the
+ * owner sleeps on one until a request arrives. Tasks that wait for the card to open wait on one event-group bit. Controller completion and bounded register waits are served inside a request by apps/os/large_sd.c.
  *
  * os_large_device() here replaces the read-only binding's entry for the loader (large_sd.c names its own
  * os_sd_open_owner_device in this build) and returns a proxy whose requests the owner runs. */
 #include "FreeRTOS.h"
 #include "task.h"
+#include "event_groups.h"
 #include "sd_hw.h"
 #include "quiesce.h"
 #include "cpu-return.h"
 #include "os_space.h"
 #include "os-task.h"
 #include "../board/application.h"
+#include "os.h"
+#include "application.h"
 #include "sunstone_crumb.h"
 #include "fat32_rw.h"
 #include "sunstone_deadline.h"
@@ -26,7 +29,6 @@
 
 #define OWNER_STACK_WORDS 2048u
 #define OWNER_PRIORITY (tskIDLE_PRIORITY + 2)
-#define READY_TIMEOUT_US 10000000u
 #include "sunstone_notify.h"
 #define WAIT_INDEX SS_NOTIFY_REQUEST_WAIT   /* notification index a caller sleeps on; index 0 is the owner's */
 
@@ -45,8 +47,11 @@ struct request {
 };
 static _Atomic(struct request *) loader_slot, writer_slot;
 static _Atomic(TaskHandle_t) owner;
-static _Atomic(TaskHandle_t) ready_waiter;
-static unsigned ready_index;       /* immutable while the owner publishes readiness */
+/* Set once, after the open's result is in `ready`: every task that waits for the open (start) waits for this bit, and it
+ * stays set, so a later caller returns at once. */
+#define READY_BIT ((EventBits_t)1)
+static StaticEventGroup_t ready_storage;
+static EventGroupHandle_t ready_group;
 static StaticTask_t owner_tcb;
 static StackType_t owner_stack[OWNER_STACK_WORDS];
 static const struct os_sd_hw *hw;
@@ -143,11 +148,11 @@ static enum os_quiesce_result storage_quiesce_step(struct os_quiesce *q)
         return OS_QUIESCE_DONE;             /* no task can open after this claim */
     if(state==SD_CLOSED)return OS_QUIESCE_DONE;
     if(state==SD_FAILED){
-        /* The open's own note (owner_main) is overwritten by this record, so this record carries the open's diagnostic word as its value. */
+        /* The open's own note (open_card) is overwritten by this record, so this record carries the open's diagnostic word as its value. */
         (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x901,diag_word(),SUNSTONE_CRUMB_HERE());
         return OS_QUIESCE_FAULT;
     }
-    if(owner)xTaskNotifyGive(owner);       /* wake an IRQ/timer wait to observe the shared deadline */
+    xTaskNotifyGive(owner);                /* wake an IRQ/timer wait to observe the shared deadline */
     if(retirement_fault(q))return OS_QUIESCE_FAULT;
     return os_quiesce_result(q);
 }
@@ -156,11 +161,15 @@ static struct os_quiesce storage_quiesce={.owner=OS_QUIESCE_STORAGE,
 int os_sd_quiesce_register(void)
 {return os_quiesce_register(&storage_quiesce);}
 
+/* The waiter is read before `done` is stored, because the request lives on the waiter's stack and is gone once the waiter
+ * sees `done`. The main task waits in its OS wait (post), which a notification on its own index ends. */
 static void finish(struct request *r, int ok)
 {
     TaskHandle_t waiter = r->waiter;
     atomic_store_explicit(&r->done, ok ? 1 : -1, memory_order_release);
-    if (waiter) xTaskNotifyGiveIndexed(waiter, WAIT_INDEX);
+    if (!waiter) return;
+    xTaskNotifyGiveIndexed(waiter, WAIT_INDEX);
+    if (waiter == os_application_main_task()) os_application_wake_task(waiter);
 }
 
 /* The note for a refused request or a failed open (the first-failure record's value): bits 7:0 the stage, 23:8 its detail (the low 16 bits:
@@ -259,8 +268,7 @@ static int owner_quiesce_step(void)
     os_quiesce_complete(&storage_quiesce);return 1;
 }
 
-/* Registration may precede the first instruction of the lazy owner task.
- * A return in that interval prevents its first hardware access. */
+/* A CPU return requested before the first storage call's open prevents the open's first hardware access. */
 static int owner_open_allowed(void)
 {
     if(!os_cpu_return_requested())return 1;
@@ -268,11 +276,43 @@ static int owner_open_allowed(void)
     os_quiesce_complete(&storage_quiesce);return 0;
 }
 
+/* The open's result for every task that waits for it (start): the result first, then the bit, which wakes every waiter. */
+static _Atomic(TaskHandle_t) main_waiting;      /* the main task while it waits for the open (wait_ready) */
+static void publish_ready(int result)
+{
+    atomic_store(&ready, result);
+    (void)xEventGroupSetBits(ready_group, READY_BIT);
+    TaskHandle_t m = atomic_load(&main_waiting);
+    if (m) os_application_wake_task(m);
+}
+
+/* Open the card for the first storage call. The open's waits are bounded by the owner's own deadline slot
+ * (os_sd_open_owner registers it), so every caller of start hears the result. */
+static int open_card(void)
+{
+    if (!owner_open_allowed()) { publish_ready(-1); return 0; }
+    hw = os_sd_open_owner();
+    atomic_store_explicit(&storage_state,hw?SD_OPEN:SD_FAILED,memory_order_release);
+    atomic_store(&first_us, sunstone_deadline_now_us());
+    if (!hw) {
+        /* A failed open leaves the controller's state uncertain and the platform register lock retained, which the thermal service
+         * then reports as its own failure. Note the open's stage before any caller hears the failure, so that the record names
+         * the SD0 binding (the diagnostic word: stage in bits 7:0, its detail above). */
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), diag_word(), SUNSTONE_CRUMB_HERE());
+        publish_ready(-1);
+        return 0;
+    }
+    publish_ready(1);
+    return 1;
+}
+
 /* TTBR0 and the task tag as the owner's first instruction found them: the QEMU check requires the kernel's table, and the board report
  * carries both (ss_storage_owner_space). */
 static volatile uint64_t entry_ttbr0;
 static volatile uint8_t entry_seen, entry_tagged;
 uint64_t os_sd_owner_entry_ttbr(void) { return entry_ttbr0; }
+/* The owner exists from the OS start, but the card stays unpowered until the first storage call asks for it (start): the
+ * owner sleeps on its request notification and opens the card when it finds the state STARTING. */
 static void owner_main(void *unused)
 {
     uint64_t ttbr;
@@ -281,23 +321,15 @@ static void owner_main(void *unused)
     entry_tagged = xTaskGetApplicationTaskTag(NULL) != NULL;
     entry_seen = 1;
     (void)unused;
-    if(!owner_open_allowed())for(;;)vTaskSuspend(NULL);
-    hw = os_sd_open_owner();
-    atomic_store_explicit(&storage_state,hw?SD_OPEN:SD_FAILED,memory_order_release);
-    atomic_store(&first_us, sunstone_deadline_now_us());
-    atomic_store(&ready, hw ? 1 : -1);
-    TaskHandle_t waiter=atomic_load_explicit(&ready_waiter,memory_order_acquire);
-    if (waiter) xTaskNotifyGiveIndexed(waiter, ready_index);
-    if (!hw) {
-        /* A failed open leaves the controller's state uncertain and the platform register lock retained, which the thermal service
-         * then reports as its own failure. Note the open's stage first so that the record names the SD0 binding (the diagnostic
-         * word: stage in bits 7:0, its detail above). */
-        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), diag_word(), SUNSTONE_CRUMB_HERE());
-        vTaskSuspend(NULL);
-    }
     for (;;) {
+        const int open = hw != NULL;
         uint64_t slept_from = sunstone_deadline_now_us();
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (!open) {
+            if (atomic_load_explicit(&storage_state, memory_order_acquire) != SD_STARTING) continue;
+            if (!open_card()) for (;;) vTaskSuspend(NULL);
+            continue;
+        }
         atomic_fetch_add(&idle_us, sunstone_deadline_now_us() - slept_from);
         atomic_fetch_add(&wake_count, 1);
         atomic_fetch_or(&owner_core_mask, 1u << portGET_CORE_ID());
@@ -312,6 +344,29 @@ static void owner_main(void *unused)
     }
 }
 
+/* The time `bound` from now, or the session's end if that is sooner. */
+static uint64_t bound_from_now(uint64_t bound)
+{
+    const uint64_t now = sunstone_deadline_now_us(), session = board.session.deadline_us;
+    return now < session && session - now > bound ? now + bound : session;
+}
+/* The main task's wait for a condition, up to `limit`, in its OS wait (os_application_wait_unless): the supervisor counts
+ * the main task as blocked up to the limit plus its progress window, so a wait longer than the window does not stop the
+ * watchdog's renewal. The main task reports progress before each wait, as application_wait_for does, so that a wake from
+ * another OS event leaves no stale record between two waits; the limit is fixed, so the waits end at it. */
+static void main_wait(uint64_t limit, int (*done)(void))
+{
+    while (!done() && sunstone_deadline_now_us() < limit) {
+        board_service_progress(OS_SERVICE_APPLICATION);
+        if (os_application_wait_unless(limit, done) == SUNSTONE_DEADLINE_ERROR) return;
+    }
+}
+static _Atomic(struct request *) main_request;      /* the main task's request while it waits for it (post) */
+static int main_request_done(void)
+{
+    struct request *r = atomic_load(&main_request);
+    return r && atomic_load_explicit(&r->done, memory_order_acquire);
+}
 static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
 {
     atomic_fetch_add(&posting,1);
@@ -327,54 +382,66 @@ static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
     if(!posted)return 0;                    /* one request per mailbox */
     xTaskNotifyGive(owner);
     if (!wait) return 1;
+    /* The main task first waits in its OS wait, up to OS_SD_PIECE_BOUND_US (sd_hw.h). The owner holds the request on this
+     * stack until it finishes, so past the bound the main task waits on as any caller does, and the supervisor stops the
+     * watchdog's renewal one progress window later. */
+    if (xTaskGetCurrentTaskHandle() == os_application_main_task()) {
+        atomic_store(&main_request, r);
+        main_wait(bound_from_now(OS_SD_PIECE_BOUND_US), main_request_done);
+        atomic_store(&main_request, NULL);
+    }
     while (!atomic_load_explicit(&r->done, memory_order_acquire)) ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, portMAX_DELAY);
     return atomic_load(&r->done) == 1;
 }
 
-/* The owner reads the CCU and drives SMHC0, so the scheduler creates it at EL1 (board_application_task_privileged). The first
- * caller is the application's EL0 task, which would otherwise pass its own level on to the task it creates. */
-int os_sd_owner_task_privileged(void (*entry)(void *), void *context) { (void)context; return entry == owner_main; }
-
-/* The owner task, once started: for the QEMU check that it holds no application tag. */
-TaskHandle_t os_sd_owner_task(void) { return owner; }
-
-/* Ready publication and the timer use the same task-specific notification index. */
-extern unsigned sunstone_deadline_notify_index(void);
-static int wait_ready(uint64_t until)
+/* The owner reads the CCU and drives SMHC0, so the scheduler creates it at EL1 (board_application_task_privileged). */
+int os_sd_task_privileged(void (*entry)(void *), void *context) { (void)context; return entry == owner_main; }
+/* The card's pins are the loader's binding's (os_large_sd_pins, apps/os/large_sd.c). */
+int os_sd_pins(struct a733_pin_handoff *pins) { return pins != NULL; }
+/* The start entry of a write-capable image (apps/os/os-services.h): the owner task, which opens nothing until a storage
+ * call asks. It is an OS service task and runs in the kernel's table from its first instruction (include/os_space.h). */
+int os_sd_start(void)
 {
-    while (!atomic_load_explicit(&ready,memory_order_acquire)) {
-        if (sunstone_deadline_now_us()>=until ||
-            sunstone_deadline_wait_until(until)==SUNSTONE_DEADLINE_ERROR) return 0;
-    }
-    return atomic_load_explicit(&ready,memory_order_acquire)==1;
+    ready_group = xEventGroupCreateStatic(&ready_storage);
+    owner = os_task_create_static(NULL, owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb);
+    return ready_group != NULL && owner != NULL;
 }
 
-/* Start the owner task; the caller is told when the card is open (os_large_device) or has failed. */
+/* The owner task: for the QEMU check that it holds no application tag. */
+TaskHandle_t os_sd_owner_task(void) { return owner; }
+
+static int open_published(void) { return atomic_load(&ready) != 0; }
+/* Wait for the open's result, up to OS_SD_OPEN_BOUND_US (sd_hw.h); an open that has not finished by then answers 0. The
+ * bit is set after the result is stored and is never cleared, and a task notification cannot end an event-group wait. The
+ * main task first waits in its OS wait, which the owner ends (publish_ready) and which rechecks the result once it is
+ * registered; if that wait is refused, it waits for the bit as the other callers do. The callers hold no deadline slot of
+ * their own. */
+static int wait_ready(void)
+{
+    const uint64_t limit = bound_from_now(OS_SD_OPEN_BOUND_US);
+    TaskHandle_t self = xTaskGetCurrentTaskHandle();
+    if (self == os_application_main_task()) {
+        atomic_store(&main_waiting, self);
+        main_wait(limit, open_published);
+        atomic_store(&main_waiting, NULL);
+        if (open_published() || sunstone_deadline_now_us() >= limit) return atomic_load(&ready) == 1;
+    }
+    const uint64_t now = sunstone_deadline_now_us();
+    const TickType_t ticks = now < limit ? (TickType_t)((limit - now + 999u) / 1000u * configTICK_RATE_HZ / 1000u) + 1u : 0;
+    (void)xEventGroupWaitBits(ready_group, READY_BIT, pdFALSE, pdTRUE, ticks);
+    return atomic_load(&ready) == 1;
+}
+
+/* The card for any task of the application or the loader: the first call asks the owner to open it, and every call made
+ * before the open has finished waits for its result. */
 static int start(void)
 {
     if(os_cpu_return_requested())return 0;
-    if (owner) return atomic_load(&ready) == 1;
     unsigned state=SD_UNOPENED;
-    if(!atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_STARTING,memory_order_acq_rel,memory_order_acquire))return 0;
-    if (!sunstone_deadline_register()) {
-        os_sd_diag[0]=9;atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);return 0;
-    }
-    ready_index=sunstone_deadline_notify_index();
-    atomic_store_explicit(&ready_waiter,xTaskGetCurrentTaskHandle(),memory_order_release);
-    /* The caller is the application's task, which would pass its address space on to the task it creates; the owner is
-     * an OS service task and runs in the kernel's table from its first instruction (include/os_space.h). */
-    owner = os_task_create_static(NULL, owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb);
-    if (!owner) { os_sd_diag[0] = 10; atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release); return 0; }
-    /* The owner gives the notification once the card is open or has failed. A wake is only a hint (any other notification would end a
-     * single wait early), so wait on the state, on the caller's own index, until a time bound measured in microseconds. */
-    uint64_t t0 = sunstone_deadline_now_us(), ticks0 = xTaskGetTickCount();
-    (void)wait_ready(t0+READY_TIMEOUT_US);
-    atomic_store_explicit(&ready_waiter,NULL,memory_order_release);
-    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) {                         /* no answer from the owner in time */
-        os_sd_diag[0] = 11; os_sd_diag[1] = sunstone_deadline_now_us() - t0;
-        os_sd_diag[2] = (uint64_t)atomic_load(&ready) & 0xffffffffu; os_sd_diag[3] = xTaskGetTickCount() - ticks0;
-    }
-    return atomic_load(&ready) == 1;
+    if(atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_STARTING,memory_order_acq_rel,memory_order_acquire))
+        xTaskNotifyGive(owner);
+    else if(state!=SD_STARTING&&state!=SD_OPEN)return 0;
+    return wait_ready();
 }
 
 /* --- the loader's view -------------------------------------------------------------------------------------------- */
@@ -410,14 +477,15 @@ const struct os_large_device *os_large_device(void)
 void os_large_device_close(void) {}
 
 /* --- the writer's view -------------------------------------------------------------------------------------------- */
-static struct request writer_request;
+/* Each request is built on its caller's stack and held there until the owner finishes it (post waits), so a task whose
+ * post is refused because the mailbox holds another task's request changes nothing of that request. */
 static int writer_read(void *c, uint64_t sector, uint32_t count, uint8_t *out)
 {
     (void)c;
     for (uint32_t done = 0; done < count;) {
         uint32_t n = count - done < OS_SD_WRITE_PIECE_SECTORS ? count - done : OS_SD_WRITE_PIECE_SECTORS;
-        writer_request = (struct request){.kind = K_READ, .sector = sector + done, .count = n, .buffer = out + (size_t)done * 512u};
-        if (!post(&writer_slot, &writer_request, 1)) return 0;
+        struct request r = {.kind = K_READ, .sector = sector + done, .count = n, .buffer = out + (size_t)done * 512u};
+        if (!post(&writer_slot, &r, 1)) return 0;
         done += n;
     }
     return 1;
@@ -426,49 +494,49 @@ static int writer_write(void *c, uint64_t sector, uint32_t count, const uint8_t 
 {
     (void)c;
     if (!count || count > OS_SD_WRITE_PIECE_SECTORS) return 0;            /* the service splits at its max_write_sectors */
-    writer_request = (struct request){.kind = K_WRITE, .sector = sector, .count = count, .source = data};
-    return post(&writer_slot, &writer_request, 1);
+    struct request r = {.kind = K_WRITE, .sector = sector, .count = count, .source = data};
+    return post(&writer_slot, &r, 1);
 }
 static int writer_transaction(void *c, unsigned event, unsigned operation, uint32_t *token)
 {
     (void)c;
-    writer_request = (struct request){.kind=K_TRANSACTION,.event=event,.operation=operation,.token=*token};
-    if (!post(&writer_slot, &writer_request, 1)) return 0;
-    *token=writer_request.token;
+    struct request r = {.kind=K_TRANSACTION,.event=event,.operation=operation,.token=*token};
+    if (!post(&writer_slot, &r, 1)) return 0;
+    *token=r.token;
     return 1;
 }
 static int writer_classified(void *c, uint64_t sector, uint32_t count, const uint8_t *data, unsigned phase, uint32_t token)
 {
     (void)c;
     if (!count || count > OS_SD_WRITE_PIECE_SECTORS) return 0;
-    writer_request = (struct request){.kind=K_CLASSIFIED_WRITE,.sector=sector,.count=count,.source=data,.phase=phase,.token=token};
-    return post(&writer_slot, &writer_request, 1);
+    struct request r = {.kind=K_CLASSIFIED_WRITE,.sector=sector,.count=count,.source=data,.phase=phase,.token=token};
+    return post(&writer_slot, &r, 1);
 }
 /* Admit the writes: the runner-delivered bounds blob (the first input, kept unchanged), verified against the card. */
 static int writes_enable(const uint8_t *blob, size_t bytes)
 {
     if (!start()) return 0;
-    writer_request = (struct request){.kind = K_ENABLE, .source = blob, .bytes = bytes};
-    if (!post(&writer_slot, &writer_request, 1)) return 0;
-    writer_request = (struct request){.kind = K_UNIT};
-    if (!post(&writer_slot, &writer_request, 1)) return 0;
-    unit_sectors = writer_request.value;
+    struct request enable = {.kind = K_ENABLE, .source = blob, .bytes = bytes};
+    if (!post(&writer_slot, &enable, 1)) return 0;
+    struct request unit = {.kind = K_UNIT};
+    if (!post(&writer_slot, &unit, 1)) return 0;
+    unit_sectors = unit.value;
     return 1;
 }
 static int reads_open(void)
 {
     if (!start()) return 0;
-    writer_request = (struct request){.kind = K_UNIT};
-    if (!post(&writer_slot, &writer_request, 1)) return 0;
-    unit_sectors = writer_request.value;
+    struct request unit = {.kind = K_UNIT};
+    if (!post(&writer_slot, &unit, 1)) return 0;
+    unit_sectors = unit.value;
     return 1;
 }
 /* Register the application's flush buffer so the FAT32 service flushes from it straight into the controller. */
 static int write_region(uint8_t *base, size_t bytes)
 {
     if (!start()) return 0;
-    writer_request = (struct request){.kind = K_REGION, .buffer = base, .bytes = bytes};
-    return post(&writer_slot, &writer_request, 1);
+    struct request r = {.kind = K_REGION, .buffer = base, .bytes = bytes};
+    return post(&writer_slot, &r, 1);
 }
 /* The block device for the FAT32 write service; call after os_sd_writes_enable. */
 static int writer_device(struct fwr_device *d)
@@ -488,8 +556,8 @@ int ss_storage_device(struct fwr_device *d) { return writer_device(d); }
 int ss_storage_close(void)
 {
     if (!hw) return 0;
-    writer_request = (struct request){.kind = K_CLOSE};
-    return post(&writer_slot, &writer_request, 1);
+    struct request r = {.kind = K_CLOSE};
+    return post(&writer_slot, &r, 1);
 }
 int ss_storage_diagnostic(uint64_t out[4])
 {

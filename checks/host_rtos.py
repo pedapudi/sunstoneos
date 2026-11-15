@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HOST = ROOT / 'checks/host'
 KERNEL = CACHE / 'sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2'
 OBJECTS = CACHE / 'build/host-shim-objects'
-KERNEL_SOURCES = ('tasks.c', 'queue.c', 'list.c')
+KERNEL_SOURCES = ('tasks.c', 'queue.c', 'list.c', 'event_groups.c')
 FLAGS = ['-std=gnu11', '-g', '-O1', '-Wall', '-Wextra', '-Werror', '-Wno-missing-field-initializers', '-Wno-unused-parameter',
          '-Wno-sign-compare', *SANITIZE]
 

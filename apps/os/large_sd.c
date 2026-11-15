@@ -38,6 +38,13 @@
 #define SMHC0 UINT32_C(0x04020000)
 #define LIFETIME_US 180000000u
 #define READ_US 500000u
+/* The write-capable open's wait for the PMIC service: 1 ms pauses. */
+#define PMIC_PAUSES 10000u
+#ifdef OS_SD_WRITE
+#define GIC_REARM_TRIES 100u
+_Static_assert(OS_SD_OPEN_BOUND_US >= (PMIC_PAUSES + 1u) * 1000u + 2u * IDENTIFY_US + READ_US + GIC_REARM_TRIES * 1000u,
+               "the main task's bound for the open (sd_hw.h) covers its deadlines");
+#endif
 /* The initial busy retry cadence of sunxi_mmc.c:busy_wait, also used for
  * register conditions whose admitted interface supplies no notification. */
 #define REGISTER_RECHECK_US 100u
@@ -199,7 +206,7 @@ static int dma_sync(void *cookie, uint8_t *b, size_t n, unsigned phase)
  * failed bounds read (sector + 1), [3] the bounds reads made. For an open that stopped, [2] is INTID 193's state before the owner masked it
  * (bit 0 enabled, 1 pending, 2 active; stray handler entries << 8) and [3] its state after the mask settled. Stages: 1 declared or already open, 2 PMIC service, 3 descriptor memory,
  * 4 configure, 5 native binding, 6 platform init, 7 identification (detail: result), 8 card query (result), 9 interrupt and timer
- * registration or irq arming (detail 1 platform, 2 or 3 GIC rearm), 10 owner task creation (sd_owner.c), 11 owner wait (sd_owner.c), 12 GIC mask before the baseline, 37 to 42 the recovery of a failed read (37 restart refused, 38 identification again, 39 card query, 40 interrupt re-armed) or the re-opening of a card found at 1.8 V (41 its read, 42 its close), 30 to 36 a refused read, write or status request (detail: result | platform stage << 8 | platform fault << 16 | core error << 24), 20 enable preconditions, 21 blob copy, 22 blob parse, 23 bounds verify (detail: object state), 24 write binding. */
+ * registration or irq arming (detail 1 platform, 2 or 3 GIC rearm), 10 and 11 not used, 12 GIC mask before the baseline, 37 to 42 the recovery of a failed read (37 restart refused, 38 identification again, 39 card query, 40 interrupt re-armed) or the re-opening of a card found at 1.8 V (41 its read, 42 its close), 30 to 36 a refused read, write or status request (detail: result | platform stage << 8 | platform fault << 16 | core error << 24), 20 enable preconditions, 21 blob copy, 22 blob parse, 23 bounds verify (detail: object state), 24 write binding. */
 uint64_t os_sd_diag[4];
 /* The PF bank's power-mode register, voltage status and selector, raw, as the first open found them at its baseline and as the reopen at
  * 1.8 V found them (zero when there was no reopen); sd_owner.c:diag_word carries their PF fields in a failed identification's record. */
@@ -651,7 +658,7 @@ const struct os_large_device *os_large_device(void)
     if(!read_pmic_ready())return DIAGP(2,0);
 #else
     for (unsigned waited = 0; !atomic_load_explicit(&providers.shared.pmic_ready, memory_order_acquire); ++waited) {
-        if (!sd_admission() || waited > 10000 || !board_live(NULL)) return DIAGP(2, waited);
+        if (!sd_admission() || waited > PMIC_PAUSES || !board_live(NULL)) return DIAGP(2, waited);
         sd_pause();
     }
 #endif
@@ -818,6 +825,7 @@ int ss_storage_owner_stats(struct ss_storage_owner_stats *out)
 
 #ifdef OS_SD_WRITE
 #define WRITE_US 2000000u
+_Static_assert(OS_SD_PIECE_BOUND_US == WRITE_US + READ_US, "the main task's bound for a request (sd_hw.h)");
 static uint8_t *blob_copy;                       /* sized from the input at enable time, kept for the image's lifetime */
 
 /* The wait loop: poll, then sleep on the interrupt or a one-shot timer, as the core's hint says. */
@@ -1015,7 +1023,7 @@ const struct os_sd_hw *os_sd_open_owner(void)
     if (!a733_mmc_platform_irq(&platform, 1)) { (void)DIAG(9, 1); return 0; }
     irq_live = 1; irq_owner_on = 1;
     int armed = 0;
-    for (unsigned tries = 0; tries < 100 && !armed; ++tries) {
+    for (unsigned tries = 0; tries < GIC_REARM_TRIES && !armed; ++tries) {
         if(!sd_admission()||!sd_time_left(config.lifetime_deadline_us)){irq_live=0;return 0;}
         int r = gicv3_spi_rearm(&sd_gic);
         if (r < 0) { irq_live = 0; (void)DIAG(9, 2); return 0; }
