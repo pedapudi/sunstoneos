@@ -137,6 +137,10 @@ struct a733_radio_platform {
  * The platform scopes core_call for initialization and stopping, where a
  * public borrower may not access the controller. See sunxi_sdio_event_prepare. */
 int a733_radio_platform_event_prepare(struct a733_radio_platform *,uint64_t *until);
+/* For the fault record: read the SD controller's raw interrupt status (RINT) and its mask (IMASK), and nothing else.
+ * Owner task only, while the controller is ready and borrowed and no stop is requested. Changes no state, records
+ * no failure, and returns 0 when it cannot read now. */
+int a733_radio_platform_sdio_irq_view(struct a733_radio_platform *,uint32_t *raw,uint32_t *mask);
 /* The failure left nothing powered, so no reset is needed to release anything: the first-run guard refused before
  * any write, or the failure shutdown finished with every readback matched (PM1 low, clocks off, BLDO5 off). Such a
  * failure keeps the board alive: it leaves the register lock and the leases as they are, sets no failure bit, and the

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Check the accel-overlap counter decoder (apps/accel-overlap/host.py) against records written through the C layout of
-result.h: modeled runs decode with every check in range and the expected GPU and NPU decisions, a rate between the
-two GPU models stays undecided, and a stale or missing sample fails a check."""
+result.h: a modeled run of each outcome of the relu at 144 values per row with a 320-byte output stride decodes with
+every check in range and that outcome decided, counts that fit no outcome leave it open, a control that misses voids
+it, and a stale or missing sample fails a check."""
 import argparse
 import importlib.util
 from pathlib import Path
@@ -35,9 +36,9 @@ def main():
     host = load_host()
     results = []
 
-    def record(name, once, rule):
+    def record(name, form, control=1.0):
         path = args.output / (name + '.bin')
-        subprocess.run([str(writer), str(path), str(once), rule], check=True)
+        subprocess.run([str(writer), str(path), form, str(control)], check=True)
         raw = bytearray(path.read_bytes())
         if len(raw) != host.COUNTERS_BYTES:
             raise SystemExit(f'FAIL record holds {len(raw)} bytes, the decoder expects {host.COUNTERS_BYTES}')
@@ -49,21 +50,25 @@ def main():
         results.append({'case': name, 'misses': misses, 'models': r['models']})
         return r, misses
 
-    # Request-rate outcome (2.6x) with whole-row NPU units, and residency (1.2x) with 256-byte bursts.
-    for name, once, rule, model in (('request-rate-rows', 1776, 'rows', 'request rate'),
-                                    ('residency-bursts', 808, 'bursts', 'residency')):
-        r, misses = decoded(name, record(name, once, rule))
-        if misses or r['models']['gpu']['model'] != model or r['models']['npu']['rule'] != rule:
-            raise SystemExit(f'FAIL {name}: misses {misses}, models {r["models"]}')
-        print(f'{name}: {len(r["checks"])} checks in range, gpu {model}, npu {rule}')
-    # Between the two models the limit stays undecided.
-    r, misses = decoded('undecided', record('undecided', 942, 'rows'))
-    if misses != ['gpu limit decided']:
-        raise SystemExit(f'FAIL undecided: misses {misses}')
-    print('undecided: only the decision check misses')
+    # Each outcome of the stride graph decodes with every check in range and that outcome decided.
+    for arg, form in (('a125', 'alignment-1.25'), ('beats', 'alignment-beats'), ('tile', 'tile')):
+        r, misses = decoded(form, record(form, arg))
+        if misses or r['models']['npu']['form'] != form:
+            raise SystemExit(f'FAIL {form}: misses {misses}, models {r["models"]}')
+        print(f'{form}: {len(r["checks"])} checks in range, outcome {form}')
+    # Counts that fit no outcome leave the decision open.
+    r, misses = decoded('none', record('none', 'none'))
+    if misses != ['npu stride outcome decided'] or r['models']['npu']['form'] != 'none':
+        raise SystemExit(f'FAIL none: misses {misses}, models {r["models"]}')
+    print('none: only the decision check misses')
+    # A control 3% off voids the decision even when the stride graph fits an outcome.
+    r, misses = decoded('void', record('void', 'a125', 1.03))
+    if r['models']['npu']['form'] != 'void' or 'npu-w176 dt_wr per job' not in misses:
+        raise SystemExit(f'FAIL void: misses {misses}, models {r["models"]}')
+    print('void: the control miss voids the alignment outcome')
     base = host.COUNTERS_BYTES - 8 * 808
     # A pre sample that already shows its own period: phase 1, period 3, port 6 data reads.
-    raw = record('stale', 1776, 'rows')
+    raw = record('stale', 'a125')
     pre = base + 808 * 1 + 168 + 64 * 2 + 16 + 4 * 2
     post = base + 808 * 1 + 168 + 64 * (5 + 2) + 16 + 4 * 2
     raw[pre:pre + 4] = raw[post:post + 4]
@@ -72,7 +77,7 @@ def main():
         raise SystemExit(f'FAIL stale pre sample decoded in range: {misses}')
     print('stale: refused')
     # A phase with nine samples.
-    raw = record('short', 1776, 'rows')
+    raw = record('short', 'a125')
     at = base + 808 * 3 + 40
     raw[at:at + 4] = (9).to_bytes(4, 'little')
     _, misses = decoded('short', raw)
