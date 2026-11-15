@@ -529,7 +529,34 @@ its bytes, and a 128-value row twice. The planner would then prefer innermost di
 bursts rule, rows round up to multiples of 128 values: 128 costs nothing extra and 176 costs as much as 256. If
 neither rule holds, the counts give no shape rule. The planner stays unchanged until a run decides.
 
-**Status.** The image is built and host-checked; no board run has used it.
+**Results.** One returning run on port 3-1 (entry `1794731628675614053-3bc9fbc0`, image built from 3c1d021c7) gave
+these counts per job:
+
+| Phase | Read requests | Read units | Write requests | Write units | Jobs/s |
+|---|---|---|---|---|---|
+| GPU mode 1 | 102,767 | 201,687 | 32,800 | 131,107 | 699.9 |
+| GPU mode 0 | 37,219 | 136,118 | 32,797 | 131,096 | 1,080.2 |
+| NPU, 176 values per row | 3,228 | 36,145 | 2,688 | 32,765 | 10,189 |
+| NPU, 128 | 3,100 | 24,884 | 2,048 | 20,480 | 14,654 |
+| NPU, 192 | 3,612 | 37,169 | 3,072 | 30,718 | 10,257 |
+| NPU, 256 | 5,149 | 45,373 | 4,097 | 40,968 | 8,189 |
+
+Every sample fell on the predicted side of its period end, every pre sample showed the previous period, idle and the
+core-2 stream counted 0 on both ports, every output matched its reference, and PLL_NPU and the top point held.
+
+- **GPU.** Mode 1 repeated the four-elements-per-lane counts within 0.2% and ran 4% faster. Mode 0 dropped
+  65,548 read requests per job, the 65,536 per-lane argument loads, and kept the writes within 0.05%. The rate rose
+  1.54 times. That clears the 1.5 threshold, but it is below both forms of the request-rate model (1.93 to 2.76
+  times) and above the residency bound (1.25 times), so neither model predicts it. The read-request rate fell from
+  71.9 M/s to 40.2 M/s, and the mean read latency from 245.6 to 173.1 NSI cycles. Reads outstanding, rate times
+  latency, fell from about 29 to about 12. The port therefore did not run at a fixed request rate in mode 0.
+- **NPU.** Neither row rule holds. At 128, 192 and 256 values per row, each write request carries 10 units and
+  there is one request per 64 values, so the write units are 1.25 times the bytes written divided by 16. At 176
+  values per row the write units equal 512 bytes per row, 1.45 times the bytes. The rows of 192 values moved fewer
+  write units than the rows of 176 values, at the same job rate.
+
+The run returned in 4.50 s from arming, with 4.23 s of phases, against a 55 s session bound.
+
 
 ## Stage 2: DMA completion timing
 
