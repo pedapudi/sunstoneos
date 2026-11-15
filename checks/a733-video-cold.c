@@ -407,11 +407,15 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
     /* The decoder's row is answered ON before its first write. Adopted ON,
      * the first poll's request is answered at once. */
     if(checked_poll&&on_poll)assert(o.polls_after_on==1);
+    /* A started decoder stamps the end of the lock wait after the settle of the third LOCK read. */
+    if(result==1&&c->pll&&c->pll_locked==3)assert(o.rec.locked_at>=c->pll_lock_at+21);
     if(result<0&&l->fault_close) {
         o.last_address=(uint32_t)dec->unit.last_address;o.last_word=dec->unit.last_word;
         o.uncertain=dec->unit.uncertain;o.locked=m->lock;o.writes_before_close=m->writes;
         const unsigned accesses=m->reads+m->writes,enters=c->enters;c->quiesced=1;c->stopping=1;c->pll_seq=0;
+        const uint64_t close_start=m->now;
         o.closed=a733_video_decoder_close(dec,run.deadline+200000,1);
+        if(o.closed==1)assert(dec->cold.close_at>=close_start&&dec->cold.close_at<=dec->cold.closed_at);
         o.close_accesses=m->reads+m->writes-accesses;o.close_enters=c->enters-enters;
         if(o.closed==1) {
             /* Closed for the rest of the power lifetime: a later open is refused with no access. */
@@ -421,8 +425,11 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
     }
     if(result==1&&quiesce) {
         const unsigned before=m->writes;c->quiesced=1;c->stopping=1;c->pll_seq=0;
+        const uint64_t close_start=m->now;
         assert(a733_video_decoder_close(dec,run.deadline+200000,0)==1);
         assert(!m->lock&&m->writes>before);
+        /* The close's hold is stamped after its lock and after its unlock. */
+        assert(dec->cold.close_at>=close_start&&dec->cold.close_at<=dec->cold.closed_at&&dec->cold.closed_at<=m->now);
         /* Closed for the rest of the power lifetime: a later open is refused with no access. */
         {
             const unsigned accesses=m->reads+m->writes;

@@ -406,7 +406,7 @@ uint32_t a733_power_service_step(struct a733_power_domains *d)
     if(!clock(d,&now)){fail_service(d);return UINT32_MAX;}
     if(!d->running) {
         /* An image with no row needs no supply record and makes no bus read. */
-        d->running=1;
+        d->running=1;d->started_at=now;
         if(!d->rows || !a733_deadline_after(now,d->settled_supply ? 0 : A733_POWER_SUPPLY_SETTLE_US,
            &d->verify_at))verified(d,0);
     }

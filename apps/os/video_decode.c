@@ -226,6 +226,9 @@ static void copy_record(void)
     i->fault_step=vd.fault_step;i->fault_value=vd.fault_value;
     i->measured=providers.domains.measure_transitions;
     if(a733_power_domain_state(&vd.row)!=A733_POWER_ROW_PENDING)i->transition=vd.row.transition;
+    if(a733_power_authority_load(&providers.shared.rails.authority)&A733_POWER_DCDC2_VERIFIED){
+        i->owner_started_us=providers.domains.started_at;i->owner_verified_us=providers.domains.verified_at;
+    }
 #endif
 }
 /* A fault after the first write (docs/video-decode-os.md, "Faults after the first write"): the service enters FAULT

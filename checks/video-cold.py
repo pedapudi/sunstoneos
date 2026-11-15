@@ -67,8 +67,8 @@ MUTANTS = [
     ('include/a733_pll_lock.h', '#define A733_PLL_LOCK_MAX_READS 100u', '#define A733_PLL_LOCK_MAX_READS 50u', '50 reads'),
     ('drivers/video/a733_video_platform.c', '{{0xa80,0},{0xa88,1},{0xb00,4}}', '{{0xa88,1},{0xb00,4}}', 'encoder consumer ignored'),
     ('drivers/video/a733_video_platform.c', '{{0xa80,0},{0xa88,1},{0xb00,4}}', '{{0xa80,0},{0xa88,1}}', 'NPU consumer ignored'),
-    ('drivers/video/a733_video_platform.c', '        case COLD_WAIT:\n            if(!a733_video_unit_pll_wait(u))',
-     '        case COLD_WAIT:\n            if(lock(u)!=1||!a733_video_unit_pll_wait(u))', 'lock wait under the register mutex'),
+    ('drivers/video/a733_video_platform.c', '            if(!a733_video_unit_pll_wait(u))return fail(u);',
+     '            if(lock(u)!=1||!a733_video_unit_pll_wait(u))return fail(u);', 'lock wait under the register mutex'),
     # Domain 2 through the owner's row, and the critical gates.
     ('drivers/video/a733_video_platform.c', '            r=held_phase(p,cold_entry,&p->cold.entered_at);break;',
      '            ++p->cold_step;break;', 'no read-only entry before the row request'),
@@ -108,6 +108,11 @@ MUTANTS = [
     ('drivers/video/a733_video_platform.c', '    if(!close_steps(u))return a733_video_unit_refuse_held(u);',
      '    if(!faulted&&!close_steps(u))return a733_video_unit_refuse_held(u);', 'fault close writes nothing'),
     ('drivers/video/a733_video_unit.c', '    u->last_word=*v;\n    return 1;', '    return 1;', 'failing word not kept'),
+    ('drivers/video/a733_video_platform.c',
+     '            uint64_t n;if(a733_video_unit_now(u,&n)!=1)return -1;\n'
+     '            p->cold.lock_reads=u->pll_reads;p->cold.locked_at=n;',
+     '            p->cold.lock_reads=u->pll_reads;p->cold.locked_at=u->last_now;', 'lock wait stamped before the settle'),
+    ('drivers/video/a733_video_platform.c', '    p->cold.closed_at=u->last_now;\n', '', 'close hold end not stamped'),
     ('drivers/video/a733_video_platform.c', '    for(unsigned i=0;i<3;++i)if(rd(u,CCU+gate[i],&p->cold.entry_gates[i])!=1)return 0;\n',
      '    for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)\n'
      '        if(!check(u,rom_identity[i].address,UINT32_MAX,rom_identity[i].word))return 0;\n'

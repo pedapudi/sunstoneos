@@ -26,7 +26,8 @@ WORDS = ('pll_ref', 'rtc_osc', 'ahb', 'nsi', 'mbus', 'pll_ve0', 'pll_ve0_p0', 'p
 # image's DWARF.
 COLD = (('entry_gates', 'I', 3), ('gates', 'I', 3), ('mclk_written', 'I', 1), ('mclk_readback', 'I', 1),
         ('entry_at', 'Q', 1), ('entered_at', 'Q', 1), ('on_at', 'Q', 1), ('hold_a_at', 'Q', 1),
-        ('locked_at', 'Q', 1), ('hold_b_at', 'Q', 1), ('lock_reads', 'I', 1), ('vcu', 'I', 2))
+        ('locked_at', 'Q', 1), ('hold_b_at', 'Q', 1), ('close_at', 'Q', 1), ('closed_at', 'Q', 1),
+        ('lock_reads', 'I', 1), ('vcu', 'I', 2))
 TRANSITION = (('policy_before', 'I', 1), ('status_before', 'I', 1), ('policy_written', 'I', 1),
               ('first_word', 'I', 1), ('pending_word', 'I', 1), ('reached_word', 'I', 1), ('all_and', 'I', 1),
               ('all_or', 'I', 1), ('reads', 'I', 1), ('spin_reads', 'I', 1), ('commands', 'I', 1),
@@ -36,7 +37,8 @@ RECORD = (('magic', 'I', 1), ('bytes', 'I', 1), ('entry', 'I', 20), ('started', 
           ('version_high', 'I', 1), ('version_low', 'I', 1), ('cold_phase', 'I', 1), ('failed', 'I', 1),
           ('row_state', 'I', 1), ('authority', 'I', 1), ('measured', 'I', 1), ('fault_closed', 'I', 1),
           ('fault_step', 'I', 1), ('fault_value', 'I', 1), ('refused_address', 'I', 1), ('refused_word', 'I', 1),
-          ('row_request_us', 'Q', 1), ('row_on_us', 'Q', 1), ('requested_ticks', 'Q', 1),
+          ('row_request_us', 'Q', 1), ('row_on_us', 'Q', 1), ('owner_started_us', 'Q', 1),
+          ('owner_verified_us', 'Q', 1), ('requested_ticks', 'Q', 1),
           ('started_ticks', 'Q', 1), ('closed_ticks', 'Q', 1), ('transition', TRANSITION, 1))
 
 
@@ -107,9 +109,10 @@ def decode(payload):
     out['record_fault_step'] = STEPS.get(r['fault_step'], r['fault_step'])
     out['record_fault_value'] = r['fault_value']
     out['failed_flags'] = [name for k, name in enumerate(FAILED_FLAGS) if out['failed'] >> k & 1]
-    times = {k: c[k] for k in ('entry_at', 'entered_at', 'on_at', 'hold_a_at', 'locked_at', 'hold_b_at')}
-    times.update({k: r[k] for k in ('row_request_us', 'row_on_us', 'requested_ticks', 'started_ticks',
-                                    'closed_ticks')})
+    times = {k: c[k] for k in ('entry_at', 'entered_at', 'on_at', 'hold_a_at', 'locked_at', 'hold_b_at', 'close_at',
+                               'closed_at')}
+    times.update({k: r[k] for k in ('row_request_us', 'row_on_us', 'owner_started_us', 'owner_verified_us',
+                                    'requested_ticks', 'started_ticks', 'closed_ticks')})
     out['times'] = times
     out['transition'] = r['transition']
     # Derived durations in microseconds; zero where a phase was not reached.
@@ -117,7 +120,10 @@ def decode(payload):
     out['durations_us'] = {
         'entry_hold': span('entry_at', 'entered_at'), 'row_wait': span('entered_at', 'on_at'),
         'hold_a': span('on_at', 'hold_a_at'), 'lock_wait': span('hold_a_at', 'locked_at'),
-        'hold_b': span('locked_at', 'hold_b_at'), 'owner_row_wait': span('row_request_us', 'row_on_us'),
+        'hold_b': span('locked_at', 'hold_b_at'), 'close_hold': span('close_at', 'closed_at'),
+        'owner_row_wait': span('row_request_us', 'row_on_us'),
+        'owner_verify': span('owner_started_us', 'owner_verified_us'),
+        'request_after_owner_start': span('owner_started_us', 'row_request_us'),
         'open': (times['started_ticks'] - times['requested_ticks']) / TICKS_PER_US if times['started_ticks'] else None,
         'close': (times['closed_ticks'] - times['started_ticks']) / TICKS_PER_US if times['closed_ticks'] else None}
     # Reported, not judged: no reading shows 0x1b10 move, so the close is predicted to leave it at 0x20000.

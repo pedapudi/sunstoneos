@@ -87,11 +87,12 @@ struct a733_video_platform_ops {
  * at entry and at A1, the 0x5e4 word written and read back when bit 18 was
  * opened (zero when no write was needed), the times (binding clock, us) at
  * the start and end of the entry hold, the row's ON answer, the end of hold
- * A, the end of the PLL lock wait and the end of hold B, and the lock wait's
- * PLL reads. */
+ * A, the end of the PLL lock wait after its settle, the end of hold B, and
+ * the start and end of the close's hold, and the lock wait's PLL reads. */
 struct a733_video_cold_record {
     uint32_t entry_gates[3], gates[3], mclk_written, mclk_readback;
     uint64_t entry_at, entered_at, on_at, hold_a_at, locked_at, hold_b_at;
+    uint64_t close_at, closed_at; /* after the close's lock, or its start in a kept hold; after its unlock */
     unsigned lock_reads;
     uint32_t vcu[2]; /* VE+0x804 read before the pulse's set and before its clear write */
 };

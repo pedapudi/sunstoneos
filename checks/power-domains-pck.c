@@ -123,12 +123,16 @@ static void supply_time_case(unsigned settled)
     struct a733_rail_token t={0};struct a733_power_domain_row r={0};
     assert(a733_power_domain_row_init(&r,&d.owner,1,59,&t));
     if(settled)assert(a733_power_domains_settled_supply(&d.owner));
-    uint64_t first=0,start=0,end=0,seen=0;unsigned dcdc4_after=0;
+    uint64_t first=0,start=0,end=0,seen=0,first_step=0;unsigned dcdc4_after=0;
     d.wake_at=0;
     for(unsigned i=0;i<100000 && !(a733_power_authority_load(&m.rails.authority)&A733_POWER_SUPPLY_DONE);++i) {
         if(d.wake_at!=UINT64_MAX && d.wake_at>m.now)m.now=d.wake_at;
         const uint64_t before=m.now;const uint64_t held=d.owner.verified_at;
         service_step();
+        /* started_at: the owner's clock at its first step, kept for every later step. */
+        if(!i)first_step=before;
+        assert(d.owner.started_at>=first_step && d.owner.started_at<=(i?d.owner.started_at:m.now));
+        if(!i)first_step=d.owner.started_at;else assert(d.owner.started_at==first_step);
         const unsigned w=a733_power_authority_load(&m.rails.authority);
         if(!(w&A733_POWER_DCDC2_VERIFIED)) {
             assert(!d.owner.verified_at);
@@ -145,8 +149,9 @@ static void supply_time_case(unsigned settled)
     const unsigned w=a733_power_authority_load(&m.rails.authority);
     assert((w&(A733_POWER_SUPPLY_DONE|A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED))==
         (A733_POWER_SUPPLY_DONE|A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED));
-    printf("verified-at %s %llu step %llu..%llu\n",settled ? "settled" : "boot",
-           (unsigned long long)first,(unsigned long long)start,(unsigned long long)end);
+    if(!settled)assert(first>=first_step+A733_POWER_SUPPLY_SETTLE_US);
+    printf("verified-at %s %llu step %llu..%llu, first step %llu\n",settled ? "settled" : "boot",
+           (unsigned long long)first,(unsigned long long)start,(unsigned long long)end,(unsigned long long)first_step);
 }
 /* Holds the rail ledger busy from the first time read after the verification
  * request is queued until the provider expires it, so the request cannot be

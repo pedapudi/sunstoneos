@@ -92,6 +92,9 @@ struct a733_power_domains {
      * A733_POWER_DCDC2_VERIFIED; written once, before that bit, which
      * publishes it. Read it only after that bit is seen. */
     uint64_t verified_at;
+    /* The owner's clock at the service's first step; written before any verification bit is published, so readable
+     * once one is seen. */
+    uint64_t started_at;
     uint64_t verify_at, verify_deadline, last_now;
     unsigned running, supply_stage, supply_verified, failed;
     unsigned settled_supply; /* Before the service runs only; then read-only. */

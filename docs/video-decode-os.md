@@ -43,17 +43,17 @@ The image of that run fails the first two cases.
 
 ## The stage-1 record
 
-The class interface carries no register dump. An image built with `SUNSTONE_VIDEO_DECODE_MEASURE` (the vdec-check image) also keeps the stage-1 record, `struct vdec_check_record` in apps/vdec-check/record.h, which the application copies with `vdec_check_record` after each call (520 bytes):
+The class interface carries no register dump. An image built with `SUNSTONE_VIDEO_DECODE_MEASURE` (the vdec-check image) also keeps the stage-1 record, `struct vdec_check_record` in apps/vdec-check/record.h, which the application copies with `vdec_check_record` after each call (560 bytes):
 
 - 20 platform words read under the register lock at open before any write, after the cold start, and after the close: the PLL reference, the RTC oscillator word, the AHB, NSI and MBUS clocks, PLL_VE0 and its pattern words, the PLL gate configuration and status, `0x1b10`, the module word, the reset and bus gate word, the three critical gates, the PCK600 bus clock (R_CCU `0x1ac`) and the GIC enable, pending and active words for INTID 81;
-- the cold start's own record: the critical gates at entry and before the reset release, the `0x5e4` word written and read back, the number of PLL lock reads, and the two `0x804` words the VCU pulse read before its set and clear writes;
+- the binding's cold record (`struct a733_video_cold_record`): the critical gates at entry and before the reset release, the `0x5e4` word written and read back, the phase times and the close's hold ([video-platform.md](video-platform.md#register-lock-holds-bound-band-2-waits)), the number of PLL lock reads, and the two `0x804` words the VCU pulse read before its set and clear writes;
 - after a fault: the step and value, the unit's failed, mutex-held, uncertain and late flags, the address and word of the binding's latest access before the close, and whether the fault close completed (the closed words are then the words after it);
 - the identity words and the admitted compound version;
 - the domain-2 row's answer, the power authority word at that answer, and whether the owner measured transitions back to back;
-- the binding's phase times, the owner's row request and answer times, and the system counter at the open request, the started decoder and the close;
+- the decoder task's row request and answer times, the power-domain owner's first step and the step that published DCDC2 verified, all on the owner's clock, and the system counter at the open request, the started decoder and the close;
 - domain 2's transition record as the power-domain owner published it with the row's latest answer (`transition` in `struct a733_power_domain_row`).
 
-apps/vdec-check/host.py decodes the 552-byte result of the vdec-check application, which is the record behind a 32-byte header, and lists every departure from the stage-1 prediction.
+apps/vdec-check/host.py decodes the 592-byte result of the vdec-check application, which is the record behind a 32-byte header, and lists every departure from the stage-1 prediction.
 
 ## Board stages
 

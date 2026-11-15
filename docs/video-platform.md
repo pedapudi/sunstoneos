@@ -275,27 +275,34 @@ write with bit 31 clear.
 | `prepare`, each of 18 steps | at most 3 (1) | at most 4 | held, one step per call |
 | Quiesce | 18 (7) | 38: 18, plus 7 old-word reads, 12 PLL policy reads and 1 `0xa88` policy read | held |
 
-The longest register-lock hold is hold B, 41 native accesses. At the 1 µs
-per access that the design assumes, that is about 41 µs, which bounds how long
-a band-2 task that needs the register lock waits behind the decoder; the
-mutex's priority inheritance raises the decoder task while it waits. Stage 1
-on the board measures each hold.
+The longest register-lock hold is hold B, 41 native accesses. A task that
+needs the register lock waits behind the decoder for at most the longest hold
+plus the time the decoder task is preempted while it holds the lock, by
+interrupts and by tasks above its priority on its core. The mutex's priority
+inheritance raises the decoder task to the waiter's priority, so tasks between
+the two priorities do not lengthen the wait.
 
 The OS image's decoder task repeats `acquire` and `prepare` calls while they
 advance, rather than one call per tick: `prepare`'s eighteen steps run back to
 back, each in its own hold, so no hold exceeds four accesses there. From the
-ON answer, a cold start therefore takes the entry, hold A, the lock wait and
-hold B, about 120 µs of accesses plus at most about 420 µs of waiting.
+ON answer, a cold start therefore makes about 120 native accesses, about
+240 µs at the measured 2 µs each, plus at most about 420 µs of waiting.
 
-Stage 1 on the board measures the entry hold (`entry_at` to `entered_at`),
-hold A (`on_at` to `hold_a_at`), the lock wait (`hold_a_at` to `locked_at`)
-and hold B (`locked_at` to `hold_b_at`) in the binding's cold record
-(`struct a733_video_cold_record`), in microseconds; apps/vdec-check/host.py
-reports them as `durations_us`. Run `1794714415147688285-6b3ec3f5` on port
-3-1, with CPU-L at 494 MHz, measured the entry hold at 75 µs, hold A at 59 µs,
-the lock wait at 12 µs and hold B at 99 µs. Hold B therefore takes about
-2.4 µs per native access, not 1 µs, and a band-2 task that needs the register
-lock waits up to about 100 µs behind the decoder at that clock.
+The binding's cold record (`struct a733_video_cold_record`) stamps each phase
+in microseconds: the entry hold (`entry_at` to `entered_at`), hold A (`on_at`
+to `hold_a_at`, which includes taking the lock), the lock wait (`hold_a_at` to
+`locked_at`, which ends after the settle), hold B (`locked_at` to
+`hold_b_at`) and the close's hold (`close_at` to `closed_at`).
+apps/vdec-check/host.py reports them as `durations_us`.
+
+Run `1794714415147688285-6b3ec3f5` on port 3-1, with CPU-L at 494 MHz,
+measured the entry hold at 75 µs for 37 native accesses, the 15 ROM reads
+included: about 2 µs per access. Hold A took 59 µs. That image stamped
+`locked_at` before the 21 µs settle, so its hold-B span of 99 µs holds the
+settle too, and hold B itself took at most about 78 µs. The largest measured
+hold is therefore about 80 µs at that clock, and a task that needs the register
+lock waits up to that plus the decoder task's preemption while it holds the
+lock.
 
 ## Memory authority and physical qualification remain required
 

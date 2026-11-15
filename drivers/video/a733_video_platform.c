@@ -202,9 +202,12 @@ static int cold(struct a733_video_decoder *p)
             p->cold.on_at=n;++p->cold_step;break;
         }
         case COLD_HOLD_A:r=held_phase(p,hold_a,&p->cold.hold_a_at);break;
-        case COLD_WAIT:
+        case COLD_WAIT: {
+            /* locked_at follows the settle, which the wait spins on the per-core clock. */
             if(!a733_video_unit_pll_wait(u))return fail(u);
-            p->cold.lock_reads=u->pll_reads;p->cold.locked_at=u->last_now;++p->cold_step;break;
+            uint64_t n;if(a733_video_unit_now(u,&n)!=1)return -1;
+            p->cold.lock_reads=u->pll_reads;p->cold.locked_at=n;++p->cold_step;break;
+        }
         case COLD_HOLD_B:r=held_phase(p,hold_b,&p->cold.hold_b_at);break;
         default:return 1;
         }
@@ -279,9 +282,11 @@ int a733_video_decoder_close(struct a733_video_decoder *p,uint64_t d,unsigned fa
     if(!held_on) {
         int r=lock(u);
         if(r!=1){if(!r&&faulted)u->failed=1;return r;}
-    }
+    } else if(a733_video_unit_now(u,&(uint64_t){0})!=1)return -1;
+    p->cold.close_at=u->last_now;
     if(!close_steps(u))return a733_video_unit_refuse_held(u);
     if(unlock(u)!=1)return -1;
+    p->cold.closed_at=u->last_now;
     p->checked=p->prepared=0;p->quiesced=1;u->failed=faulted;
     return 1;
 }

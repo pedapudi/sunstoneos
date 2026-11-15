@@ -52,6 +52,9 @@ struct vdec_check_record {
     uint32_t fault_step, fault_value, refused_address, refused_word;
     /* Owner clock (microseconds): the first acquire call and the row's ON answer as the decoder task saw them. */
     uint64_t row_request_us, row_on_us;
+    /* Owner clock (microseconds): the power-domain owner's first step and the step that published DCDC2 verified
+     * (struct a733_power_domains, started_at and verified_at); both zero until DCDC2 is verified. */
+    uint64_t owner_started_us, owner_verified_us;
     /* System counter ticks (24 MHz): open request, started, closed. */
     uint64_t requested_ticks, started_ticks, closed_ticks;
     /* Domain 2's latest transition (struct a733_power_transition) as the power-domain owner published it with the
