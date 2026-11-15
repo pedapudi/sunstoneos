@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Check that evidence records refuse device addresses and one access point's frequency and RSSI, and that a record
-added from a queue entry names each measurement and evidence path once."""
+"""Check that evidence records refuse device addresses, one access point's frequency and RSSI and, in radio records,
+IPv4 addresses, and that a record added from a queue entry names each measurement and evidence path once."""
 import argparse
 import importlib.util
 import json
@@ -41,7 +41,20 @@ for constant in evidence.PROTOCOL_ADDRESSES:
     assert not refused(record(note='destination ' + constant.upper().replace(':', '-'))), constant
 
 # Hashes, revisions and IPv6 addresses do not have the address format.
-assert not refused(record(note='image ' + 'a0' * 32 + ', revision 6bf24ca03, fe80::1, 10.0.0.2'))
+assert not refused(record(note='image ' + 'a0' * 32 + ', revision 6bf24ca03, fe80::1'))
+
+# A radio record holds no IPv4 address in any field: a leased address, gateway or DNS server locates the network.
+for text in ('10.0.0.2', 'leased 192.168.1.20.', 'gateway 172.16.0.1, DNS 8.8.8.8', '0.0.0.0', 'via 010.000.000.002',
+             'peer=10.0.0.2;'):
+    assert refused(record(note=text)), text
+assert refused(record(conditions={'gateway': '192.168.1.1'}))
+assert refused(record(measurements=[{'name': 'lease', 'value': 3600, 'unit': 's'}], conclusion='address 10.1.2.3'))
+assert refused(record(evidence=['~/runs/10.0.0.2.json']))
+# Three-part versions, five-part runs, octets above 255 and other subsystems pass.
+for text in ('wpa_supplicant 2.12.0', 'FreeRTOS 11.1.0', 'section 4.1', 'OID 1.3.6.1.4', '256.1.1.1', '1.2.3.400',
+             'v10.0.2', 'RFC 1918 private range'):
+    assert not refused(record(note=text)), text
+assert not refused(record(subsystem='usb', note='host 10.0.0.2'))
 
 # One channel frequency with one RSSI identifies an access point; a predicted range does not.
 assert refused(record(conclusion='The matched access point answered on 2437 MHz at -48 dBm.'))
@@ -70,6 +83,14 @@ with tempfile.TemporaryDirectory(prefix='sunstone-evidence-addresses-') as tempo
     assert path.read_text() == before
     path.write_text(before + '{"id": "address-case-3", "subsystem": "radio", "note": "peer 02:11:22:33:44:55"}\n')
     assert any('device address' in problem for problem in evidence.validate_records(root))
+    try:
+        evidence.append_record(root, record(id='address-case-4', note='leased 192.168.1.20'))
+    except SystemExit as error:
+        assert 'IPv4 address' in str(error)
+    else:
+        raise AssertionError('The writer accepted an IPv4 address in a radio record.')
+    path.write_text(before + '{"id": "address-case-5", "subsystem": "radio", "note": "gateway 192.168.1.1"}\n')
+    assert any('IPv4 address' in problem for problem in evidence.validate_records(root))
 
 # add fills run_total from result.json: a --measure of the same name is refused, and the run directory given again with
 # --evidence is listed once (nine stage 7 records of 2026-11-15 carried both twice).

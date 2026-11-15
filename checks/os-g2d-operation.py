@@ -74,13 +74,14 @@ Cases:
     640 by 480 frame converted unscaled with the BT.601 limited table, scaled to 224 by 224 with the BT.709 full
     table, and a 320 by 240 window at (64, 37) scaled 2:1 into a BGRA output at (8, 4). Each completes on the mixer's
     launch sequence, and each command page carries the vendor's words for the job at the device addresses the service
-    used (checks/g2d-convert-words.py, the transcription of g2d_bsp_bitblt's YUV path). One attach maps the output
-    read-write, the source read-only and the command page. Each convert cleans and invalidates the output's lines,
-    cleans the luma and the chroma plane's, and invalidates the output's again after the finish, in whole lines.
+    used (checks/g2d-convert-words.py: g2d_bsp_bitblt's YUV path with g2d_bsp_bld's csc0 conversion and the
+    generated tables). One attach maps the output read-write, the source read-only and the command page. Each convert
+    cleans and invalidates the output's lines, cleans the luma and the chroma plane's, and invalidates the output's
+    again after the finish, in whole lines.
   - Convert refusals: a table outside 1 to 4, an odd sx, an RGB source, a degree or a colour, scale fields on a blit,
     chroma fields on an RGB surface, an NV16 output, a chroma plane outside its region or narrower than the frame, a
-    zero output width and an output rectangle that leaves the surface. Each fails with its step and value and touches
-    nothing.
+    zero output width, an output rectangle that leaves the surface, and a nonzero reserved word on a convert or a
+    blit. Each fails with its step and value and touches nothing.
 
 Usage: os-g2d-operation.py --image ELF --output DIR"""
 import argparse
@@ -176,8 +177,8 @@ def rotate_vendor():
 
 
 def convert_vendor():
-    """vendor_blocks, check_page and CSC of checks/g2d-convert-words.py, the transcription of g2d_bsp_bitblt's YUV
-    path."""
+    """vendor_blocks, check_page and generated_tables of checks/g2d-convert-words.py, the transcription of the
+    vendor's YUV path."""
     import importlib.util
     spec = importlib.util.spec_from_file_location('g2d_convert_words', Path(__file__).with_name('g2d-convert-words.py'))
     module = importlib.util.module_from_spec(spec)
@@ -385,7 +386,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         for key in ('output', 'source'):
             for k, v in op.get(key, {}).items():
                 put(job + jl[key] + sl[k], v, 8 if k in ('offset', 'chroma_offset') else 4)
-        for k in ('sx', 'sy', 'dx', 'dy', 'w', 'h', 'degrees', 'flip', 'color', 'ow', 'oh', 'csc'):
+        for k in ('sx', 'sy', 'dx', 'dy', 'w', 'h', 'degrees', 'flip', 'color', 'ow', 'oh', 'csc', 'reserved'):
             put(job + jl[k], op.get(k, 0))
         put(field('request'), 0); put(field('op'), RUN_OP); put(field('request'), POSTED)
     if converts:
@@ -814,6 +815,7 @@ def check_converts(record, state, ops, words):
         (name, 'command page span', rcq)
     assert not state['map'] and not state['unmap'], (name, 'later converts must reuse the mappings', state)
     lan2 = words.lan2_bank(Path(__file__).resolve().parents[1] / 'drivers/g2d/a733_g2d.c')
+    tables = words.generated_tables()
     for n, (op, o) in enumerate(zip(ops, records)):
         s, d = op['source'], op['output']
         assert o['result'] == 1 and o['fault_step'] == 0 and o['entries'] == 1 and o['irq_count'] == n + 1, \
@@ -832,7 +834,7 @@ def check_converts(record, state, ops, words):
         src_image = words.image(s['format'], s['stride'], op['sx'], op['sy'], op['w'], op['h'], (luma, chroma, 0))
         dst_image = words.image(d['format'], d['stride'] // 4, op['dx'], op['dy'], op['ow'], op['oh'], (output, 0, 0))
         problems = words.check_page(f'{name} operation {n + 1}', o['page'],
-                                    words.vendor_blocks(src_image, dst_image, *words.CSC[op['csc']], lan2), rcq_iova)
+                                    words.vendor_blocks(src_image, dst_image, tables[op['csc']], lan2), rcq_iova)
         assert not problems, (name, n, 'the command page differs from the vendor\'s words', problems[:6])
     cache = state['cache']
     assert [c for c, _, _ in cache] == [CACHE_CLEAN_INVALIDATE, CACHE_CLEAN, CACHE_CLEAN, CACHE_CLEAN_INVALIDATE] * \
@@ -961,6 +963,9 @@ def main():
         'refuse-convert-rgb-source': (dict(convert, source=RGB_FRAME, w=256, h=160, ow=256, oh=160), 48, 4),
         'refuse-convert-degrees': (dict(convert, degrees=90), 48, 4),
         'refuse-convert-color': (dict(convert, color=1), 48, 4),
+        # A nonzero reserved word is refused on every operation.
+        'refuse-convert-variant': (dict(convert, reserved=1), 48, 4),
+        'refuse-blit-reserved': (dict(op='blit', source=RGB_FRAME, output=rgb_output, w=64, h=32, reserved=8), 48, 2),
         'refuse-blit-scale': (dict(op='blit', source=RGB_FRAME, output=rgb_output, w=64, h=32, ow=64), 48, 2),
         'refuse-rgb-chroma': (dict(convert, output=dict(convert['output'], chroma_stride=2624)), 49, 0),
         'refuse-nv16-output': (dict(convert, output=dict(frame, region=0)), 49, 0),
