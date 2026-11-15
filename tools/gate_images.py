@@ -53,6 +53,10 @@ IMAGES = {
         '-DSUNSTONE_APPLICATION=g2d-check',
     ], 'target': 'sunstone-a733-os-g2d-check', 'elf': 'sunstone-a733-os-g2d-check.elf'},
     # the returning latency diagnostic image
+    # the returning RTC alarm image (apps/rtc-alarm), whose fault return checks/os-rtc-fault-return.py runs
+    'ret-rtc': {'configure': [
+        '-DSUNSTONE_APPLICATION=rtc-alarm',
+    ], 'target': 'sunstone-a733-os-rtc-alarm', 'elf': 'sunstone-a733-os-rtc-alarm.elf'},
     'ret-latency': {'configure': [
         '-DSUNSTONE_LATENCY=ON',
         '-DSUNSTONE_APPLICATION=latency',
