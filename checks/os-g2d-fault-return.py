@@ -17,6 +17,11 @@ Cases, each starting from a service that failed during its open (phase FAULT):
   The close touches no G2D register, and the registry reaches DONE.
 - close-step-fails: the CCU bus-gate word does not hold its write. The close fails, the quiesce step reports FAULT
   with site 0x931 once, and the registry never reaches DONE: the session fails at the bound.
+- quiesce-among-close-stores: as fault-after-engine-open, but the quiesce step that runs during the close is placed
+  at every point among the close's stores to the words the step reads (phase, close_started, reported and quiesced),
+  with a pause after each of its first three loads of them so that its loads can straddle one or more stores
+  (harness.TwoCores). No placement may report 0x931; every one must reach DONE with the service CLOSED. An image whose
+  quiesce step decides from phase and close_started (bringup at 566574ee3) fails this case.
 An image built before the close of a faulted service (the stage-2 board run 1794711214889069759-0a9ae5d4, the
 stage-1 image) fails the first two cases: its registry reports FAULT on every pass until the bound.
 
@@ -27,7 +32,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import (UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_X0,
                                  UC_ARM64_REG_X1, UC_ARM64_REG_X2)
-from harness import machine as harness_machine, Image, hook_addresses, save, skip_crumbs
+from harness import machine as harness_machine, Image, hook_addresses, save, skip_crumbs, TwoCores
 
 GATE_RUNS = [['--image', '{elf:ret-g2d}', '--output', '{output}']]
 UNIT = '/apps/os/g2d.c'
@@ -53,7 +58,7 @@ class Registers:
         self.words[offset] = self.stuck.get(offset, value)
 
 
-def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=None):
+def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=None, schedule=None):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -129,11 +134,15 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
     hook_addresses(uc, {NOTE}, lambda m, a, s, u: note(m))
     hook_addresses(uc, {SENTINEL}, lambda m, a, s, u: m.emu_stop())
 
-    def call(function, *args, stack=STACKS + 0x80000):
+    def enter(function, *args, stack=STACKS + 0x80000):
         for register, value in zip((UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2), args):
             uc.reg_write(register, value)
         uc.reg_write(UC_ARM64_REG_SP, stack)
         uc.reg_write(UC_ARM64_REG_LR, SENTINEL)
+        uc.reg_write(UC_ARM64_REG_PC, function)
+
+    def call(function, *args, stack=STACKS + 0x80000):
+        enter(function, *args, stack=stack)
         uc.emu_start(function, SENTINEL, count=5_000_000)
         return uc.reg_read(UC_ARM64_REG_X0)
 
@@ -141,19 +150,35 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
     assert call(image.address('os_quiesce_register'), quiesce) == 1, (name, 'registration refused')
     state['requested'] = 1
     task = image.address('os_g2d_task', UNIT)
-    start, results = state['time'], []
+    start, results, events = state['time'], [], None
     while state['time'] - start < BOUND_US:
         result = call(image.address('os_quiesce_step'), NOTE) & 0xffffffff
         results.append(result)
         if result == QUIESCE['DONE']:
             break
         state['slice_done'] = False
-        call(task, 0, stack=STACKS + 0x40000)
+        if schedule and events is None:
+            # The owner's close, with one more quiesce step on the supervisor's core placed among its stores.
+            shared = [(field(n), 4) for n in ('phase', 'close_started', 'reported', 'quiesced') if n in layout]
+            cores = TwoCores(uc, shared, SENTINEL)
+            enter(task, 0, stack=STACKS + 0x40000)
+            writer = uc.context_save()
+            enter(image.address('os_quiesce_step'), NOTE)
+            reader = uc.context_save()
+            events = cores.run(writer, reader, schedule, lambda: state['slice_done'],
+                               lambda: uc.reg_read(UC_ARM64_REG_PC) == SENTINEL)
+            results.append(uc.reg_read(UC_ARM64_REG_X0) & 0xffffffff)
+            cores.close()
+            if results[-1] == QUIESCE['DONE']:
+                break
+        else:
+            call(task, 0, stack=STACKS + 0x40000)
         assert state['slice_done'], (name, 'the owner task did not reach its wait')
         state['time'] += PASS_US
     return {
         'case': name, 'fault_step': fault_step, 'passes': len(results), 'last_result': results[-1],
         'done_within_bound': results[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
+        'schedule': schedule, 'events': events, 'any_fault': QUIESCE['FAULT'] in results,
         'phase': get(field('phase')), 'recorded_fault_step': get(field('fault_step')),
         'notes': [(hex(s), hex(v)) for s, v in state['notes']],
         'ccu': {hex(k): hex(v) for k, v in sorted(ccu.words.items())},
@@ -218,14 +243,31 @@ def main():
         if problems:
             failures.append(name)
         rows.append(row)
+    # The quiesce step on the supervisor's core placed at every point among the close's stores to the words it reads,
+    # with its loads straddling one or more of them: no placement may report the fault of a close that succeeds.
+    base = ('fault-after-engine-open', steps['G2D_STEP_TOP'], opened, None)
+    writer_events = run_case(image, parts, layout, steps, *base, schedule=(0, 0, 0))['events']['writer']
+    sweep = [(w, k, b) for w in range(writer_events + 1) for k in range(4) for b in range(w, writer_events + 1)]
+    races = []
+    for schedule in sweep:
+        row = run_case(image, parts, layout, steps, *base, schedule=schedule)
+        if row['any_fault'] or row['notes'] or not row['done_within_bound'] or row['phase'] != CLOSED_PHASE:
+            races.append({'schedule': schedule, 'events': row['events'], 'notes': row['notes'], 'phase': row['phase']})
+    rows.append({'case': 'quiesce-among-close-stores', 'writer_events': writer_events, 'schedules': len(sweep),
+                 'reported': races[:8], 'passed': not races and writer_events >= 2,
+                 'problems': [f'{len(races)} of {len(sweep)} placements reported 0x931 during a close that succeeds']
+                 if races else [] if writer_events >= 2 else ['the close must store at least two shared words']})
+    if not rows[-1]['passed']:
+        failures.append('quiesce-among-close-stores')
     save(a.output / 'result.json', {
         'passed': not failures, 'physical_access': False, 'image': str(a.image),
         'image_sha256': hashlib.sha256(a.image.read_bytes()).hexdigest(), 'cases': rows,
         'sources_sha256': {n: hashlib.sha256((Path(__file__).resolve().parents[1] / n).read_bytes()).hexdigest()
                            for n in ('apps/os/g2d.c', 'apps/os/quiesce.c', 'checks/os-g2d-fault-return.py')}})
     for row in rows:
-        print('PASS' if row['passed'] else 'FAIL', row['case'], f"{row['passes']} passes, {row['elapsed_us']} us",
-              '; '.join(row['problems']))
+        detail = f"{row['schedules']} placements over {row['writer_events']} close stores" if 'schedules' in row else \
+            f"{row['passes']} passes, {row['elapsed_us']} us"
+        print('PASS' if row['passed'] else 'FAIL', row['case'], detail, '; '.join(row['problems']))
     if failures:
         raise SystemExit(f'{len(failures)} of {len(rows)} cases failed')
     print('PASS faulted G2D service: closes and returns within the bound; a failed close step stays FAULT')

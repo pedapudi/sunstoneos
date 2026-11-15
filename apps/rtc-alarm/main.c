@@ -9,7 +9,7 @@
 #define SET_HMS ((4u<<16)|(0u<<8)|0u)
 struct report {
     uint64_t magic;
-    uint32_t version, failed, step, set_day, set_hms, reserved;
+    uint32_t version, failed, step, set_day, set_hms, service_fault;   /* ss_rtc_fault's step at a failure, else 0 */
     struct ss_rtc_info info;
     struct ss_rtc_time after_set;
     uint64_t after_set_ticks;
@@ -18,7 +18,7 @@ struct report {
     uint64_t final_ticks, set_done_ticks;
 };
 static struct report report;
-#define STEP(call) do{int r_; report.step++; while((r_=(call))==0)ss_rtc_wait(2000); if(r_<0){report.failed=report.step;ss_finish(&report,sizeof report);}}while(0)
+#define STEP(call) do{int r_; report.step++; while((r_=(call))==0)ss_rtc_wait(2000); if(r_<0){report.failed=report.step;(void)ss_rtc_fault(&report.service_fault);ss_finish(&report,sizeof report);}}while(0)
 void rtc_alarm_main(const struct ss_grant *grant)
 {
     (void)grant;
@@ -32,7 +32,7 @@ void rtc_alarm_main(const struct ss_grant *grant)
     STEP(ss_rtc_arm(3));
     int r;
     while((r=ss_rtc_alarm(&report.alarm))==0){ss_progress();ss_rtc_wait(500000);}
-    if(r<0)report.failed=100;
+    if(r<0){report.failed=100;(void)ss_rtc_fault(&report.service_fault);}
     STEP(ss_rtc_read(&report.final,&report.final_ticks));
     STEP(ss_rtc_close());
     ss_finish(&report,sizeof report);

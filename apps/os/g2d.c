@@ -82,8 +82,12 @@ static struct {
     struct ss_g2d_info info;
     struct ss_g2d_closed closed;
     atomic_uint phase,request,quiesce_wanted,quiesced;
-    /* 1 once a close has started since the last open: a FAULT service gets one close attempt (docs/g2d-os.md). */
+    /* 1 once a close has started since the last open: a FAULT service gets one close attempt (docs/g2d-os.md). Only
+     * the owner task reads it. */
     atomic_uint close_started;
+    /* 1 once a close step failed. The owner task stores it after the fault fields; quiesce_step loads it and nothing
+     * else, see there. A reported service stays FAULT, so it is never cleared. */
+    atomic_uint reported;
     unsigned op;int result;
     uint32_t fault_step,fault_value;
     uint64_t limit;
@@ -130,7 +134,9 @@ static int refuse(unsigned step,uint32_t value){g2d.fault_step=step;g2d.fault_va
 static int fail(unsigned step,uint32_t value)
 {
     if(!g2d.fault_step){g2d.fault_step=step;g2d.fault_value=value;}
-    atomic_store(&g2d.phase,FAULT);return -1;
+    atomic_store(&g2d.phase,FAULT);
+    if(atomic_load(&g2d.close_started))atomic_store_explicit(&g2d.reported,1,memory_order_release);
+    return -1;
 }
 static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner);}
 static uint64_t owner_us(void){uint64_t t=0;return a733_pmic_now(&providers.shared.pmic,&t)==1?t:0;}
@@ -585,10 +591,17 @@ void os_g2d_irq(void)
 int os_g2d_task_privileged(void (*entry)(void *),void *context){return !context&&entry==os_g2d_task;}
 int os_g2d_pins(struct a733_pin_handoff *pins){return pins!=NULL;}
 /* A FAULT service first gets its close (docs/designs/failure-return-audit.md, "A faulted device service closes
- * before it reports"): DONE when every close step read back, FAULT when one failed. */
+ * before it reports"): DONE when every close step read back, FAULT when one failed.
+ *
+ * This step runs on the supervisor's core while the owner task closes, so it decides from the one word the owner
+ * publishes. Deciding from phase and close_started together is racy in either load order: with the close storing
+ * close_started and then CLOSING, a load of close_started can see 1 while the next load of phase still sees the
+ * fault's FAULT; with the stores swapped, a load of phase can see FAULT before CLOSING lands and the next load of
+ * close_started sees 1. Either way the step reports 0x931 while a close that will succeed is running, and the sticky
+ * report ends the session at 0x742. */
 static enum os_quiesce_result quiesce_step(struct os_quiesce *q)
 {
-    if(atomic_load(&g2d.phase)==FAULT&&atomic_load(&g2d.close_started)){
+    if(atomic_load_explicit(&g2d.reported,memory_order_acquire)){
         (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x931,
             g2d.fault_step<<24|(g2d.fault_value&0xffffff),SUNSTONE_CRUMB_HERE());
         return OS_QUIESCE_FAULT;
