@@ -15,6 +15,11 @@ add_sunstone_application(accel-overlap
   INPUTS "${CMAKE_CURRENT_LIST_DIR}/../result.h" "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/program.h")
 # The streaming sweep (main.c, ACCEL_OVERLAP_SWEEP): both accelerators under five streaming sets, with a dependent-load chase.
 option(SUNSTONE_ACCEL_OVERLAP_SWEEP "Build accel-overlap as the streaming sweep" OFF)
-if(SUNSTONE_ACCEL_OVERLAP_SWEEP)
+# The larger-job sweep (ACCEL_OVERLAP_LARGE): 262,144-element GPU adds, a 1024x176 relu (the graphs directory names it), nine
+# phases with device-alone controls and interleaved streams. It needs manifest-large.json (npu-app-image.py --manifest).
+option(SUNSTONE_ACCEL_OVERLAP_LARGE "Build accel-overlap as the larger-job streaming sweep" OFF)
+if(SUNSTONE_ACCEL_OVERLAP_LARGE)
+  target_compile_definitions(accel-overlap PRIVATE ACCEL_OVERLAP_SWEEP=1 ACCEL_OVERLAP_LARGE=1)
+elseif(SUNSTONE_ACCEL_OVERLAP_SWEEP)
   target_compile_definitions(accel-overlap PRIVATE ACCEL_OVERLAP_SWEEP=1)
 endif()

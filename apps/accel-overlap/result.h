@@ -70,6 +70,32 @@ struct accel_overlap_sweep_result {
 };
 _Static_assert(sizeof(struct accel_overlap_sweep) == 56 && sizeof(struct accel_overlap_sweep_result) == 1488,
                "host.py decodes this layout");
+/* The larger-job sweep build (ACCEL_OVERLAP_LARGE): nine phases, each with its devices, streaming set and chase. A phase's
+ * stream_mode names the worker (bits 7:0, as in stream_mask) that streams over three interleaved 4 MiB areas in one loop,
+ * with ACCEL_OVERLAP_INTERLEAVED set. After the pipelined second, every GPU slot runs one serial job with a one-line sync
+ * range (plain) and then one with the slot's whole output range (synced), whose output is compared; the difference of the two
+ * round trips is the output cache maintenance of a full slot. */
+#define ACCEL_OVERLAP_LARGE_VERSION 3u
+#define ACCEL_OVERLAP_LARGE_PHASES 9u
+#define ACCEL_OVERLAP_INTERLEAVED 0x100u
+struct accel_overlap_large_phase {
+    struct accel_overlap_phase run;
+    struct accel_overlap_sweep sweep;
+    uint32_t stream_mode, slot_jobs;
+    uint64_t plain_ticks_sum, plain_ticks_max;     /* serial slot jobs with a 64-byte output sync range */
+    uint64_t synced_ticks_sum, synced_ticks_max;   /* serial slot jobs with the whole slot as the sync range */
+};
+struct accel_overlap_large_result {
+    uint32_t magic, version, bytes, phases;
+    uint64_t clock[2];
+    uint32_t initial_top, final_top, stream_workers, stream_bytes_per_worker;
+    struct accel_overlap_pll pll;
+    uint64_t chase_lines;
+    uint32_t gpu_elements, npu_tensor_bytes;
+    struct accel_overlap_large_phase phase[ACCEL_OVERLAP_LARGE_PHASES];
+};
+_Static_assert(sizeof(struct accel_overlap_large_phase) == 312 && sizeof(struct accel_overlap_large_result) == 2944,
+               "host.py decodes this layout");
 _Static_assert(sizeof(struct accel_overlap_distribution) == 32 && sizeof(struct accel_overlap_device) == 88 &&
                sizeof(struct accel_overlap_phase) == 216 && sizeof(struct accel_overlap_pll) == 72 &&
                sizeof(struct accel_overlap_result) == 1200, "host.py decodes this layout");
