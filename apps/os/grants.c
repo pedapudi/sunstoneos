@@ -71,10 +71,6 @@ static const struct {unsigned services;const char *reason;unsigned lifetimes;} r
     {OS_GRANT_HEADSET,"the returning lifetime has no qualified shutdown of the Bluetooth module",LIFETIME(A733_LIFETIME_RETURN)},
     {OS_GRANT_NPU|OS_GRANT_DMA,"the returning lifetime has no qualified retirement of the NPU beside the RAM-copy service",
         LIFETIME(A733_LIFETIME_RETURN)},
-#ifdef SUNSTONE_A733_OS_GPU
-    {OS_GRANT_NPU,"the returning lifetime has no qualified retirement of the NPU beside the GPU queue",
-        LIFETIME(A733_LIFETIME_RETURN)},
-#endif
 #ifdef SUNSTONE_A733_OS_USB_JPEG
     {OS_GRANT_AUDIO,"the USB camera decoder owns run-time non-cacheable allocation; the I2S stream needs allocator serialization"},
     {OS_GRANT_RADIO,"the USB camera decoder owns run-time non-cacheable allocation; the radio station needs allocator serialization"},

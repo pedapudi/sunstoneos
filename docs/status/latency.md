@@ -2,9 +2,9 @@
 
 **Status: implemented.**
 
-The cached-walk CPU latency diagnostic returns normally on port 3-3 and completes all eight cores' samples. Task-lock wait is below its budget; masking and wake timing remain above target. The instrumented CPU0 tick is the main open item. These observations establish no worst-case bound, task-wake percentile or combined-load timing. DMA, GPU and NPU completion timing is unmeasured.
+The cached-walk CPU latency diagnostic returns normally on port 3-3 and completes all eight cores' samples. Task-lock wait is below its budget; masking and wake timing remain above target. The instrumented CPU0 tick is the main open item. These observations establish no worst-case bound, task-wake percentile or combined-load timing. GPU and NPU completion wake latency is measured on the board, alone, together and under CPU streaming; DMA completion timing is unmeasured.
 
-**Board-qualified scope:** None.
+**Board-qualified scope:** GPU and NPU completion wake latency, from the completion interrupt handler's entry to the waiting task running, in one returning image on port 3-1 (entry `1794707177945351013-cb244af9`): alone, with both devices running, and with five CPU workers streaming.
 
 ## Capabilities
 
@@ -22,7 +22,8 @@ The cached-walk CPU latency diagnostic returns normally on port 3-3 and complete
 | Retained mask interval after scheduler start | open | 86.250 µs on core 4 against 25 µs | same record |
 | Kernel task-lock wait | measured below budget; worst case unqualified | 9.792 µs against 25 µs | same record |
 | CPU0 busy task wake | open | Maximum 210.417 µs; 10 µs 99.99th-percentile target unqualified | same record |
-| DMA, GPU and NPU completion timing | open | Unmeasured (budgets 250, 1,000 and 1,000 µs) | none |
+| GPU and NPU completion wake latency ([design](../designs/concurrent-accel.md)) | qualified on the board | p50 / p99 / maximum, budget 1,000 µs each. GPU: alone 2.04 / 2.63 / 3.08 µs, with the NPU 2.38 / 3.04 / 3.21 µs, with streaming 6.04 / 10.54 / 17.04 µs. NPU: alone 2.88 / 2.96 / 5.92 µs, with the GPU 2.88 / 3.13 / 7.29 µs, with streaming 3.63 / 5.79 / 9.96 µs. 2,000 GPU and 4,000 to 13,064 NPU samples per phase | `1794707177945351013-cb244af9` |
+| DMA completion timing | open | Unmeasured (budget 250 µs) | none |
 
 The figures come from one instrumented run at CPU-L 1794 MHz and 1000 mV, CPU-B 2002 MHz and 1050 mV, with cached table walks. Long PMU windows confirm effective clocks of 1793 and 1998 MHz. Every retained target window has zero data and instruction TLB walks. New PMU result writes are outside the counted windows; existing control and tick observers remain inside. The aggregate core 0 mask maximum begins before the scheduler running flag and cannot qualify startup masking.
 
@@ -33,7 +34,7 @@ The figures come from one instrumented run at CPU-L 1794 MHz and 1000 mV, CPU-B 
 3. Reduce the cache lines CPU0 touches per tick further. The stalls follow refills of lines that the busy memory traffic evicts, at about 1,270 cycles per L3 refill. Seven footprint cuts, held by `checks/tick-footprint-budget.py`, removed 80 refills per busy tick (entry `1794508626388886966-ae6d2457`); the remaining remote-release work is the next target. Preserve task lifetime, affinity and priority order.
 4. Qualify lock-wait bounds under contention independently of diagnostic wrapper overhead.
 5. Run the combined CPU and DMA image after the thermal-readiness fix and independently established DMA authority.
-6. Measure DMA, GPU and NPU completion timing; physical DMA cleanup is unqualified.
+6. Measure DMA completion timing; physical DMA cleanup is unqualified. The DMA wake path takes two task hops and a 1 ms fallback poll ([concurrent design](../designs/concurrent-accel.md#stage-2-dma-completion-timing)).
 7. Meet the partitioned scheduler's 25 µs masking budget. Self-suspension publishes before masking and changes only the caller's local state before saving its frame and selecting a replacement; it drains no controls. Other maintenance admits interrupts during control preparation and attempts at most sixteen distinct records per entry. Masked spans still exceed the budget. With cached table walks, PMU windows measure A55 self-selection at 3 to 15.792 µs, general selection at up to 31.667 µs and control bodies at 3.125 to 20.375 µs. These component observations cannot bound a full maintenance batch. Every retained target window reports zero data and instruction TLB walks. Nearly equal selection refill counts accompany substantially different durations, leaving the cause of the stalls unresolved. [The scheduler timing records](../evidence/scheduler-latency-measurement.jsonl), entry `1794497365941804086-44d410dc`, qualify the image, counter banks and measurement boundaries.
 8. Qualify task-lock wait and its cause at the actual FIFO reservation. The cached-walk PMU diagnostic observes a public maximum of 9.792 µs against 25 µs. This observation does not identify the maximum's cause or establish a worst-case bound. Startup timing after the scheduler running flag remains unqualified because the recorder omits assembly work and some mask boundaries.
 9. Resolve the partitioned scheduler's wake tail and CPU0 regression. The instrumented whole tick reaches 165.917 µs and the CPU0 busy-wake maximum reaches 210.417 µs. A separate tick invocation spends 74.88 percent of its cycles stalled in the backend. New PMU result writes occur outside the counted window, while existing tick observers remain inside it. Setup and publication can delay wake outside that window. The tick directly notifies eight latency fixture tasks and publishes due work without calling owner maintenance. The 128 busy samples per core cannot establish the 10 µs 99.99th-percentile target.
@@ -45,7 +46,7 @@ The figures come from one instrumented run at CPU-L 1794 MHz and 1000 mV, CPU-B 
 Board results are records in `docs/evidence/latency.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-latency-20261101.md).
 
 <!-- evidence-table:begin -->
-5 records in `docs/evidence/latency.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+6 records in `docs/evidence/latency.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -54,4 +55,5 @@ Board results are records in `docs/evidence/latency.jsonl`; add one with `tools/
 | `1793920888961447818-41b92029` | 2026-11-05 | 3-1 | `76d8533f2fc6` | returned | passed | run_total 22.506 s, core0_irq_masked_max 31.2 µs, core1_irq_masked_max 51.9 µs, core1_lock1_wait_max 9.2 µs, core1_lock1_hold_max 25.8 µs, core6_lock1_wait_max 5.3 µs, irq_masked_max 79.1 µs, cpu_clock_transitions 4 |
 | `1793924840132757923-b56fe551` | 2026-11-06 | 3-1 | `7a05420668c5` | returned | passed | run_total 22.624 s, core0_irq_masked_max 31.9 µs, core1_irq_masked_max 41.6 µs, core1_lock1_wait_max 3.8 µs, core1_lock1_hold_max 21.1 µs, core6_lock1_wait_max 11.5 µs, irq_masked_max 74.4 µs, cpu_clock_transitions 4 |
 | `1793948978286084246-2f19b799` | 2026-11-06 | 3-1 | `b7c1f9f870a9` | returned | passed | run_total 23.575 s, run_total 23.57 s, core0_irq_masked_max 29.5 µs, core1_irq_masked_max 45 µs, core1_lock1_wait_max 12.9 µs, core1_lock1_hold_max 20.3 µs, core6_lock1_wait_max 12.6 µs, irq_masked_max 75.7 µs, cpu_clock_transitions 4 |
+| `1794707177945351013-cb244af9` | 2026-11-14 | 3-1 | `50a67af09253` | returned | failed | run_total 52.162 s, run_total 52.2 s, launch_with_upload 25.8 s, gpu_wake_alone_p50 2.042 us, gpu_wake_alone_p99 2.625 us, gpu_wake_alone_max 3.083 us, npu_wake_alone_p50 2.875 us, npu_wake_alone_p99 2.958 us, npu_wake_alone_max 5.917 us, gpu_wake_both_p50 2.375 us, gpu_wake_both_max 3.208 us, npu_wake_both_p50 2.875 us, npu_wake_both_max 7.292 us, gpu_wake_stream_p50 6.042 us, gpu_wake_stream_p99 10.542 us, gpu_wake_stream_max 17.042 us, npu_wake_stream_p50 3.625 us, npu_wake_stream_p99 5.792 us, npu_wake_stream_max 9.958 us, gpu_jobs_alone 9558 jobs/s, gpu_jobs_both 7344 jobs/s, gpu_jobs_stream 3512 jobs/s, npu_jobs_alone 177768 jobs/s, npu_jobs_both 175536 jobs/s, npu_jobs_stream 81744 jobs/s, npu_completions_gpu_in_flight 278635 completions, stream_rate 6.46 GB/s, pll_gpu0_writes 52 writes, pll_gpu0_writes_npu_in_flight 42 writes, pll_npu_completion_reads 31 reads, pll_npu_unlocked_reads 0 reads, gpu_close_max 3.009 ms, gpu_open_max 7.885 ms, output_mismatches 0 outputs |
 <!-- evidence-table:end -->

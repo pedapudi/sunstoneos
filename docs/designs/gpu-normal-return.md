@@ -2,7 +2,7 @@
 
 Status: implemented and qualified on the board for the returning recognition image with GPU linear-layer recognition. Physical cleanup timing is not separately measured.
 
-Under the returning lifetime, an image built with the GPU linear option (`SUNSTONE_A733_OS_GPU_LINEAR=ON`) adds GPU retirement to the return path. The CPU profile supplies worker acknowledgments, the thermal and PMIC owners, per-core terminals, the copied transcript and host RAM restoration. NPU, performance modes and external input services are excluded. The CPU-only option behaves as without the GPU.
+Under the returning lifetime, an image built with the GPU linear option (`SUNSTONE_A733_OS_GPU_LINEAR=ON`) adds GPU retirement to the return path. The CPU profile supplies worker acknowledgments, the thermal and PMIC owners, per-core terminals, the copied transcript and host RAM restoration. Performance modes and external input services are excluded. Admission also grants the NPU; the return then requires the NPU retirement as well (`os_cpu_return_devices_ready`). The two retirements together are host-tested ([GPU and NPU composition](os-gpu-npu.md)); the board-qualified run granted no NPU. The CPU-only option behaves as without the GPU.
 
 ## Retirement sequence
 
