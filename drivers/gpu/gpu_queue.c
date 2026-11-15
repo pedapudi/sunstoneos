@@ -184,7 +184,7 @@ struct fast_batch_call {
     uint32_t fence[GPU_QUEUE_DEPTH],count,accepted;
 };
 #ifdef SUNSTONE_ACCEL_NSI_COUNTERS
-/* The NSI counter diagnostic: only the GPU owner's context reaches the counter owner (platform/a733/nsi_counters_os.c). */
+/* The NSI counter diagnostic: only the GPU owner's context reaches the counter owner (drivers/dram/a733_nsi_counters_guard.c). */
 struct __attribute__((aligned(8))) fast_counters_call {
     struct gpu_queue_context context;
     struct a733_nsi_counter_call call;

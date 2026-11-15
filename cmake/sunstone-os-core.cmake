@@ -308,7 +308,8 @@ if(SUNSTONE_A733_OS_GPU)
   # The GPU service's performance-mode hooks, which the OS performance service drives.
   list(APPEND os_added drivers/gpu/a733_gpu_performance.c drivers/gpu/pvr_gpu_clock.c)
   if(SUNSTONE_ACCEL_NSI_COUNTERS)
-    list(APPEND os_added drivers/dram/a733_nsi_counters.c platform/a733/nsi_counters_os.c)
+    list(APPEND os_added drivers/dram/a733_nsi_counters.c drivers/dram/a733_nsi_counters_guard.c
+      platform/a733/nsi_counters_os.c)
     list(APPEND os_external_inputs "${os_root}/include/a733_nsi_counters.h")
   endif()
   file(WRITE "${os_build}/gpu-firmware.S"

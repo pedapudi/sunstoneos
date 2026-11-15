@@ -56,7 +56,7 @@ static struct {
 } gpu;
 static enum os_quiesce_result gpu_quiesce_step(struct os_quiesce *);
 #ifdef SUNSTONE_ACCEL_NSI_COUNTERS
-void os_nsi_counters_quiesce(void);   /* platform/a733/nsi_counters_os.c */
+void os_nsi_counters_quiesce(void);   /* drivers/dram/a733_nsi_counters_guard.c */
 #endif
 static struct os_quiesce gpu_quiesce={.owner=OS_QUIESCE_GPU,
     .order=OS_QUIESCE_QUEUES,.step=gpu_quiesce_step};

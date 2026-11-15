@@ -202,6 +202,12 @@ int a733_gpu_power_init(struct a733_gpu_power *s,
     *s = (struct a733_gpu_power){.ops = *ops, .context = context};
     return 1;
 }
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+/* NSI port 6, the GPU's interconnect port, sits in GPU_TOP; its counter owner (drivers/dram/a733_nsi_counters_guard.c)
+ * restores and refuses the port's bank before an OFF and allows it again after an ON. */
+void os_nsi_counters_power_off(unsigned bank);
+void os_nsi_counters_power_on(unsigned bank);
+#endif
 static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
                                         uint64_t deadline, int on)
 {
@@ -215,6 +221,9 @@ static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
     s->wait=(struct a733_gpu_wait){0};s->sample_reads=s->sample_run=0;
 #endif
     s->phase = on ? A733_GPU_POWER_STARTING : A733_GPU_POWER_STOPPING;
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+    if (!on) os_nsi_counters_power_off(0);   /* before every OFF step: GPU_TOP is still on */
+#endif
     /* ON clears its own notes and keeps those of the OFF before it; OFF
      * clears its notes. core_seen bit 3 + n follows note n. */
     const unsigned first = on ? 0 : A733_GPU_NOTE_AHB_TOP5_OFF;
@@ -433,6 +442,9 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
         if (!clock_read(s)) return A733_GPU_POWER_FAULT;
     }
     s->phase = on ? A733_GPU_POWER_ON : A733_GPU_POWER_OFF;
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+    if (on) os_nsi_counters_power_on(0);   /* after every ON step: GPU_TOP is on */
+#endif
     return A733_GPU_POWER_OK;
 }
 enum a733_gpu_power_result a733_gpu_power_cancel(struct a733_gpu_power *s)

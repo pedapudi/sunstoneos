@@ -388,10 +388,19 @@ GPU quiesce restores any bank left programmed. The owner writes six words in all
 priority, mode or limit word. [checks/nsi-counters.c](../../checks/nsi-counters.c) runs the sequence against a
 register model, with a failing or corrupt access injected at every read, write and readback.
 
-The vendor device tree places port 6 in the GPU_TOP power domain and port 18 in the NPU domain. The GPU backend's
-isolate step, which runs before every GPU power-off, restores the port-6 bank and refuses any later access to it until
-the next power-on. The NPU domain stays on once the NPU has started: its local stop leaves domain 4 on
-(drivers/npu/a733_npu_startup.c).
+The vendor device tree places port 6 in the GPU_TOP power domain and port 18 in the NPU domain. A write to a port
+in a powered-off domain can hang the interconnect, so the OS owner
+([drivers/dram/a733_nsi_counters_guard.c](../../drivers/dram/a733_nsi_counters_guard.c)) refuses every access to
+the port-6 bank while GPU_TOP is not on. The GPU power controller calls it when a power-off begins, before any OFF
+step, and the owner then restores the bank while GPU_TOP is still on. From then until the controller finishes the
+next power-on, a call that would reach the bank is refused, and the bank starts refused until the GPU's first
+power-on. Each access sets an in-flight bit before it tests the refusal, with IRQs masked, so a power-off that
+arrives during a call refuses the rest of that call and waits for at most the one access already under way.
+[checks/nsi-counters-gpu-power.py](../../checks/nsi-counters-gpu-power.py) runs the owner with the GPU platform and
+power controller against a modeled GPU_TOP: no access when the counters are unused, the restore before the TOP5 OFF
+command, refusal with no access while GPU_TOP is off, a power-off in the middle of a call, and use after the next
+power-on. Moving the restore after the OFF command, or dropping the refusal, makes it fail. The NPU domain stays on
+once the NPU has started: its local stop leaves domain 4 on (drivers/npu/a733_npu_startup.c).
 
 The application reaches the owner through the GPU call gateway, from the GPU owner task only. The counter build of
 accel-overlap (`SUNSTONE_ACCEL_OVERLAP_COUNTERS`) runs four counted phases: idle for 100 ms, the GPU alone, the NPU
