@@ -76,7 +76,8 @@ def main():
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=False)
     # The service supervisor uses the OS's declared task set. Select that
     # same reservation in both the runtime and every mutation build.
-    owner_defines=['SUNSTONE_A733_OS=1']
+    # Every scan of the slots asserts that no critical section is held (deadline_scan_check in checks/deadline-host.c).
+    owner_defines=['SUNSTONE_A733_OS=1','SUNSTONE_DEADLINE_SCAN_CHECK=deadline_scan_check']
     exe=host_rtos.build(args.output,['checks/deadline-host.c','runtime/deadline.c'],'deadline-host',
                         includes=[ROOT/'apps/os'],defines=owner_defines)
     host=''
@@ -95,7 +96,12 @@ def main():
          'if(d&&d<=now){first=d;due=&slots[i];}'),
         ('slot-ownership-unchecked','runtime','runtime/deadline.c',
          'if(s<slots||s>=slots+DEADLINE_SLOTS||atomic_load_explicit(&s->owner,memory_order_relaxed)!=self)return NULL;',
-         '(void)self;')):
+         '(void)self;'),
+        # The supervisor's record reads with the slot scan back inside their critical sections.
+        ('supervisor-scan-under-lock','services','apps/os/services.c','int recorded=sunstone_deadline_slot_record(slot,&r);',
+         'int recorded=sunstone_deadline_owner_record(owner,&r);'),
+        ('blocked-scan-under-lock','services','apps/os/services.c',
+         'int ok=sunstone_deadline_slot_record(slot,&r)&&','int ok=sunstone_deadline_owner_record(owner,&r)&&')):
         sources=['checks/deadline-host.c','runtime/deadline.c']
         defines=list(owner_defines)
         if source.startswith('apps/'):

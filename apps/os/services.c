@@ -35,9 +35,11 @@ int board_service_blocked_until(unsigned service,uint64_t deadline)
     const struct os_session *session=os_session_admitted();
     if(!owner||owner!=xTaskGetCurrentTaskHandle()||!session||
        deadline>board_runtime_deadline_us()||deadline<=a733_smp_counter()/24)return 0;
+    /* The caller is the owner, so its slot comes from its task-local pointer, before the lock. */
+    const struct sunstone_deadline_slot *slot=sunstone_deadline_self_slot();
     taskENTER_CRITICAL();
     struct sunstone_deadline_record r;
-    int ok=sunstone_deadline_owner_record(owner,&r)&&!r.failed&&!r.armed&&r.sequence<UINT64_MAX;
+    int ok=sunstone_deadline_slot_record(slot,&r)&&!r.failed&&!r.armed&&r.sequence<UINT64_MAX;
     if(ok){blocked[service].deadline=deadline;blocked[service].sequence=r.sequence+1;}
     taskEXIT_CRITICAL();return ok;
 }
@@ -88,10 +90,19 @@ static int services_state(uint64_t now,unsigned *first)
         if(i==OS_SERVICE_NPU&&os_npu_complete())continue;
         TaskHandle_t owner=atomic_load_explicit(&blocked_owner[i],memory_order_acquire);
         if(owner){
+            /* A service's owner never changes once set, and a slot never changes owner once bound, so the owner's
+             * slot is found once, by a scan outside the lock; every caller that fills the cache stores the same
+             * value. Under the lock only the record and the blocked state are read, as a pair. */
+            static _Atomic(const struct sunstone_deadline_slot *) owner_slot[OS_SERVICES];
+            const struct sunstone_deadline_slot *slot=atomic_load_explicit(&owner_slot[i],memory_order_relaxed);
+            if(!slot){
+                slot=sunstone_deadline_owner_slot(owner);
+                atomic_store_explicit(&owner_slot[i],slot,memory_order_relaxed);
+            }
             struct sunstone_deadline_record r;
             taskENTER_CRITICAL();
             uint64_t limit=blocked[i].deadline,sequence=blocked[i].sequence;
-            int recorded=sunstone_deadline_owner_record(owner,&r);
+            int recorded=sunstone_deadline_slot_record(slot,&r);
             taskEXIT_CRITICAL();
             if(!recorded||r.failed||(limit&&now>=limit)){*first=i;return 0;}
             if(limit&&r.sequence==sequence&&r.deadline_us<=limit){

@@ -13,6 +13,9 @@
 #include "sunstone_deadline.h"
 
 static struct sunstone_deadline_record record;
+/* runtime/deadline.c calls this before each scan of the slots (SUNSTONE_DEADLINE_SCAN_CHECK): a scan inside a critical
+ * section fails the run. */
+void deadline_scan_check(void){assert(!host_critical_depth());}
 static TaskHandle_t t1, t2;
 static unsigned timer_fires;
 static void count_fire(void){++timer_fires;sunstone_deadline_irq();}
