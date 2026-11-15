@@ -1458,6 +1458,35 @@ def run_reference(args):
     return {'path': path, 'anchor': anchor}
 
 
+def source_revisions(host_tree, image=None):
+    """The revision of the source the image was built from, the host tree's and the daemon's, as separate fields.
+
+    An image carries its own revision and a flag for uncommitted changes to tracked files, recorded at its build (cmake/sunstone-source-
+    revision.cmake; board_images.embedded_source_revision). git_revision is that revision with git_revision_source 'image' and
+    git_revision_dirty from the image. The HEAD of the host tree (--host-tree: the geometry, the session and the return validation come
+    from it) is read at run time, so it is not the image's revision when a worker committed after building: it is host_tree_git_revision,
+    and git_revision_host_tree_mismatch is true when it differs from the image's (None without a host tree or an embedded revision).
+    An image with no embedded revision (an older build) takes git_revision from the host tree, else from the board-queue checkout,
+    as git_revision_source 'host-tree' or 'daemon-checkout'. daemon_git_revision is HEAD of the board-queue checkout whose code ran
+    the queue; the revision of the stage-1 decoder record was this one, not the image's."""
+    def head(tree):
+        revision = subprocess.run(['git', '-C', str(tree), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+        status = subprocess.run(['git', '-C', str(tree), 'status', '--porcelain', '--untracked-files=no'], capture_output=True, text=True)
+        return revision, bool(status.stdout.strip())
+    daemon, daemon_dirty = head(ROOT)
+    host, host_dirty = head(Path(host_tree).resolve()) if host_tree else (None, None)
+    embedded = images.embedded_source_revision(image) if image else None
+    if embedded and embedded['known']:
+        revision, dirty, source = embedded['revision'], embedded['dirty'], 'image'
+        mismatch = None if host is None else host != revision
+    elif host_tree:
+        revision, dirty, source, mismatch = host, host_dirty, 'host-tree', None
+    else:
+        revision, dirty, source, mismatch = daemon, daemon_dirty, 'daemon-checkout', None
+    return {'git_revision': revision, 'git_revision_source': source, 'git_revision_dirty': dirty,
+            'host_tree_git_revision': host, 'git_revision_host_tree_mismatch': mismatch, 'daemon_git_revision': daemon}
+
+
 def run_image(args, backend=Live):
     started = time.monotonic()
     pressure_start = host_priority.pressure()
@@ -1468,7 +1497,7 @@ def run_image(args, backend=Live):
               'outcome': 'host-error', 'first_failure': None, 'durations': {},
               'evidence_path': str(evidence.resolve()), 'result_path': str((evidence/'result.json').resolve()),
               'quarantined': False, 'launch_attempted': False, 'time': time.time(), 'host_pressure': {'start': pressure_start},
-              'git_revision': subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'], capture_output=True,text=True).stdout.strip()}
+              **source_revisions(getattr(args, 'host_tree', None), getattr(args, 'image', None))}
     result['dram_mode'] = 'preserved' if images.preserving(args) else 'development'
     result['reference'] = run_reference(args)
     owner = None

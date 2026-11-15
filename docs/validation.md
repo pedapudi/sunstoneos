@@ -320,6 +320,53 @@ that meets the planted sequence error now reports it when it happens (`ss_latenc
 the check accepts a non-zero exit without the PASS line and either that report or the ping assertion. A run that ends at the budget failure
 without either is repeated, up to three times, in both halves.
 
+### One tree, one build id
+
+An image's build id hashes its inputs in list order, and the lists come from globs, which sort by absolute path. Two checkouts of one tree
+at different depths or names put the same headers in different places beside the files of other roots, so one tree gave different build ids
+at different checkout paths (found in the stage-1 decoder image check), and `build-id-inputs.txt` showed a block of
+`kernel/scheduler/*.h` moved. The identities now sort their inputs by portable path (`src/...`, `build/...`, `cache/...`:
+`sunstone_sort_inputs` in `cmake/aarch64-clang.cmake`, applied before every digest loop and inside `sunstone_identity_digests`), and the
+gpu-application and cached-devices identities pass the text of their compile options, definitions and link options through
+`sunstone_portable_text`, which the other identities already did. `checks/build-id-checkout-path.py` copies the tree to two paths of
+different depth and name, configures both, and requires the same eleven `build-id.txt` files with the same ids; on bringup before the change
+eight of the eleven differed. A copy with one source byte changed must change the OS image id.
+
+The board record's `git_revision` is the revision of the source the image was built from, read from the image. Every image carries the
+48-byte object `a733_source_revision`: `SRV1`, the 40 hex digits of HEAD, a flag that the revision was known and a flag for uncommitted
+changes to tracked files. `cmake/source-revision-write.cmake` writes it at every build (a custom target, not at configure, so a commit between
+configure and build cannot leave a stale one), `cmake/sunstone-source-revision.cmake` adds it to every executable that carries a build-id
+object (deferred until the tree is configured, and listed in `source-revision-targets.txt` of the build directory), and the revision is not
+part of the build id. The runner reads it with `board_images.embedded_source_revision`. A worker can commit after building or build from a
+dirty tree, so the record names the host tree's HEAD at run time separately, as `host_tree_git_revision`, and
+`git_revision_host_tree_mismatch` is true when it differs from the image's revision (null without a host tree or an embedded revision).
+`git_revision_source` is `image`, or `host-tree` / `daemon-checkout` for an image built before images carried the object or outside a git
+checkout, and `git_revision_dirty` is the image's flag. The daemon's own revision is `daemon_git_revision`. The stage-1 decoder record said
+`4f4d44e73`, the daemon's HEAD, for an image built from `6fef74d18`. `checks/image-source-revision.py` builds the object as the images do,
+commits to the tree afterwards and checks the record; `checks/board-runner.py` covers the fallback fields.
+
+The image's own hash now changes with every commit, even when its sources do not: the embedded revision is part of its bytes. The build
+id stays source-only. Anything that keys reuse on the image hash instead of the build id treats a rebuilt image as new, so the paths that
+name an image were checked for what they mean:
+
+- **Bytes, and right to be.** A session, an admission and a queue job bind the exact bytes that run on the board:
+  `tools/board_images.py` (descriptor, DMA and session admissions: `image_sha256 == sha(image)`), `tools/session.py`,
+  `tools/sunstone-image-link.py`, `tools/a733-crumbs.py` (`bundle_image`), the `tools/check-a733-*-supervised.py` admissions, the frozen and
+  submitted copies of `tools/board_image_store.py` and the job and result hashes of `tools/board.py`. After a rebuild at a new commit the
+  session of the old image names the old bytes, so it is prepared again; its build id, which the image checks on the board, is unchanged.
+  `tools/host_admission.py` caches the host admission harness by image digest: a queued copy of an image has only its bytes to find the
+  harness that was built at submission, and the cost of the change is one more compile per rebuilt image.
+- **Build id, and right to be.** `tools/host_admission.py` (`find_build`) accepts an image only when its `a733_smp_build_id` equals the
+  build's recorded `build-id.c`. The gate reuses a passing gate by the git tree and the inputs of the selected checks
+  (`tools/land.py`, `gate-record.json`), and builds images once per tree state (`tools/gate_images.py`): neither reads an image hash.
+- **Not affected.** `tools/check-smp.py` and `tools/check-kernel.py` skip a passed case by an identity that holds the image digest, for QEMU
+  models and the kernel check, which have no build-id object and so carry no revision. The pinned hashes (the rail helper probes in
+  `tools/board.py`, `BUNDLE2_ELF` in `checks/board-bundles-apps.py`, `PIN` in `tools/card-fel-image.py`) name frozen files that are not
+  rebuilt. `checks/harness.py` `Steps` skips a passed step by its command text.
+- **One wrong path, changed.** `checks/check-index.py` followed `include()` and `add_subdirectory()` only, so a change to
+  `cmake/source-revision-write.cmake`, which every build runs with `cmake -P`, selected four checks and not the checks that build the images
+  it writes into. It now follows `cmake -P` scripts (`CMAKE_SCRIPT`); `checks/image-source-revision.py` requires the selection.
+
 ### A run the host stops
 
 A guest run or a threaded host model can end without saying anything about the claim of the check that started it, because of the host and

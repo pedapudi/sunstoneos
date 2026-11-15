@@ -60,6 +60,7 @@ set(sdsc_inputs ${sdsc_sources} ${sdsc_headers} ${storage_read_inputs} ${sdsc_ho
  "${sdsc_root}/patches/freertos-aarch64-clang.patch")
 list(REMOVE_DUPLICATES sdsc_inputs)
 set(sdsc_identity "sd0-read-service2;single-boot-cpu;SRE;supervised60;retained;${CMAKE_C_COMPILER_VERSION}")
+sunstone_sort_inputs(sdsc_inputs)
 foreach(input IN LISTS sdsc_inputs)
  file(SHA256 "${input}" sdsc_hash)
  string(APPEND sdsc_identity "${sdsc_hash}")

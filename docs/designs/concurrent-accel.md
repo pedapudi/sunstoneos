@@ -176,7 +176,7 @@ open lower the total that DRAM delivers.
 A straight line from no streaming through that point gives an NPU loss of 2-4% and a GPU loss of 5-9%. Queueing delay
 grows faster than linearly with load, so the straight line is an upper estimate for one paced stream at that rate.
 
-### Deeper pipelining cannot recover the loss; larger jobs are untested
+### Deeper pipelining cannot recover the loss
 
 Stage 1 measured each device both serially and pipelined:
 
@@ -189,8 +189,7 @@ Stage 1 measured each device both serially and pipelined:
 
 Both devices therefore lose time inside each job. The relu job moves 11,264 bytes in 5.6 µs (2.0 GB/s) without streaming,
 far below what DRAM delivers, so the job's own memory accesses wait on latency. A larger job amortizes per-job work, and
-larger transfers keep more requests in flight. A run with GPU adds over many more elements and a relu over a larger
-tensor, with and without the stage-1 streaming set, would measure whether larger jobs lose less.
+larger transfers keep more requests in flight. Stage 1c measured larger jobs and found that they lose more.
 
 ### Hardware features that could bound CPU bandwidth
 
@@ -213,6 +212,164 @@ approves.
 - **DSU controls.** CLUSTERBUSQOS_EL1 (S3_0_C15_C4_4) sets a quality-of-service value per scheme ID on the bus and limits
   nothing; CLUSTERPARTCR_EL1 (S3_0_C15_C4_3) partitions L3 ways (DSU TRM 100453 r3p0, B1.6 and B1.12). The A76, A55 and
   DSU implement no MPAM.
+
+## Stage 1c: larger jobs lose more under CPU streaming
+
+Stage 1c repeats the stage-1b streaming sets with larger jobs: the GPU add grows from 65 to 262,144 elements and the
+relu from 11,264 to 360,448 bytes per direction. It also adds two controls. Each device runs
+alone without streaming, which measures how much the two devices slow each other. One core streams three interleaved
+4 MiB areas instead of one, which opens more DRAM rows from the same core and separates the requesting core from row
+interleaving.
+
+### Method
+
+The larger-job build of accel-overlap (`SUNSTONE_ACCEL_OVERLAP_LARGE`, with `apps/accel-overlap/manifest-large.json`)
+runs nine one-second phases:
+
+- **GPU job.** An add of two 262,144-element arrays: 2 MiB read and 1 MiB written per job, four jobs in flight in four
+  1 MiB output slots. The GPU input lease is 2 MiB and the output lease 4 MiB, the first GPU leases on the board larger
+  than one page; context creation and mapping succeeded.
+- **NPU job.** A relu over a 1024 × 176 int16 tensor: 360,448 bytes read and 360,448 written per job, eight in flight.
+- **Output checks.** Pipelined GPU jobs clean and invalidate only the first 64 bytes of each output. After each phase,
+  every slot runs one serial job with that 64-byte range and one with the whole 1 MiB slot, and the second output is
+  compared with its reference in full. The time difference between the two jobs is the cost of the 1 MiB output
+  maintenance. The last NPU output of each phase is compared in full.
+- **Phases.** GPU alone, NPU alone, both with no streaming, then both under the stage-1b streaming sets (core 2, core 7,
+  cores 2-4, and cores 2-5 and 7), then both while core 2 or core 7 streams three interleaved areas.
+
+The chase task on core 0 is unchanged from stage 1b.
+
+### Results
+
+One returning run on port 3-1 at the approved points (entry `1794711666388475314-76dd9c8e`, 34.4 s against a budget
+of 55-70 s). Every compared output matched its reference, PLL_NPU kept its word and lock, no phase throttled and the top
+point held at the start and end.
+
+Without streaming, the GPU ran 225 jobs/s alone (4.48 ms per job, 0.7 GB/s) and the NPU 10,184 jobs/s alone (98 µs per
+job, 7.3 GB/s). Together they ran at 64.7% (GPU) and 74.2% (NPU) of those rates. Losses below are against the phase with
+both devices and no streaming, as in stage 1b.
+
+| Streaming | CPU bandwidth | Chase median | GPU loss | NPU loss | Stage 1b GPU loss | Stage 1b NPU loss |
+|---|---|---|---|---|---|---|
+| none | 0 | 357 ns | 0 | 0 | 0 | 0 |
+| core 2 | 3.86 GB/s | 488 ns | 35.6% | 35.1% | 25.4% | 11.4% |
+| core 7 | 6.20 GB/s | 557 ns | 55.5% | 55.9% | 32.5% | 29.3% |
+| cores 2-4 | 5.77 GB/s | 984 ns | 68.4% | 67.8% | 51.1% | 48.1% |
+| cores 2-5 and 7 | 5.37 GB/s | 1,200 ns | 68.3% | 69.2% | 51.1% | 53.0% |
+| core 2, three areas | 2.38 GB/s | 445 ns | 30.1% | 30.3% | | |
+| core 7, three areas | 4.01 GB/s | 622 ns | 53.9% | 54.7% | | |
+
+The figures below are the mean over the four slots of the whole-slot job time minus the 64-byte job time. Without
+streaming the 1 MiB output maintenance costs under 1% of the GPU job. Under streaming the difference is below the
+variation between serial jobs, so this run does not resolve it.
+
+| Phase | GPU slot job | 1 MiB maintenance |
+|---|---|---|
+| GPU alone | 4,484 µs | 20 µs |
+| both, no streaming | 4,474 µs | 37 µs |
+| core 2 | 6,373 µs | 58 µs |
+| core 7 | 9,795 µs | −623 µs |
+| cores 2-4 | 12,615 µs | 23 µs |
+| cores 2-5 and 7 | 12,487 µs | 24 µs |
+| core 2, three areas | 5,970 µs | 132 µs |
+| core 7, three areas | 9,005 µs | 142 µs |
+
+The negative value under core 7 shows that variation directly.
+
+Seventeen predictions missed:
+
+- The GPU ran 225 jobs/s alone, against 300-2,000, which moves 0.7 GB/s. One unmeasured explanation is that each work
+  item loads one 4-byte word, so few requests are in flight per group.
+- Together, the GPU kept 64.7% and the NPU 74.2% of their alone rates, against at least 80%. The two devices slow each
+  other, so the comparison with stage 1b is confounded.
+- Seven streaming losses exceeded their ranges: the NPU under core 2, and both devices under core 7, cores 2-4 and the
+  stage-1 set.
+- The GPU completed 48-148 pipelined jobs in each of the seven phases that run both devices, against at least 200.
+
+### Larger jobs are not a lever
+
+At the stage-1 set the large jobs lost 68.3% (GPU) and 69.2% (NPU), against 51.1% and 53.0% for the stage-1b jobs.
+Against the alone rates the losses are 79% and 77%. The decision rule labels both devices worse.
+
+The large relu moves 7.3 GB/s alone, so it is bandwidth-bound and shares the DRAM total with the CPU streams. CPU
+streams plus accelerator traffic came to 7.2-8.8 GB/s in the single-area streaming phases and 6.5-6.7 GB/s in the
+interleaved ones, against 5.9 GB/s with no streaming. The stage-1b relu moved 2.0 GB/s and waited on latency, so a
+CPU stream would take less from it; this run did not measure that directly.
+
+### Interleaved areas cost about the same as one area, at fewer bytes
+
+Three interleaved areas on one core cost within 6 points of a single area on that core, while moving 35-38% fewer bytes:
+core 2 moved 2.38 GB/s instead of 3.86 GB/s and cost 30.1% instead of 35.6% (GPU). The decision rule labels this
+result "requesting cores, not row interleaving". The comparison changed two things at once, more open rows and fewer
+bytes, so two readings fit it:
+
+- **Requesting core.** The loss follows which cores request DRAM, through a limit on outstanding transactions or
+  arbitration between the CPU path and the accelerators. Rows and bytes both matter little.
+- **Rows offset bytes.** More open rows raise the loss by about as much as fewer bytes lower it.
+
+DRAM-controller or NSI counters of requests, latency and row misses would separate the two; a run at equal bytes would
+also separate them.
+
+**At about 2.4 GB/s of CPU traffic**, one A55 core streaming three areas, both large-job devices lost 30%. This is the
+first measured point near the 1-2 GB/s that a camera and lidar workload moves.
+
+Under the stage-1c decision rule the next lever is CPU-side bounding: the AXI2HIF limiter and `CPU_DA_DDR_CTRL_REG`
+listed under stage 1b, read without writes. That limiter bounds bytes per period, while stages 1b and 1c both show a
+loss that follows bytes weakly. A counter run that measures outstanding requests and latency per master would show
+whether a byte limit can help before any limiter write.
+
+## The GPU add waits on memory four times per task
+
+Alone, the stage-1c GPU add ran 4.48 ms per job and moved 0.70 GB/s. The time comes from the program and the
+dispatch, as host analysis of the program and the queue shows:
+
+- **Dispatch.** A job runs 8,192 workgroups, each one 32-lane task. The BXM-4-64 MC1 has one cluster, 64 USC slots
+  and at most 156 USC tasks (pinned Mesa `src/imagination/common/device_info/bxm-4-64.h`). Less the 103 µs per-job
+  overhead that a three-task job measured in stage 1, each task takes 535 ns, 539 GPU clocks at 1008 MHz.
+- **Program.** The compiled `apps/queue-add/vector_add.cl` is 28 instruction groups with 10 temps. It loads the
+  argument words, `a[i]` and `b[i]`, and stores the sum, each through one DMA access of 4 bytes per lane (12 for the
+  arguments). The pinned compiler's scheduler (`pco_schedule.c`) puts a data-fence wait after every DMA access and an
+  extra fence after the store, so a task waits on memory four times in series. Only other resident tasks overlap
+  those waits. No host source determines whether the hardware merges the 32 lanes' accesses into line requests.
+- **GPU mapping.** Both leases use 256 KiB pages with the SLC-bypass bit set and the cache-coherent bit clear
+  (`platform/a733/gpu_queue.c`), so every load that misses the GPU's own cache and every write-through store goes to
+  DRAM. The mapping is ordinary memory, not device memory.
+- **Clock.** Power-on programs PLL_GPU0 to 1008 MHz and the GPU clock to that source with divider 1, and checks both
+  by readback. The manifest declares no `cpu.perf`, so session admission refuses a performance grant and the GPU
+  performance service, the only path that changes the rate, does not start. The GPU supply read 960 mV, the
+  1008 MHz point, at return. The run recorded no per-phase clock.
+
+If the waits bound the task, 535 ns equals four memory round trips divided by the resident tasks, so the round trip
+is 134 ns times the resident tasks. The unified-store sizing of [the GPU recognizer design](gpu-mimus-compute.md)
+allows 89 tasks at 10 temps, so the 64 USC slots would bound residency, and the round trip would be 8.6 µs, against a
+205 ns CPU chase in the same phase. The waits therefore do not explain the time at full residency. Either few tasks
+are resident (2-4 tasks give a 270-540 ns round trip), or a per-request limit binds: one request per lane access
+gives 1,048,576 requests per job, 4.2 ns each. A wider program cannot separate the two, because both predict the
+same gain. The request count of the GPU's NSI port can, if those counters count live on the board, which is not yet
+shown. No vendor figure for this GPU's buffer bandwidth exists in the datasheet, the manual or the pinned GPU sources.
+
+### Four elements per lane triple the GPU add
+
+The width build of accel-overlap (`SUNSTONE_ACCEL_OVERLAP_WIDTH`) runs the GPU-alone phase with
+[add4/vector_add4.cl](../../apps/accel-overlap/add4/vector_add4.cl). Each lane loads four consecutive words of each
+vector with one access and stores the four sums with two 2-word stores, so a job runs 2,048 workgroups. The compiled
+program has 18 temps and five serial memory waits per task.
+
+One returning run on port 3-1 (entry `1794714617637336813-d6d9ac0d`) gave:
+
+| Measurement | One element per lane (stage 1c) | Four elements per lane | Predicted |
+|---|---|---|---|
+| Pipelined rate | 225 jobs/s (0.70 GB/s) | 676 jobs/s (2.13 GB/s) | 550-850 jobs/s |
+| Serial slot job | 4,484 µs | 1,495 µs | 1.2-1.8 ms |
+| 1 MiB output maintenance | 20 µs | 104 µs | |
+
+Every compared output matched its reference, the run returned with no GPU fault, PLL_NPU kept its word and lock, and
+the top point held. The gain of 3.0 times matches five waits carrying four times the bytes of four waits, at unchanged
+residency. Few resident tasks and a per-request limit both predicted this gain, so the run does not separate them;
+the request count per job of the GPU's NSI port can.
+
+Mapping the leases without SLC bypass, so that GPU misses can use the system-level cache, is a separate candidate. It
+needs its own hypothesis after the NSI counters are shown to count.
 
 ## Stage 2: DMA completion timing
 

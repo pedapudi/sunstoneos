@@ -52,6 +52,7 @@ list(REMOVE_ITEM dsi_inputs "$<TARGET_OBJECTS:a733-board-usb2-host>")
 list(APPEND dsi_inputs ${dsi_headers} "${dsi_app}/link.patch" "${dsi_app}/monitor.patch" "${dsi_app}/runtime.patch"
  "${CMAKE_CURRENT_LIST_FILE}" "${SUNSTONE_SOURCE_ROOT}/cmake/a733-dsi-native.cmake")
 set(dsi_identity "dsi-single-core-v1;extended784MiB;retained;${dsi_definitions};${CMAKE_C_COMPILER_VERSION}")
+sunstone_sort_inputs(dsi_inputs)
 foreach(source IN LISTS dsi_inputs)
  file(SHA256 "${source}" hash)
  string(APPEND dsi_identity "${hash}")
