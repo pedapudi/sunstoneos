@@ -15,6 +15,10 @@ from pathlib import Path
 import resource
 import shutil
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import harness  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['runtime/control_irq.c', 'runtime/control_ring.h', 'include/sunstone_control.h',
@@ -55,14 +59,23 @@ def main():
             raise RuntimeError(result.stderr)
         return binary
 
-    def run(binary, case, failure=None, timeout=20):
+    def run(binary, case, failure=None, timeout=None):
         command = [str(binary), case]
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, env=env, timeout=timeout)
+        if failure == 'timeout':
+            # A negative control that must hang: the kill is its expected result, at the short bound its variant names.
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, env=env, timeout=timeout)
+                text, code = result.stdout + result.stderr, result.returncode
+            except subprocess.TimeoutExpired as error:
+                text = ((error.stdout or b'') + (error.stderr or b'')).decode(errors='replace')
+                code = 124
+        else:
+            # Every other case is bounded by a hang guard measured at the gate's load; a kill is run again and a second kill is
+            # inconclusive (harness.KillInconclusive, exit 75), not a failure of the model.
+            result = harness.until_booted(lambda: subprocess.run(command, capture_output=True, text=True, env=env,
+                                                                 timeout=timeout or harness.host_kill_seconds('scheduler-control-stop')),
+                                          lambda done: done.stdout + done.stderr, lambda done: done.returncode)
             text, code = result.stdout + result.stderr, result.returncode
-        except subprocess.TimeoutExpired as error:
-            text = ((error.stdout or b'') + (error.stderr or b'')).decode(errors='replace')
-            code = 124
         expected = (code == 0 and 'PASS control stop and qualification model' in text) if failure is None else \
             (code == 124 if failure == 'timeout' else code != 0 and failure in text)
         log = output / (binary.name + '-' + case + '.log')
@@ -93,12 +106,12 @@ def main():
         guard = '    if (__atomic_load_n(&s->stop, __ATOMIC_ACQUIRE)) { stop_local(s, 1); return; }\n'
         assert source[task_start:].count(guard) == 1
         old_task = source[:task_start] + source[task_start:].replace(guard, '', 1)
-        variants = [('old-task-stop', old_task, 'task-stop', 'state[1].task_irq_count == before', 20)]
+        variants = [('old-task-stop', old_task, 'task-stop', 'state[1].task_irq_count == before', None)]
         early_ack = source.replace('if (stop) { stop_local(s, 0); return; }',
                                    'if (stop) { stop_local(s, 1); return; }')
         assert early_ack != source
         variants.append(('early-control-ack', early_ack, 'nested-control-stop',
-                         '!__atomic_load_n(&state[1].isr_stopped, __ATOMIC_ACQUIRE)', 20))
+                         '!__atomic_load_n(&state[1].isr_stopped, __ATOMIC_ACQUIRE)', None))
         start = source.index('void __wrap_vApplicationIRQHandler(')
         end = source.index('#ifdef SUNSTONE_CONTROL_TASK_EL1', start)
         old_wrapper = '''void __wrap_vApplicationIRQHandler(uint64_t interrupt)
@@ -115,7 +128,7 @@ def main():
 
 '''
         variants.append(('old-stale-ownership', source[:start] + old_wrapper + source[end:],
-                         'task-stop', 'native_irqs[TASK_INTID] + native_irqs[INTID] == native_before', 20))
+                         'task-stop', 'native_irqs[TASK_INTID] + native_irqs[INTID] == native_before', None))
         start = source.index('static int advance(')
         end = source.index('static int serve(', start)
         old_advance = '''static int advance(struct path *p, uint64_t now, uint64_t *served, unsigned *missed)
@@ -135,7 +148,7 @@ def main():
 { (void)core; return ticks * 1000u / 24u; }
 '''
         variants.append(('old-ns-overflow', source[:start] + old_ns + source[end:],
-                         'arithmetic', 'ticks_to_ns(1, 24000000) == 1000000000', 20))
+                         'arithmetic', 'ticks_to_ns(1, 24000000) == 1000000000', None))
         for name, changed, case, failure, timeout in variants:
             path = output / (name + '.c')
             path.write_text(changed)

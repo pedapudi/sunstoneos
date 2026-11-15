@@ -88,6 +88,13 @@ endif()
 if(SUNSTONE_A733_OS_USB_JPEG AND NOT SUNSTONE_A733_OS_USB_CLASSES)
   message(FATAL_ERROR "USB JPEG requires USB class services")
 endif()
+# The OS image programs the IOMMU through its one owner (drivers/iommu/a733_iommu_owner.c, docs/iommu.md). USB JPEG
+# still programs it through drivers/iommu/a733_iommu.c, so the two would share the banks with no common state. The
+# two files also define one symbol, a733_iommu_programmer, so a link of both fails even without this refusal.
+if(SUNSTONE_A733_OS_USB_JPEG)
+  message(FATAL_ERROR "USB JPEG programs the IOMMU through drivers/iommu/a733_iommu.c; the OS image's IOMMU owner "
+    "must be its only programmer, so USB JPEG is refused until its decoder attaches through the owner")
+endif()
 if(NOT SUNSTONE_BOARD_SUPERVISED OR NOT TARGET sunstone-a733-board)
   message(FATAL_ERROR "The OS kit requires the supervised native board composition")
 endif()
@@ -153,7 +160,7 @@ set(os_added apps/os/admission.c apps/os/lifetime.c apps/os/sealed.c apps/os/ide
   apps/os/usb-service.c apps/os/large.c apps/os/large_load.c drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c drivers/storage/storage_digest_extensions.c drivers/storage/storage_digest_ce.S kernel/appmem/app_region.c kernel/appmem/large_admit.c kernel/umem/umem.c apps/os/application.c apps/os/session.c apps/os/grants.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
-  apps/os/thermal.c apps/os/i2c.c drivers/i2c/a733_i2c_bus.c apps/os/rtc.c drivers/rtc/a733_rtc.c apps/os/g2d.c apps/os/video_decode.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
+  apps/os/thermal.c apps/os/i2c.c drivers/i2c/a733_i2c_bus.c apps/os/rtc.c drivers/rtc/a733_rtc.c apps/os/g2d.c drivers/g2d/a733_g2d.c apps/os/iommu.c drivers/iommu/a733_iommu_owner.c apps/os/video_decode.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
 if(SUNSTONE_A733_OS_SD_WRITE)
   # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.

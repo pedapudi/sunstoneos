@@ -56,6 +56,9 @@ int ss_rtc_arm(unsigned seconds);
 /* 1 once the alarm has fired (or timed out) and the RTC is restored; 0 while armed. */
 int ss_rtc_alarm(struct ss_rtc_alarm *alarm);
 void ss_rtc_wait(uint32_t wait_us);
+/* The service's first failure since the image started: 1 with its step, 0 none, -1 not declared. A failure whose
+ * close succeeded leaves the service CLOSED, so the application reads the step here and returns it in its record. */
+int ss_rtc_fault(uint32_t *step);
 int ss_rtc_close(void);
 #ifdef __cplusplus
 }

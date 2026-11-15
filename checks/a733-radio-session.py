@@ -79,9 +79,7 @@ def main():
    if lib.is_dir():env["LD_LIBRARY_PATH"]=str(lib)+(":"+env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
    for case in a.cases:
     cmd=[str(a.qemu),"-M","virt,gic-version=3,secure=off,virtualization=off",*harness.QEMU_DETERMINISTIC,"-cpu","cortex-a53","-m","128M","-nographic","-nic","none","-monitor","none","-semihosting-config","enable=on,target=native,arg="+case,"-kernel",str(artifact)]
-    try:
-     run=subprocess.run(cmd,capture_output=True,text=True,env=env,timeout=harness.qemu_kill_seconds("a733-radio-session"));record={"case":case,"command":cmd,"returncode":run.returncode,"stdout":run.stdout,"stderr":run.stderr}
-    except subprocess.TimeoutExpired as error:record={"case":case,"command":cmd,"returncode":124,"stdout":str(error.stdout),"stderr":str(error.stderr)}
+    run=harness.run_qemu(cmd,harness.qemu_kill_seconds("a733-radio-session"),env=env);record={"case":case,"command":cmd,"returncode":run.returncode,"stdout":run.stdout,"stderr":run.stderr}
     result["runs"].append(record);print(case,record["returncode"],record["stdout"],flush=True)
     if record["returncode"]:break
  result["passed"]=not result["commands"][-1]["returncode"] and all(not r["returncode"] for r in result["runs"])
