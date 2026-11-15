@@ -83,3 +83,22 @@ When every step reads back, the service is CLOSED, its quiesce step reports DONE
 INTID 83 is enabled at the end of the open and disabled, and observed disabled, at the start of the close. The close then detaches master 10 before it gates the engine; the last detach disables both IOMMU banks and returns the IOMMU clock lease. The CPU caches are cleaned and invalidated over the 64-byte lines that the output surface touches before the operation, and again after it, so the application reads the engine's writes through its own mapping.
 
 `ss_g2d_run` returns a `struct ss_g2d_done`: the 0x24 word the handler read before its acknowledgment, the 0x08 word it read before the reset pulse, the 0x24 word after, the 0x24 word the owner read before the launch, the IOMMU entry words of the first attach (also when it refused), master 10's fault words after the operation, the IOMMU owner's failure step, register offset and read-back value, the count of interrupts taken with no operation armed, the surface's and directory's physical addresses, and the system-counter times of the submission, the update bit, the interrupt and the end.
+
+## Copy paths
+
+The vendor's copy writes a source pixel whose alpha byte is 0 as 0x00000000 (run `1794723622887180087-445859c1`). That is right when alpha is coverage. It is wrong when the alpha byte carries data, as in camera frames or packed sensor words. `ss_g2d_job.path` selects a copy's blender path. Path 0, `SS_G2D_PATH_VENDOR`, is the vendor's, and its command pages are byte-identical to those of the board-qualified image 916988f84c39. [os-g2d-operation.py](../checks/os-g2d-operation.py) compares them by SHA-256. Paths 1 to 4 are the candidates of the exact-copy experiment. Each changes only the page words below, and os-g2d-operation checks that each candidate's page differs from path 0's in exactly those words.
+
+| Path | Candidate | Page words that differ from path 0's | Source of the words |
+| --- | --- | --- | --- |
+| 1 | `SS_G2D_PATH_MARKERS` | blender 0x10 (pipe 0's fill colour) = 0x00a1b2c3; blender 0x44 (background) = 0x00d4e5f6 | Path 0 with alpha-0 markers: the alpha-0 output names the stage that writes it. |
+| 2 | `SS_G2D_PATH_PREMULTIPLIED` | video layer 0x00 bit 16 (`lay_premul_ctl` 1); blender 0x40 (`premulti_ctrl`) = 1; blender 0x60 (`out_color`) = 1 | The vendor's `bpremul` words (`g2d_vlayer_set`, `bld_in_set`, `bld_out_setting`). `g2d_image_check` clears `bpremul` on every image (g2d.c 503), so the vendor never runs them. |
+| 3 | `SS_G2D_PATH_ROP_COPY` | blender 0x80 (`rop_ctrl`) = 0; blender 0x84 (`ch3_index0`) = 0x61082 | `bld_rop2_set`'s `G2D_BLT_COPYPEN` encoding with its `index0node0 = 2` override (g2d_bld.c 447-530). `g2d_bsp_bitblt` reaches its ROP2 branch only when bit 4 of the flag is set, so the vendor never programs COPYPEN. |
+| 4 | `SS_G2D_PATH_NO_FILL` | blender 0x00 (`bld_en_ctrl`) = 0x100 | Pipe 0 without its fill colour. Every vendor `bld_in_set` sets `p0_fcen`, so no vendor path clears it. |
+
+The paths are accepted only on a copy, and a path above 4 is refused before any write. After the experiment's board run, the candidate that copies exactly becomes the exact copy, and the others are removed.
+
+apps/g2d-paths runs the experiment. It copies one 96 by 40 ARGB8888 rectangle, unconverted, on each path in order 0 to 4, into five disjoint output rectangles. After each copy it records:
+- the CRC-32 of the copy's output rectangle;
+- the output at the first source pixel with alpha 0, with alpha 0xff and with any other alpha.
+
+apps/g2d-paths/host.py names the output model each copy matched: exact, zeroed, either marker, or opaque. A copy that fails ends the run, and its record keeps its path and the fault step. [g2d-paths-host.py](../checks/g2d-paths-host.py) builds the application on the host with the predicted outcomes, an engine that zeroes on every path and an engine whose ROP copy times out, and checks that the decoder names each.

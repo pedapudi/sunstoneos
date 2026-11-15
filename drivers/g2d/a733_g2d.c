@@ -215,6 +215,16 @@ int a733_g2d_commands_at(void *memory,size_t capacity,const struct a733_g2d_sess
     b->bld_en_ctrl.dwval=0x101;b->mem_size[0].dwval=size;
     b->out_size.dwval=size;b->bld_ctrl.dwval=0x00010001; /* COPY */
     b->rop_ctrl.dwval=0xf0;b->ch3_index0.dwval=0x41000;
+    /* The exact-copy candidates change only these words of the copy's page (a733_g2d_application.h). */
+    if(s->path==A733_G2D_PATH_MARKERS){
+        b->bld_fill_color[0]=A733_G2D_FILL_MARKER;b->bld_backgroud_color=A733_G2D_BACKGROUND_MARKER;
+    }else if(s->path==A733_G2D_PATH_PREMULTIPLIED){
+        v->ovl_attr.dwval|=UINT32_C(1)<<16;b->premulti_ctrl.dwval=1;b->out_color.dwval=1;
+    }else if(s->path==A733_G2D_PATH_ROP_COPY){
+        b->rop_ctrl.dwval=0;b->ch3_index0.dwval=0x61082;
+    }else if(s->path==A733_G2D_PATH_NO_FILL){
+        b->bld_en_ctrl.dwval=0x100;
+    }
     if(blend){
         /* Effective g2d_bsp_bld: V0/pipe0 source, UI2/pipe1 destination.
          * bpremul=0 preserves straight alpha on both inputs and the output. */

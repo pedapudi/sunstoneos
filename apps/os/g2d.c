@@ -521,8 +521,8 @@ static int do_run(void)
     /* A fill writes an ARGB8888 output and reads no source. A blit reads a source of the output's geometry (the
      * builder's one width, height and stride) and converts from its format to the output's. */
     const int blit=j->op==SS_G2D_BLIT;
-    if((j->op!=SS_G2D_FILL&&!blit)||j->reserved[0]||j->reserved[1]||
-       (!blit&&(j->sx||j->sy||!zero(&j->source,sizeof(j->source))||j->output.format))||
+    if((j->op!=SS_G2D_FILL&&!blit)||j->reserved||j->path>SS_G2D_PATH_NO_FILL||
+       (!blit&&(j->path||j->sx||j->sy||!zero(&j->source,sizeof(j->source))||j->output.format))||
        (blit&&(j->color||j->source.width!=j->output.width||j->source.height!=j->output.height||
                j->source.stride!=j->output.stride)))return run_refuse(G2D_STEP_RUN,j->op);
     const struct large_slot *l=surface_slot(&j->output,1);
@@ -533,8 +533,11 @@ static int do_run(void)
     memset(c,0,sizeof(*c));
     c->width=j->output.width;c->height=j->output.height;c->stride=j->output.stride;
     c->op=blit?A733_G2D_BLIT:A733_G2D_FILL;
+    _Static_assert(SS_G2D_PATH_VENDOR==A733_G2D_PATH_VENDOR&&SS_G2D_PATH_MARKERS==A733_G2D_PATH_MARKERS&&
+        SS_G2D_PATH_PREMULTIPLIED==A733_G2D_PATH_PREMULTIPLIED&&SS_G2D_PATH_ROP_COPY==A733_G2D_PATH_ROP_COPY&&
+        SS_G2D_PATH_NO_FILL==A733_G2D_PATH_NO_FILL,"the public paths are the builder's");
     c->dx=j->dx;c->dy=j->dy;c->w=j->w;c->h=j->h;c->color=j->color;
-    if(blit){c->sx=j->sx;c->sy=j->sy;c->format=j->source.format;c->output_format=j->output.format;}
+    if(blit){c->sx=j->sx;c->sy=j->sy;c->format=j->source.format;c->output_format=j->output.format;c->path=j->path;}
     if(!a733_g2d_geometry_valid(c))return run_refuse(G2D_STEP_RUN_GEOMETRY,0);
     if(!g2d.rcq&&!(g2d.rcq=os_owner_memory(G2D_RCQ_BYTES,G2D_RCQ_BYTES,OS_MEMORY_DEVICE)))
         return run_refuse(G2D_STEP_RUN_MEMORY,0);

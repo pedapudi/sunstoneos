@@ -97,6 +97,11 @@ struct ss_g2d_surface {
     uint32_t width, height, stride, reserved;
 };
 enum { SS_G2D_FILL = 1, SS_G2D_BLIT = 2 };
+/* A blit's blender path. SS_G2D_PATH_VENDOR (0) is the vendor's copy, which writes a source pixel with alpha 0 as
+ * 0x00000000. 1 to 4 are the exact-copy experiment's candidates (docs/g2d-os.md#copy-paths); after its board run one
+ * of them becomes the exact copy and the others are removed. */
+enum { SS_G2D_PATH_VENDOR = 0, SS_G2D_PATH_MARKERS = 1, SS_G2D_PATH_PREMULTIPLIED = 2, SS_G2D_PATH_ROP_COPY = 3,
+       SS_G2D_PATH_NO_FILL = 4 };
 /* One operation. The rest of the output is unchanged.
  * - Fill writes color (ARGB, 32 bits) to the w by h rectangle at dx, dy of an ARGB8888 output; source, sx and sy are
  *   zero.
@@ -107,7 +112,7 @@ enum { SS_G2D_FILL = 1, SS_G2D_BLIT = 2 };
 struct ss_g2d_job {
     uint32_t op, color;
     struct ss_g2d_surface source, output;
-    uint32_t sx, sy, dx, dy, w, h, reserved[2];
+    uint32_t sx, sy, dx, dy, w, h, path, reserved;
 };
 #define SS_G2D_DONE_MAGIC UINT32_C(0x44443247) /* "G2DD" */
 /* The record of one operation. Times are system-counter ticks. */

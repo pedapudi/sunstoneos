@@ -90,6 +90,19 @@ LAUNCH = [(0x28, 0), (0x20, 0), (0x24, 1), (0x2c, None), (0x30, 0), (0x34, 128),
 # from (108, 13) to (8, 44) converting ARGB8888 to BGRA8888, operation 2 a 172 by 48 copy from (222, 206) to
 # (108, 131) unconverted.
 STAGE3 = (395, 257, 1644)
+# The command pages of the board-qualified image 916988f84c39 (runs 1794725199336568290-5c9e9da6 and
+# 1794714427314630502-a44050c7), by SHA-256: both stage-3 copies, and a stage-2-shaped fill. The vendor path's pages
+# must stay byte-identical to them.
+QUALIFIED_PAGES = {'blit1': '9199b2f7878a615c78fc40cbc61fb8adc76fc10861aff902e26ee90b0236ac21',
+                   'blit2': '9e77ad4dfe814f5ef2e1dc32b018d51ae80326abc359a89a5da8d296499fab2d',
+                   'fill': 'e4ed360e8c298dbd9977aa45d92a9298a8ad6092ddeb5e3d8c38051942fd94ce'}
+# The exact-copy candidates (include/a733_g2d_application.h): the page words, at their byte offsets, in which each
+# path's copy page differs from the vendor path's. The video layer's attribute word is at 128 and the blender at 384.
+V0, BLD = 128, 384
+PATH_WORDS = {1: {BLD + 0x10: 0x00a1b2c3, BLD + 0x44: 0x00d4e5f6},
+              2: {V0: None, BLD + 0x40: 1, BLD + 0x60: 1},
+              3: {BLD + 0x80: 0, BLD + 0x84: 0x61082},
+              4: {BLD + 0x00: 0x100}}
 STAGE3_OPS = [dict(w=282, h=114, sx=108, sy=13, dx=8, dy=44, format=0, output_format=3),
               dict(w=172, h=48, sx=222, sy=206, dx=108, dy=131, format=0, output_format=0)]
 
@@ -214,8 +227,10 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
 
     def post_blit(op):
         # A blit from region 1 (the source) to region 0 (the output), both of the shape's geometry.
-        uc.mem_write(job, bytes(jl['reserved'] + 8))
+        uc.mem_write(job, bytes(jl['reserved'] + (4 if 'path' in jl else 8)))
         put(job + jl['op'], 2)
+        if 'path' in jl:
+            put(job + jl['path'], op.get('path', 0))
         for surface, region, fmt in ((job + jl['source'], 1, op['format']), (job + jl['output'], 0, op['output_format'])):
             put(surface + sl['region'], region); put(surface + sl['format'], fmt); put(surface + sl['offset'], offset, 8)
             put(surface + sl['width'], width); put(surface + sl['height'], height); put(surface + sl['stride'], stride)
@@ -527,6 +542,9 @@ def check_blits(record, state, engine, update_sticks):
         assert o['status_after'] == 4 and o['update_after'] == (1 if update_sticks else 0) and o['mixer_after'] == 0, \
             (name, 'after-operation words', hex(o['status_after']), hex(o['update_after']), hex(o['mixer_after']))
     assert record['built'] == [True, True], (name, 'the command page differs from the builder\'s for the plan')
+    pages = [hashlib.sha256(o['page']).hexdigest() for o in ops]
+    assert pages == [QUALIFIED_PAGES['blit1'], QUALIFIED_PAGES['blit2']], \
+        (name, 'the vendor path\'s copy pages must equal the board-qualified image\'s', pages)
     cache = state['cache']
     assert [op for op, _, _ in cache] == [CACHE_CLEAN_INVALIDATE, CACHE_CLEAN, CACHE_CLEAN_INVALIDATE] * 2, (name, cache)
     for (op, at, n), base in zip(cache, [SURFACE, SOURCE, SURFACE] * 2):
@@ -542,6 +560,27 @@ def check_fills(record):
         (name, 'the second operation must launch although 0x28 read 1 after the first',
          [(o['result'], o['fault_step'], hex(o['fault_value'])) for o in ops])
     assert [o['irq_count'] for o in ops] == [1, 2], (name, ops)
+    pages = [hashlib.sha256(o['page']).hexdigest() for o in ops]
+    assert pages == [QUALIFIED_PAGES['fill']] * 2, (name, 'the fill pages must equal the board-qualified image\'s', pages)
+
+
+def check_paths(record):
+    """Stage-3 operation 2's copy once on each path, 0 to 4, in one session: every copy completes, and each candidate's
+    page differs from path 0's in exactly its PATH_WORDS, with those values; path 0's page is the qualified one."""
+    name, ops = record['case'], record['ops']
+    assert [(o['result'], o['fault_step']) for o in ops] == [(1, 0)] * 5 and record['phase'] == OPEN, \
+        (name, [(o['result'], o['fault_step'], hex(o['fault_value'])) for o in ops])
+    base = ops[0]['page']
+    assert hashlib.sha256(base).hexdigest() == QUALIFIED_PAGES['blit2'], (name, 'path 0 page')
+    word = lambda page, at: struct.unpack_from('<I', page, at)[0]
+    for path in range(1, 5):
+        page = ops[path]['page']
+        differ = {at for at in range(0, len(page), 4) if word(page, at) != word(base, at)}
+        want = PATH_WORDS[path]
+        assert differ == set(want), (name, path, 'differing words', sorted(hex(a) for a in differ))
+        for at, value in want.items():
+            expect = word(base, V0) | 1 << 16 if value is None else value
+            assert word(page, at) == expect, (name, path, hex(at), hex(word(page, at)), hex(expect))
 
 
 def check_close(record, step, closes):
@@ -605,6 +644,10 @@ def main():
     blits = {'blits-update-sticks': True, 'blits-update-clears': False}
     cases += [(n, STAGE3 + (0,), {'blits': STAGE3_OPS, 'update_sticks': v}) for n, v in blits.items()]
     cases += [('fills-update-sticks', stage2(), {'fills': 2, 'update_sticks': True})]
+    # The exact-copy candidates: stage-3 operation 2's copy on paths 0 to 4 in one session.
+    cases += [('copy-paths', STAGE3 + (0,), {'blits': [dict(STAGE3_OPS[1], path=p) for p in range(5)]})]
+    # A path outside 0 to 4 is refused before any write.
+    cases += [('path-refused', STAGE3 + (0,), {'blits': [dict(STAGE3_OPS[1], path=5)]})]
     for name, shape, options in cases:
         try:
             record, state, engine = run_case(image, parts, fields, name, *shape, **options)
@@ -612,6 +655,12 @@ def main():
                 check_surface(record, state, engine)
             elif name == 'fills-update-sticks':
                 check_fills(record)
+            elif name == 'copy-paths':
+                check_paths(record)
+            elif name == 'path-refused':
+                op = record['ops'][0]
+                assert (op['result'], op['fault_step']) == (-1, 48) and record['phase'] == OPEN, (record['ops'], record['phase'])
+                assert not record['ops'][0]['writes'], (name, 'a refused path wrote', record['ops'][0]['writes'])
             elif name in blits:
                 check_blits(record, state, engine, blits[name])
             elif name in closes:
@@ -639,9 +688,10 @@ def main():
             if not row['passed']:
                 print('FAIL', row['case'], row['error'][:600])
         raise SystemExit(f'{len(failures)} of {len(rows)} cases failed')
-    print(f'PASS G2D operation path: {len(rows) - 3 - len(closes) - len(blits)} surfaces, cache refusal leaves the '
+    print(f'PASS G2D operation path: {len(rows) - 5 - len(closes) - len(blits)} surfaces, cache refusal leaves the '
           f'service open, timeout faults, {len(closes)} closes after a fault, both stage-3 copies in one session, two '
-          f'fills with the update bit left set')
+          f'fills with the update bit left set, the vendor path\'s pages equal the qualified image\'s, and the four '
+          f'exact-copy candidates change only their own words; a path outside 0 to 4 is refused')
 
 
 if __name__ == '__main__':

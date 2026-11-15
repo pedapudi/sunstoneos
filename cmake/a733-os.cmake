@@ -49,6 +49,12 @@ elseif(SUNSTONE_APPLICATION STREQUAL "g2d-check")
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/g2d-check/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/g2d-check/manifest.json")
   add_sunstone_image(sunstone-a733-os-g2d-check LIFETIME ${os_lifetime} APPLICATION g2d-check)
+elseif(SUNSTONE_APPLICATION STREQUAL "g2d-paths")
+  # The G2D exact-copy experiment: one copy on each blender path (docs/g2d-os.md#copy-paths).
+  add_sunstone_application(g2d-paths
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/g2d-paths/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/g2d-paths/manifest.json")
+  add_sunstone_image(sunstone-a733-os-g2d-paths LIFETIME ${os_lifetime} APPLICATION g2d-paths)
 elseif(SUNSTONE_APPLICATION STREQUAL "i2c-scan")
   add_sunstone_application(i2c-scan
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/i2c-scan/main.c"
