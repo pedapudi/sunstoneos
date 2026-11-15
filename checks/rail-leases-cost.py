@@ -30,6 +30,8 @@ from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X
 if not __debug__:
     raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
+GATE_RUNS = [['--limits']]  # the gate enforces the budgets; without the flag the check only prints its measurements
+
 HERE = Path(__file__).resolve().parent
 CACHE = Path.home() / '.cache/sunstoneos'
 CLANG = Path('/usr/bin/clang-21')
@@ -217,6 +219,16 @@ def measure(root):
     return results
 
 
+# The instruction budget of a clock token status read, itemized by what the operation must do. The status read is the poll that the USB,
+# GPU performance and PMIC drivers make against a token they hold; the check protects that a poll costs one slot lookup and no scan
+# (the equal-cost assertion below) and a fixed number of instructions around it. Each item is a behaviour the status result requires, with
+# the instructions it was measured to add; a change that adds code to the read adds an item and its reason here, in the same commit.
+CLOCK_STATUS_BUDGET = (
+    ('registry entry, one slot lookup comparing the four token fields, registry exit (design measurement, docs/designs/power-authority.md)', 45),
+    ('a retained token reports FAULT: load the retained bit of the slot, test it, select the result (a6124e535, SD0 fault isolation)', 6),
+)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--root', type=Path, default=HERE.parent)
@@ -234,7 +246,7 @@ def main():
         for label in ['small', 'full']:
             row = results[label]
             assert row['rail_status']['instructions'] <= 60 and row['rail_status']['lines'] <= 3, row
-            assert row['clock_status']['instructions'] <= 50, row
+            assert row['clock_status']['instructions'] <= sum(count for _, count in CLOCK_STATUS_BUDGET), row
             assert row['acquire_poll_release']['instructions'] <= 450, row
             assert row['authority_per_transaction']['instructions'] <= 6, row
         # No scan: the cost does not grow with the number of holders.
