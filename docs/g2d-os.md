@@ -195,9 +195,9 @@ The four tables (`SS_G2D_CSC_*`) name the source's colour space, and the RGB out
 | `SS_G2D_CSC_BT709_LIMITED` | BT.709, Y 16 to 235 | 1.164 (0x4a8) | `Ycbcr2rgb_709`, words 0 to 11 |
 | `SS_G2D_CSC_BT709_FULL` | BT.709, Y 0 to 255 | 1.0 (0x400) | `Ycbcr2rgb_709`, words 24 to 35 |
 
-The vendor's arrays (g2d_bld.c 37-50 and 66-79) hold four 12-word blocks each. Their labels do not match their contents. The block labelled full to limited, words 0 to 11, holds the limited-to-full conversion: Y times 1.164 and a constant of -222.9 for R. Words 12 to 23 hold limited to limited, words 24 to 35 full to full, and words 36 to 47 full to limited, which multiplies Y by 0.858 (0x36f). The builder selects each table by its contents. Each block gives, for R, G and B in turn, the Y, U and V coefficients with 10 fraction bits and then the constant times 1024.
+The vendor's arrays (g2d_bld.c 37-50 and 66-79) hold four 12-word blocks each. Each block gives, for R, G and B in turn, the Y, U and V coefficients with 10 fraction bits and then the constant times 1024. The builder selects the blocks by their contents, not by the vendor's labels ([Vendor sequence and the native diff](#vendor-conversion-path-and-the-native-diff)).
 
-### Vendor sequence and the native diff
+### Vendor conversion path and the native diff
 
 The reference is `g2d_bsp_bitblt` with flag G2D_BLT_NONE (g2d_mixer.c 304-371 in linux-orangepi 2ac08e8c, bsp/drivers/g2d/g2d_rcq) for a YUV source and an RGB output. [a733_g2d_convert_commands](../drivers/g2d/a733_g2d_convert.c) writes the same register images into the mixer's command page, with the block headers and their order of `a733_g2d_commands_at`:
 - **Video layer V0** (`g2d_vlayer_set`, g2d_ovl_v.c 244-335): the format code, both plane addresses and pitches, and the rectangle.
@@ -207,6 +207,8 @@ The reference is `g2d_bsp_bitblt` with flag G2D_BLT_NONE (g2d_mixer.c 304-371 in
 - **Write-back** (`g2d_wb_set`): the output's format, address, pitch and size.
 
 The vendor has a second YUV-to-RGB path, csc0 in `g2d_bsp_bld`, which the builder does not use. g2d_mixer.c 202 reads `if (src->resize.w == 0 || src->resize.h)`, which refuses every job with a nonzero height, so the csc0 branch never runs for a real frame. The scaler words come from g2d_scal.c, which the vendor's bitblt path reaches, rather than from that branch.
+
+The vendor's YUV-to-RGB block labels do not match their contents either. The block labelled full to limited, words 0 to 11, holds the limited-to-full conversion: Y times 1.164 and a constant of -222.9 for R. Words 12 to 23 hold limited to limited, words 24 to 35 full to full, and words 36 to 47 full to limited, which multiplies Y by 0.858 (0x36f). A table chosen by its label would compress full-range RGB output into 16 to 235, so the builder selects each table by its coefficients.
 
 The builder writes nothing for a job that the vendor refuses or that the registers cannot hold:
 - a format other than 0x24 and 0x25, an output format above 7, or an unknown table;
@@ -236,3 +238,22 @@ Frame B is one flat colour (Y 150, U 90, V 170) in its left half and a luma ramp
 The record keeps each output rectangle's CRC-32, the exact region's and the padding's, the alpha bytes, two whole rows of each conversion and the middle row of each scale, and each operation's launch-to-interrupt time. After the engine is closed, one A76 core converts frame A with the BT.601 limited table three times in C, as the CPU reference. That code is scalar integer C built with -O2 -march=armv8.1-a+lse -mgeneral-regs-only -mtune=cortex-a55, with no NEON, at the approved CPU-B point of 2002 MHz.
 
 [The decoder](../apps/g2d-convert/host.py) rebuilds both frames and names, for each conversion, which of 32 models the exact region matches: each of the eight vendor blocks under each of the four rules. In the sampled rows it names the chroma interpolation (the scaler's half-phase taps -4, 36, 36 and -4 over 64, the nearest pair, or linear). For the scales it applies a model of the scaler and reports the largest difference over the ramp. It reports the engine's pixel rate in Mpixel/s over the input and the output pixels, and the CPU's over the frame. [g2d-convert-host.py](../checks/g2d-convert-host.py) builds the application on the host with a CPU model of the engine and checks the decoder against it and five mutant engines: rounding down, V first, uninterpolated chroma, a missed pixel and a scale that times out.
+
+Run `1794749218366895381-6f184f31` (port 3-1, image 31ab76340302, built at 635fef995) missed the prediction and stopped before the scales, as the stop rule requires. Both conversions completed, and no candidate rule matched them:
+
+| Conversion | Table | Rectangle CRC-32 | Mismatches in the exact region (of 145,920 pixels): nearest/uv, down/uv, nearest/vu, down/vu | Launch to interrupt |
+| --- | --- | --- | --- | --- |
+| 1 | BT.601 limited | 0xa04060fd | 103,385; 8,971; 144,326; 144,204 | 1050.5 µs |
+| 2 | BT.709 full | 0x5676719f | 105,391; 8,973; 145,008; 144,559 | 1049.1 µs |
+
+Every rectangle word had alpha 0xff, and the row padding and the source were unchanged. The open and the close returned 1, the close gated the engine (CCU words 0) and the session returned normally in 22.4 s.
+
+One model of the engine reproduces both 640 by 480 rectangles: its CRC-32 values equal the board's.
+- **Luma floor.** Y below 16 is raised to 16 before the table, for both tables, the full-range one included. There is no upper luma limit and no chroma limit. This accounts for every down/uv mismatch: the model differs from plain rounding down at 8,971 and 8,973 pixels, the counts the application measured.
+- **Rounding.** The table's result is rounded down (the `>> 10` without the 512 term).
+- **Byte order.** U is the first byte of each chroma pair, so code 0x24 is NV16.
+- **Chroma interpolation.** An odd pixel's chroma is the scaler's half phase, (-4, 36, 36, -4) over 64 rounded to nearest, over the neighbouring pairs. The last pixel of a row (x = 639) takes its own pair.
+
+The model was derived from the run's records: the exact region's mismatch counts, its CRC-32 (0xa2d55262 and 0x24b4dc15, equal to the model's) and the two sampled rows of each conversion. It has not been tested on a second frame. The vendor source does not show which block applies the luma floor. A full-range camera frame therefore loses luma 0 to 15.
+
+The engine converted 640 by 480 pixels in 1050 µs, 292 Mpixel/s at a module clock of 300 MHz. One A76 core at 2002 MHz took 2718 µs on the first run and 2696 and 2697 µs on the next two, 114 Mpixel/s, with the predicted rule rather than the engine's. That reference is scalar integer C without NEON, so it is a lower bound on the CPU's rate: the engine is 2.6 times faster than scalar C. Whether the engine is faster than a NEON conversion is not measured, and the 2:1 and 224 by 224 scales did not run.
