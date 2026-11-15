@@ -544,18 +544,28 @@ these counts per job:
 Every sample fell on the predicted side of its period end, every pre sample showed the previous period, idle and the
 core-2 stream counted 0 on both ports, every output matched its reference, and PLL_NPU and the top point held.
 
-- **GPU.** Mode 1 repeated the four-elements-per-lane counts within 0.2% and ran 4% faster. Mode 0 dropped
-  65,548 read requests per job, the 65,536 per-lane argument loads, and kept the writes within 0.05%. The rate rose
-  1.54 times. That clears the 1.5 threshold, but it is below both forms of the request-rate model (1.93 to 2.76
-  times) and above the residency bound (1.25 times), so neither model predicts it. The read-request rate fell from
+- **GPU: both models missed.** Mode 1 repeated the four-elements-per-lane counts within 0.2% and ran 4% faster.
+  Mode 0 dropped 65,548 read requests per job, the 65,536 per-lane argument loads, and kept the writes within 0.05%.
+  The rate rose 1.54 times. The decoder's threshold of 1.5 classed this as the request-rate model, but that model
+  predicted 1,302 to 1,855 jobs/s and the run measured 1,080, below its range; residency predicted at most 1.25
+  times, which the run exceeded. The read-request rate fell from
   71.9 M/s to 40.2 M/s, and the mean read latency from 245.6 to 173.1 NSI cycles. Reads outstanding, rate times
   latency, fell from about 29 to about 12. The port therefore did not run at a fixed request rate in mode 0.
-- **NPU.** Neither row rule holds. At 128, 192 and 256 values per row, each write request carries 10 units and
+- **NPU: the row-rule prediction missed.** Neither rule fits the four widths, and the read units missed their
+  range at 128 and 256 values per row. At 128, 192 and 256 values per row, each write request carries 10 units and
   there is one request per 64 values, so the write units are 1.25 times the bytes written divided by 16. At 176
   values per row the write units equal 512 bytes per row, 1.45 times the bytes. The rows of 192 values moved fewer
   write units than the rows of 176 values, at the same job rate.
 
-The run returned in 4.50 s from arming, with 4.23 s of phases, against a 55 s session bound.
+| Width | Write units, rows rule | Bursts rule | Measured | Read units predicted (rows rule) | Measured |
+|---|---|---|---|---|---|
+| 176 | 32,768 | 32,768 | 32,765 | 35,087-37,257 | 36,145 |
+| 128 | 32,768 | 16,384 | 20,480 | 35,087-37,257 | 24,884 (miss) |
+| 192 | 32,768 | 32,768 | 30,718 | 35,087-37,257 | 37,169 |
+| 256 | 32,768 | 32,768 | 40,968 | 35,087-37,257 | 45,373 (miss) |
+
+The arguments-once gain is measured; the GPU throughput model and the NPU row rule remain open. The run returned in
+4.50 s from arming, with 4.23 s of phases, against a 55 s session bound.
 
 
 ## Stage 2: DMA completion timing
