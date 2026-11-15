@@ -100,8 +100,12 @@ are received; messages 2 and 4 are sent. Flags identify unqualified entropy,
 SSID match, PSK and CCMP support, target construction, entropy readiness,
 credential presence and entropy failure. The tail also records the number of
 matching scan results, selected frequency and RSSI, and connection and
-authorization times. It holds no SSID, key or credential byte. The access point
-list in this stage also omits SSIDs.
+authorization times. It holds no SSID, key or credential byte.
+
+No stage's access point list names an SSID. A scan hears the user's network
+among its neighbours, and the record reaches the host's result files; the list
+keeps each BSSID, frequency and RSSI. `checks/board-radio.c` checks that the
+scan-only record holds no name although the scan heard two.
 
 An association miss (a refused association, a timeout or a handshake that never
 completes) retains the radio, so its return ends at the watchdog and the record

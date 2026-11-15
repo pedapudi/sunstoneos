@@ -44,6 +44,14 @@ struct a733_thermal_policy;
  * has finished, 0 before, and -1 after publishing a terminal failure. The
  * caller must end the session on -1, preserving retained ownership. */
 int os_perf_step(struct a733_cpu_clock *, const struct a733_thermal_policy *, int burst);
+/* The failure record's value word after os_perf_step returned -1 (apps/os/cpu.c): bit 31 set, 2:0 the burst's driver
+ * result, 3 the service's failed flag, 8:4 the engine's retained blocks, 11:9 its failed block (5 none), 13:12 the
+ * snapshot's request stage, 15:14 the service phase (boot wait, boot read, boot switch, serve), 17:16 the engine phase
+ * (idle, apply, release, read), 20:18 the last PMIC answer, 23:21 the last rail ledger answer, 27:24 the statement that
+ * set the failed flag (0 none, 1 time read, 2 snapshot unanswered at its deadline, 3 snapshot refused, 4 reap, 5 rail
+ * release, 6 NPU retune failed, 7 NPU retune unanswered, 8 GPU), 29:28 the rail index of the last snapshot (DCDC5,
+ * DCDC3, DCDC4, DCDC2), 30 a CPU transition was in flight. Decoded by tools/a733-crumbs.py. */
+uint32_t os_perf_fault_word(int burst);
 /* USB0 task: answers one operation 8 request that passed the framing rules. */
 void os_perf_usb(unsigned command, uint32_t selection, uint64_t epoch, uint8_t out[OS_PERF_REPORT_BYTES]);
 #ifdef SUNSTONE_A733_OS_GPU

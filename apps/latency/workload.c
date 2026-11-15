@@ -324,6 +324,12 @@ void ss_latency_tick_hook(uint64_t due)
     unsigned p = atomic_load_explicit(&phase, memory_order_acquire);
     if (p == BUSY) latency_dma_model_tick();
     if (p != IDLE && p != BUSY) return;
+    /* A tick that came due before this phase began belongs to the phase before it: the interrupt reached this core late. The
+     * recorder places a sample in the phase that holds its whole interval, so a release for such a tick would count toward
+     * the phase's samples without being in its window. Release only ticks that came due inside the phase. */
+    uint64_t bounds[SS_LAT_PHASES][2];
+    ss_latency_phase_bounds(bounds);
+    if (due < bounds[p == IDLE ? SS_LAT_IDLE : SS_LAT_BUSY][0]) return;
 #ifdef SUNSTONE_LATENCY_TLBI
     tlbi_broadcast();
 #endif
@@ -469,6 +475,18 @@ void ss_kernel_test_self_suspend_published(void)
         !atomic_load_explicit(&stop_load, memory_order_acquire)) return;
     portYIELD_CORE(1);
     for (unsigned spin = 0; spin < 100000; ++spin) __asm__ volatile("isb" ::: "memory");
+}
+#endif
+#if defined(SUNSTONE_LATENCY_MODEL) && defined(SUNSTONE_LATENCY_CAUSE)
+/* The failure line is one write of one string, so that another core's output cannot split it. apps/latency/model.c's
+ * broken-ping check (checks/latency-cause-model.py) looks for it: a planted defect is seen when its peer reports it,
+ * whatever other failure a slow host reaches first. */
+void ss_latency_cause_ping_failed(unsigned pair, unsigned status)
+{
+    char line[] = "latency cause ping failed: pair=0 status=0\n";
+    line[sizeof("latency cause ping failed: pair=") - 1] = (char)('0' + pair % 10u);
+    line[sizeof("latency cause ping failed: pair=0 status=") - 1] = (char)('0' + status % 10u);
+    platform_puts(line);
 }
 #endif
 static void wait_period(unsigned milliseconds)
