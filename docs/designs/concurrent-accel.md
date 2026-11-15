@@ -193,8 +193,10 @@ larger transfers keep more requests in flight. Stage 1c measured larger jobs and
 
 ### Hardware features that could bound CPU bandwidth
 
-No register named here has been read on the board, and none may be written without a hypothesis that the coordinator
-approves.
+None of these registers may be written without a hypothesis that the coordinator approves. The DRAM training capture
+read AXI2HIF bridge 0 at +0x00 to +0x6c on port 3-1 in two lifetimes (`board-session-20261025-26`, `dc-capture-1` and `-2`),
+from boot0's Secure context, with identical words; +0x30 and +0x48 to +0x5c read 0. Both bridges, the path select and
+the DRAM0 clock have since been read at EL1 ([the AXI2HIF limiter](#the-axi2hif-limiter-in-the-vendor-driver)).
 
 - **AXI2HIF bandwidth limiter**, at 0x0a030000 and 0x0a040000. +0x30 enables the limiter (bit 0) and each limit (bit
   16+p). +0x48 and +0x4c hold the bandwidth and saturation for the total, +0x50 and +0x54 for reads, +0x58 and +0x5c for
@@ -317,6 +319,109 @@ Under the stage-1c decision rule the next lever is CPU-side bounding: the AXI2HI
 listed under stage 1b, read without writes. That limiter bounds bytes per period, while stages 1b and 1c both show a
 loss that follows bytes weakly. A counter run that measures outstanding requests and latency per master would show
 whether a byte limit can help before any limiter write.
+
+## The AXI2HIF limiter in the vendor driver
+
+**The limiter bounds the eight CPU cores together, so it cannot exempt the real-time cores.** The DSU (the cluster's
+shared unit, which holds the L3 cache and the bus ports) sends every core's DRAM traffic through both AXI2HIF bridges.
+A bandwidth cap on the bridges therefore also delays the cache misses of cores 1-7 and of the core-0 chase. Any policy
+that applies the cap is judged first by the worst-case latency on cores 1-7 with the cap on, and NPU throughput counts
+only under that bar.
+
+The sources are the vendor kernel's `drivers/bus/sunxi-nsi.c`, `sunxi-nsi.h` and `sunxi-nsi-bw.c`, the A733 device
+tree `sun60iw2p1.dtsi` and the vendor A733 kernel configuration.
+
+### The limiter counts CPU traffic only
+
+- The device tree's NSI node (lines 1470-1503) names two CPU-direct masters: `cpu0` (NSI id 19) with registers at
+  0x0a030000 and `cpu1` (id 20) at 0x0a040000. Both use `cpu_direct_mux = <0x08000200 bit 0>`. The GPU (port 6),
+  display (2), NPU (18), ISP and CSI (16, 17), video units, IOMMUs and USB/PCIe are NSI ports, which reach DRAM through
+  the target agents (ports 32 and 33).
+- The vendor driver computes DRAM bandwidth as the bridge counters plus the target-agent counters
+  (`sunxi-nsi-bw.c` lines 70-79 and 146-155). The bridges and the NSI are separate paths to the DRAM controller.
+- `CLUSTERCFR_EL1` reads 0x073fc237 on the board (the scheduler latency report). Bits 10:9 = 01 mean two 128-bit ACE
+  master ports, bit 11 = 0 means no accelerator coherency port, and bit 12 = 0 means no peripheral port, so no device
+  enters through the DSU. The two bridges are the two ACE ports. The DSU sends each request to one port by one bit of
+  its physical address (`INTERLEAVE_ADDR_BIT`, a build parameter between 6 and 12 that software cannot read; DSU TRM
+  100453, Table A1-1), so every core's traffic reaches both bridges.
+
+That every core reaches both bridges rests on these sources and on the one measured register.
+
+### Registers, clock and units
+
+Each bridge has the same words (`sunxi-nsi.h` lines 394-420):
+
+- +0x20, +0x24, +0x28: counter enable, clear and period. +0x80 to +0x94: read and write requests, data and latency.
+- +0x2c QoS, +0x34 priority and +0x38 input/output select, which the vendor writes for no CPU-direct master.
+- +0x30 (`CPU_IAG_MODE`): bit 0 enables the limiter and bit 16+p enables limit p.
+- +0x48 + 8p: bandwidth, 12 bits. +0x4c + 8p: saturation, 10 bits. Limit p = 0 bounds the total, 1 the reads and 2
+  the writes.
+
+The counting clock is the device tree's `cpu_direct` clock, `CLK_DRAM0` (CCU 0x0c00). Every rate computation in the
+driver prefers it (`sunxi-nsi.c` lines 442-447, 647-652 and 1694-1699). DRAM0 runs at PLL_DDR ÷ 4 (CCU word
+0x80000003). PLL_DDR is PLL_REF × (N+1)/(M+1), with its VCO at most 2.52 GHz (`ccu-sun60iw2.c`, `pll_ddr_clk`). With
+PLL_REF at 24 MHz, boot0's reported 2,040 MHz DRAM clock puts DRAM0 at 510 MHz, which the EL1 read below confirms.
+
+The vendor's arithmetic (`sunxi-nsi.c` lines 251-262 and 401-488), which the vendor never ran on the A733, at
+f = 510 MHz:
+
+- Bandwidth word = 256 × MB/s ÷ f, so one unit is 1/256 byte per DRAM0 cycle. 1,000 MB/s gives 501, which the
+  driver reads back as 998 MB/s. The largest word, 4,095, is 8,158 MB/s per bridge; two bridges together reach
+  16.3 GB/s, the DRAM pin rate.
+- Saturation word = the bytes of 2,630 cycles (5.16 µs) in 16-byte units: 321 for 1,000 MB/s. The word reaches its
+  10-bit limit above 3,174 MB/s per bridge. The 16-byte unit is the NSI ports' unit and is unverified for the bridges,
+  whose counters count 64-byte units (device tree `cpu_pmu_data_unit`).
+- The vendor's limit request divides the asked total between the bridges (`sunxi-nsi.c` lines 2061-2077).
+
+### Vendor sequence
+
+For each bridge, under one mutex (`nsi_set_cpu_rw_bwl`, `sunxi-nsi.c` lines 401-488):
+
+1. Read +0x30 and write it back with bit 16+p clear.
+2. Write the bandwidth word to +0x48 + 8p and the saturation word to +0x4c + 8p, each clamped to its width.
+3. If limits are enabled, write the value of step 1 with bit 16+p and bit 0 set.
+
+Enabling all configured limits is one read-modify-write of +0x30 that sets bit 0 and the limit bits
+(`nsi_set_cpu_rw_bw_en`, lines 337-395). Disabling clears bits 16-18 and bit 0 and leaves the bandwidth and saturation
+words. A policy that writes those words once can therefore switch the cap with one read and one write of +0x30 per
+bridge: four device accesses, at most 6.4 µs at the 1.6 µs per access measured for translated register accesses
+([NPU full model](npu-full-model.md)).
+
+Every access to +0x30 and +0x48 to +0x5c is in these functions, their show routine (lines 1674-1717), the limit
+ioctls (lines 2054-2080), the `cpu_rw_bwl` sysfs store (lines 1788-1796) and resume (lines 2002-2007). The sysfs store
+cannot work with this device tree: it passes `ia_master.ia_index`, which shares a union with the bridge's mapped
+address (`sunxi-nsi.h` lines 53-66), as the limit number. All of them build only with `CONFIG_AW_NSI_CPU_CHANNEL`, which
+the vendor A733 configuration leaves unset, so the shipped kernel never writes the limiter. Boot0 writes +0x18 and
++0x68 only, and the SCP firmware writes +0x08, +0x18 and +0x68 on both bridges.
+
+The shipped kernel (`CONFIG_AW_NSI=y`) does reach the bridges from Non-secure EL1 without the limiter code: it reads
+0x08000200 at probe (line 1304), maps both bridges (line 1326), writes +0x20 to +0x28 when a user sets the counter
+period (lines 626-709) and reads +0x80 to +0x94 in its bandwidth, latency and request reports (`sunxi-nsi-bw.c`).
+
+### Both bridges read at EL1 match boot0's values, with the limiter off
+
+The hardware facts probe ([facts probe](../hardware/a733-facts-probe.md)) reads the DRAM0 clock words, PLL_DDR, the
+path select and both bridges at EL1 on core 0 and writes nothing. One returning run on port 3-1 (queue entry
+`1794744873056408964-85d3ad7d`, image `d25c82783579`) returned normally, and the facts file holds every word.
+
+- **Gates.** DRAM0_CLK `0x02002c00` reads 0x80000003 (gate open, source PLL_DDR, divider 4), DRAM0_BGR `0x02002c0c`
+  reads 0x00010001 (bus gate open, reset deasserted) and the path select `0x08000200` reads 0x1. All three opened,
+  so CPU traffic takes the bridges and the probe read every bridge word.
+- **Bridges.** All 34 words of bridge 1 equal those of bridge 0, and bridge 0's +0x00 to +0x6c equal the Secure-context
+  capture word for word: +0x00 0x1, +0x04 0x20220410, +0x08 0x2, +0x10 0x101010, +0x14 0x10, +0x18 0x8002, +0x1c 0x3,
+  +0x2c 0x1, +0x38 0x1, +0x3c 0x4, +0x40 0x8, +0x44 0xc, +0x64 0x1 and +0x68 0xffffffff; every other word reads 0. The
+  limiter words read 0: +0x30 and +0x48 to +0x5c on both bridges. The counters +0x80 to +0x94 read 0, with the period words
+  +0x20 to +0x28 at 0.
+- **Clock.** PLL_DDR_CTRL `0x02002020` reads 0xf9005400. Enable, LDO, lock enable, lock and output gate (bits 31 to
+  27) are set, N = 0x54 and the output divider (bits 22 to 20) is 0. Bit 24, which the hypothesis did not predict, is
+  PLL_FREF_SEL (U-Boot's `clock_autogen.h` for sun60iw2p1): set, the PLL takes PLL_REF rather than the crystal, as the
+  kernel's clock tree also says. No run has read PLL_REF; at the 24 MHz that boot0's DRAM report implies, PLL_DDR =
+  24 × 85 = 2,040 MHz. The pattern words read 0 and 0x30000000; pattern 0's enable bit (31) is clear, so the PLL runs
+  without sigma-delta modulation. DRAM0, and with it the limiter's counting clock, runs at 2,040 ÷ 4 = 510 MHz, the
+  rate the units above assume.
+
+Non-secure EL1 therefore sees both bridges, which hold boot0's values with every limit disabled. These words are the
+reset values that a limiter owner restores.
 
 ## The GPU add waits on memory four times per task
 
@@ -455,9 +560,10 @@ The NPU relu (1,024 rows of 176 16-bit values) writes 32,768 units, 512 bytes pe
 reads are those units plus a residual of 3,404 units in 1,182 requests. Its write requests (2,690) fit neither 16-beat
 bursts (2,048) nor splits at 256-byte boundaries (2,944).
 
-The two CPU bridges (AXI2HIF, 0x0a030000 and 0x0a040000) have counters too. The vendor driver accesses them behind
-a clock (`cpu_direct`, CCU 0x0c00 and 0x0c0c) and a selector bit (0x08000200) that no capture from port 3-1 has read.
-They are left to a later stage.
+The two CPU bridges (AXI2HIF, 0x0a030000 and 0x0a040000) have counters too, at +0x80 to +0x94. Their clock
+(`cpu_direct`, DRAM0 at 510 MHz) and the path select read open at EL1, and the counters read 0 while disabled
+([both bridges read at EL1](#both-bridges-read-at-el1-match-boot0s-values-with-the-limiter-off)). Enabling them needs
+writes to +0x20 to +0x28, which no run has made.
 
 ### Arguments once per task
 

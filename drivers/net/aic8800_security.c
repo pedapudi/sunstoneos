@@ -96,8 +96,12 @@ enum aic8800_codec_result aic8800_security_response(struct aic8800_security *s,c
     aic8800_security_observe(s,owner,now);if(s->state==AIC8800_SECURITY_FAULT)return AIC8800_CODEC_MALFORMED;
     if(s->state!=AIC8800_SECURITY_WAITING||!r->has_message||r->message_id!=s->expected_cfm)return AIC8800_CODEC_UNRELATED;
     s->seen_cfm_bytes=r->parameter_bytes;s->seen_cfm_status=r->parameter_bytes?r->parameters[0]:0;
-    if(r->parameter_bytes>sizeof(s->last_cfm)||(s->operation==AIC8800_SECURITY_ADD&&r->parameter_bytes!=4))goto fail;
-    s->last_cfm_bytes=r->parameter_bytes;for(unsigned i=0;i<r->parameter_bytes;++i)s->last_cfm[i]=r->parameters[i];
+    /* As the reference's command manager (rwnx_cmds.c), a confirmation is read for the fields used and its
+     * parameter length is not otherwise checked: MM_KEY_ADD_CFM's status and hw_key_idx are its first two
+     * bytes, and the board's firmware sends exactly those two (run 6). Longer copies keep the first bytes. */
+    if(s->operation==AIC8800_SECURITY_ADD&&r->parameter_bytes<2)goto fail;
+    size_t kept=r->parameter_bytes>sizeof(s->last_cfm)?sizeof(s->last_cfm):r->parameter_bytes;
+    s->last_cfm_bytes=kept;for(unsigned i=0;i<kept;++i)s->last_cfm[i]=r->parameters[i];
     if(s->operation==AIC8800_SECURITY_ADD) {
         if(r->parameters[0])goto fail;
         for(unsigned i=0;i<AIC8800_SECURITY_KEYS;++i)if(i!=s->slot&&s->keys[i].valid&&s->keys[i].hardware_index==r->parameters[1])goto fail;

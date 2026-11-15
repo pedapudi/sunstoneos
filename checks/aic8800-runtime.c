@@ -41,7 +41,9 @@ static int runtime_write(void *ctx,uint32_t off,uint32_t value)
         if(binding_reply) {
             /* Unknown control record before the CFM must survive backpressure. */
             receive[0]=3;receive[2]=0x13;receive[4]=7;receive[5]=8;receive[6]=9;
-            uint8_t status[2]={(uint8_t)binding_status,0};message(receive+8,0x0416,status,binding_reply==2?2:1);
+            /* DBG_BINDING_CFM's status is its first byte; a longer confirmation is read the same way (rwnx_cmds.c),
+             * and one with no status byte is refused. binding_reply: 1 one byte, 2 two bytes, 3 none. */
+            uint8_t status[2]={(uint8_t)binding_status,0};message(receive+8,0x0416,status,binding_reply==2?2:(binding_reply==3?0:1));
             m.card[1][4]=1;
         }
     }
@@ -169,10 +171,22 @@ int AIC8800_RUNTIME_FIXTURE_MAIN(int argc,char **argv)
     }
     assert(runtime.binding_status==7&&runtime.error==AIC8800_RUNTIME_BINDING_REJECTED);retained_fault();
     fresh(1);binding_reply=2;
+    for(unsigned i=0;i<1000&&transport.state!=AIC8800_TRANSPORT_FAULT&&!runtime.binding_confirmed;++i) {
+        step();if(transport.held)assert(aic8800_transport_consume(&transport));
+    }
+    assert(runtime.binding_confirmed&&runtime.binding_status==0&&runtime.state==AIC8800_RUNTIME_RECEIVING);
+    fresh(1);binding_reply=3;
     for(unsigned i=0;i<1000&&transport.state!=AIC8800_TRANSPORT_FAULT;++i) {
         step();if(transport.held)assert(aic8800_transport_consume(&transport));
     }
     assert(transport.error==AIC8800_TRANSPORT_MESSAGE_ERROR&&!runtime.binding_confirmed);retained_fault();
+    /* DBG_BINDING_IND's 16 challenge bytes are read; a longer indication is accepted, a shorter one refused. */
+    fresh(0);memset(receive,0,sizeof(receive));
+    {uint8_t longer[20]={0};memcpy(longer,challenge_bytes,16);message(receive,0x0417,longer,20);}m.card[1][4]=1;
+    for(unsigned i=0;i<1000&&transport.state!=AIC8800_TRANSPORT_FAULT&&!runtime.binding_confirmed;++i) {
+        step();if(transport.held)assert(aic8800_transport_consume(&transport));
+    }
+    assert(runtime.binding_confirmed&&binding_transmissions==1);
     fresh(1);binding_reply=0;
     for(unsigned i=0;i<500&&runtime.state!=AIC8800_RUNTIME_WAITING;++i)step();
     assert(binding_transmissions==1);m.now=runtime.binding_deadline;step();
