@@ -2,7 +2,7 @@
 
 The G2D 2D engine at 0x05440000 is an OS-image service. An application declares the `g2d` device in its manifest, the session grants it as `SS_DEVICE_G2D`, and the application calls the class interface in include/sunstone_g2d.h. One owner task on core 0 (apps/os/g2d.c, priority 4) makes every G2D, CCU and GIC access for the service. The G2D service writes no PCK600 or PMIC register: the shared power-domain owner (drivers/power/a733_power_domains.c) powers domain 1 (DE_SYS) for it.
 
-Status: open and close are implemented and wait for their first board run. Fill, blit, scale and format conversion, the INTID 83 completion handler and the IOMMU mapping are not implemented yet.
+Status: open and close are implemented and qualified on port 3-1 (docs/evidence/display-g2d.jsonl). Fill, blit, scale and format conversion, the INTID 83 completion handler and the IOMMU mapping are not implemented yet.
 
 ## Vendor sequence and the native diff
 
