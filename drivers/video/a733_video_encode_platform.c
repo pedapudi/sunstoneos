@@ -36,6 +36,8 @@ static int encoder_init(struct a733_video_encoder *p,const struct a733_encode_pl
     if(!a733_video_unit_init(&p->unit,&a733_video_encoder_unit,&u,o,cookie))return 0;
     p->config=config;p->admit=admit;p->memory=memory;p->context=context;
     p->bound=p->checked=p->prepared=0;
+    /* The page walks run here, once per boot, so the first hold makes none (a733_video_platform.c, decoder_init). */
+    (void)a733_video_unit_native_map();
     return 1;
 }
 /* The codec binding binds its job on the first call and reports whether a

@@ -164,9 +164,9 @@ int a733_video_unit_irq_quiet(struct a733_video_unit *);
  * compound version, which is stored through the pointer in either case. The
  * words read are kept in identity. */
 int a733_video_unit_identity(struct a733_video_unit *,uint64_t *);
-/* Check once that every page a video binding accesses is identity-mapped Device-nGnRnE: 1 when it is. The first
- * native access makes the check when no caller has; an image calls this from its init so that the page walks fall
- * outside every hold. Non-AArch64 builds return 0. */
+/* Check once that every page a video binding accesses is identity-mapped Device-nGnRnE: 1 when it is. The decoder
+ * and encoder inits call it, so the page walks fall outside every hold; the first native access makes the check if
+ * no init has. Non-AArch64 builds return 0. */
 int a733_video_unit_native_map(void);
 /* Lowest native access for one allowlisted physical address on a checked
  * page: DSB SY before and after, volatile access. A nonzero owned mask

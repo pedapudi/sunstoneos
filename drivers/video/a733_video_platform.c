@@ -51,6 +51,9 @@ static int decoder_init(struct a733_video_decoder *p,const struct a733_video_pla
     p->config=config;p->admit=admit;p->memory=memory;p->context=context;
     p->version=p->reset_until=0;p->admitted=p->checked=p->mapped=p->prepared=p->step=p->cold_step=p->requested=0;
     p->cold=(struct a733_video_cold_record){0};
+    /* The page walks run here, once per boot, so the first hold makes none. Its result is decided again, without
+     * a walk, at each access; a host build has no pages to check. */
+    (void)a733_video_unit_native_map();
     return 1;
 }
 int a733_video_decoder_init(struct a733_video_decoder *p,const struct a733_video_platform_config *c,

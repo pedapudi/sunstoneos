@@ -204,7 +204,8 @@ static int tokens(void)
          * pinned. The decoder masters touch no memory in this stage. */
         static const struct a733_video_unit_ops ops={op_now,op_enter,op_leave,a733_video_platform_native_read,
             a733_video_platform_native_write,op_spin_now};
-        /* The page walks for the decoder's registers run here, once, not on each access inside a hold. */
+        /* The binding's init checks the pages once, outside every hold; a page that fails the check refuses the
+         * service here, before any access. */
         if(!a733_video_unit_native_map())return refuse(VD_STEP_CONFIG,3);
         if(!a733_video_decoder_init(&vd.decoder,c,&ops,NULL))return refuse(VD_STEP_CONFIG,2);
         vd.initialized=1;

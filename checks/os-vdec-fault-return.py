@@ -7,8 +7,8 @@ under AArch64 emulation, with the owner task run between supervisor passes as it
 initialized by its own a733_video_decoder_init from a configuration at the vendor point; the decoder is then left as
 the stage-1 board run 1794712072331160946-bd447f26 left it, refused in hold B (cold step 4) with PLL_VE0 running and
 open, the module gate open, and reset and bus gate released. The CCU, RTC, R_CCU, GIC, PCK and decoder pages are
-plain registers, and every page the binding uses passes the image's own Device-mapping check, made once: each case
-that accesses a register translates each of the ten pages once, however many registers it accesses. The clock and PCK lease
+plain registers, and every page the binding uses passes the image's own Device-mapping check, made once at the
+decoder's init: each case translates each of the ten pages once, there, however many registers it accesses. The clock and PCK lease
 registries answer that the decoder's leases are held. Time advances 10 ms per supervisor pass; the supervisor's
 shared bound is 3 s (OS_FAILURE_RETURN_US, apps/os/cpu-return.c), after which the image stops at site 0x742 and the
 watchdog reset ends the session.
@@ -69,8 +69,9 @@ SETTLE_US, BUDGET_US, PCK_BOUND_US, TICK_US = 5160, 100000, 10000, 1000
 CALL_US = 500000  # VD_CALL_US, the open's deadline
 DCDC2_VERIFIED = 1 << 2
 BOUND_US, PASS_US = 3_000_000, 10_000
-# The pages a733_video_unit_native_map checks, once per boot, each with one write translation (drivers/video/
-# a733_video_unit.c, pages[]). A page walk per access would translate once per register access instead.
+# The pages a733_video_unit_native_map checks, once per boot from the decoder's init, each with one write
+# translation (drivers/video/a733_video_unit.c, pages[]). A page walk per access would translate once per register
+# access instead.
 MAPPED_PAGES = 10
 QUIESCE = {'PENDING': 0, 'DONE': 1, 'FAULT': 2}
 SITE_DECODER = 0x941
@@ -252,6 +253,8 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     put(lease + pck_layout['token'], 1, 8); put(lease + pck_layout['mask'], OSC_PCK); put(lease + pck_layout['mode'], STABLE)
     assert call(image.address('a733_video_decoder_init'), decoder, config, image.address('ops', UNIT), 0) == 1, \
         (name, 'the binding refused its configuration')
+    # The init checks the pages, so no hold that follows walks a page table.
+    assert state['translations'] == MAPPED_PAGES, (name, 'the init must check the pages', state['translations'])
     if row_wait:
         return row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call=lambda: call(
             image.address('os_video_decode_task', UNIT), 0, stack=STACKS + 0x40000), ccu=ccu, others=others, vd=vd,
@@ -471,10 +474,8 @@ def main():
                 problems.append('the application close of a faulted service must be answered -1')
         if row['ve_accesses']:
             problems.append('the close must not touch a decoder register')
-        # An uncertain failure is not touched, so its case makes no access and no translation.
-        pages = 0 if name == 'uncertain-access' else MAPPED_PAGES
-        if row['translations'] != pages:
-            problems.append(f"the pages are checked once, {pages} translations: {row['translations']}")
+        if row['translations'] != MAPPED_PAGES:
+            problems.append(f"the pages are checked once, at init, {MAPPED_PAGES} translations: {row['translations']}")
         row['passed'] = not problems
         row['problems'] = problems
         if problems:
