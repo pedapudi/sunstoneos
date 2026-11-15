@@ -63,7 +63,10 @@ enum {
     G2D_STEP_PERI0, G2D_STEP_MODULE, G2D_STEP_ENGINE, G2D_STEP_INTID, G2D_STEP_WRITES=16, G2D_STEP_ROW, G2D_STEP_ROW_TIMEOUT, G2D_STEP_LOCK,
     G2D_STEP_G2D_RESET, G2D_STEP_DE_SYS_RESET, G2D_STEP_MUX, G2D_STEP_BUS_GATE, G2D_STEP_MODULE_GATE,
     G2D_STEP_TOP, G2D_STEP_LOCAL, G2D_STEP_MODULE_WORD, G2D_STEP_GIC, G2D_STEP_CLOSE=32,
-    /* An operation: refusals below G2D_STEP_RUN_WRITES change nothing. */
+    /* An operation. Refusals below G2D_STEP_RUN_WRITES change nothing. A failure that leaves the engine idle and the
+     * IOMMU consistent (the command build and the CPU cache maintenance) is also a refusal: the service stays open
+     * and its close detaches master 10. A failure that may leave the engine running or the IOMMU or an engine
+     * register in an unknown state makes the service FAULT, which retains its gates, leases and mapping. */
     G2D_STEP_RUN=48, G2D_STEP_RUN_SURFACE, G2D_STEP_RUN_GEOMETRY, G2D_STEP_RUN_MEMORY, G2D_STEP_RUN_IOVA,
     G2D_STEP_RUN_WRITES=56, G2D_STEP_RUN_ATTACH, G2D_STEP_RUN_MAP, G2D_STEP_RUN_CACHE, G2D_STEP_RUN_BUSY,
     G2D_STEP_RUN_LAUNCH, G2D_STEP_RUN_TIMEOUT, G2D_STEP_RUN_IRQ, G2D_STEP_RUN_FINISH, G2D_STEP_RUN_IOMMU_FAULT,
@@ -458,14 +461,14 @@ static int do_run(void)
     d->output_iova=(uint32_t)output_iova;
     /* The fill reads no source; the layer's address names the output, which is mapped. */
     if(!a733_g2d_commands_at(g2d.rcq,G2D_RCQ_BYTES,c,(uint32_t)output_iova,(uint32_t)output_iova,(uint32_t)g2d.rcq_iova))
-        return fail(G2D_STEP_RUN_GEOMETRY,1);
+        return run_refuse(G2D_STEP_RUN_GEOMETRY,1);
     /* The surface's lines leave the CPU caches before the engine writes it; the command page is non-cacheable. The
      * maintenance takes whole 64-byte lines, so the range is widened to the lines the surface touches; they lie in
      * the page-aligned region, and the rows' padding is the application's own memory. */
     const uintptr_t first=(uintptr_t)(l->base+j->output.offset);
     const uintptr_t at=first&~(uintptr_t)63;
     const size_t bytes=((first+(size_t)j->output.stride*j->output.height+63)&~(uintptr_t)63)-at;
-    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,bytes))return fail(G2D_STEP_RUN_CACHE,0);
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,bytes))return run_refuse(G2D_STEP_RUN_CACHE,0);
     __asm__ volatile("dsb sy":::"memory");
     uint32_t v;
     if(!g2d_rd(0x28,&v)||(v&1)||!rd(G2D+0x100,&v)||(v&0x80000000))return fail(G2D_STEP_RUN_BUSY,v);
@@ -503,7 +506,7 @@ static int do_run(void)
     d->iommu_fault_step=os_iommu_owner()->fault_step;d->iommu_fault_word=os_iommu_owner()->fault_word;
     if(d->iommu_scan!=1)return fail(d->iommu_scan==0?G2D_STEP_RUN_IOMMU_FAULT:G2D_STEP_RUN_IOMMU,f.micro_status);
     /* Lines the CPU may have fetched during the operation are dropped before the application reads the output. */
-    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,bytes))return fail(G2D_STEP_RUN_CACHE,1);
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,bytes))return run_refuse(G2D_STEP_RUN_CACHE,1);
     d->done_ticks=ss_counter_ticks();
     return 1;
 }
