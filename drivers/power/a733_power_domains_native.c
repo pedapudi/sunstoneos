@@ -10,13 +10,15 @@
 /* Each window once, from init before the scheduler starts, so the result is
  * immutable before any task reads it: the PPU blocks are written, so their
  * translation must be outer-shareable Device-nGnRnE; the CCU and R_CCU pages
- * are only read. */
+ * are only read. One result covers every page, and all PPU blocks lie in the
+ * first gigabyte, which one level-1 Device block maps
+ * (platform/a733/cpu_coherence.c line 59). */
 static int mapped(void)
 {
     static const struct a733_mapping_rule write_rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
     static const struct a733_mapping_rule read_rule={A733_MAPPING_READ,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
-    static const uintptr_t written[]={0x07061000,0x07064000,0x07065000},read[]={0x02002000,0x07010000};
-    for(unsigned i=0;i<3;++i)if(!a733_mapping_check(aarch64_device_translate,written[i],written[i],&write_rule))return 0;
+    static const uintptr_t written[]={0x07061000,0x07062000,0x07064000,0x07065000},read[]={0x02002000,0x07010000};
+    for(unsigned i=0;i<4;++i)if(!a733_mapping_check(aarch64_device_translate,written[i],written[i],&write_rule))return 0;
     for(unsigned i=0;i<2;++i)if(!a733_mapping_check(aarch64_device_translate,read[i],read[i],&read_rule))return 0;
     return 1;
 }

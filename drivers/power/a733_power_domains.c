@@ -20,17 +20,24 @@
 #define SPIN_READS (1u<<18)
 #define PMIC_POLLS_PER_STEP 256u
 
-/* Per domain: MBUS gates (CCU 0x5c0 and 0x5e0 bits), supply and fault bits
- * (ccu-sun60iw2.c lines 587-601 and 653-677; board device tree npu-supply
- * line 2932 and gpu-supply line 3421). */
-struct profile { unsigned id, ahb, mbus; enum a733_rail rail; unsigned verified, fault; };
+/* Per domain: the master gates that the owner requires (CCU 0x5c0 and 0x5e0
+ * masks), supply and fault bits (ccu-sun60iw2.c lines 587-601 and 653-677;
+ * board device tree npu-supply line 2932 and gpu-supply line 3421).
+ * gates_after_on: an ON from OFF reads the PPU clock alone and the gates are
+ * required only while the domain is ON (domain 5, below). Domain 2's master
+ * gates (0x5c0 bit 0, 0x5e0 bit 14) are CLK_IS_CRITICAL (ccu-sun60iw2.c lines
+ * 622 and 663) and belong to the decoder, so its masks are empty; its supply,
+ * VDD-VE, is DCDC2 (schematic v1.2, sheets 2 and 6). Slots keep their order:
+ * domain 2 was added last. */
+struct profile { unsigned id; uint32_t ahb, mbus; enum a733_rail rail; unsigned verified, fault, gates_after_on; };
 static const struct profile profiles[A733_POWER_DOMAINS]={
-    {1,5,11,A733_RAIL_DCDC2,A733_POWER_DCDC2_VERIFIED,A733_POWER_DOMAIN1_FAULT},
-    {4,6,18,A733_RAIL_DCDC2,A733_POWER_DCDC2_VERIFIED,A733_POWER_DOMAIN4_FAULT},
-    {5,7,16,A733_RAIL_DCDC4,A733_POWER_DCDC4_VERIFIED,A733_POWER_DOMAIN5_FAULT},
+    {1,BIT(5),BIT(11),A733_RAIL_DCDC2,A733_POWER_DCDC2_VERIFIED,A733_POWER_DOMAIN1_FAULT,0},
+    {4,BIT(6),BIT(18),A733_RAIL_DCDC2,A733_POWER_DCDC2_VERIFIED,A733_POWER_DOMAIN4_FAULT,0},
+    {5,BIT(7),BIT(16),A733_RAIL_DCDC4,A733_POWER_DCDC4_VERIFIED,A733_POWER_DOMAIN5_FAULT,1},
+    {2,0,0,A733_RAIL_DCDC2,A733_POWER_DCDC2_VERIFIED,A733_POWER_DOMAIN2_FAULT,0},
 };
 static int slot(unsigned id)
-{return id==1 ? 0 : id==4 ? 1 : id==5 ? 2 : -1;}
+{return id==1 ? 0 : id==4 ? 1 : id==5 ? 2 : id==2 ? 3 : -1;}
 static struct a733_power_authority *word(const struct a733_power_domains *d)
 {return &d->pmic->rails->authority;}
 static int clock(struct a733_power_domains *d,uint64_t *now)
@@ -47,6 +54,8 @@ static int bits(const struct a733_power_domains *d,uintptr_t a,uint32_t mask,uin
 {uint32_t v;return rd(d,a,&v) && (v&mask)==expected;}
 static void publish(struct a733_power_domain_row *r,unsigned generation,enum a733_power_row_state s)
 {
+    const int k=slot(r->domain);
+    if(k>=0)r->transition=r->domains->transition[k];
     atomic_store_explicit(&r->state,generation<<3|s,memory_order_release);
     if(r->wake)r->wake(r->wake_context);
 }
@@ -65,7 +74,7 @@ static unsigned answered(const struct a733_power_domain_row *r)
  * sunxiPrePowerState and sunxiPostPowerState); its GPU-local clock and reset
  * belong to the GPU controller (docs/designs/gpu-vendor-default.md). */
 static int gates(const struct a733_power_domains *d,const struct profile *f)
-{return bits(d,CCU+0x5c0,BIT(f->ahb),BIT(f->ahb)) && bits(d,CCU+0x5e0,BIT(f->mbus),BIT(f->mbus));}
+{return (!f->ahb || bits(d,CCU+0x5c0,f->ahb,f->ahb)) && (!f->mbus || bits(d,CCU+0x5e0,f->mbus,f->mbus));}
 static int level(const struct a733_power_domains *d,const struct profile *f)
 {return gates(d,f) && bits(d,R_CCU+0x1ac,1,1);}
 /* A TOP5 OFF closed the GPU AHB master gate, which took no write while
@@ -73,14 +82,18 @@ static int level(const struct a733_power_domains *d,const struct profile *f)
  * never reads it or the MBUS gate. Domain 5 therefore requires them only while it is ON; an ON from
  * OFF reads the PPU clock alone, and the GPU controller requires the gates
  * after TOP5 ON. Domains 1 and 4 keep the full domain-level reads;
- * their physical OFF requests are unsupported. */
+ * their physical OFF requests are unsupported. Domain 2 has no gate reads:
+ * its master gates are critical clocks that the decoder opens. */
 static int level_before(const struct a733_power_domains *d,const struct profile *f)
-{return f->id==5 ? bits(d,R_CCU+0x1ac,1,1) : level(d,f);}
-/* Policy (+0x0) and status (+0x8) bits 3:0 must agree at OFF (0) or ON (8). */
-static int coherent(const struct a733_power_domains *d,unsigned id,uint32_t *policy)
+{return f->gates_after_on ? bits(d,R_CCU+0x1ac,1,1) : level(d,f);}
+/* Policy (+0x0) and status (+0x8) bits 3:0 must agree at OFF (0) or ON (8).
+ * Other bits, bit 8 among them, are recorded and never refused. */
+static int coherent(const struct a733_power_domains *d,unsigned id,uint32_t *policy,struct a733_power_transition *t)
 {
     uint32_t status;const uintptr_t base=A733_POWER_PCK_DOMAIN(id);
-    if(!rd(d,base,policy) || !rd(d,base+8,&status) || (*policy&15)!=(status&15))return -1;
+    if(!rd(d,base,policy) || !rd(d,base+8,&status))return -1;
+    if(t){t->policy_before=*policy;t->status_before=status;}
+    if((*policy&15)!=(status&15))return -1;
     return (status&15)==0 ? 0 : (status&15)==8 ? 8 : -1;
 }
 /* Class 3: the domain is uncertain. Its counted rows, their rail pins and
@@ -114,26 +127,33 @@ static void reached(struct a733_power_domains *d,struct a733_power_domain *m)
     }
 }
 /* One status check of a transition: 1 reached, 0 still pending, -1 failed.
- * Status may read the starting value or the target, nothing else. */
-static int status(struct a733_power_domains *d,struct a733_power_domain *m,uint64_t now)
+ * Status may read the starting value or the target, nothing else. Each read
+ * goes into the transition record. */
+static int status(struct a733_power_domains *d,struct a733_power_domain *m,uint64_t now,int spin)
 {
     if(now>=m->deadline)return -1;
     uint32_t v;const unsigned target=m->state==A733_POWER_DOMAIN_ON_WAIT ? 8 : 0;
     if(m->id==4)sunstone_crumb(SUNSTONE_CRUMB_NPU_PPU_STATUS,target);
     if(!rd(d,A733_POWER_PCK_DOMAIN(m->id)+8,&v))return -1;
-    if((v&15)==target)return 1;
-    if((v&15)!=(8-target))return -1;
-    return 0;
+    struct a733_power_transition *t=&d->transition[slot(m->id)];
+    if(!t->reads++){t->first_at=now;t->first_word=v;t->all_and=t->all_or=v;}
+    t->spin_reads+=spin!=0;t->all_and&=v;t->all_or|=v;
+    const int r=(v&15)==target ? 1 : (v&15)==(8-target) ? 0 : -1;
+    /* A read that ends the transition, at the target or failed, is its last. */
+    if(r){t->reached_at=now;t->reached_word=v;}
+    else {t->pending_at=now;t->pending_word=v;}
+    return r;
 }
 /* Spin on status for up to A733_POWER_PCK_SPIN_US after the command; the
  * spin bound is timed from the command, which the write accessor has
- * completed with DSB SY. Afterwards one check per step. */
+ * completed with DSB SY. Afterwards one check per step. With
+ * measure_transitions the spin lasts until the target or the deadline. */
 static void advance(struct a733_power_domains *d,struct a733_power_domain *m,int spin)
 {
     for(unsigned n=0;;++n) {
         uint64_t now;
         if(!clock(d,&now)){fail_service(d);return;}
-        int r=status(d,m,now);
+        int r=status(d,m,now,spin);
         if(r>0) {
             /* The status read can cross the bound. Never publish a late
              * acknowledgement or release the rail pin on a late OFF. */
@@ -142,7 +162,7 @@ static void advance(struct a733_power_domains *d,struct a733_power_domain *m,int
             reached(d,m);return;
         }
         if(r<0){fail_domain(d,m);return;}
-        if(!spin || n>=SPIN_READS || now-m->command_at>=A733_POWER_PCK_SPIN_US)return;
+        if(!spin || n>=SPIN_READS || (!d->measure_transitions && now-m->command_at>=A733_POWER_PCK_SPIN_US))return;
     }
 }
 static void command(struct a733_power_domains *d,struct a733_power_domain *m,uint32_t policy,unsigned on)
@@ -180,6 +200,9 @@ static void command(struct a733_power_domains *d,struct a733_power_domain *m,uin
        !a733_deadline_after(now,A733_POWER_PCK_BOUND_US,&m->deadline)){fail_domain(d,m);return;}
     if(m->deadline>d->config.deadline)m->deadline=d->config.deadline;
     m->command_at=now;m->state=on ? A733_POWER_DOMAIN_ON_WAIT : A733_POWER_DOMAIN_OFF_WAIT;
+    struct a733_power_transition *t=&d->transition[slot(m->id)];
+    *t=(struct a733_power_transition){.policy_before=t->policy_before,.status_before=t->status_before,
+        .policy_written=(policy&~UINT32_C(15))|(on ? 8 : 0),.commands=t->commands+1,.command_at=now};
     advance(d,m,1);
 }
 
@@ -205,7 +228,7 @@ static int admit(struct a733_power_domains *d,struct a733_power_domain_row *r,un
        !((t->shared|t->exclusive)&A733_RAIL_BIT(f->rail)) || !level_before(d,f)){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
     uint32_t policy=0;
     if(m->state!=A733_POWER_DOMAIN_ON_WAIT) {
-        const int ppu=coherent(d,m->id,&policy);
+        const int ppu=coherent(d,m->id,&policy,&d->transition[slot(m->id)]);
         if(m->state==A733_POWER_DOMAIN_UNKNOWN && ppu>=0)m->state=ppu ? A733_POWER_DOMAIN_ON : A733_POWER_DOMAIN_OFF;
         else if(ppu<0 || (ppu==8)!=(m->state==A733_POWER_DOMAIN_ON)) {
             /* Adoption of an incoherent domain writes nothing; a domain that
@@ -214,8 +237,8 @@ static int admit(struct a733_power_domains *d,struct a733_power_domain_row *r,un
             publish(r,g,A733_POWER_ROW_REFUSED);return 0;
         }
     }
-    /* Domain 5 found ON still needs its master gates open. */
-    if(f->id==5 && m->state==A733_POWER_DOMAIN_ON && !gates(d,f)){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
+    /* A domain whose gates follow it (5) found ON still needs them open. */
+    if(f->gates_after_on && m->state==A733_POWER_DOMAIN_ON && !gates(d,f)){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
     enum a733_rail_result p=a733_rail_pin(d->pmic->rails,t,A733_RAIL_BIT(f->rail));
     if(p==A733_RAIL_BUSY)return 1;
     if(p!=A733_RAIL_READY){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
@@ -235,7 +258,7 @@ static int release(struct a733_power_domains *d,struct a733_power_domain_row *r,
     if(m->state==A733_POWER_DOMAIN_ON_WAIT || m->state==A733_POWER_DOMAIN_OFF_WAIT)return 1;
     if(m->state==A733_POWER_DOMAIN_ON && m->count==1) {
         uint32_t policy;
-        if(!level(d,f) || coherent(d,m->id,&policy)!=8){fail_domain(d,m);return 0;}
+        if(!level(d,f) || coherent(d,m->id,&policy,&d->transition[slot(m->id)])!=8){fail_domain(d,m);return 0;}
         command(d,m,policy,0);
         if(m->state!=A733_POWER_DOMAIN_OFF)return m->state==A733_POWER_DOMAIN_OFF_WAIT;
     }
@@ -327,6 +350,7 @@ static int verify(struct a733_power_domains *d,uint64_t now)
             /* A settled supply publishes each verified rail at once, so its
              * consumers need not wait for the other rail's snapshot. */
             if(d->settled_supply) {
+                if(!rail4)d->verified_at=now; /* before the release store that publishes DCDC2 */
                 a733_power_authority_set(word(d),rail4 ? A733_POWER_DCDC4_VERIFIED : A733_POWER_DCDC2_VERIFIED);
                 wake_rows(d);
             }
@@ -335,7 +359,11 @@ static int verify(struct a733_power_domains *d,uint64_t now)
         if(r==A733_PMIC_BUSY)return 1;
         if(r!=A733_PMIC_COMPLETE){verified(d,0);d->supply_stage=V_DONE;return 0;}
         d->supply_request=(struct a733_pmic_request){0};
-        if(++d->supply_stage==V_RELEASE)verified(d,1);
+        if(++d->supply_stage==V_RELEASE) {
+            /* Without a settled supply, verified(d,1) first publishes DCDC2. */
+            if(!d->settled_supply && (d->supply_verified&A733_POWER_DCDC2_VERIFIED))d->verified_at=now;
+            verified(d,1);
+        }
         return 1;
     }
     default:verified(d,0);return 0;
@@ -378,7 +406,7 @@ uint32_t a733_power_service_step(struct a733_power_domains *d)
     if(!clock(d,&now)){fail_service(d);return UINT32_MAX;}
     if(!d->running) {
         /* An image with no row needs no supply record and makes no bus read. */
-        d->running=1;
+        d->running=1;d->started_at=now;
         if(!d->rows || !a733_deadline_after(now,d->settled_supply ? 0 : A733_POWER_SUPPLY_SETTLE_US,
            &d->verify_at))verified(d,0);
     }
@@ -436,6 +464,11 @@ int a733_power_domains_settled_supply(struct a733_power_domains *d)
     if(!d || d->self!=d || d->running)return 0;
     d->settled_supply=1;return 1;
 }
+int a733_power_domains_measure_transitions(struct a733_power_domains *d)
+{
+    if(!d || d->self!=d || d->running)return 0;
+    d->measure_transitions=1;return 1;
+}
 int a733_power_service_idle(const struct a733_power_domains *d)
 {
     if(!d || d->self!=d)return 0;
@@ -459,9 +492,9 @@ int a733_power_domain_check(struct a733_power_domains *d,unsigned domain,unsigne
     uint32_t policy;
     if(!d || d->self!=d || slot(domain)<0)return 0;
     const struct profile *f=&profiles[slot(domain)];
-    if(!bits(d,CCU+0x5c0,BIT(f->ahb),BIT(f->ahb)) || !bits(d,CCU+0x5e0,BIT(f->mbus),BIT(f->mbus)) ||
-       !bits(d,R_CCU+0x1ac,1,1))return 0;
-    const int status=coherent(d,domain,&policy);
+    if(!gates(d,f) || !bits(d,R_CCU+0x1ac,1,1))return 0;
+    /* Any task may call the check, so it leaves the service's record alone. */
+    const int status=coherent(d,domain,&policy,NULL);
     if(status<0)return 0;
     if(state)*state=(unsigned)status;
     return 1;

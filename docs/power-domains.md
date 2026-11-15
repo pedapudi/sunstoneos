@@ -1,4 +1,4 @@
-# One service owns PCK600 domains 1, 4 and 5
+# One service owns PCK600 domains 1, 2, 4 and 5
 
 Status: **implemented and host-modeled**. On port 3-3 on 2026-10-24, two
 returning images ran it: one made 32 PMIC snapshots and the adoption reads
@@ -12,16 +12,18 @@ bits 3:0 request OFF (0) or ON (8), a status word (`+0x8`) that reports the
 reached state, and a delay row (`+0x170`, `+0x174`, `+0xc00`–`+0xc10`) that the
 pinned vendor driver initializes when it registers each domain.
 [`drivers/power/a733_power_domains.c`](../drivers/power/a733_power_domains.c)
-is the only writer of domain 1 (DE_SYS, the display engine and G2D),
-domain 4 (NPU) and domain 5 (GPU_TOP). Domains 2, 3 and 10 keep their own writers: the video platform,
-HDMI and DisplayPort. The design and its review are in
+is the writer of domain 1 (DE_SYS, the display engine and G2D), domain 2
+(VE_DEC, the video decoder), domain 4 (NPU) and domain 5 (GPU_TOP). HDMI and
+DisplayPort write domain 10 themselves, and the video encoder only reads
+domain 3. The video decoder requests domain 2 through its row and writes no
+PCK600 register. The design and its review are in
 [docs/designs/power-domains.md](designs/power-domains.md).
 
 ## Consumers hold rows
 
 A consumer registers one **row** for its domain before the scheduler starts:
 the domain, its owner identity and a pointer to its rail token, which must
-hold the domain's supply (DCDC2 for domains 1 and 4, DCDC4 for domain 5). The
+hold the domain's supply (DCDC2 for domains 1, 2 and 4, DCDC4 for domain 5). The
 row lives in the consumer's storage
 ([`a733_power_domain_row.h`](../include/a733_power_domain_row.h)). The
 consumer runs its own authorization, then stores ON in the row with release
@@ -59,9 +61,14 @@ Admission of an ON request, in order:
 1. Supply verification has ended, the domain's supply has its verified bit,
    and no provider, clock-registry, ledger or domain fault bit is set.
 2. The rail token belongs to the row's owner and holds the supply.
-3. Domain-level reads: both MBUS gates of the domain (CCU `0x5c0` and `0x5e0`
-   bits 5 and 11, 6 and 18, 7 and 16 for domains 1, 4 and 5) and the PPU
-   clock. A domain-5 ON from OFF reads the PPU clock alone: a TOP5 OFF
+3. Domain-level reads: the PPU clock and the master gates in the domain's
+   profile, CCU `0x5c0` and `0x5e0` bits 5 and 11, 6 and 18, 7 and 16 for
+   domains 1, 4 and 5. Domain 2 has no gates in its profile: its three gates
+   are `CLK_IS_CRITICAL`, and the decoder handles them
+   ([video-platform.md](video-platform.md#cold-startup-identifies-a-fixed-rom-profile-before-power-on),
+   "The MBUS clock gate"). A
+   domain whose profile sets `gates_after_on`, domain 5 alone, reads the PPU
+   clock alone for an ON from OFF: a TOP5 OFF
    closed the GPU AHB master gate on a board, and the GPU controller
    requires both gates after TOP5 ON. Domain 5 found ON still requires them. Domain 5 changes whatever the GPU clock gate and reset read: the
    vendor powers it on after the GPU clocks open and off before they close
@@ -152,8 +159,34 @@ records the primary-source anchors and missing physical evidence.
 | Rail unpin fails after domain-5 power-off | FAILED; a later ON request from the row is answered FAILED | The row, counted, and its pin |
 | A service time read fails | Transitions FAILED; later requests REFUSED | As above |
 
-The fault bits (`A733_POWER_DOMAIN1_FAULT`, `…4_FAULT`, `…5_FAULT`) are part of
+The fault bits (`A733_POWER_DOMAIN1_FAULT`, `…2_FAULT`, `…4_FAULT`, `…5_FAULT`,
+bits 11, 14, 12 and 13) are part of
 the power-authority state word ([docs/power.md](power.md)).
+
+## A transition record sizes the 50 µs spin
+
+For each domain the owner keeps its latest admission words and its latest
+transition in `transition[]` of `struct a733_power_domains`: the full policy
+and status words at admission, bit 8 included, the policy word written, the
+time after the write, the status reads in total and during the spin, the
+first read, the last read that still showed the starting state and the read
+that showed the target, each with its time and word, and the AND and OR of
+every status word read. The owner fails a transition on any status other
+than the starting or the target value, so these fields describe every read;
+the AND and OR words show whether any other bit changed. The owner copies a domain's record into each of that domain's rows before it publishes an answer, so a consumer reads it from its row after the answer, never from the service's array. The record makes no
+register access, and the access traces of domains 1, 4 and 5 are unchanged.
+
+`a733_power_domains_measure_transitions()`, called before the service runs
+in a measurement run only, makes the service read status back to back from
+the command until the target or the 10 ms bound, so the record brackets the
+time to the target within one read gap. The service task then holds its
+core for up to that bound. The samples are OFF-to-ON transitions of domain
+2 or of domain 5. Domain 2 gives at most one per board power cycle, because it
+stays ON across the decoder's close and is adopted afterwards. Domain 5 stands
+in for it: a GPU image powers domain 5 on and off within one power lifetime.
+The 50 µs spin stays as it is until three samples have been timed. The
+record, the measurement mode and their model cases are deleted once the spin
+is sized, at the latest on 2026-12-14.
 
 ## Supplies are verified once per boot
 
@@ -194,7 +227,11 @@ The GPU's DCDC4 consumer ([docs/pmic-consumers.md](pmic-consumers.md))
 completes from the boot reading of DCDC4 (`dcdc4` in the owner), which the
 DCDC4 verified bit publishes, with no bus transaction and no PMIC request
 slot. The DCDC2 reading is not kept: domain-1 and domain-4 admission needs
-only its verified bit. Only
+only its verified bit. The owner does keep the time of that bit,
+`verified_at`: its clock, in microseconds, at the step that first publishes
+DCDC2 as verified, which is the DCDC2 result for a settled supply and the done
+step otherwise. It is written once, before the bit, which publishes it; G2D
+copies it into its info record. Only
 selector writes to DCDC3 and DCDC5 are accepted; that no firmware writes DCDC2
 or DCDC4 after boot is established only by board evidence.
 
@@ -309,7 +346,7 @@ the actual owner.
 
 ## Measurements
 
-The host models, the merge-base comparison and the commands are recorded in
+The host models, the trace comparison and the commands are recorded in
 the design document's implementation section
 ([docs/designs/power-domains.md](designs/power-domains.md)). The figures are
 modeled, except the service steps of the read-only board runs.
@@ -329,9 +366,17 @@ the cost model.
 
 ## Checks
 
+- `checks/power-domains-owner.py` builds and runs the two models below with
+  sanitizers. It also requires the owner's accesses to domains 1, 4 and 5
+  (`--domain-traces`) to equal `checks/data/power-domains-traces.txt`, the
+  same output from the owner at bringup 3ab4c296d before domain 2 was added,
+  and the domain-2 delay row and ON command to equal the
+  `SUN60IW2_PCK_VE_DEC` row of the hash-pinned `pck600_domains.c`. Sixteen
+  owner mutants must each fail a model run, five of them on `verified_at`.
 - `checks/power-domains-pck.c` composes the actual provider, ledger and owner
   over modeled PPU, CCU and R_CCU words: the delay row and command, adoption,
-  incoherent and domain-level refusals, verified supplies, the verification
+  incoherent and domain-level refusals, verified supplies and `verified_at` on
+  both publication paths, the verification
   budget started at provider READY, an expired verification request reaped
   with its token released, the slow acknowledgement bound with retention,
   domain-5 power-off and reopen, a failed unpin answered FAILED, and the NPU
@@ -340,7 +385,10 @@ the cost model.
   earlier session cutoffs and expired command admission. `--delays` selects
   inherited OFF/ON and repeated transitions, exact first-OFF write/readback order,
   18 initialization failures with retained pins, and preservation of an untouched
-  domain-4 register block. With an output
+  domain-4 register block. `--domain2` selects domain 2: no gate read, the
+  delay row and command, adoption, refusals that set bit 14 alone, timeout
+  retention with domain 4 still admitted, no power-off, the transition record
+  and the back-to-back measurement. With an output
   path it writes the GPU power-on and
   power-off register trace that no host check (evidence: docs/evidence/power-domains.jsonl power-domains-implementation-notes; docs/gpu-power.md)
   compares with the pinned PCK functions.
@@ -349,9 +397,10 @@ the cost model.
   modeled core and with two, and the retention of the I2C mutex after a fault
   that a client latches during a transfer.
 - `checks/power-domains-tree.py` checks the source facts: one writer of
-  domains 1 and 5, and five delay-row writers. The GPU controller is the
-  writer of domain 6 (GPU_CORE), and the GPU native adapter is the only
-  native allowlist that admits the delay row, for that domain alone.
+  domains 1, 2 and 5, with the decoder's platform and unit listed as
+  domain-2 readers, and three delay-row writers (the owner, HDMI and
+  DisplayPort). The GPU controller writes no delay row, and no native
+  allowlist admits one.
   It rejects direct NPU delay-row writes alongside a domain-4 row consumer,
   checks the five service tasks and their priorities, and rejects critical
   sections, scheduler suspension or waits in the owner's code.
@@ -398,8 +447,10 @@ operation. No production change was needed.
 ## Board evidence required
 
 - The inherited S_TWI0 divisor (`TWI+0x14`) and the bus rate it gives.
-- PCK600 time to ON for domains 1, 4 and 5 and to OFF for domain 5, which
-  replaces the 50 µs spin bound with the longest time plus 50%.
+- PCK600 time to ON for domains 1, 2, 4 and 5 and to OFF for domain 5, which
+  replaces the 50 µs spin bound with the longest time plus 50%. The
+  transition record with `a733_power_domains_measure_transitions()` collects
+  it.
 - A trace of the status word (`+0x8`) read back to back during each of those
   transitions. The owner fails a transition on any status other than the
   starting or the target value, while the pinned `pck600_domains.c` waits

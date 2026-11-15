@@ -95,6 +95,8 @@ int os_session_decode_why(const void *raw,size_t bytes,struct os_session *out,un
     }
     /* The headset is linked only into an image whose application declares it. */
     if((h->devices&SS_DEVICE_AUDIO_HEADSET)&&!os_headset_start)REFUSE(A733_DECODE_DEVICES);
+    /* So is the video decoder service, exactly when the manifest declares the device (cmake/sunstone-image.cmake);
+     * the manifest comparison above already refuses any grant the manifest does not declare. */
 #ifndef SUNSTONE_A733_OS_GPU
     if(h->devices&SS_DEVICE_GPU)REFUSE(A733_DECODE_DEVICES);
 #endif
