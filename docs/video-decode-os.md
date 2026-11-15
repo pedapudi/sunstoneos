@@ -13,11 +13,11 @@ The reference is the vendor VE driver `cedar_ve.c` and the clock framework (`ccu
 | Power domain 2 on before any decoder clock or reset changes | genpd attach at probe; delay row and ON command, `pck600_domains.c` 126-142 and 547-569 | The start entry registers a domain-2 row before the scheduler starts. Open requests ON once; the owner writes the delay row and the ON command, or adopts a domain already ON with no write. The binding writes no PCK600 word. |
 | VDD-VE on DCDC2 at 800 mV | board schematic v1.2, sheets 2 and 6 | The owner task holds the DCDC2 rail token and requires the owner's DCDC2-verified bit. No PMIC write. |
 | Critical MBUS clock gates `0x5c0` bit 0, `0x5e0` bit 14, `0x5e4` bit 18 | `CLK_IS_CRITICAL`, `ccu-sun60iw2.c` 622, 663, 688-692; enable `ccu_gate_helper_enable`, `ccu_gate.c` 213-240 | `0x5c0` and `0x5e0` are read and must be set. `0x5e4` is opened once by a read-modify-write that ORs in the key value `0x40302`, then read back; the readback must have bit 18 set and no change outside the key. A word that already holds the key is not written. |
-| Reset release (`0xa8c` bit 18), bus gate (`0xa8c` bit 2) | `enable_cedar_hw_clk_reset` and `enable_cedar_hw_clk_module`, `cedar_ve.c` 450-472 | Same order, each with readback, after the three critical gates read set. |
+| Reset release (`0xa8c` bit 18), bus gate (`0xa8c` bit 2) | `enable_cedar_hw_clk_reset`, `cedar_ve.c` 368-386; `enable_cedar_hw_clk_module`, 416-472 | Same order, each with readback, after the three critical gates read set. |
 | Module parent PLL_VE0 (mux 1), divider 1, gate closed | `clk_set_parent` at probe, `cedar_ve.c` 1789; parent list `ccu-sun60iw2.c` 965-981 | `0xa88` selector and divider `0x01000000`, gate closed. |
 | PLL_VE0 at 624 MHz: LDO, factors, enable, lock enable, LOCK wait, output gate | `setup_ve_freq`, `cedar_ve.c` 351-366; `ccu_gate.c` 157-211; lock wait `ccu_common.c` 47-64 | Factors `0x00204d00` (N=78, P0=3) written before the enable, as the manual's enable method 2 orders them; one lock wait with the kernel's bounds (three reads in a row with LOCK, at most 100 reads, 3 µs apart, then 20 µs); output gate; readback `0xf9204d00`. |
-| Module gate (`0xa88` bit 31) last | `cedar_ve.c` 450-472 | Same; `0xa88` then reads `0x81000000`. |
-| Cold VCU pulse at `0x01c0e804`, bits 0 and 4 set then cleared | `CONFIG_ARCH_SUN60IW2` path in `cedar_ve.c` | Same, then the identity words at `+0xf0`, `+0xe0` and `+0xe4`. |
+| Module gate (`0xa88` bit 31) last | `enable_cedar_hw_clk_module`, `cedar_ve.c` 416-472 | Same; `0xa88` then reads `0x81000000`. |
+| Cold VCU pulse at `0x01c0e804`, bits 0 and 4 set then cleared | `set_vcu_en_regmode_to1_to0`, `cedar_ve.c` 388-405 (`CONFIG_ARCH_SUN60IW2`) | Same, then the identity words at `+0xf0`, `+0xe0` and `+0xe4`. |
 | Close: module gate, bus gate, reset, then PLL_VE0 output gate, lock enable, enable and LDO | `disable_cedar_hw_clk_module`, `disable_cedar_hw_clk_reset`; `ccu_pll_gate_helper_disable`, `ccu_gate.c` 40-69 | Same order in one register-lock hold. PLL_VE0 ends at `0x01204d00`. Domain 2 stays ON and the critical gates stay as they are. |
 
 The open adds checks that the vendor driver does not make, each read before the first write: reset asserted and bus and module gates closed, `0x1b10 & 0x30001 == 0x10000`, the fabric and parent clocks, the 15 boot ROM words, and INTID 81 neither enabled, pending nor active. A refusal at any of these writes nothing. A failure after the first write marks the service FAULT, keeps every token and gate as it is, and makes the session quiesce report fault site `0x941` with the failing step in bits 31:24 and its value in bits 23:0.
@@ -55,4 +55,5 @@ The stage-1 prediction, from the port 3-3 FEL dump and the host model:
 | PLL lock reads | 3 to 100 |
 | Identity | one of `0x0003332100021321`, `0x0003331000021320`, `0x0003052000012011`, with `+0xf0` reading `0` or `0x16670040` |
 | Domain 2 | row ON; either adopted at policy and status 8, or one command from 0 to 8 measured within 10,000 µs |
-| `0x1b10 & 0x30001` after the close | `0x10000` (a model assumption the run records) |
+| `0x1b10 & 0x30001` after the close | `0x10000` (a host-model assumption; recorded, not judged) |
+| `0x5e4` bits 1, 8 and 9 (encoder, CSI and ISP MBUS clock gates) | set by the open and still set after the close |

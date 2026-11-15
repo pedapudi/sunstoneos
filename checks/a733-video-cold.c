@@ -261,6 +261,7 @@ struct lifetime {
      * bits reading zero; an edit of the entry words. */
     uint32_t policy,status;unsigned ack_us,stall,fault,pll;uint32_t pll_entry;unsigned key_zero;
     void (*edit)(struct model *);
+    unsigned service; /* the OS service's open (apps/os/video_decode.c) instead of the JPEG job */
 };
 struct outcome {
     int result;unsigned writes,owner_ppu_writes,owner_commands,decoder_pck_reads,polls_after_on;
@@ -283,6 +284,20 @@ static void fel_words(struct cold_model *c,const struct lifetime *l)
 /* One power lifetime: a fresh owner and decoder. ccu_in, when given,
  * replaces the CCU words (a later lifetime); ppu_in the domain-2 nibbles.
  * Runs the JPEG job and, when it completes and quiesce is set, the quiesce. */
+/* The OS service's open (apps/os/video_decode.c, do_open): acquire with an empty job until started, the three
+ * identity words through the codec read call, then prepare's identity admission, which returns 0 with the version
+ * set and the register lock released. One deadline for every call. */
+static const struct a733_video_jpeg_job no_job;
+static int service_open(struct a733_video_platform *p,uint64_t d)
+{
+    const struct a733_video_jpeg_ops *o=a733_video_platform_jpeg_ops();uint64_t t=0;uint32_t w[3];
+    const int r=o->acquire(p,&no_job,d,&t);
+    if(r!=1)return r;
+    assert(o->read(p,t,0xf0,&w[0],d)==1&&o->read(p,t,0xe0,&w[1],d)==1&&o->read(p,t,0xe4,&w[2],d)==1);
+    assert(((uint64_t)(w[1]&0xfffff)<<32|(w[2]&0xfffff))==version);
+    assert(o->prepare(p,t,&no_job,NULL,0,0,d)==0&&p->decoder.version==version&&!p->decoder.unit.locked);
+    return 1;
+}
 static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,const uint32_t *ccu_in,
     const uint32_t *ppu_in,unsigned quiesce)
 {
@@ -332,7 +347,7 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
     const unsigned ppu_writes=d.ppu_writes;
     int result=0;unsigned polls=0,on_poll=0,checked_poll=0;
     while(!result&&++polls<20000) {
-        result=a733_video_jpeg_poll(&run);
+        result=l->service?service_open(&p,run.deadline):a733_video_jpeg_poll(&run);
         if(!checked_poll&&p.decoder.checked)checked_poll=polls;
         /* The service answers the row; the decoder's owner task blocks on
          * the row's wake meanwhile. */
@@ -527,6 +542,16 @@ int main(int argc,char **argv)
         assert(reset.result==1&&!reset.owner_ppu_writes&&vm->events[0].address==CCU+0x5e4);
         printf("lifetime2 (CCU at the FEL words): result%d writes%u owner_ppu_writes%u\n",reset.result,reset.writes,
             reset.owner_ppu_writes);
+    }
+    /* The OS service's open and close from the FEL words, domain 2 OFF and then adopted ON. */
+    {
+        const struct lifetime l={.ack_us=10,.pll=PLL_LOCKS,.pll_entry=FEL_PLL,.service=1};
+        const struct outcome first=lifetime(&c,&l,0,0,1);
+        assert(first.result==1&&first.owner_commands==1&&vm->ccu[0x220/4]==0x01204d00u&&vm->ccu[0x5e4/4]==0x40306);
+        const uint32_t ppu[2]={d.ppu[2][0]&15,d.ppu[2][2]&15};
+        const struct outcome kept=lifetime(&c,&l,0,ppu,1);
+        assert(kept.result==1&&!kept.owner_commands&&!kept.owner_ppu_writes);
+        printf("service: result%d writes%u, adopted result%d writes%u\n",first.result,first.writes,kept.result,kept.writes);
     }
     policy();
     puts("PASS: decoder cold start on the actual owner: entry before the row request, ON from 0/0 or adopted, refusals "

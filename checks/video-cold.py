@@ -131,6 +131,7 @@ for extra in ([], ['--reset']):
     runs[' '.join(['cold', *extra])] = result.stdout.splitlines()
 assert any(line.startswith('PASS: decoder cold start on the actual owner') for line in runs['cold'])
 assert any(line.startswith('lifetime2 (CCU at the FEL words): result1') for line in runs['cold'])
+assert any(line.startswith('service: result1') and 'adopted result1' in line for line in runs['cold'])
 holds = [line for line in runs['cold'] if line.startswith('holds ')]
 refused = []
 for i, (path, old, new, name) in enumerate(MUTANTS):

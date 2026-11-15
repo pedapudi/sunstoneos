@@ -7,7 +7,8 @@ prediction in docs/video-decode-os.md: the open and close succeed, the entry wor
 the binding depends on them, the 0x5e4 open reads back 0x40306, PLL_VE0 reads 0xf9204d00 once started and 0x01204d00
 after the close, the module word is 0x81000000 started and 0x01000000 closed, reset and bus gate are released only
 while open, the identity is one the binding lists, and domain 2 answers ON either adopted or after one measured
-command. The entry words that the binding does not depend on are reported, not judged.
+command. The entry words that the binding does not depend on, the status bits outside the low nibble and 0x1b10
+after the close are reported, not judged.
 """
 import struct
 
@@ -70,6 +71,8 @@ def decode(payload):
         'hold_b': span('locked_at', 'hold_b_at'), 'owner_row_wait': span('row_request_us', 'row_on_us'),
         'open': (times['started_ticks'] - times['requested_ticks']) / TICKS_PER_US if times['started_ticks'] else None,
         'close': (times['closed_ticks'] - times['started_ticks']) / TICKS_PER_US if times['closed_ticks'] else None}
+    # Reported, not judged: the host model assumes the close leaves 0x1b10 & 0x30001 at 0x10000.
+    out['auto_closed_as_modeled'] = out['closed']['auto'] & 0x30001 == 0x10000
     domain2 = [t for t in out['transitions'] if t['domain'] == 2]
     if domain2 and domain2[0]['commands'] and domain2[0]['reached_at'] >= domain2[0]['command_at']:
         out['durations_us']['domain2_to_on'] = domain2[0]['reached_at'] - domain2[0]['command_at']
@@ -117,16 +120,16 @@ def failures(d):
         want(c['bgr'] == e['bgr'], f"reset/bus closed {c['bgr']:#x}")
         want(c['mclk_gates'] == s['mclk_gates'] and c['ahb_gates'] == e['ahb_gates'] and
              c['mbus_gates'] == e['mbus_gates'], 'critical gates changed by the close')
-        want(c['auto'] & 0x30001 == 0x10000, f"0x1b10 closed {c['auto']:#x} (model assumption 0x10000)")
     want(d['row_state'] == 'on' and d['measured'] == 1, f"row {d['row_state']}, measured {d['measured']}")
     t = [x for x in d['transitions'] if x['domain'] == 2]
     if not t:
         out.append('no domain-2 transition slot')
     else:
         t = t[0]
-        adopted = t['commands'] == 0 and t['policy_before'] & 0xf == 8 and t['status_before'] == 8
-        measured = (t['commands'] == 1 and t['policy_before'] & 0xf == 0 and t['status_before'] == 0 and
-                    t['policy_written'] & 0xf == 8 and t['reached_word'] == 8 and t['reads'] == t['spin_reads'] and
-                    t['all_or'] & ~8 == 0 and t['reached_at'] - t['command_at'] <= 10000)
+        # The owner judges the low nibble only; bit 8 and the other status bits are reported, not judged.
+        adopted = t['commands'] == 0 and t['policy_before'] & 0xf == 8 and t['status_before'] & 0xf == 8
+        measured = (t['commands'] == 1 and t['policy_before'] & 0xf == 0 and t['status_before'] & 0xf == 0 and
+                    t['policy_written'] & 0xf == 8 and t['reached_word'] & 0xf == 8 and t['reads'] == t['spin_reads'] and
+                    t['reached_at'] - t['command_at'] <= 10000)
         want(adopted or measured, f"domain 2 neither adopted ON nor one measured OFF-to-ON command: {t}")
     return out
