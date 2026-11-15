@@ -12,8 +12,8 @@
  * already set belongs to another counter user: open then refuses with no write. Every write is read back. A phase
  * programs a bank, and ending the phase restores CYCLE, CLR and ENABLE to their reset values with readbacks; a
  * failed readback restores every programmed bank and refuses later writes until the next open. Restore puts one bank
- * back alone, for the power-off of its master's domain (the vendor device tree places port 6 in GPU_TOP and port 18 in
- * the NPU domain).
+ * back alone, for the power-off of its master's domain or its next power-on (the vendor device tree places port 6 in
+ * GPU_TOP and port 18 in the NPU domain), and works on a closed owner whose bank is still programmed.
  *
  * The counts latch. On the board, each count stays 0 until the first period end after enable. At each period end it
  * steps to that period's total and holds that value until the next. A caller therefore gives every measured phase a

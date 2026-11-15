@@ -140,7 +140,8 @@ int a733_nsi_counters_end(struct a733_nsi_counters *c, unsigned bank, uint32_t v
 }
 int a733_nsi_counters_restore(struct a733_nsi_counters *c, unsigned bank)
 {
-    if (!c || !c->opened || bank >= A733_NSI_COUNTER_BANKS) return A733_NSI_C_REFUSED;
+    if (!c || bank >= A733_NSI_COUNTER_BANKS) return A733_NSI_C_REFUSED;
+    /* A closed owner may still hold a programmed bank whose restore missed; OPEN's reset values remain valid. */
     if (!(c->programmed >> bank & 1u)) return A733_NSI_C_OK;
     if (restore_bank(c, bank)) return A733_NSI_C_OK;
     c->failed = 1;

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Check the NSI port 6 counter guard on the GPU power path: the restore before the GPU_TOP OFF command, refusal while it is off, and use after ON; mutations that move the restore after the OFF command must fail."""
+"""Check the NSI port 6 counter guard on the GPU power path: the restore before the GPU_TOP OFF command, refusal while
+it is off, use after ON, and the restore at the next power-on of a bank refused during a call. Mutations that move the
+restore after the OFF command, drop the gate test, drop the power-on restore or drop the holder's restore must fail."""
 import argparse
 from pathlib import Path
 import subprocess
@@ -21,6 +23,8 @@ HOOK = '    if (!on) os_nsi_counters_power_off(0);   /* before every OFF step: G
 DOMAIN_DONE = '            s->requested = 0;\n'
 OFF_DONE = '    if (on) os_nsi_counters_power_on(0);   /* after every ON step: GPU_TOP is on */\n'
 GATE = '!(atomic_load(&gated) >> b & 1u) &&'
+POWER_ON_TAKE = '    if (take()) release();\n}'
+CALL_RELEASE = '    release();\n    return r;'
 
 
 def replaced(text, old, new):
@@ -39,6 +43,10 @@ MUTATIONS = {
         OFF_DONE + '    if (!on) os_nsi_counters_power_off(0);\n')),
     # The guard without its gate test: accesses while GPU_TOP is off reach the bus.
     'no-gate-test': (GUARD, lambda t: replaced(t, GATE, '')),
+    # The power-on clears the gate but restores nothing.
+    'no-power-on-restore': (GUARD, lambda t: replaced(t, POWER_ON_TAKE, '}')),
+    # A holder gives the owner up without restoring a stale bank.
+    'no-holder-restore': (GUARD, lambda t: replaced(t, CALL_RELEASE, '    give();\n    return r;')),
 }
 
 

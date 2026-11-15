@@ -8,6 +8,10 @@
  * the bank is restored while GPU_TOP is still on; the call returns with the bank refused and no access to it in
  * flight. Until the controller has finished a power-on and calls os_nsi_counters_power_on(0), every access to the
  * bank is refused without reaching the platform. The bank starts refused: the GPU is off until its first power-on.
+ * A bank that was refused while the owner may have left it programmed (a power-off during a call, or a restore that
+ * missed) is stale. The power-on puts a stale bank's CYCLE, CLR and ENABLE back to the values OPEN read, with
+ * readbacks, so the result does not depend on whether GPU_TOP's power-on resets the NSI words. If a call holds the
+ * owner at the power-on, that call restores the bank before it returns.
  * Port 18 sits in the NPU domain, which stays on once the NPU has started (drivers/npu/a733_npu_startup.c refuses
  * every NPU domain OFF). checks/nsi-counters-gpu-power.c runs this unit with the GPU power controller and a modeled
  * GPU_TOP. */
@@ -22,6 +26,8 @@ static struct a733_nsi_counters owner;
 static atomic_uint busy;          /* one caller at a time: the owner task's call, a power transition or the quiesce */
 static atomic_uint gated = 1u;    /* bit b: bank b's master domain is not on; bank 0 until the GPU's first power-on */
 static atomic_uint inflight;      /* bit b: an access to bank b has passed the gate and not yet finished */
+static atomic_uint stale;         /* bit b: bank b was refused while the owner may have left it programmed */
+static atomic_uint ons;           /* power-ons so far: a holder that sees a new one restores again */
 
 /* Each access sets its bank's in-flight bit before it tests the gate, with IRQs masked so that it cannot be
  * preempted in between; a power-off sets the gate before it tests the in-flight bit. With sequentially consistent
@@ -53,6 +59,27 @@ static const struct a733_nsi_counter_ops guarded_ops = {guarded_read, guarded_wr
 
 static int take(void) { return !atomic_exchange_explicit(&busy, 1, memory_order_acquire); }
 static void give(void) { atomic_store_explicit(&busy, 0, memory_order_release); }
+/* With the owner held: restore every stale bank that is no longer refused. A bank whose restore misses stays stale,
+ * and the owner records the miss. */
+static void settle_stale(void)
+{
+    for (unsigned b = 0; b < A733_NSI_COUNTER_BANKS; ++b)
+        if ((atomic_load(&stale) & ~atomic_load(&gated)) >> b & 1u &&
+            a733_nsi_counters_restore(&owner, b) == A733_NSI_C_OK && !(owner.programmed >> b & 1u))
+            atomic_fetch_and(&stale, ~(1u << b));
+}
+/* Every holder of the owner releases it here. A power-on that found the owner held leaves its bank stale and not
+ * refused; the holder restores it before giving the owner up. A power-on counted after the holder's restore began
+ * makes it take the owner again, so no power-on is missed, and a restore that misses is not retried until the next. */
+static void release(void)
+{
+    unsigned seen;
+    do {
+        seen = atomic_load(&ons);
+        settle_stale();
+        give();
+    } while (atomic_load(&ons) != seen && take());
+}
 static int refused_bank(unsigned bank) { return bank >= A733_NSI_COUNTER_BANKS || (atomic_load(&gated) >> bank & 1u); }
 
 /* A call that would access a refused bank returns REFUSED and leaves the owner as it was: OPEN reads both banks,
@@ -66,29 +93,37 @@ int os_nsi_counters_call(struct a733_nsi_counter_call *call)
         call->status = A733_NSI_C_REFUSED; r = A733_NSI_C_REFUSED;
     } else
         r = a733_nsi_counters_call(&owner, &guarded_ops, 0, call);
-    give();
+    release();
     return r;
 }
 /* Before bank's master domain turns off, while it is still on. With no call in progress, the bank is restored and
- * then refused. A call in progress keeps the owner, so the bank is refused at once and left as the call had it;
- * the wait covers at most the one access that had already passed the gate, which runs with IRQs masked. */
+ * then refused; it is stale only if the restore missed. A call in progress keeps the owner, so the bank is refused at
+ * once, left as the call had it and marked stale; the wait covers at most the one access that had already passed the
+ * gate, which runs with IRQs masked. */
 void os_nsi_counters_power_off(unsigned bank)
 {
     if (bank >= A733_NSI_COUNTER_BANKS) return;
     if (take()) {
-        if (owner.opened && !(atomic_load(&gated) >> bank & 1u))
+        if (!(atomic_load(&gated) >> bank & 1u))
             (void)a733_nsi_counters_restore(&owner, bank);
+        if (owner.programmed >> bank & 1u) atomic_fetch_or(&stale, 1u << bank);
         atomic_fetch_or(&gated, 1u << bank);
-        give();
+        release();
         return;
     }
-    atomic_fetch_or(&gated, 1u << bank);
+    atomic_fetch_or(&gated, 1u << bank);   /* before stale, so the holder never restores a bank still on its way off */
+    atomic_fetch_or(&stale, 1u << bank);
     while (atomic_load(&inflight) >> bank & 1u) {}
 }
-/* After bank's master domain has finished a power-on: its words are back at their hardware reset. */
+/* After bank's master domain has finished a power-on, while it is on. The power controller orders this call after
+ * the domain's ON steps and never runs it beside os_nsi_counters_power_off. A stale bank is restored here, or by the
+ * call that holds the owner. */
 void os_nsi_counters_power_on(unsigned bank)
 {
-    if (bank < A733_NSI_COUNTER_BANKS) atomic_fetch_and(&gated, ~(1u << bank));
+    if (bank >= A733_NSI_COUNTER_BANKS) return;
+    atomic_fetch_and(&gated, ~(1u << bank));
+    atomic_fetch_add(&ons, 1u);
+    if (take()) release();
 }
 /* A failed session's GPU quiesce (apps/os/gpu.c): restore and close, unless a call is in progress (the board's reset
  * then restores the words). */
@@ -96,5 +131,5 @@ void os_nsi_counters_quiesce(void)
 {
     if (!take()) return;
     (void)a733_nsi_counters_close(&owner);
-    give();
+    release();
 }

@@ -14,7 +14,13 @@
  *   5. A power-off that arrives during a call on bank 0 (from another core): the bank is refused at once and the
  *      call's later bank 0 accesses never reach the bus; the OFF that follows makes none either.
  *   6. ON again: the bank is back at its hardware reset, and OPEN, BEGIN, SAMPLE, END and CLOSE work on both banks.
- * checks/nsi-counters-gpu-power.py builds this with the restore moved after the OFF command and requires a failure.
+ *   7. A power-on that keeps port 6's words (the model's reset_at_on cleared), after a power-off that arrived during a
+ *      call on bank 1 while bank 0 counted: the power-on restores bank 0's CYCLE, CLR and ENABLE, with GPU_TOP on,
+ *      before any call, and the owner then closes without a failure.
+ *   8. A power-on that arrives while a call on bank 1 holds the owner: that call restores the stale bank 0 before it
+ *      returns, and BEGIN on bank 0 then works.
+ * checks/nsi-counters-gpu-power.py builds this with the restore moved after the OFF command, without the gate test,
+ * without the power-on restore and without the holder's restore, and requires each build to fail.
  */
 #define main a733_gpu_second_on_main
 #include "a733-gpu-second-on.c"
@@ -23,6 +29,7 @@
 
 int os_nsi_counters_call(struct a733_nsi_counter_call *);
 void os_nsi_counters_power_off(unsigned bank);
+void os_nsi_counters_power_on(unsigned bank);
 
 #define WINDOW 60000000u
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); exit(1); } } while (0)
@@ -37,6 +44,8 @@ static struct {
     unsigned seq, last_bank0, off_command;          /* sequence numbers of the last bank 0 access and the OFF */
     uint64_t now;
     int arm_power_off;                              /* the next tick calls the power-off, as another core would */
+    unsigned arm_power_on;                          /* the tick this many ticks on calls the guard's power-on */
+    int reset_at_on;                                /* a TOP5 power-on brings port 6's words back to reset */
     unsigned masked;
 } n;
 
@@ -85,6 +94,7 @@ static uint64_t nticks(void *ctx)
 {
     (void)ctx;
     if (n.arm_power_off) { n.arm_power_off = 0; os_nsi_counters_power_off(0); }
+    if (n.arm_power_on && !--n.arm_power_on) os_nsi_counters_power_on(0);
     traffic();
     return n.now += 8;
 }
@@ -100,7 +110,10 @@ static void written(uintptr_t a, uint32_t value)
     unsigned id, offset;
     if (!ppu_block(a, &id, &offset) || id != 5 || offset) return;
     if (!(value & 15)) { ++n.seq; n.off_command = n.seq; n.after_off = 0; }
-    else if ((value & 15) == 8) { memcpy(n.word[0], reset_word[0], sizeof(n.word[0])); n.off_command = 0; }
+    else if ((value & 15) == 8) {
+        if (n.reset_at_on) memcpy(n.word[0], reset_word[0], sizeof(n.word[0]));
+        n.off_command = 0;
+    }
 }
 static int controls_reset(uint32_t w[2][9])
 {
@@ -127,6 +140,7 @@ static void gpu_off(void)
 int main(void)
 {
     memcpy(n.word, reset_word, sizeof(n.word));
+    n.reset_at_on = 1;
     struct a733_nsi_counter_call c;
 
     /* 2. Before the GPU's first power-on, port 6 is refused: OPEN reads both banks, so it is refused whole. */
@@ -193,10 +207,39 @@ int main(void)
     CHECK(call(A733_NSI_OPEN, 0, &c) == A733_NSI_C_OK && call(A733_NSI_CLOSE, 0, &c) == A733_NSI_C_OK);
     CHECK(!n.violations);
 
+    /* 7. Bank 0 counting, then a power-off during BEGIN on bank 1 (its 10 us settle ticks). BEGIN on bank 1 completes;
+     * bank 0 is refused with its words as BEGIN left them. The OFF makes no bank 0 access, and the power-on that
+     * follows keeps the words, so only the guard's restore can bring them back. */
+    CHECK(call(A733_NSI_OPEN, 0, &c) == A733_NSI_C_OK && call(A733_NSI_BEGIN, 0, &c) == A733_NSI_C_OK);
+    n.arm_power_off = 1;
+    CHECK(call(A733_NSI_BEGIN, 1, &c) == A733_NSI_C_OK && !n.arm_power_off);
+    CHECK(n.word[0][A733_NSI_W_ENABLE] & 1u && n.word[0][A733_NSI_W_CYCLE] == WINDOW);
+    gpu_off();
+    CHECK(!n.violations && !n.after_off);
+    n.reset_at_on = 0;
+    const unsigned before_on = n.accesses[0];
+    gpu_on();
+    CHECK(n.accesses[0] == before_on + 8 && !n.violations);   /* the restore's four writes, each read back */
+    CHECK(!memcmp(n.word[0], reset_word[0], 3 * sizeof(uint32_t)));
+    CHECK(call(A733_NSI_END, 1, &c) == A733_NSI_C_OK && call(A733_NSI_CLOSE, 0, &c) == A733_NSI_C_OK);
+    CHECK(controls_reset(n.word));
+
+    /* 8. Bank 0 counting; during BEGIN on bank 1 the power-off and then the power-on arrive, as if GPU_TOP turned off
+     * and on meanwhile. The power-on finds the owner held, so BEGIN on bank 1 restores bank 0 before it returns. */
+    CHECK(call(A733_NSI_OPEN, 0, &c) == A733_NSI_C_OK && call(A733_NSI_BEGIN, 0, &c) == A733_NSI_C_OK);
+    n.arm_power_off = 1;
+    n.arm_power_on = 3;
+    CHECK(call(A733_NSI_BEGIN, 1, &c) == A733_NSI_C_OK && !n.arm_power_off && !n.arm_power_on);
+    CHECK(!memcmp(n.word[0], reset_word[0], 3 * sizeof(uint32_t)) && n.word[1][A733_NSI_W_ENABLE] & 1u);
+    CHECK(call(A733_NSI_BEGIN, 0, &c) == A733_NSI_C_OK);   /* bank 0 is no longer programmed */
+    CHECK(call(A733_NSI_END, 0, &c) == A733_NSI_C_OK && call(A733_NSI_END, 1, &c) == A733_NSI_C_OK);
+    CHECK(call(A733_NSI_CLOSE, 0, &c) == A733_NSI_C_OK && controls_reset(n.word) && !n.violations);
+
     printf("PASS NSI port 6 guard on the GPU power path: no access with the counters unused; OPEN refused before the "
            "first ON; the OFF restores bank 0 (%u accesses, all before the OFF command) while bank 1 keeps counting; "
            "bank 0 calls refused with no access while GPU_TOP is off; a power-off during END refuses the rest of the "
-           "call; ON again restores use of both banks; %u bank 0 accesses in all, none with GPU_TOP off\n",
+           "call; ON again restores use of both banks; a power-on that keeps the words restores a bank refused during a call, "
+           "and a call that holds the owner at the power-on restores it; %u bank 0 accesses in all, none with GPU_TOP off\n",
            8u, n.accesses[0]);
     return 0;
 }

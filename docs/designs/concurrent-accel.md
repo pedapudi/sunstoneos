@@ -395,12 +395,17 @@ the port-6 bank while GPU_TOP is not on. The GPU power controller calls it when 
 step, and the owner then restores the bank while GPU_TOP is still on. From then until the controller finishes the
 next power-on, a call that would reach the bank is refused, and the bank starts refused until the GPU's first
 power-on. Each access sets an in-flight bit before it tests the refusal, with IRQs masked, so a power-off that
-arrives during a call refuses the rest of that call and waits for at most the one access already under way.
+arrives during a call refuses the rest of that call and waits for at most the one access already under way. Such a
+bank, and any bank whose restore missed, may hold programmed words while it is refused. The next power-on restores
+its CYCLE, CLR and ENABLE words to the values OPEN read, each read back, while GPU_TOP is on; if a call holds the owner
+at that moment, the call restores the bank before it returns. The guard therefore does not depend on whether
+GPU_TOP's power-on resets the NSI words.
 [checks/nsi-counters-gpu-power.py](../../checks/nsi-counters-gpu-power.py) runs the owner with the GPU platform and
 power controller against a modeled GPU_TOP: no access when the counters are unused, the restore before the TOP5 OFF
-command, refusal with no access while GPU_TOP is off, a power-off in the middle of a call, and use after the next
-power-on. Moving the restore after the OFF command, or dropping the refusal, makes it fail. The NPU domain stays on
-once the NPU has started: its local stop leaves domain 4 on (drivers/npu/a733_npu_startup.c).
+command, refusal with no access while GPU_TOP is off, a power-off in the middle of a call, use after the next
+power-on, and the restore at a power-on that keeps the words, from the power-on and from a call that holds the owner.
+Moving the restore after the OFF command, dropping the refusal, or dropping either power-on restore makes it fail.
+The NPU domain stays on once the NPU has started: its local stop leaves domain 4 on (drivers/npu/a733_npu_startup.c).
 
 The application reaches the owner through the GPU call gateway, from the GPU owner task only. An earlier counter build
 of accel-overlap ran four counted phases: idle for 100 ms, then the GPU alone, the NPU alone and the core-2 stream
