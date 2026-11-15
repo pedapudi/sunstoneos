@@ -215,7 +215,8 @@ approves.
 
 ## Stage 1c: larger jobs lose more under CPU streaming
 
-Stage 1c repeats the stage-1b streaming sets with jobs about 30 times larger, and adds two controls. Each device runs
+Stage 1c repeats the stage-1b streaming sets with larger jobs: the GPU add grows from 65 to 262,144 elements and the
+relu from 11,264 to 360,448 bytes per direction. It also adds two controls. Each device runs
 alone without streaming, which measures how much the two devices slow each other. One core streams three interleaved
 4 MiB areas instead of one, which opens more DRAM rows from the same core and separates the requesting core from row
 interleaving.
@@ -258,8 +259,9 @@ both devices and no streaming, as in stage 1b.
 | core 2, three areas | 2.38 GB/s | 445 ns | 30.1% | 30.3% | | |
 | core 7, three areas | 4.01 GB/s | 622 ns | 53.9% | 54.7% | | |
 
-The 1 MiB output maintenance costs little next to the GPU job. The figures are the mean over the four slots of the
-whole-slot job time minus the 64-byte job time.
+The figures below are the mean over the four slots of the whole-slot job time minus the 64-byte job time. Without
+streaming the 1 MiB output maintenance costs under 1% of the GPU job. Under streaming the difference is below the
+variation between serial jobs, so this run does not resolve it.
 
 | Phase | GPU slot job | 1 MiB maintenance |
 |---|---|---|
@@ -272,11 +274,12 @@ whole-slot job time minus the 64-byte job time.
 | core 2, three areas | 5,970 µs | 132 µs |
 | core 7, three areas | 9,005 µs | 142 µs |
 
-The negative value under core 7 means that the variation between serial jobs exceeds the maintenance cost.
+The negative value under core 7 shows that variation directly.
 
 Seventeen predictions missed:
 
-- The GPU ran 225 jobs/s alone, against 300-2,000. Each work item loads one 4-byte word, so the add moves 0.7 GB/s.
+- The GPU ran 225 jobs/s alone, against 300-2,000, which moves 0.7 GB/s. One unmeasured explanation is that each work
+  item loads one 4-byte word, so few requests are in flight per group.
 - Together, the GPU kept 64.7% and the NPU 74.2% of their alone rates, against at least 80%. The two devices slow each
   other, so the comparison with stage 1b is confounded.
 - Seven streaming losses exceeded their ranges: the NPU under core 2, and both devices under core 7, cores 2-4 and the
@@ -291,20 +294,29 @@ Against the alone rates the losses are 79% and 77%. The decision rule labels bot
 The large relu moves 7.3 GB/s alone, so it is bandwidth-bound and shares the DRAM total with the CPU streams. CPU
 streams plus accelerator traffic came to 7.2-8.8 GB/s in the single-area streaming phases and 6.5-6.7 GB/s in the
 interleaved ones, against 5.9 GB/s with no streaming. The stage-1b relu moved 2.0 GB/s and waited on latency, so a
-CPU stream took less from it.
+CPU stream would take less from it; this run did not measure that directly.
 
-### The loss follows the requesting core
+### Interleaved areas cost about the same as one area, at fewer bytes
 
 Three interleaved areas on one core cost within 6 points of a single area on that core, while moving 35-38% fewer bytes:
-core 2 moved 2.38 GB/s instead of 3.86 GB/s and cost 30.1% instead of 35.6% (GPU). More open rows from the same core
-did not raise the loss, so bank and row conflicts from one core are not the cause. The loss follows which cores request
-DRAM, which points at a limit on outstanding transactions or arbitration between the CPU path and the accelerators.
+core 2 moved 2.38 GB/s instead of 3.86 GB/s and cost 30.1% instead of 35.6% (GPU). The decision rule labels this
+result "requesting cores, not row interleaving". The comparison changed two things at once, more open rows and fewer
+bytes, so two readings fit it:
+
+- **Requesting core.** The loss follows which cores request DRAM, through a limit on outstanding transactions or
+  arbitration between the CPU path and the accelerators. Rows and bytes both matter little.
+- **Rows offset bytes.** More open rows raise the loss by about as much as fewer bytes lower it.
+
+DRAM-controller or NSI counters of requests, latency and row misses would separate the two; a run at equal bytes would
+also separate them.
 
 **At about 2.4 GB/s of CPU traffic**, one A55 core streaming three areas, both large-job devices lost 30%. This is the
 first measured point near the 1-2 GB/s that a camera and lidar workload moves.
 
-The next lever is CPU-side bounding. The AXI2HIF limiter words and `CPU_DA_DDR_CTRL_REG` listed under stage 1b can be
-read without writes; writing either needs a hypothesis that the coordinator approves.
+Under the stage-1c decision rule the next lever is CPU-side bounding: the AXI2HIF limiter and `CPU_DA_DDR_CTRL_REG`
+listed under stage 1b, read without writes. That limiter bounds bytes per period, while stages 1b and 1c both show a
+loss that follows bytes weakly. A counter run that measures outstanding requests and latency per master would show
+whether a byte limit can help before any limiter write.
 
 ## Stage 2: DMA completion timing
 
