@@ -809,7 +809,7 @@ int main(void)
                         AIC8800_ADDRESS_RESOLVED|AIC8800_ADDRESS_ENTROPY_SHORT));
                 uint8_t encoded[1024];size_t n=a733_radio_report_encode(done,encoded,sizeof(encoded));
                 assert(n==a733_radio_report_bytes(done)&&(encoded[37]&64u)&&(encoded[37]&32u)&&!memcmp(encoded+n-64,a,64)&&
-                    !memcmp(encoded+n-84,&done->trace,28));
+                    !memcmp(encoded+n-92,&done->trace,28));
                 /* The answer's address is in neither the record nor the board object. */
                 for(size_t i=0;i+4<=n;++i)assert(memcmp(encoded+i,answer,4));
                 for(size_t i=0;i+4<=sizeof(app);++i)assert(memcmp((const uint8_t *)&app+i,answer,4));
