@@ -464,6 +464,10 @@ def source_facts():
                         core='all', status=FROM_SOURCE, value=value, source_ref=ref,
                         note='the value the code writes; a Non-secure write of v stores ((v >> 1) | 0x80) & 0xf8' if 'written_ns' in field else
                              'the value the code sets'))
+    out.append(dict(name='config.sgi_ppi.isenabler0', source='source: platform/a733/cpu_continue.c:122 and platform/a733-smp-cached/continue.c:137',
+                    view=dict(el=3, security='secure', interface='gic-redistributor-sgi-frame'), core='all', status=FROM_SOURCE,
+                    value=0xf, source_ref='platform/a733-smp-cached/continue.c:137 (SS_SCHEDULER_SGI_BITS, kernel/scheduler/bands.h:81; SGI 0 at platform/a733/cpu_continue.c:122)',
+                    note='the SGI enables set before the probe reads: SGI 0 and the reschedule SGIs 1-3; PPIs 27 and 30 are enabled after the probe'))
     for intid, core, stored, ref, images in ROUTES:
         base = 'config.spi%d.' % intid
         for field, value, where in (('group', 1, 'platform/a733-smp-cached/irq_table.c:70'), ('group_modifier', 0, 'platform/a733-smp-cached/irq_table.c:71'),
@@ -481,6 +485,74 @@ def source_facts():
     return out
 
 
+# ---------------------------------------------------------------------------
+# Image-dependent facts. These registers hold what the image wrote before the probe read them, so their values
+# change with the image (1a1c6b061 changed every one of them). Each is recorded as the run's value with the source
+# fact it follows and the rule that maps one to the other; the rule is the hardware fact. image_state_errors()
+# fails a measured value that disagrees with its source fact under its rule.
+
+IMAGE_STATE = {
+    **{'gic.redist.intid%d.priority' % i: ('config.intid%d.stored_priority' % i, 'ns_view', 'platform/a733-smp-cached/continue.c:136')
+       for i in range(4)},
+    'gic.redist.sgi_ppi.isenabler0': ('config.sgi_ppi.isenabler0', 'equal', 'platform/a733-smp-cached/continue.c:137'),
+    'gic.redist.intid27.priority_after_write': ('config.intid27.stored_priority_written_ns', 'ns_write', 'platform/a733/hw_facts_a733.c:13'),
+    'gic.redist.intid30.priority_after_write': ('config.intid30.stored_priority_written_ns', 'ns_write', 'platform/a733/hw_facts_a733.c:12'),
+    # Bits 7 and 16 are the GPU0 AHB and MBUS gates, which the GPU driver sets when it opens the GPU
+    # (drivers/gpu/a733_gpu_resources_native.c:36-37) and neither probe image does, so they show the board's earlier
+    # state. Only the NPU gate bit is a fixed fact.
+    'mmio.0x020025c0': (None, 'fixed_bits', 'drivers/gpu/a733_gpu_resources_native.c:36'),
+    'mmio.0x020025e0': (None, 'fixed_bits', 'drivers/gpu/a733_gpu_resources_native.c:37'),
+}
+IMAGE_STATE_NOTES = {
+    'ns_view': 'image-dependent: the Non-secure view of the stored priority the image writes before the probe (IHI0069 4.8.1)',
+    'equal': 'image-dependent: the enables the image sets before the probe',
+    'ns_write': 'image-dependent: the probe writes the byte the platform writes next; a Non-secure write of v reads back '
+                '(((v >> 1) | 0x80) & 0xf8) << 1',
+    'fixed_bits': 'image-dependent: only the NPU gate bit is fixed; the GPU0 gate bit shows whether the GPU driver opened the GPU '
+                  'in this lifetime or an earlier one',
+}
+
+
+def image_state_expected(rule, source, written=None):
+    """The value a register holds under `rule` for the source value `source` (or, for ns_write, the byte written)."""
+    if rule == 'ns_view':
+        return ns_view(source)
+    if rule == 'ns_write':
+        return ns_view(stored_from_ns(written))
+    return source
+
+
+def image_state_errors(document):
+    """Each image-dependent entry whose value disagrees with its source fact under its rule, as text."""
+    values = {(e['name'], e['core']): e.get('value') for e in document['facts']}
+    errors = []
+    for item in document['facts']:
+        spec = IMAGE_STATE.get(item['name'])
+        if not spec or item['status'] != 'measured':
+            continue
+        if 'image_dependent' not in item:
+            errors.append('%s core %s is not marked image-dependent' % (item['name'], item['core']))
+            continue
+        source_fact, rule, _ = spec
+        value = item['value']
+        if rule == 'fixed_bits':
+            bits = NPU_GATES[int(item['name'][5:], 16)]
+            if value & bits != bits:
+                errors.append('%s core %s: NPU gate bit %#x clear in %#x' % (item['name'], item['core'], bits, value))
+            continue
+        source = values.get((source_fact, 'all'), values.get((source_fact, None)))
+        if source is None:
+            errors.append('%s: source fact %s is missing' % (item['name'], source_fact))
+            continue
+        if rule == 'ns_write' and item.get('written') != source:
+            errors.append('%s core %s: the probe wrote %s, the source writes %#x' % (item['name'], item['core'], item.get('written'), source))
+            continue
+        expected = image_state_expected(rule, source, item.get('written'))
+        if value != expected:
+            errors.append('%s core %s: %#x, the rule gives %#x from %s = %#x' % (item['name'], item['core'], value, expected, source_fact, source))
+    return errors
+
+
 def annotate(document):
     """Add the source facts and resolve the raz-in-view entries that our source configures.
 
@@ -492,8 +564,9 @@ def annotate(document):
     routed = {r[0]: r for r in ROUTES}
     # The hw-facts image routes 71, 95, 97 and 143 itself (tools/sunstone-manifest.py SUNSTONE_A733_HW_FACTS).
     image_routes = {71, 95, 97, 143}
+    resolved = 'platform/a733/cpu_continue.c:115'  # the source_ref of a priority this function resolved on an earlier run
     for item in document['facts']:
-        if item['status'] != RAZ:
+        if item['status'] != RAZ and not (item['status'] == 'measured' and item.get('source_ref') == resolved and 'read_value' in item):
             continue
         parts = item['name'].split('.')
         if parts[:2] == ['gic', 'dist'] and parts[2].startswith('spi') and parts[3] in ('group1', 'group_modifier'):
@@ -506,9 +579,15 @@ def annotate(document):
         elif parts[:2] == ['gic', 'redist'] and parts[2].startswith('intid') and parts[3] == 'priority':
             intid = int(parts[2][5:])
             if intid in LOCAL_VISIBLE:
-                item.update(status='measured', value=item['read_value'], source_ref='platform/a733/cpu_continue.c:115',
-                            note='visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); our code writes only SGI 0 '
-                                 '(cpu_continue.c:120), so this is the reset value of the stored priority, seen through the shifted view')
+                item.update(status='measured', value=item['read_value'], source_ref=resolved,
+                            note='visible: source sets this interrupt to Non-secure Group 1 (cpu_continue.c:115); before the probe our code '
+                                 'writes only SGIs 0-3 (platform/a733-smp-cached/continue.c:136) and PPIs 27 and 30 come after it, so '
+                                 'for any other interrupt this is the reset value of the stored priority, seen through the shifted view')
+    for item in document['facts']:
+        spec = IMAGE_STATE.get(item['name'])
+        if spec and item['status'] == 'measured':
+            source_fact, rule, where = spec
+            item['image_dependent'] = dict(rule=rule, source_fact=source_fact, source_ref=where, note=IMAGE_STATE_NOTES[rule])
     return document
 
 
