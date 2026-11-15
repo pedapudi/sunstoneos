@@ -53,6 +53,7 @@ Queues, event groups and stream buffers lock their own hashed slot instead of th
 8. Control-path long runs (10^6 periods) at 1 to 8 kHz; only 10 kHz has them.
 9. Qualify heterogeneous placement and tickless timing.
 10. Move the control-interrupt measurement off PPI30 the next time it is needed. It uses PPI30 on CPUs 1-7, so its builds keep CPU0's periodic release and do not measure the shipped timer path.
+11. After per-core precise deadlines (stage 7), revisit the woken-frame prefetch (stage 6c, work/sched-stage6-1114). Over three runs it lowered the mean busy wake on every one of CPUs 1-7 and CPU4's and CPU6's worst by about 4 µs, but at a cold wake 0 on CPUs 1-3 it added about 2,200 cycles of interrupt-exit work, which put the whole-phase worst over stage 5's on CPU1 and CPU3. Test skipping the prefetch on the first wake after a phase change, and enabling it only on the cores where it helps.
 
 ## Evidence
 
