@@ -22,7 +22,8 @@ enum a733_radio_stage {
 #define A733_RADIO_RESULT_FUNCTIONS 8u
 struct a733_radio_result_rail { uint8_t rail, enable, selector, flags; uint32_t programmed_uv; }; /* flags: bit0 enabled, bit1 decoded */
 struct a733_radio_result_function { uint16_t manufacturer, device; uint8_t class_code, present, pad[2]; };
-/* frequency_mhz and channel are as reported; security is 0 (not parsed). */
+/* frequency_mhz and channel are as reported; security is 0 (not parsed). ssid_bytes and ssid are always 0: the
+ * layout keeps the fields so that records already captured still decode. */
 struct a733_radio_result_ap { uint8_t bssid[6], ssid_bytes; int8_t rssi_dbm; uint16_t frequency_mhz; uint8_t channel, security, ssid[32]; };
 struct a733_radio_result_head {
     uint64_t magic;
@@ -92,9 +93,11 @@ struct aic8800_firmware;
 void a733_radio_report_firmware_progress(struct a733_radio_report *,const struct aic8800_firmware *,uint64_t ticks_per_ms);
 void a733_radio_report_identity(struct a733_radio_report *,uint32_t chip_word,uint32_t subrevision_word);
 /* One scan result; the list keeps one entry per BSSID (the latest sighting) and
- * grows as needed. When memory runs out the result is counted in aps_dropped. */
-void a733_radio_report_ap(struct a733_radio_report *,const uint8_t bssid[6],const uint8_t *ssid,unsigned ssid_bytes,
-    uint16_t frequency_mhz,int8_t rssi_dbm);
+ * grows as needed. When memory runs out the result is counted in aps_dropped.
+ * The entry takes no SSID: a scan hears the user's network among its neighbours,
+ * and the record reaches the host's result files. ssid_bytes stays 0, and the
+ * host decoder refuses an entry whose length is not 0. */
+void a733_radio_report_ap(struct a733_radio_report *,const uint8_t bssid[6],uint16_t frequency_mhz,int8_t rssi_dbm);
 void a733_radio_report_scan_done(struct a733_radio_report *,unsigned reported);
 /* Length of the encoded record, and the encoding. encode returns the bytes
  * written, or 0 when capacity is smaller than the length. */

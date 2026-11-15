@@ -21,7 +21,7 @@ association, and what it reports to the host.
 | `enumerated` | CMD5, CMD3, CMD7 and the CCCR and tuple reads complete | OCR offered and selected, RCA, CCCR, SDIO and SD revisions, capabilities, function count, each function's manufacturer and device identity, bus width and card clock |
 | `firmware` | The firmware is loaded and started | Firmware flags |
 | `identified` | The chip and subrevision words are read | Both words |
-| `scanned` | A scan completes | Every access point found: BSSID, SSID, channel, frequency and RSSI, one entry per BSSID (the latest sighting), the count the firmware reported and the count dropped for lack of memory |
+| `scanned` | A scan completes | Every access point found: BSSID, channel, frequency and RSSI, one entry per BSSID (the latest sighting), the count the firmware reported and the count dropped for lack of memory |
 | `associated` | The four-way handshake reaches authorized and secured state | Stage, link status, supplicant and RSN states, EAPOL counts, selected frequency and timing; no credential bytes |
 
 A failure keeps the stage reached and names the stage that did not complete. A
@@ -104,8 +104,11 @@ authorization times. It holds no SSID, key or credential byte.
 
 No stage's access point list names an SSID. A scan hears the user's network
 among its neighbours, and the record reaches the host's result files; the list
-keeps each BSSID, frequency and RSSI. `checks/board-radio.c` checks that the
-scan-only record holds no name although the scan heard two.
+keeps each BSSID, frequency and RSSI. `a733_radio_report_ap()` takes no SSID,
+so each entry's SSID length and bytes stay 0, and `tools/radio_result.py`
+refuses an entry where they are not. `checks/board-radio.c` checks that the
+scan-only record holds no name although the scan heard two, and
+`checks/radio-result-decode.py` checks the refusal.
 
 An association miss (a refused association, a timeout or a handshake that never
 completes) retains the radio, so its return ends at the watchdog and the record

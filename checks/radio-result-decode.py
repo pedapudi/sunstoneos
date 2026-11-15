@@ -65,6 +65,21 @@ def main():
                      'entropy_failed': False, 'candidates': 2, 'frequency_mhz': 2437, 'rssi_dbm': -41,
                      'ms_connect_mod_65536': 15000, 'ms_authorized_mod_65536': 15900}, assoc
     assert radio_result.decode(RECORD)['association'] is None
+    # An access point entry holds BSSID, RSSI, frequency and channel. An entry with an SSID length or SSID bytes is
+    # refused, and the error names no byte of it.
+    entry = bytes.fromhex('021122334455') + bytes([0, 0xc3]) + struct.pack('<H2B', 2437, 6, 0) + bytes(32)
+    listed = bytearray(RECORD)
+    struct.pack_into('<I', listed, 12, len(RECORD) + len(entry))
+    struct.pack_into('<I', listed, 216, 1)
+    assert radio_result.decode(bytes(listed) + entry)['scan']['aps'] == [
+        {'bssid': '02:11:22:33:44:55', 'frequency_mhz': 2437, 'channel': 6, 'rssi_dbm': -61}]
+    for named in (entry[:6] + bytes([4]) + entry[7:], entry[:12] + b'case' + entry[16:]):
+        try:
+            radio_result.decode(bytes(listed) + named)
+        except ValueError as error:
+            assert 'case' not in str(error)
+        else:
+            raise SystemExit('an access point entry with SSID bytes was accepted')
     try:
         radio_result.decode(wire[:-4])
     except ValueError:

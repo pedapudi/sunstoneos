@@ -113,8 +113,7 @@ static int grow(struct a733_radio_report *r)
     if(r->aps)r->memory.release(r->memory.context,r->aps);
     r->aps=aps;r->ap_capacity=capacity;return 1;
 }
-void a733_radio_report_ap(struct a733_radio_report *r,const uint8_t bssid[6],const uint8_t *ssid,unsigned ssid_bytes,
-    uint16_t frequency,int8_t rssi_dbm)
+void a733_radio_report_ap(struct a733_radio_report *r,const uint8_t bssid[6],uint16_t frequency,int8_t rssi_dbm)
 {
     if(r->head.aps_reported!=UINT32_MAX)++r->head.aps_reported;
     size_t slot=r->ap_count;
@@ -127,8 +126,6 @@ void a733_radio_report_ap(struct a733_radio_report *r,const uint8_t bssid[6],con
     struct a733_radio_result_ap *a=&r->aps[slot];
     memset(a,0,sizeof(*a));
     memcpy(a->bssid,bssid,6);
-    a->ssid_bytes=(uint8_t)(ssid_bytes>32?32:ssid_bytes);
-    if(ssid&&a->ssid_bytes)memcpy(a->ssid,ssid,a->ssid_bytes);
     a->rssi_dbm=rssi_dbm;a->frequency_mhz=frequency;a->channel=(uint8_t)channel(frequency);
 }
 void a733_radio_report_scan_done(struct a733_radio_report *r,unsigned reported)

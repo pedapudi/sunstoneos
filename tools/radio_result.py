@@ -119,9 +119,11 @@ def decode(data):
         n = data[o + 6]
         rssi = struct.unpack_from('<b', data, o + 7)[0]
         freq, channel, security = struct.unpack_from('<H2B', data, o + 8)
-        if n > 32:
-            raise ValueError('SSID length out of range')
-        aps.append({'bssid': data[o:o + 6].hex(':'), 'ssid': data[o + 12:o + 12 + n].decode('utf-8', 'replace'),
+        if n or any(data[o + 12:o + AP_BYTES]):
+            # The image records no SSID (a733_radio_report_ap); a record that carries one is refused before any
+            # field of it reaches a result file.
+            raise ValueError('An access point entry carries SSID bytes; the record must hold none')
+        aps.append({'bssid': data[o:o + 6].hex(':'),
                     'frequency_mhz': freq, 'channel': channel, 'rssi_dbm': rssi})
     result['scan'] = {'listed': ap_count, 'reported': reported, 'dropped': dropped,
                       'aps': sorted(aps, key=lambda a: -a['rssi_dbm'])}
