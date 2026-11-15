@@ -25,5 +25,10 @@ regions and the session's decoder. [host.py](host.py) decodes the 1,200-byte res
 distributions of both devices, their pipelined job rates, the NPU completions seen while a GPU job was in flight, the
 streaming sweeps, and the PLL_NPU watch. It also lists each predicted range and whether the value fell inside it.
 
+Adding `--define SUNSTONE_ACCEL_OVERLAP_SWEEP=ON` builds the streaming sweep instead: five one-second phases of both
+devices pipelined under five sets of streaming workers, with a dependent-load chase on core 0 timing the loaded memory
+latency. Its result is 1,488 bytes (version 2), and host.py applies the stage-1b predictions and decision rule to it
+([design](../../docs/designs/concurrent-accel.md#stage-1b-the-loss-follows-the-number-of-cpu-streams)).
+
 A failure ends the session with `ss_fail_value`: the low 12 bits name the check in [main.c](main.c), bits 16 to 19 the
 phase (5 after the last phase), and the value the measured operand.

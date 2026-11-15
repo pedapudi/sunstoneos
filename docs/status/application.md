@@ -62,9 +62,11 @@ unqualified.
 2. Run the checks that need external inputs (H.264 capture, SAE); the full gate lists nine remaining checks.
 3. Qualify GPU recovery and application recognition.
 4. Recover GPU and NPU throughput under CPU streaming. Five workers streaming 6.5 GB/s cut the GPU job rate by 63% and the
-   NPU relu rate by 54% (entry `1794707177945351013-cb244af9`). Whether DRAM saturation or bus arbitration (DRAM and MBUS quality-of-service
-   settings) causes the loss is not yet separated.
-4. Qualify simultaneous CPU, GPU and NPU operation; the optional builds have host evidence only.
+   NPU relu rate by 54% (entry `1794707177945351013-cb244af9`). A sweep of streaming sets (entry
+   `1794709286170370328-b5d81897`) shows that the loss grows with the number of concurrent CPU streams more than with the
+   bytes they move: one A76 stream at 7.6 GB/s costs the NPU 29%, three A55 streams at 7.0 GB/s cost it 48%. The vendor
+   sets no quality-of-service value for these masters, so the open levers are the CPU-side bandwidth limiter and the job
+   structure ([design](../designs/concurrent-accel.md#stage-1b-the-loss-follows-the-number-of-cpu-streams)).
 5. Qualify returning accelerator execution; [NPU status](npu.md) lists the finite images that already pass.
 6. Add broader application inputs, native audio input, autonomous card boot, fault recovery and concurrent thermal qualification.
 7. Qualify continued resident supervision after application completion and autonomous card boot. The bounded hello-compute diagnostic passes over FEL with no USB0 grant; it intentionally stops renewal after successful completion. Ordinary resident builds continue supervision, with host evidence. USB0-granted FEL sessions still need ROM takeover admission and current rail readbacks ([entry contract and open work](../designs/resident-fel.md), [physical evidence](../evidence/application.jsonl)).

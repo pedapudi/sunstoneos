@@ -124,6 +124,96 @@ and at least half of the serial NPU jobs give a wake sample: a relu job takes ab
 producer blocks, and such a job has no wake to measure. The decoder
 ([host.py](../../apps/accel-overlap/host.py)) compares every value with these ranges.
 
+## Stage 1b: the loss follows the number of CPU streams
+
+In stage 1, five CPU workers streaming 6.5 GB/s cut the GPU job rate by 63% and the NPU relu rate by 54%. Stage 1b
+separates two causes: DRAM saturation, where every master waits longer for DRAM, and arbitration, where a bus setting ranks
+the accelerators behind the CPU.
+
+### The vendor sets no quality-of-service value for these masters
+
+The vendor kernel, U-Boot and boot0 write no NSI (the A733's bus interconnect) priority, mode or bandwidth limit for the
+GPU (port 6), the NPU (port 18) or the CPU ports (19 and 20). CPU traffic reaches DRAM through the AXI2HIF bridges at
+0x0a030000 and 0x0a040000 and does not pass through the NSI, so an NSI priority can rank the GPU against the NPU but not
+against the CPU. Our settings already equal the vendor's for all three masters.
+
+### Method
+
+The streaming sweep build of accel-overlap (`SUNSTONE_ACCEL_OVERLAP_SWEEP`) runs five one-second phases. In each, the GPU
+(four jobs in flight) and the NPU (eight in flight) run pipelined together, and the last output of each GPU slot and the
+last NPU output are checked. The phases differ in the streaming workers: none, core 2, cores 2-4, cores 2-5 and 7 (the
+stage-1 set), and core 7 alone. Cores 2-5 are Cortex-A55 cores and core 7 is a Cortex-A76. A chase task on core 0 (an A55)
+follows one random cycle through the 262,144 64-byte lines of a 16 MiB region, so each load waits for the one before. It
+times 64 such loads per sample, which gives the loaded CPU memory latency in every phase.
+
+### Results
+
+One returning run on port 3-1 at the approved points (entry `1794709286170370328-b5d81897`). Losses are against the phase
+without streaming, which reproduced stage 1 within 1% (GPU 7,317 and NPU 174,098 jobs/s).
+
+| Streaming | Bandwidth | Chase median | GPU loss | NPU loss |
+|---|---|---|---|---|
+| none | 0 | 184 ns | 0 | 0 |
+| core 2 | 5.40 GB/s | 338 ns (1.8×) | 25.4% | 11.4% |
+| core 7 | 7.64 GB/s | 416 ns (2.3×) | 32.5% | 29.3% |
+| cores 2-4 | 6.95 GB/s | 854 ns (4.6×) | 51.1% | 48.1% |
+| cores 2-5 and 7 | 6.26 GB/s | 1,135 ns (6.2×) | 51.1% | 53.0% |
+
+Every output matched its reference, PLL_NPU kept its word and lock, and no phase throttled. Four predictions missed. Core 2
+streamed 5.4 GB/s against 3-5 GB/s predicted. Core 7 alone cost the NPU 29% against 40-65%. The chase median did not rise
+with bandwidth. Each NPU job-time ratio fell 37-66% below the chase ratio, against a predicted agreement within 25%.
+
+The decision rule chose neither cause. The cores 2-4 and stage-1 totals are within 15% of each other, as saturation
+predicts, but the accelerators slow far less than the CPU chase. The arbitration criterion, an accelerator slowing more
+than 1.5 times as much as the chase, holds in no phase.
+
+The loss follows the number of concurrent CPU streams more than the bytes they move. One A76 stream moved 7.64 GB/s and
+cost the NPU 29%; three A55 streams moved 6.95 GB/s and cost it 48%. Adding cores 5 and 7 lowered the total to 6.26 GB/s
+and raised the NPU loss to 53%. More streams keep more requests waiting in the DRAM controller, and the extra rows they
+open lower the total that DRAM delivers.
+
+**At 1-2 GB/s of CPU traffic** the loss is estimated, not measured. The lowest measured point is one stream at 5.4 GB/s.
+A straight line from no streaming through that point gives an NPU loss of 2-4% and a GPU loss of 5-9%. Queueing delay
+grows faster than linearly with load, so the straight line is an upper estimate for one paced stream at that rate.
+
+### Deeper pipelining cannot recover the loss; larger jobs are untested
+
+Stage 1 measured each device both serially and pipelined:
+
+- **GPU.** A serial job took 102.8 µs from submission to return. Four jobs in flight gave 9,558 jobs/s, or 104.6 µs per
+  job, so the GPU runs jobs one after another and the depth adds nothing. A 65-element add costs about 100 µs, almost
+  all of it per-job work, and under streaming that per-job work stretched to 285 µs.
+- **NPU.** A serial job took 8.4 µs; eight in flight kept the NPU busy at 5.6 µs per job. Under streaming the serial job
+  took 14.8 µs and the pipelined job 12.2 µs. The device stays busy at depth 8 in both cases, so a deeper queue cannot
+  raise the rate.
+
+Both devices therefore lose time inside each job. The relu job moves 11,264 bytes in 5.6 µs (2.0 GB/s) without streaming,
+far below what DRAM delivers, so the job's own memory accesses wait on latency. A larger job amortizes per-job work, and
+larger transfers keep more requests in flight. A run with GPU adds over many more elements and a relu over a larger
+tensor, with and without the stage-1 streaming set, would measure whether larger jobs lose less.
+
+### Hardware features that could bound CPU bandwidth
+
+No register named here has been read on the board, and none may be written without a hypothesis that the coordinator
+approves.
+
+- **AXI2HIF bandwidth limiter**, at 0x0a030000 and 0x0a040000. +0x30 enables the limiter (bit 0) and each limit (bit
+  16+p). +0x48 and +0x4c hold the bandwidth and saturation for the total, +0x50 and +0x54 for reads, +0x58 and +0x5c for
+  writes. Source: the vendor kernel's bsp/drivers/bus/sunxi-nsi.h lines 410-422 and sunxi-nsi.c lines 336-491, built
+  only with `CONFIG_AW_NSI_CPU_CHANNEL`, which the vendor A733 configuration leaves off. Boot0 writes +0x18 and +0x68 only.
+  This is the only hardware bound on CPU bandwidth found.
+- **CPU path select**, `CPU_DA_DDR_CTRL_REG` at 0x08000200 (A733 manual 5.1.6.5). Bit 0 set sends CPU traffic through
+  AXI2HIF, and boot0 sets it. Cleared, CPU traffic would pass through NSI ports 19 and 20, whose limiter (port base
+  0x02020000 + 0x200 × port: +0x10 mode, +0x28 bandwidth, +0x2c saturation) and priority (+0x14) would then apply.
+  Whether the path may change after DRAM initialization is unknown.
+- **Core prefetch controls**, `CPUECTLR_EL1` (S3_0_C15_C1_4). On the A55, L1PCTL (bits 15:13) bounds outstanding L1
+  prefetches and L3PCTL (bits 12:10) sets the prefetch distance (Cortex-A55 TRM B2.30). On the A76, PF_DIS (bit 15)
+  disables data prefetch and WS_THR fields (bits 25:18) set the write-streaming thresholds (Cortex-A76 TRM B2.32). These
+  reduce speculative traffic; they do not cap demand traffic.
+- **DSU controls.** CLUSTERBUSQOS_EL1 (S3_0_C15_C4_4) sets a quality-of-service value per scheme ID on the bus and limits
+  nothing; CLUSTERPARTCR_EL1 (S3_0_C15_C4_3) partitions L3 ways (DSU TRM 100453 r3p0, B1.6 and B1.12). The A76, A55 and
+  DSU implement no MPAM.
+
 ## Stage 2: DMA completion timing
 
 DMA is a separate later stage. Its known work:
