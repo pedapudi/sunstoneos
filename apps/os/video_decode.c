@@ -255,7 +255,9 @@ static int do_open(void)
         if(r<0)return fault(VD_STEP_COLD,p->cold_step|s<<8);
         if(s==A733_POWER_ROW_PENDING){
             if(!row_limit)row_limit=now_us()+A733_POWER_PCK_BOUND_US+4000;
-            if(now_us()>=row_limit){copy_record();return fail(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);}
+            /* The row is requested only after the entry hold, which writes nothing, and the decoder writes only
+             * after the ON answer: an unanswered row leaves nothing to close. */
+            if(now_us()>=row_limit){copy_record();refuse(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);goto refused;}
             (void)sunstone_deadline_wait_until(row_limit);
         }else{
             /* A busy registry or register lock after the binding's own bounded retry: block, then call again. */
