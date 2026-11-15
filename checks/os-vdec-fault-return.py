@@ -34,7 +34,7 @@ words and the published nonsecure boot ROM mapped:
   supply verification ends, the service waits on the supply budget (A733_POWER_SUPPLY_SETTLE_US +
   A733_POWER_SUPPLY_BUDGET_US + one tick, anchored at the PMIC startup deadline or now); once DCDC2 is verified,
   on the PCK600 bound plus two ticks. Past that bound the open is refused with step VD_STEP_ROW_TIMEOUT: the service
-  ends CLOSED with no register written and no close.
+  ends CLOSED with no register written and no close, and the binding drops the open's deadline so that a reopen runs.
 - record-layout: every member offset of the board record (struct vdec_check_record, with the binding's cold record
   and the owner's transition record embedded) in apps/vdec-check/host.py equals the image's DWARF, so the host
   decodes the bytes the image returns.
@@ -378,6 +378,9 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
         problems.append('an unanswered row leaves nothing written and no close')
     if state['translations'] != MAPPED_PAGES:
         problems.append(f"the pages are checked once, {MAPPED_PAGES} translations: {state['translations']}")
+    unit = vd + layout['decoder'] + L['a733_video_decoder']['unit']
+    if get(unit + L['a733_video_unit']['deadline'], 8) or get(unit + L['a733_video_unit']['failed']):
+        problems.append('the refused open must leave the binding with no deadline and not failed, so a reopen runs')
     return {'case': 'row-wait', 'waits_us': rows, 'passes': len(state['waits']), 'elapsed_us': state['time'],
             'phase': get(vd + layout['phase']), 'recorded_fault_step': get(vd + layout['fault_step']),
             'ccu_writes': [(hex(a), hex(v)) for a, v in ccu.writes], 'problems': problems, 'passed': not problems,

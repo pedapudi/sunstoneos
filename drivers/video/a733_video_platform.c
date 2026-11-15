@@ -248,6 +248,16 @@ static int acquire(struct a733_video_decoder *p,const void *j,uint64_t d,uint64_
  * Only a close ends either; the fault close continues in the held lock. */
 static int written(const struct a733_video_decoder *p)
 {return p->unit.locked||(p->config.start==A733_VIDEO_COLD_NS_ROM&&p->cold_step>=COLD_HOLD_A);}
+/* An open that ends refused has written nothing and holds no lock: it drops its deadline, so the next open runs with
+ * its own. A refusal that only the deadline caused (late, with every access certain) also clears the failure; any
+ * other refusal leaves the unit failed. */
+static int refused(struct a733_video_decoder *p)
+{
+    struct a733_video_unit *u=&p->unit;
+    if(u->late&&!u->uncertain){u->failed=0;u->late=0;}
+    u->deadline=0;
+    return A733_VIDEO_OPEN_REFUSED;
+}
 int a733_video_decoder_open(struct a733_video_decoder *p,uint64_t d)
 {
     if(!p)return A733_VIDEO_OPEN_REFUSED;
@@ -261,8 +271,10 @@ int a733_video_decoder_open(struct a733_video_decoder *p,uint64_t d)
         if((r=lock(u))==1)r=a733_video_unit_identity(u,&p->version)?unlock(u):a733_video_unit_refuse_held(u);
     }
     if(r>=0)return r;
-    return written(p)?A733_VIDEO_OPEN_FAULT:A733_VIDEO_OPEN_REFUSED;
+    return written(p)?A733_VIDEO_OPEN_FAULT:refused(p);
 }
+int a733_video_decoder_cancel(struct a733_video_decoder *p)
+{return !p||!p->unit.initialized||written(p)?-1:refused(p);}
 /* The close in the vendor order, under the held mutex, each write read back. */
 static int close_steps(struct a733_video_unit *u)
 {

@@ -275,7 +275,12 @@ static int do_open(void)
             const uint64_t bound=row_bound(&supply_bound,&verified_bound),t=owner_us();
             /* The row is requested only after the entry hold, which writes nothing, and the decoder writes only
              * after the ON answer: an unanswered row leaves nothing to close. */
-            if(t>=bound){copy_record();refuse(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);goto refused;}
+            if(t>=bound){
+                copy_record();refuse(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);
+                /* Nothing written: the binding drops the open's deadline, so a later open starts with its own. */
+                if(a733_video_decoder_cancel(&vd.decoder)!=A733_VIDEO_OPEN_REFUSED)return fault(VD_STEP_COLD,p->cold_step|s<<8);
+                goto refused;
+            }
             /* The row's wake, which the owner also calls when verification ends, notifies this task. */
             const uint64_t at=lease_now();uint64_t wait=bound-t;
             if(at>=vd.limit)wait=0;else if(vd.limit-at<wait)wait=vd.limit-at;

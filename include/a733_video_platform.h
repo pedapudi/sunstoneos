@@ -124,6 +124,11 @@ int a733_video_decoder_init(struct a733_video_decoder *,const struct a733_video_
  * late access (in any hold, the entry hold included), so a733_video_decoder_close(..., 1) must close it. */
 enum { A733_VIDEO_OPEN_REFUSED = -1, A733_VIDEO_OPEN_FAULT = -2 };
 int a733_video_decoder_open(struct a733_video_decoder *,uint64_t d);
+/* A refused open drops its deadline, so a later open may pass a new one; one refused only at its deadline is not left
+ * failed and resumes where it stopped (an outstanding row request stays). cancel ends a pending open that the caller
+ * gives up, such as an unanswered row past the caller's bound, the same way: A733_VIDEO_OPEN_REFUSED, or -1 when the
+ * open has written or holds the lock and only a close ends it. */
+int a733_video_decoder_cancel(struct a733_video_decoder *);
 /* The close of a started decoder (faulted 0) or of one that failed (faulted 1), in the vendor's order under one
  * register-lock hold; docs/video-platform.md, "Close", describes the steps and which failed units it touches. The
  * caller ensures no job is outstanding; d is a new deadline for this call. faulted 0 refuses a failed unit or a held

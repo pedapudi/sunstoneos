@@ -297,6 +297,7 @@ struct lifetime {
     unsigned fault_close; /* after a refused start, the service's fault close (a733_video_decoder_close, faulted) */
     unsigned late; /* struct cold_model */
     unsigned early; /* the open starts before the owner's first step, so the row waits for supply verification */
+    unsigned refuse_first; /* service: the first open reaches its own deadline with the row pending, then a reopen */
 };
 struct outcome {
     int result;unsigned writes,owner_ppu_writes,owner_commands,decoder_pck_reads,polls_after_on;
@@ -396,7 +397,19 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
     struct a733_video_jpeg_run run={0};assert(a733_video_jpeg_begin(&run,a733_video_platform_jpeg_ops(),&p,&job,100000));
     const unsigned ppu_writes=d.ppu_writes;
     int result=0;unsigned polls=0,on_poll=0,checked_poll=0;
+    /* refuse_first: the first open runs to a deadline of its own, ahead of the run's; once its row request is pending
+     * the clock passes that deadline, so the open is refused with nothing written and drops it. The reopen with the
+     * run's deadline resumes at the row and starts the decoder. */
+    unsigned refused_first=0;const uint64_t first_deadline=run.deadline/2;
     while(!result&&++polls<20000) {
+        if(l->refuse_first&&!refused_first) {
+            result=a733_video_decoder_open(dec,first_deadline);
+            assert(!result&&a733_power_domain_state(&c->row)==A733_POWER_ROW_PENDING&&!m->writes);
+            if(m->now<first_deadline)m->now=first_deadline;
+            assert(a733_video_decoder_open(dec,first_deadline)==A733_VIDEO_OPEN_REFUSED);
+            assert(!m->writes&&!m->lock&&!dec->unit.deadline&&!dec->unit.failed&&dec->requested);
+            refused_first=1;result=0;continue;
+        }
         result=l->service?service_open(dec,run.deadline):a733_video_jpeg_poll(&run);
         if(!checked_poll&&dec->checked)checked_poll=polls;
         /* The service answers the row; the decoder's owner task blocks on
@@ -704,6 +717,11 @@ int main(int argc,char **argv)
         const struct outcome kept=lifetime(&c,&l,0,ppu,1);
         assert(kept.result==1&&!kept.owner_commands&&!kept.owner_ppu_writes);
         printf("service: result%d writes%u, adopted result%d writes%u\n",first.result,first.writes,kept.result,kept.writes);
+        /* An open refused at its own deadline with the row pending, then a reopen that starts the decoder. */
+        const struct lifetime r={.ack_us=10,.pll=PLL_LOCKS,.pll_entry=FEL_PLL,.service=1,.refuse_first=1};
+        const struct outcome again=lifetime(&c,&r,0,0,1);
+        assert(again.result==1&&again.owner_commands==1&&vm->ccu[0x220/4]==0x01204d00u);
+        printf("service reopen after a refusal at its deadline: result%d writes%u\n",again.result,again.writes);
     }
     policy();
     puts("PASS: decoder cold start on the actual owner: entry before the row request, ON from 0/0 or adopted, refusals "

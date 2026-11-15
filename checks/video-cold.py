@@ -117,6 +117,10 @@ MUTANTS = [
     ('drivers/video/a733_video_platform.c', '    p->cold.closed_at=u->last_now;\n', '', 'close hold end not stamped'),
     ('drivers/power/a733_power_domains.c', '    if(k>=0)r->transition=r->domains->transition[k];\n', '',
      'row answered without its transition record'),
+    ('drivers/video/a733_video_platform.c', '    u->deadline=0;\n    return A733_VIDEO_OPEN_REFUSED;',
+     '    return A733_VIDEO_OPEN_REFUSED;', 'refused open keeps its deadline'),
+    ('drivers/video/a733_video_platform.c', '    if(u->late&&!u->uncertain){u->failed=0;u->late=0;}\n', '',
+     'refusal at the deadline leaves the unit failed'),
     ('drivers/video/a733_video_platform.c', '    for(unsigned i=0;i<3;++i)if(rd(u,CCU+gate[i],&p->cold.entry_gates[i])!=1)return 0;\n',
      '    for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)\n'
      '        if(!check(u,rom_identity[i].address,UINT32_MAX,rom_identity[i].word))return 0;\n'
