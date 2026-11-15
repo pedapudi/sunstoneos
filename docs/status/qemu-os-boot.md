@@ -4,6 +4,8 @@
 
 The SunstoneOS image starts on a virtual eight-core board in QEMU and runs through startup to the first application task, in the supervised and the resident lifetime. `checks/qemu-os-boot.py` builds and boots it in about eight seconds without a board. The OS CPU clock owner, the NPU and GPU services, the USB host and the radio are not modeled.
 
+Every case counts the tasks that register a precise-wait slot and fails when a registration is refused or the count exceeds the image's slots. These images start few registering tasks; `checks/deadline-owners.py` derives the slot count for the images that link every service.
+
 **Software evidence:** emulator.
 
 **Board-qualified scope:** None.

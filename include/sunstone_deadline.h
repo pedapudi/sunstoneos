@@ -7,10 +7,10 @@
  * Register in each owning task before its first wait. A second call from the same task returns 1 with the slot it
  * already holds; a call from a task whose task-local pointer names a slot it does not own returns 0. Registered tasks
  * must not be deleted or have their handles reused. There is no allocation or registration hot path. */
-/* Owner slots, one for each task that registers. The OS image counts its own
- * tasks from the service declaration (apps/os/os-services.h). Probe and
- * host-check builds that name no count get this small default, enough for
- * their handful of tasks. */
+/* Owner slots, one for each task that registers. In the OS image (SUNSTONE_DEADLINE_IMAGE_SLOTS) the image's own tables
+ * hold them, sized by OS_DEADLINE_OWNERS (apps/os/os-services.h), because only the tables see the services that the image
+ * links per application. A host-check build of the OS sources without that option sizes a static table from the same
+ * count; probe and host-check builds that name no count get this small default, enough for their handful of tasks. */
 #ifndef SUNSTONE_DEADLINE_SLOTS
 #ifdef SUNSTONE_A733_OS
 #include "os-services.h"

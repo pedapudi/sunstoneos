@@ -4,7 +4,7 @@
 The thermal driver's STOPPED result and completed clock transition are API
 fixtures. The actual thermal owner masks its SPI and publishes completion;
 the registered owner callbacks, PMIC idle predicate and supervisor notification
-order execute. RTOS wake-ups are modeled; this is not physical qualification.
+order execute. RTOS wake-ups and task-local pointers are modeled; this is not physical qualification.
 In an image with the host-armed watchdog, each live supervisor step restarts
 WDT0 and a step that fails its liveness check does not.
 """
@@ -45,6 +45,11 @@ class Model(prior.Model):
             self.hooks[layout.address(name)] = lambda: 1
         self.hooks[layout.address('xQueueGetMutexHolder')] = lambda: int(self.mutex_held)
         self.hooks[layout.address('xTaskGetCurrentTaskHandle')] = lambda: 0x3000
+        # Each modeled task's task-local pointers (the deadline runtime keeps its slot in one), keyed by the handle that
+        # the model's xTaskGetCurrentTaskHandle returns at the time of the call.
+        self.task_local = {}
+        self.hooks[layout.address('pvTaskGetThreadLocalStoragePointer')] = self.task_local_get
+        self.hooks[layout.address('vTaskSetThreadLocalStoragePointer')] = self.task_local_set
         self.hooks[layout.address('a733_thermal_stop')] = self.thermal_stop
         self.hooks[layout.address('xTaskGenericNotify')] = self.notify
         self.hooks[layout.address('xTaskCreateStaticAffinitySet')] = self.create
@@ -87,6 +92,17 @@ class Model(prior.Model):
         assert self.uc.reg_read(prior.fault.REGS[7]) == 1 << core
         self.handles.append(0x2000 + core)
         return self.handles[-1]
+
+    def task_local_key(self):
+        task = self.uc.reg_read(prior.fault.REGS[0]) or self.hooks[self.layout.address('xTaskGetCurrentTaskHandle')]()
+        return task, self.uc.reg_read(prior.fault.REGS[1])
+
+    def task_local_get(self):
+        return self.task_local.get(self.task_local_key(), 0)
+
+    def task_local_set(self):
+        self.task_local[self.task_local_key()] = self.uc.reg_read(prior.fault.REGS[2])
+        return 0
 
     def notify(self):
         self.events.append(('notify', self.uc.reg_read(prior.fault.REGS[0])))

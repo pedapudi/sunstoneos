@@ -15,6 +15,12 @@ Cases: normal start to the first application and its normal finish; the zero
 sealed deadline that refused every application wait with failure 0x757
 (negative control: the check must fail with the earlier apps/os/services.c);
 sensors not yet read at application start; an OS service that fails to start.
+
+Every case also counts the image's deadline-owner registrations. The board
+wraps sunstone_deadline_register and reports, before each exit, how many tasks
+claimed a precise-wait slot, how many were refused and how many slots the
+image's tables provide (OS_DEADLINE_OWNERS). A case fails when any
+registration is refused or the registered count exceeds the slot count.
 """
 import argparse
 import hashlib
@@ -67,7 +73,7 @@ def run(command, log=None, **kwargs):
 
 DEFINES = ['-DSUNSTONE_A733_OS=1', '-DSUNSTONE_A733_SMP_DIAGNOSTIC=1', '-DSUNSTONE_BOARD_APPLICATION=1',
            '-DSUNSTONE_BOARD_SUPERVISED=1', '-DSUNSTONE_BOARD_USB2_DUAL=1', '-DSUNSTONE_TASK_DEADLINES=1',
-           '-DSUNSTONE_A733_IRQ_TABLE=1', '-DSUNSTONE_CRUMBS=1',
+           '-DSUNSTONE_A733_IRQ_TABLE=1', '-DSUNSTONE_CRUMBS=1', '-DSUNSTONE_DEADLINE_IMAGE_SLOTS=1',
            # The patched tasks.c gives each core's current-task entry a cache line (include/sunstone_current_tcb.h).
            '-DportCURRENT_TCB_SHIFT=6']
 CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mgeneral-regs-only', '-ffreestanding',
@@ -254,7 +260,9 @@ class Image:
         units = [(self.services_source if u[0] == ROOT / 'apps/os/services.c' else u[0], u[1]) for u in units]
         objects = self.compile_all(units, generated)
         elf = self.work / 'os.elf'
-        done = run([LLD, '--error-limit=0', '-nostdlib', '-static', '--gc-sections', wrap, *['--wrap=' + w for w in wraps],
+        # Every image counts its deadline registrations (platform/qemu-os/board.c, DEADLINE-OWNERS).
+        done = run([LLD, '--error-limit=0', '-nostdlib', '-static', '--gc-sections', wrap, '--wrap=sunstone_deadline_register',
+                    *['--wrap=' + w for w in wraps],
                     *(['--wrap=vApplicationIRQHandler'] if self.latency else []),
                     '-T', ROOT / 'platform/qemu-os/link.ld', '-Map', self.work / 'os.map',
                     '-o', elf, *objects], self.log)
@@ -454,6 +462,8 @@ class Case:
         self.main = (lines(output, 'APP-MAIN') or [None])[0]
         self.finished = (lines(output, 'APP-FINISHED') or [None])[0]
         self.cleared = (lines(output, 'THROTTLE-CLEARED') or [None])[0]
+        # The tasks that registered a deadline owner, the first registrations refused and the image's slot count.
+        self.owners = (lines(output, 'DEADLINE-OWNERS') or [None])[0]
 
     def require(self, condition, message):
         assert condition, '%s: %s\n--- console (%s) ---\n%s' % (self.name, message, self.log, self.output[-3000:])
@@ -462,6 +472,16 @@ class Case:
         """The run ended without a failure record, panic, exception, stop or timeout."""
         bad = [l for l in self.output.splitlines() if l.startswith(FAILURES)]
         self.require(not bad and self.status == 0, 'unexpected end: status %d, %s' % (self.status, bad[:3]))
+        self.require(self.owners is not None, 'the run ended without its DEADLINE-OWNERS report')
+
+    def owners_within_slots(self):
+        """Every task that registered a deadline owner found a slot: no first registration was refused and the count is at
+        or below the image's bound (OS_DEADLINE_OWNERS, apps/os/os-services.h)."""
+        if self.owners is None:
+            return
+        registered, refused, slots = (int(self.owners[k]) for k in ('registered', 'refused', 'slots'))
+        self.require(refused == 0 and registered <= slots,
+                     '%d tasks registered a deadline owner and %d were refused, for %d slots' % (registered, refused, slots))
 
     def failed_with(self, group, detail=None):
         self.require(self.failure is not None and self.status == 3, 'no failure record (status %d)' % self.status)
@@ -621,6 +641,7 @@ def main():
     def build_storage_write(owner_source=None):
         """The storage-write application on the write-capable owner (apps/os/sd_owner.c) over the board's RAM-disk card."""
         image = Image(out / ('build-storage-write' + ('-reverted' if owner_source else '')),
+                      extra_defines=['-DSUNSTONE_A733_OS_SD_WRITE=1'],
                       extra_sources=[str(owner_source or 'apps/os/sd_owner.c'), 'platform/qemu-os/sd_hw.c',
                                                                    'drivers/storage/a733_storage_bounds.c'])
         application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
@@ -631,7 +652,8 @@ def main():
     def build_storage_write_space():
         """The storage-write image with the upper memory mapped, so that the application has an address space and its
         main task a tag; the owner is started by that task's call."""
-        image = Image(out / 'build-storage-write-space', extra_defines=['-DQEMU_OS_UPPER=1', '-DQEMU_OS_SD_OWNER=1'],
+        image = Image(out / 'build-storage-write-space',
+                      extra_defines=['-DQEMU_OS_UPPER=1', '-DQEMU_OS_SD_OWNER=1', '-DSUNSTONE_A733_OS_SD_WRITE=1'],
                       extra_sources=['apps/os/sd_owner.c', 'platform/qemu-os/sd_hw.c', 'drivers/storage/a733_storage_bounds.c'])
         application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
                                                            'apps/storage-write-test/sha256_ce.S'],
@@ -762,6 +784,7 @@ def main():
         inputs += list(extra_inputs)
         output, status, seconds = boot(elf, raw, contract, scenario_bytes, inputs, out / (name + '.log'), memory=memory)
         case = Case(name, output, status, seconds, out / (name + '.log'))
+        case.owners_within_slots()
         results.append(case)
         return case
 
@@ -1275,6 +1298,7 @@ def main():
                                     partitioned_latency_elf, prestart_elf, facts_elf)},
                'cases': [{'name': r.name, 'status': r.status, 'wall_seconds': round(r.seconds, 3),
                           'failure': r.failure and r.failure['line'], 'main': r.main and r.main['line'],
+                          'deadline_owners': r.owners and r.owners['line'],
                           'finished': r.finished and r.finished['line'][:80]} for r in results]}
     (out / 'result.json').write_text(json.dumps(summary, indent=2) + '\n')
     print('PASS qemu-os-boot: %d cases in %.1f s (build %.1f s)' % (len(results), elapsed, built))
