@@ -1,5 +1,6 @@
 /* Bounded D80 key/controlled-port worker. The pinned firmware ABI uses no
  * receive replay-counter field; host packet numbers are therefore retained. */
+#define AIC8800_SITE_FILE 5u
 #include "aic8800_security.h"
 static uint64_t pn48(const uint8_t *p)
 {uint64_t v=0;for(unsigned i=0;i<6;++i)v|=(uint64_t)p[i]<<(8*i);return v;}
@@ -13,16 +14,24 @@ static int same_link(const struct aic8800_security *s)
 static int active(const struct aic8800_security *s)
 {return s->state==AIC8800_SECURITY_REQUEST||s->state==AIC8800_SECURITY_WAITING;}
 void aic8800_security_stop(struct aic8800_security *s,const void *owner)
-{if(s&&s->initialized&&s->owner==owner){s->authorized=0;s->state=AIC8800_SECURITY_FAULT;}}
+{
+    if(!s||!s->initialized||s->owner!=owner)return;
+    if(s->state!=AIC8800_SECURITY_FAULT&&!s->stopped){s->stop_from=(uint8_t)s->state;s->stopped=1;}
+    s->authorized=0;s->state=AIC8800_SECURITY_FAULT;
+}
+static void stop_for(struct aic8800_security *s,const void *owner,enum aic8800_security_stop_reason reason)
+{if(s->state!=AIC8800_SECURITY_FAULT&&!s->stopped)s->stop_reason=(uint8_t)reason;aic8800_security_stop(s,owner);}
 void aic8800_security_observe(struct aic8800_security *s,const void *owner,uint64_t now)
 {
     if(!s||s->owner!=owner||s->state==AIC8800_SECURITY_FAULT)return;
-    if(now<s->last_now||(active(s)&&now>=s->deadline)||(s->completion_deadline&&now>=s->completion_deadline))
-        {aic8800_security_stop(s,owner);return;}
+    if(now<s->last_now){stop_for(s,owner,AIC8800_SECURITY_STOP_CLOCK);return;}
+    if(active(s)&&now>=s->deadline){stop_for(s,owner,AIC8800_SECURITY_STOP_DEADLINE);return;}
+    if(s->completion_deadline&&now>=s->completion_deadline){stop_for(s,owner,AIC8800_SECURITY_STOP_COMPLETION);return;}
     s->last_now=now;s->completion_deadline=0;
     if(!same_link(s)) {
         s->authorized=0;
-        if(s->wifi->association_generation!=s->generation||(!s->retiring&&active(s)))aic8800_security_stop(s,owner);
+        if(s->wifi->association_generation!=s->generation)stop_for(s,owner,AIC8800_SECURITY_STOP_GENERATION);
+        else if(!s->retiring&&active(s))stop_for(s,owner,AIC8800_SECURITY_STOP_LINK);
     }
 }
 int aic8800_security_init(struct aic8800_security *s)
@@ -39,6 +48,7 @@ static void encode(struct aic8800_security *s,uint16_t id,unsigned bytes)
 {
     for(unsigned i=0;i<sizeof(s->request);++i)s->request[i]=0;
     aic8800_sdio_command_header(s->request,id,(uint16_t)bytes);
+    s->seen_cfm_bytes=0;s->seen_cfm_status=0;
     s->expected_cfm=id+1;s->state=AIC8800_SECURITY_REQUEST;s->authorized=0;
 }
 static int admit(struct aic8800_security *s,const void *owner,uint64_t now,uint64_t deadline)
@@ -85,6 +95,7 @@ enum aic8800_codec_result aic8800_security_response(struct aic8800_security *s,c
     if(!s||s->owner!=owner||!r)return AIC8800_CODEC_UNRELATED;
     aic8800_security_observe(s,owner,now);if(s->state==AIC8800_SECURITY_FAULT)return AIC8800_CODEC_MALFORMED;
     if(s->state!=AIC8800_SECURITY_WAITING||!r->has_message||r->message_id!=s->expected_cfm)return AIC8800_CODEC_UNRELATED;
+    s->seen_cfm_bytes=r->parameter_bytes;s->seen_cfm_status=r->parameter_bytes?r->parameters[0]:0;
     if(r->parameter_bytes>sizeof(s->last_cfm)||(s->operation==AIC8800_SECURITY_ADD&&r->parameter_bytes!=4))goto fail;
     s->last_cfm_bytes=r->parameter_bytes;for(unsigned i=0;i<r->parameter_bytes;++i)s->last_cfm[i]=r->parameters[i];
     if(s->operation==AIC8800_SECURITY_ADD) {
@@ -99,7 +110,7 @@ enum aic8800_codec_result aic8800_security_response(struct aic8800_security *s,c
     }
     aic8800_security_zero(s->request,sizeof(s->request));
     s->completion_deadline=s->deadline;s->state=AIC8800_SECURITY_DONE;return AIC8800_CODEC_OK;
-fail:aic8800_security_stop(s,owner);return AIC8800_CODEC_MALFORMED;
+fail:stop_for(s,owner,AIC8800_SECURITY_STOP_CONFIRMATION);return AIC8800_CODEC_MALFORMED;
 }
 int aic8800_security_open(const struct aic8800_security *s)
 {return s&&s->initialized&&s->state!=AIC8800_SECURITY_FAULT&&s->authorized&&s->port_confirmed&&same_link(s);}

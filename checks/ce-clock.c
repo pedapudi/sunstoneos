@@ -1,5 +1,6 @@
 /* The CE clock bring-up (drivers/crypto/a733_ce_clock.c) against a register model that enforces the native write rules. */
 #include "a733_ce_clock.h"
+#include "sunstone_crumb.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +13,8 @@ struct model {
     uint64_t now;
     unsigned held,retained,left,writes;
     uintptr_t stuck; /* A register whose writes are accepted but never take effect. */
+    uintptr_t refuse; /* A register whose writes the callback refuses. */
+    unsigned flip_after;uint32_t flip_bits; /* After that many writes, another writer flips these 0x5e4 bits. */
     uint32_t log[32][2];
 };
 static uint32_t *reg(struct model *m,uintptr_t a)
@@ -42,8 +45,10 @@ static int write_reg(void *v,uintptr_t a,uint32_t value)
         mask=4;if((old&4)==(value&4))return 0;
     }else return 0;
     if((old^value)&~mask)return 0;
+    if(a==m->refuse)return 0;
     assert(m->writes<32);m->log[m->writes][0]=(uint32_t)(a-CCU);m->log[m->writes][1]=value;++m->writes;
     if(a!=m->stuck)*reg(m,a)=value;
+    if(m->flip_bits&&m->writes==m->flip_after)*reg(m,CCU+0x5e4)^=m->flip_bits;
     return 1;
 }
 static void setup(struct model *m,uint32_t clk,uint32_t bgr,uint32_t mbus)
@@ -116,6 +121,23 @@ int main(void)
     m.stuck=CCU+0xac0;before=m.writes;
     assert(!a733_ce_clock_retire(&clock)&&clock.state==A733_CE_CLOCK_RETAINED&&m.held&&m.retained==1);
     assert(a733_clock_token_status(&m.registry,&m.token)!=A733_CLOCK_OK);
-    puts("PASS CE clock bring-up and retirement: the board's enabled entry state is cycled in the vendor order, neighbors preserved, held-in-reset brought up, other states refused without a write; a ready CE retires by the reverse sequence, a moved state is refused without a write, a failed readback retains");
+    /* The first failure record's words. Another writer sets 0x5e4 bit 8 after the bring-up's last write: the bring-up
+     * fails at its own 0x5e4 check line with both 0x5e4 words recorded, and the record's aux holds CE_CLK and CE_BGR. */
+    setup(&m,0x81000000,0x30003,4);m.flip_after=12;m.flip_bits=0x100;
+    assert(!provision(&m,&clock)&&clock.fail_line==CE_LINE_MBUS_UP&&clock.state==A733_CE_CLOCK_RETAINED&&m.retained==1);
+    assert(clock.entry_mbus==4&&clock.seen_mbus==0x104&&clock.seen_clk==0x81000000&&clock.seen_bgr==0x30003&&!clock.write_refused);
+    assert(a733_ce_clock_fail_aux(&clock)==(3u|12u|1u<<9|1u<<12)); /* BGR bits 0, 1, 16, 17; CLK bits 24 and 31 */
+    /* The words apps/os/ce_probe.c gives board_fail_note, for the decoder case in checks/ce-clock.py. */
+    printf("RECORD %#x %#x %#x\n",SUNSTONE_CRUMB_FAIL_CE<<12|(clock.fail_line&0xfffu)|a733_ce_clock_fail_aux(&clock)<<16,
+        clock.seen_mbus,clock.entry_mbus);
+    /* A bring-up write that does not read back fails at that step's own line, and is not a refused write. */
+    setup(&m,0x81000000,0x30003,4);m.stuck=CCU+0x5e4;
+    assert(!provision(&m,&clock)&&!clock.write_refused);
+    assert(clock.fail_line==CE_LINE_CYCLE_MBUS&&clock.seen_mbus==4); /* the cycle's MBUS write, the first 0x5e4 write */
+    /* A write the callback refuses is marked as refused, at the same step's line. */
+    setup(&m,0,0,0);m.refuse=CCU+0xac4;
+    assert(!provision(&m,&clock)&&clock.write_refused&&clock.fail_line==CE_LINE_BGR_RESETS);
+    assert(a733_ce_clock_fail_aux(&clock)>>13==1u&&(a733_ce_clock_fail_aux(&clock)>>4&0x1ffu)==1u<<5);
+    puts("PASS CE clock bring-up and retirement: the board's enabled entry state is cycled in the vendor order, neighbors preserved, held-in-reset brought up, other states refused without a write; a ready CE retires by the reverse sequence, a moved state is refused without a write, a failed readback retains; each failing step has its own line and the CE words for the first failure record");
     return 0;
 }

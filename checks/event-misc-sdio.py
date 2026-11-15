@@ -30,7 +30,7 @@ def main():
         (a.output/'transport-phase.inc').write_text(enum+'\n')
         os=(ROOT/'drivers/net/aic8800_supplicant_os.c').read_text();supplicant=(ROOT/'drivers/net/aic8800_supplicant.c').read_text()
         production=''.join(module.function(os,n) for n in ('aic8800_supplicant_os_enter','aic8800_supplicant_os_leave','aic8800_supplicant_os_timer'))
-        production+=''.join(module.function(supplicant,n) for n in ('aic8800_supplicant_stop','aic8800_supplicant_observe'))
+        production+=''.join(module.function(supplicant,n) for n in ('aic8800_supplicant_stop_at','aic8800_supplicant_observe'))
         (a.output/'rsn-timer-events.inc').write_text(production)
         units=['drivers/net/aic8800_firmware.c','drivers/net/aic8800_runtime.c','drivers/net/aic8800_wifi.c',
                'drivers/net/aic8800_security.c','drivers/net/aic8800_data.c','checks/event-misc-rsn-timer.c',
@@ -54,7 +54,9 @@ def main():
     if a.composition_only:
         cache=CACHE/'sources';tcp=cache/'radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source'
         kernel=cache/'FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2'
-        exe=host_rtos.build(a.output/'build',['checks/event-misc-radio-composition.c','drivers/storage/storage_digest.c'],'composition',shim=False,
+        exe=host_rtos.build(a.output/'build',['checks/event-misc-radio-composition.c','drivers/storage/storage_digest.c',
+            # board-radio.c's scan events come from the real codec, Wi-Fi scan parser and dispatcher.
+            'drivers/net/aic8800_sdio_codec.c','drivers/net/aic8800_wifi.c','drivers/net/aic8800_dispatch.c'],'composition',shim=False,
             includes=[ROOT/'checks',ROOT/'network/include',tcp/'include',tcp/'portable/Compiler/GCC'],
             defines=['SUNSTONE_A733_RADIO_IRQ=1','SUNSTONE_AIC8800_RSN=1','INCLUDE_xSemaphoreGetMutexHolder=1'],
             flags=['-ffunction-sections','-fdata-sections'],link=['-Wl,--gc-sections'])

@@ -191,7 +191,13 @@ The coordinator executable has SHA-256
 The earlier host link failure remains in `initial/`. The continuation reused
 its verified successful SHA-256 object and completed only unfinished steps.
 Host fixtures model lower protocol observations; unused native callback-table
-boundaries abort if invoked. These checks do not execute the native startup
+boundaries abort if invoked. Scan events are the exception: each sighting is a
+SCANU_RESULT_IND record as the firmware delivers it, which the real SDIO codec,
+Wi-Fi scan parser and dispatcher turn into the event the application takes, so
+the event carries no frame pointer and the beacon is its payload, as on the
+board. A fixture that filled the event's metadata by hand once supplied a frame
+pointer the dispatcher never sets, and hid that the association stage read no
+RSN element on the board. These checks do not execute the native startup
 constructor or qualify physical CE, SID, RF, WPA2 or IPv4 operation. The complete
 native board image supplies the real constructor and provider linkage.
 

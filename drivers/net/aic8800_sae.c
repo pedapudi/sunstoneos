@@ -2,6 +2,7 @@
  * Commit, confirm, anti-clogging and group rejection follow its station SME;
  * the elliptic-curve arithmetic comes from the pinned OpenSSL library, which
  * the supplicant OS entry sets up. */
+#define AIC8800_SITE_FILE 3u
 #include "aic8800_supplicant_port.h"
 #include "aic8800_supplicant.h"
 #include "utils/common.h"

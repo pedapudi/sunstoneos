@@ -14,6 +14,14 @@ RAILS = {0: 'dcdc1', 7: 'dcdc8', 19: 'bldo5', 20: 'cldo1'}
 ASSOC_BYTES = 48
 SCAN_COUNTS_BYTES = 16   # struct a733_radio_scan_counts, present when head flags bit 10 is set
 RSN_BYTES = 16           # struct a733_radio_rsn, present when head flags bit 11 is set
+FAULT_BYTES = 16         # struct aic8800_fault_site, present when head flags bit 12 is set; the last section
+# AIC8800_SITE file codes (include/aic8800_security.h).
+SITE_FILES = {0: 'other', 1: 'aic8800_supplicant.c', 2: 'aic8800_supplicant_os.c', 3: 'aic8800_sae.c',
+              4: 'aic8800_sdio_transport.c', 5: 'aic8800_security.c'}
+# enum aic8800_security_stop_reason (include/aic8800_security.h).
+STOP_REASONS = ['external', 'deadline', 'completion', 'clock', 'link', 'generation', 'confirmation']
+TRANSPORT_ERRORS = ['none', 'host', 'timeout', 'setup', 'rx-bounds', 'unsupported-irq', 'message', 'firmware',
+                    'runtime', 'wifi', 'data']
 # Record versions this decoder reads (A733_RADIO_RESULT_VERSION). Admission refuses an image that writes another.
 VERSIONS = (2, 3)
 RSN_CHECKS = ['passed', 'no-element', 'too-long', 'malformed', 'group-not-ccmp', 'pairwise-no-ccmp', 'mfp-required',
@@ -53,7 +61,7 @@ def decode(data):
     data = data[:total]
     ap_count = struct.unpack_from('<I', data, 216)[0]
     tail = (ASSOC_BYTES if flags_of(data) & 512 else 0) + (SCAN_COUNTS_BYTES if flags_of(data) & 1024 else 0) + \
-        (RSN_BYTES if flags_of(data) & 2048 else 0)
+        (RSN_BYTES if flags_of(data) & 2048 else 0) + (FAULT_BYTES if flags_of(data) & 4096 else 0)
     if total != HEAD_BYTES + ap_count * AP_BYTES + tail:
         raise ValueError('radio result length does not match its access point count')
     stage, failed, failure_stage, flags = struct.unpack_from('<4I', data, 24)
@@ -70,8 +78,10 @@ def decode(data):
         # The rails showed BLDO5 off, so the power-on writes were needed; they ran only if the stage reached 'powered'.
         'bldo5_needs_power_on': bool(flags & 4),
         'clean_failure': bool(flags & 256),
-        'shutdown_readbacks_matched': bool(flags & 8),
         'bldo5_already_on': bool(flags & 16),
+        # Two shutdown paths: the orderly one reaches down with every step read back (bit 3); a failure runs the
+        # failure shutdown instead (bits 5 and 6), so a failed run's orderly shutdown is always false.
+        'orderly_shutdown': {'matched': bool(flags & 8)},
         'failure_shutdown': {'ran': bool(flags & 32), 'matched': bool(flags & 64)},
     }
     mod_g, val_g, mod_m, val_m = struct.unpack_from('<4I', data, 40)
@@ -171,9 +181,10 @@ def decode(data):
             'rssi_dbm': rssi - 65536 if rssi >= 32768 else rssi,
             'ms_connect_mod_65536': values['ms_connect'], 'ms_authorized_mod_65536': values['ms_authorized']}
     result['rsn'] = None
+    fault_bytes = FAULT_BYTES if flags & 4096 else 0
     if flags & 2048:
-        check, group, rsn_flags, parse, version, capabilities, pairwise, akm = struct.unpack_from('<3BbHH2I', data,
-                                                                                                  total - RSN_BYTES)
+        check, group, rsn_flags, parse, version, capabilities, pairwise, akm = struct.unpack_from(
+            '<3BbHH2I', data, total - fault_bytes - RSN_BYTES)
         result['rsn'] = {
             'check': RSN_CHECKS[check] if check < len(RSN_CHECKS) else check,
             'element_found': bool(rsn_flags & 1), 'other_oui': bool(rsn_flags & 2), 'malformed': bool(rsn_flags & 4),
@@ -182,7 +193,36 @@ def decode(data):
             'pairwise': suites(pairwise, CIPHERS) if rsn_flags & 8 else 'absent (CCMP-128)',
             'akm': suites(akm, AKMS) if rsn_flags & 16 else 'absent (802.1X)',
             'capabilities': capabilities, 'mfp_capable': bool(capabilities & 0x80), 'mfp_required': bool(capabilities & 0x40)}
+    result['fault_site'] = decode_fault_site(data[total - FAULT_BYTES:total]) if fault_bytes else None
     return result
+
+
+def site(value):
+    return {'file': SITE_FILES.get(value >> 12, value >> 12), 'line': value & 0xfff} if value else None
+
+
+def decode_fault_site(raw):
+    """The fault site section (include/aic8800_fault_site.h): codes and states only."""
+    (transport_site, transport_error, data_word, security, slot, expected, cfm_bytes, cfm_status, supplicant, actions,
+     stop_site, ms) = struct.unpack('<H4BH4BHH', raw)
+    data_states = ['idle', 'request', 'waiting', 'done', 'fault']
+    data_errors = ['none', 'time', 'link', 'transport']
+    security_states = ['idle', 'request', 'waiting', 'done', 'fault']
+    operations = ['add', 'delete', 'port']
+    supplicant_states = ['new', 'handshake', 'authorized', 'retiring', 'retired', 'fault']
+    def name(names, value): return names[value] if value < len(names) else value
+    return {
+        'transport_site': site(transport_site), 'transport_error': name(TRANSPORT_ERRORS, transport_error),
+        'data_state': name(data_states, data_word & 15), 'data_error': name(data_errors, data_word >> 4),
+        'security_state': name(security_states, security & 15), 'security_stopped': bool(security & 16),
+        'security_operation': name(operations, security >> 5), 'key_slot': slot & 7,
+        'security_stop_reason': name(STOP_REASONS, slot >> 4) if security & 16 else None, 'expected_cfm': expected,
+        'cfm_bytes': cfm_bytes, 'cfm_status': cfm_status,
+        'supplicant_state': name(supplicant_states, supplicant & 15), 'queued_actions': supplicant >> 4,
+        'head_action': ('key' if actions & 1 else 'eapol') if supplicant >> 4 else None,
+        'head_in_flight': bool(actions & 2), 'port_pending': bool(actions & 4),
+        'handshake_completed': bool(actions & 8), 'eapol_deferred': bool(actions & 16),
+        'stop_site': site(stop_site), 'ms_mod_65536': ms}
 
 
 if __name__ == '__main__':

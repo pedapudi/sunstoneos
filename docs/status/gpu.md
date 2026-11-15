@@ -39,6 +39,7 @@ on the admitted ring). General GPU coverage remains unqualified.
 6. Explain the 104 us dispatch interval and the 118 us notification tail before changing timing budgets.
 7. Qualify sustained concurrent workloads, arbitrary stuck-device recovery, thermal throttling, critical-temperature protection and graphics.
 8. Qualify sustained notification-driven lifecycle, no-work idle rates and WFI residency. Preserve the registered GPU stop and returning failure proofs.
+9. Make `-DSUNSTONE_GPU_SINGLE_CORE_APPLICATION=ON` configure on its own, or state what it needs: alone it stops with `Single-core GPU mode requires supervised compute or copied draw` (cmake/a733-gpu-application.cmake).
 
 ## Evidence
 

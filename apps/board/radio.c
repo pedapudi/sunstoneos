@@ -1,3 +1,4 @@
+#define SUNSTONE_AIC8800_FAULT_SITE_CAPTURE 1
 #include "radio.h"
 #include "a733_ce_native.h"
 #include "a733_range.h"
@@ -222,7 +223,15 @@ static enum board_radio_result retain(struct board_radio *r)
 {
     uint64_t now=0;
     int have=a733_counter_clock_now(&r->config.shared->counter,&now);
-    if(!r->failing){r->failing=1;r->failing_since=now;}
+    if(!r->failing){
+        r->failing=1;r->failing_since=now;
+        /* A failure once the security stage attached names its site, before the failure shutdown changes anything. */
+        if(r->config.associate&&r->config.report_memory.allocate&&r->session.transport.security){
+            struct aic8800_fault_site site;
+            aic8800_fault_site_capture(&site,&r->session.transport,&r->session.supplicant,(unsigned)(now/1000u)&0xffffu);
+            a733_radio_report_fault_site(&r->report,&site);
+        }
+    }
     unsigned was_failed=atomic_exchange_explicit(&r->failed,1,memory_order_acq_rel);
 #ifdef SUNSTONE_A733_RADIO_IRQ
     if(!was_failed&&r->config.network.clients[0])xTaskNotifyGive(r->config.network.clients[0]);
@@ -383,17 +392,20 @@ static void wipe_pmk(struct board_radio *r)
     for(unsigned i=0;i<32;++i){a[i]=0;b[i]=0;}
 }
 /* A scan result that carries the credential's SSID and an RSN element offering PSK and CCMP. The element is found in the
- * beacon or probe response (information elements from offset 36), copied, and kept for the strongest such result. */
-static void assoc_candidate(struct board_radio *r,const struct aic8800_wifi_scan_result *sc)
+ * beacon or probe response (information elements from offset 36), copied, and kept for the strongest such result. The
+ * result arrives as a dispatcher event, whose metadata keeps no frame pointer: the frame is the event's payload
+ * (include/aic8800_dispatch.h). */
+static void assoc_candidate(struct board_radio *r,const struct aic8800_dispatch_event *e)
 {
+    const struct aic8800_wifi_scan_result *sc=&e->metadata.scan;
     const uint8_t *ssid,*pmk,*password;size_t ssid_bytes,password_bytes;
     if(!sc->has_ssid||!ss_wifi_credential||ss_wifi_credential(&ssid,&ssid_bytes,&pmk,&password,&password_bytes)!=0)return;
     r->assoc.flags|=32u;
     if(ssid_bytes!=sc->ssid_bytes||memcmp(ssid,sc->ssid,ssid_bytes))return;
     ++r->assoc.candidates;r->assoc.flags|=2u;
     const uint8_t *element=NULL;size_t n=0;int passed=0,became=0;
-    if(sc->frame&&sc->frame_bytes>36){
-        const uint8_t *ie=sc->frame+36,*end=sc->frame+sc->frame_bytes;
+    if(e->bytes>36&&e->bytes<=sizeof(e->payload)){
+        const uint8_t *ie=e->payload+36,*end=e->payload+e->bytes;
         while(end-ie>=2&&(size_t)(end-ie)>=2u+ie[1]){
             if(ie[0]==48){element=ie;n=2u+ie[1];break;}
             ie+=2u+ie[1];
@@ -559,7 +571,7 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
                 /* The record names no SSID in any stage: a scan hears the user's network among its neighbours, and
                  * the record reaches the host's result files. The list keeps the BSSID, frequency and RSSI. */
                 a733_radio_report_ap(&r->report,r->startup_event.metadata.scan.bssid,r->startup_event.metadata.scan.frequency,r->startup_event.metadata.scan.rssi_dbm);
-                if(r->config.associate&&r->stage==SCANNING)assoc_candidate(r,&r->startup_event.metadata.scan);
+                if(r->config.associate&&r->stage==SCANNING)assoc_candidate(r,&r->startup_event);
             }
             if(!r->config.report_memory.allocate)break; /* One event per pass, as before. */
         }

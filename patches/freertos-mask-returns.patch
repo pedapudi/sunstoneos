@@ -1,6 +1,6 @@
 --- portASM.S
 +++ portASM.S
-@@ -617,21 +617,64 @@
+@@ -665,12 +665,55 @@
   * FreeRTOS_SWI_Handler handler is used to perform a context switch.
   *****************************************************************************/
     .align 8
@@ -56,16 +56,7 @@
  #ifdef SUNSTONE_SCHED_LATENCY_TRACE
  /* This selection originates in SVC, regardless of the last completed IRQ.
   * X0/X1 are saved above and DAIF.I excludes an interrupt-side tag update. */
- ADRP X0, ss_sched_trace_switch_irq
- ADD X0, X0, :lo12:ss_sched_trace_switch_irq
- MRS X1, TPIDR_EL1
- AND X1, X1, #0xff
- STR XZR, [X0, X1, LSL #3]
- #endif
- 
- MRS X4, ELR_EL1  /* Save exception return address. */
- MRS X5, SPSR_EL1 /* Save program status register address. */
-@@ -661,6 +704,9 @@
+@@ -718,6 +761,9 @@
  LDP X0, X1, [SP], #0x10
  DSB SY
  ISB SY
@@ -75,7 +66,7 @@
  ERET
  
  2:
-@@ -676,6 +722,9 @@
+@@ -733,6 +779,9 @@
  LDP X4, X5, [SP], #0x10
  LDP X2, X3, [SP], #0x10
  LDP X0, X1, [SP], #0x10
@@ -85,7 +76,7 @@
  ERET
  
  3:
-@@ -690,6 +739,9 @@
+@@ -747,6 +796,9 @@
  LDP X4, X5, [SP], #0x10
  LDP X2, X3, [ SP ], # 0x10
  LDP XZR, X1, [ SP ], # 0x10
@@ -95,7 +86,7 @@
  ERET
  
  4:
-@@ -718,6 +770,9 @@
+@@ -775,6 +827,9 @@
  LDP X4, X5, [ SP ], # 0x10
  LDP X2, X3, [ SP ], # 0x10
  LDP XZR, X1, [ SP ], # 0x10
@@ -105,7 +96,7 @@
  ERET
  
  5:
-@@ -738,6 +793,9 @@
+@@ -795,6 +850,9 @@
  LDP X4, X5, [SP], #0x10
  LDP X2, X3, [SP], #0x10
  LDP X0, X1, [SP], #0x10
@@ -115,7 +106,7 @@
  ERET
  
  6:
-@@ -758,6 +816,9 @@
+@@ -822,6 +880,9 @@
  LDP X4, X5, [SP], #0x10
  LDP X2, X3, [SP], #0x10
  LDP X0, X1, [SP], #0x10
@@ -125,7 +116,7 @@
  ERET
  
  7:
-@@ -774,6 +835,9 @@
+@@ -838,6 +899,9 @@
     LDP X4, X5, [ SP ], # 0x10
     LDP X2, X3, [ SP ], # 0x10
     LDP XZR, X1, [ SP ], # 0x10
@@ -135,7 +126,7 @@
     ERET
  #endif /* #if ( configENABLE_MPU == 1 ) */
  
-@@ -788,6 +852,9 @@
+@@ -852,6 +916,9 @@
  LDP X2, X3, [ SP ], # 0x10
  LDP X0, X1, [ SP ], # 0x10
  portSAVE_CONTEXT
@@ -145,7 +136,7 @@
  ERET
  
  9:
-@@ -801,6 +868,9 @@
+@@ -865,6 +932,9 @@
  LDP X2, X3, [ SP ], # 0x10
  LDP X0, X1, [ SP ], # 0x10
  portRESTORE_CONTEXT
@@ -155,7 +146,7 @@
  ERET
  
  10:
-@@ -839,6 +909,9 @@
+@@ -903,6 +973,9 @@
  LDP X4, X5, [SP], #0x10
  LDP X2, X3, [ SP ], # 0x10
  LDP X0, X1, [ SP ], # 0x10
@@ -165,7 +156,7 @@
  ERET
  
  12:
-@@ -855,6 +928,9 @@
+@@ -919,6 +992,9 @@
  LDP X4, X5, [SP], #0x10
  LDP X2, X3, [SP], #0x10
  LDP XZR, X1, [SP], #0x10
@@ -175,7 +166,7 @@
  ERET
  13:
  #endif
-@@ -871,6 +947,9 @@
+@@ -935,6 +1011,9 @@
  LDP X4, X5, [SP], #0x10
  LDP X2, X3, [SP], #0x10
  LDP XZR, X1, [SP], #0x10
@@ -185,7 +176,7 @@
  ERET
  14:
  #endif
-@@ -921,6 +1000,9 @@
+@@ -985,6 +1064,9 @@
  LDP X4, X5, [SP], #0x10
  LDP X2, X3, [SP], #0x10
  LDP X0, X1, [SP], #0x10
@@ -195,7 +186,7 @@
  ERET
  .Lgpu_call_refuse:
  /* Restore the original caller PC even when a missing target was detected. */
-@@ -994,6 +1076,9 @@
+@@ -1058,6 +1140,9 @@
     adrp    X30, vRequestSystemCallExit
     add     X30, X30, :lo12:vRequestSystemCallExit
     restoresyscallcontextgpregs
@@ -205,7 +196,7 @@
     ERET
  
  priv_path:
-@@ -1010,6 +1095,9 @@
+@@ -1074,6 +1159,9 @@
     LDP     X4, X5, [ SP ], #0x10
     LDP     X2, X3, [ SP ], #0x10
     LDP     X0, X1, [ SP ], #0x10
@@ -215,7 +206,7 @@
     ERET
  
     /* ---------- SystemCallExit -----------------------------------*/
-@@ -1022,6 +1110,9 @@
+@@ -1086,6 +1174,9 @@
     LDP     X4, X5, [ SP ], #0x10
     LDP     X2, X3, [ SP ], #0x10
     LDP     XZR, X1, [ SP ], #0x10
@@ -225,7 +216,7 @@
     ERET
  #endif /* #if ( configENABLE_MPU == 1 ) */
  
-@@ -1066,6 +1157,9 @@
+@@ -1130,6 +1221,9 @@
  BL vTaskSwitchContext
  restorefuncontextgpregs
  portRESTORE_CONTEXT
@@ -235,7 +226,7 @@
  ERET
  
  Skip_Context_Switch:
-@@ -1073,6 +1167,9 @@
+@@ -1137,6 +1231,9 @@
  LDP X4, X5, [SP], #0x10
  LDP X2, X3, [SP], #0x10
  LDP X0, X1, [SP], #0x10
@@ -245,7 +236,7 @@
  ERET
  
  Start_First_Task:
-@@ -1081,6 +1178,9 @@
+@@ -1145,6 +1242,9 @@
     LDP X2, X3, [SP], #0x10
     LDP X0, X1, [SP], #0x10
     portRESTORE_CONTEXT
@@ -255,7 +246,7 @@
     ERET
  
  /******************************************************************************
-@@ -1111,6 +1211,9 @@
+@@ -1170,6 +1270,9 @@
  ISB SY
  /* Start the first task. */
  portRESTORE_CONTEXT
@@ -265,10 +256,10 @@
  ERET
  
  /******************************************************************************
-@@ -1130,6 +1233,13 @@
- /* Save volatile registers. */
- saveallgpregisters
+@@ -1195,6 +1298,13 @@
+ #if configSS_IRQ_SAVES_FP
  savefloatregisters
+ #endif
 +#ifdef SUNSTONE_LATENCY_RESTORE_SPANS
 +savefuncontextgpregs
 +MRS X0, TPIDR_EL1
@@ -279,7 +270,7 @@
  
  /* Save the SPSR and ELR. */
  MRS X3, SPSR_EL1
-@@ -1184,6 +1294,13 @@
+@@ -1249,6 +1359,13 @@
   * interrupt, before the EOI. */
  MSR DAIFSET, # 2
  DSB SY
@@ -293,7 +284,7 @@
  
  /* Restore the interrupt ID value. */
  LDP X0, X1, [ SP ], # 0x10
-@@ -1274,6 +1391,9 @@
+@@ -1341,6 +1458,9 @@
  BL vTaskSwitchContext
  restorefuncontextgpregs
  portRESTORE_CONTEXT
@@ -303,8 +294,8 @@
  ERET
  
  Exit_IRQ_No_Context_Switch:
-@@ -1297,6 +1417,9 @@
- restorefloatregisters
+@@ -1366,6 +1486,9 @@
+ #endif
  restoreallgpregisters
  
 +#ifdef SUNSTONE_LATENCY_RESTORE_SPANS

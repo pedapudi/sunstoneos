@@ -382,6 +382,15 @@ def board_failure(words, defines, elf):
                       rail_held=bool(value >> 26 & 1), request_held=bool(value >> 27 & 1),
                       deadline_expired=bool(value >> 28 & 1), timer_expired=bool(value >> 29 & 1),
                       parked=bool(value >> 30 & 1), critical=bool(value >> 31 & 1))
+    if record['group'] == 'ce':
+        # apps/os/ce_probe.c: a CE clock bring-up failure. ELR and FAR are register words, not addresses.
+        aux = record['aux']
+        bgr = (aux & 3) | (aux >> 2 & 3) << 16
+        clk = (aux >> 4 & 31) | (aux >> 9 & 7) << 24 | (aux >> 12 & 1) << 31
+        record.update(site_kind='a733_ce_clock.c line', caller_kind='register word',
+                      ce_clk_last=hex(clk), ce_bgr_last=hex(bgr), write_refused=bool(aux >> 13 & 1),
+                      mbus_last=hex(value), mbus_entry=hex(caller))
+        return record
     if caller:
         # A statement address is exact; a return address points after the call.
         record['caller_source'] = symbolize(elf, caller - 4 if site >> 31 else caller)
@@ -543,6 +552,11 @@ def decode(words, epoch, elf=None):
                 f"{f['site_kind']} {f['site']:#x}, value {f['value']}, caller {f['caller']}")
         if f.get('caller_source'):
             text += f" ({f['caller_source']})"
+        if f['group'] == 'ce':
+            text = (f"first board failure on core {f['core']} at {f['exception_level']}: CE clock bring-up at "
+                    f"a733_ce_clock.c line {f['site']}; CCU 0x5e4 {f['mbus_entry']} at entry, {f['mbus_last']} last read; "
+                    f"CE_CLK {f['ce_clk_last']}, CE_BGR {f['ce_bgr_last']} last read"
+                    f"{'; the last write was refused' if f['write_refused'] else ''}")
         if f['group'] == 'quiesce':
             text += f", owner {f['owner']}, source group {f['source_group']}"
         if 'session' in f:
