@@ -44,7 +44,7 @@ Mappings and the initial MMU invalidation happen once at context creation. Per-j
 | Share of aggregate job time inside device scheduling and shader execution; time in 154 reference jobs | 94.6%; 339.188 ms | `1793561022387122671-06be5388`, `1793560651607761780-3cb221f5` |
 | Uncached against write-back payloads | saves 0.208 µs at the median, no tail gain | `1793564171325300569-9135052d` |
 
-These observations do not isolate a firmware lower bound. The zero-element vector shader still loads its argument block, so the benchmark is a minimal real compute dispatch with a fence. The measured recognition penalty cannot be attributed to tick polling, because each completion interrupts the blocked service task before its backup poll expires.
+These observations do not isolate a firmware lower bound. The zero-element vector shader of those measurements still loaded its argument block in every lane, so the benchmark was a minimal real compute dispatch with a fence; the shader now receives its arguments in unified registers. The measured recognition penalty cannot be attributed to tick polling, because each completion interrupts the blocked service task before its backup poll expires.
 
 ## Limitations and open work
 

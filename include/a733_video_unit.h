@@ -117,6 +117,12 @@ int a733_video_unit_refuse_held(struct a733_video_unit *);
 /* Accesses require the held mutex and fail the unit on any uncertainty. They do not read the clock: lock and
  * unlock check the deadline once per hold. */
 int a733_video_unit_read(struct a733_video_unit *,uintptr_t,uint32_t *);
+/* One read made without the register mutex, for a word that no other task writes while the unit holds its tokens (the
+ * PLL_VE0 control word in the lock wait) or that never changes (the boot ROM). Refused, 0, while the unit holds the
+ * mutex or has failed, with the record untouched. A read the operation does not complete marks the access uncertain
+ * and records its address, -1; the unit is not failed here, and the caller refuses. On success it records the address
+ * and the word, 1. No deadline check: the caller checks the clock as often as its wait needs. */
+int a733_video_unit_read_unlocked(struct a733_video_unit *,uintptr_t,uint32_t *);
 int a733_video_unit_write(struct a733_video_unit *,uintptr_t,unsigned,uint32_t);
 int a733_video_unit_check(struct a733_video_unit *,uintptr_t,uint32_t mask,uint32_t expected);
 /* Read-modify-write of mask bits, then verify the readback. */

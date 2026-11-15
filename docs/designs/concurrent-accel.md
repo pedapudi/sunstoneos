@@ -326,8 +326,9 @@ dispatch, as host analysis of the program and the queue shows:
 - **Dispatch.** A job runs 8,192 workgroups, each one 32-lane task. The BXM-4-64 MC1 has one cluster, 64 USC slots
   and at most 156 USC tasks (pinned Mesa `src/imagination/common/device_info/bxm-4-64.h`). Less the 103 µs per-job
   overhead that a three-task job measured in stage 1, each task takes 535 ns, 539 GPU clocks at 1008 MHz.
-- **Program.** The compiled `apps/queue-add/vector_add.cl` is 28 instruction groups with 10 temps. It loads the
-  argument words, `a[i]` and `b[i]`, and stores the sum, each through one DMA access of 4 bytes per lane (12 for the
+- **Program.** The compiled `apps/queue-add/vector_add.cl` that stages 1 to 1c ran is 28 instruction groups with 10
+  temps. (The add now takes its arguments in unified registers once per task, as described in "Arguments once per
+  task" below.) It loads the argument words, `a[i]` and `b[i]`, and stores the sum, each through one DMA access of 4 bytes per lane (12 for the
   arguments). The pinned compiler's scheduler (`pco_schedule.c`) puts a data-fence wait after every DMA access and an
   extra fence after the store, so a task waits on memory four times in series. Only other resident tasks overlap
   those waits. No host source determines whether the hardware merges the 32 lanes' accesses into line requests.
@@ -352,8 +353,10 @@ shown. No vendor figure for this GPU's buffer bandwidth exists in the datasheet,
 
 The width build of accel-overlap (`SUNSTONE_ACCEL_OVERLAP_WIDTH`) runs the GPU-alone phase with
 [add4/vector_add4.cl](../../apps/accel-overlap/add4/vector_add4.cl). Each lane loads four consecutive words of each
-vector with one access and stores the four sums with two 2-word stores, so a job runs 2,048 workgroups. The compiled
-program has 18 temps and five serial memory waits per task.
+vector with one access and stores the four sums with two 2-word stores, so a job runs 2,048 workgroups. The program
+that this run used loaded its arguments in every lane; it had 18 temps and five serial memory waits per task. The
+add now takes its arguments in unified registers once per task, and the counter build's per-lane mode reproduces the
+earlier form.
 
 One returning run on port 3-1 (entry `1794714617637336813-d6d9ac0d`) gave:
 
@@ -370,6 +373,203 @@ the request count per job of the GPU's NSI port can.
 
 Mapping the leases without SLC bypass, so that GPU misses can use the system-level cache, is a separate candidate. It
 needs its own hypothesis after the NSI counters are shown to count.
+
+### NSI counters
+
+The request count per job on the GPU's interconnect port separates the two explanations. The A733 interconnect (NSI)
+gives each initiator port a bank of traffic counters at 0x02020000 + 0x200 × port + 0xc0: an enable word, a clear
+word, a period word, and read-only counts of read and write requests, data (16-byte units) and latency. Port 6 is the
+GPU and port 18 the NPU (vendor sunxi-nsi.h lines 377-385; sun60iw2p1.dtsi ia_pmu_data_unit).
+
+The counter owner ([drivers/dram/a733_nsi_counters.c](../../drivers/dram/a733_nsi_counters.c), OS option
+`SUNSTONE_ACCEL_NSI_COUNTERS`, off by default) holds only these two banks. It reads all eighteen words before any
+write and keeps them as reset values, and refuses a bank whose enable bit is already set. A phase follows the vendor's
+sequence (`__nsi_pmu_timer_store_v2`): period, disable, clear, enable, then 10 µs. Each written word is read back. The
+end of a phase disables the bank, reads the counts twice 10 µs apart, and restores the period, clear and enable words
+to their reset values. A failed readback restores every programmed bank and refuses later writes. A failed session's
+GPU quiesce restores any bank left programmed. The owner writes six words in all, three per bank, and no QoS,
+priority, mode or limit word. [checks/nsi-counters.c](../../checks/nsi-counters.c) runs the sequence against a
+register model, with a failing or corrupt access injected at every read, write and readback.
+
+The vendor device tree places port 6 in the GPU_TOP power domain and port 18 in the NPU domain. A write to a port
+in a powered-off domain can hang the interconnect, so the OS owner
+([drivers/dram/a733_nsi_counters_guard.c](../../drivers/dram/a733_nsi_counters_guard.c)) refuses every access to
+the port-6 bank while GPU_TOP is not on. The GPU power controller calls it when a power-off begins, before any OFF
+step, and the owner then restores the bank while GPU_TOP is still on. From then until the controller finishes the
+next power-on, a call that would reach the bank is refused, and the bank starts refused until the GPU's first
+power-on. Each access sets an in-flight bit before it tests the refusal, with IRQs masked, so a power-off that
+arrives during a call refuses the rest of that call and waits for at most the one access already under way. Such a
+bank, and any bank whose restore missed, may hold programmed words while it is refused. The next power-on restores
+its CYCLE, CLR and ENABLE words to the values OPEN read, each read back, while GPU_TOP is on; if a call holds the owner
+at that moment, the call restores the bank before it returns. The guard therefore does not depend on whether
+GPU_TOP's power-on resets the NSI words.
+[checks/nsi-counters-gpu-power.py](../../checks/nsi-counters-gpu-power.py) runs the owner with the GPU platform and
+power controller against a modeled GPU_TOP: no access when the counters are unused, the restore before the TOP5 OFF
+command, refusal with no access while GPU_TOP is off, a power-off in the middle of a call, use after the next
+power-on, and the restore at a power-on that keeps the words, from the power-on and from a call that holds the owner.
+Moving the restore after the OFF command, dropping the refusal, or dropping either power-on restore makes it fail.
+The NPU domain stays on once the NPU has started: its local stop leaves domain 4 on (drivers/npu/a733_npu_startup.c).
+
+The application reaches the owner through the GPU call gateway, from the GPU owner task only. An earlier counter build
+of accel-overlap ran four counted phases: idle for 100 ms, then the GPU alone, the NPU alone and the core-2 stream
+alone, one second each. Those phases set the period word to its largest value, 7.16 s at the 600 MHz NSI clock, and
+sampled at half of each phase. Two window probes followed: the GPU alone on port 6 and the NPU alone on port 18, 600 ms each, with
+a 100 ms period and a sample every 5 ms. The vendor's readers print each count times its unit with no division by
+time, and the driver calls the period a sample timer, so the probes tested whether a count only becomes visible when
+a period ends.
+
+One returning run on port 3-1 (entry `1794721288049775573-7d82471a`) showed that the counts latch:
+
+- **Counted phases.** Every count read 0 in all four counted phases, before and after the disable, because no
+  period ended inside them.
+- **Window probes.** Each count stayed 0 until the first period end, 100.1 ms after enable on port 6 and 101.1 ms on
+  port 18. It then stepped once per period, 100.2 ms and 100.0 ms, to that period's total, and held that value
+  until the next period end.
+- **The period clock.** The NSI clock runs at 600 MHz, as the vendor device tree assigns it to both ports
+  (`master_clks`).
+- **Readbacks and rates.** Every readback matched, open and close returned OK, and the GPU and NPU rates fell in
+  their bands.
+
+A count therefore reports a completed period only. **Every phase that reads the counters needs a period that ends
+inside it, and the owner must sample at the period ends:** each sample comes just after an end and is that period's
+total. A phase shorter than one period reads 0.
+
+The probe periods gave these counts per job:
+
+| Port and direction | Data units (16 B) | Ratio to the bytes moved / 16 | Requests | Mean latency |
+|---|---|---|---|---|
+| GPU, read | 201,867 | 1.54 | 102,859 | 421 ns, 29.1 requests outstanding |
+| GPU, write | 131,235 | 2.00 | 32,833 | |
+| NPU, read | 36,172 | 1.61 | 3,230 | |
+| NPU, write | 32,790 | 1.46 | 2,690 | |
+
+The GPU counts fit a model of the four-elements-per-lane add in which a data unit is one 16-byte beat:
+
+- **Vector loads:** each lane's two 16-byte loads merge into 32,768 four-beat line requests, 131,072 beats.
+- **Argument loads:** each of the 65,536 lanes loads the 12-byte argument block in its own one-beat request. These are
+  48% of the port's requests.
+- **Stores:** each 8-byte store fills a beat, so the two stores per lane give 131,072 beats in 32,768 requests.
+- **Residual:** 4,555 read requests and 5,259 read beats remain, with 65 write requests and 163 write beats.
+
+The NPU relu (1,024 rows of 176 16-bit values) writes 32,768 units, 512 bytes per 352-byte row, within 0.07%. Its
+reads are those units plus a residual of 3,404 units in 1,182 requests. Its write requests (2,690) fit neither 16-beat
+bursts (2,048) nor splits at 256-byte boundaries (2,944).
+
+The two CPU bridges (AXI2HIF, 0x0a030000 and 0x0a040000) have counters too. The vendor driver accesses them behind
+a clock (`cpu_direct`, CCU 0x0c00 and 0x0c0c) and a selector bit (0x08000200) that no capture from port 3-1 has read.
+They are left to a later stage.
+
+### Arguments once per task
+
+Two explanations fit the GPU counts of the four-elements-per-lane add:
+
+- **A request-rate limit.** The GPU's path to DRAM serves a fixed number of requests per second. The add sustained
+  69.2 M read requests/s (673.2 jobs/s times 102,859 requests).
+- **Low residency.** About two tasks are resident at a time, each waiting on its memory accesses in series. Two
+  resident tasks at the measured 421 ns read latency predict 28.5 reads outstanding, against 29.1 measured.
+
+A program that loads its arguments once per task separates them. It removes the 65,536 per-lane argument requests, 64%
+of the read requests, and one of the five serial waits. A request-rate limit then gives at least 1.5 times the job
+rate; residency gives at most 1.25 times, since four waits replace five.
+
+**The program.** [vector_add4_inline.cl](../../apps/accel-overlap/add4inline/vector_add4_inline.cl) uses the inline
+argument ABI of [the compute queue](gpu-compute-queue.md#programs-keep-the-compilers-two-pointer-register-layout), in
+which the PDS writes the argument block into unified registers once per task. A job's block is binding 1's address,
+a count and a mode word. The queue creates one GPU context per boot, and a context holds one program, so both GPU
+phases run this program:
+
+- **Mode 1, arguments per lane:** binding 1 is a 12-byte record of the input address and count, which every lane
+  loads, as the four-elements-per-lane add loads its argument block. This phase repeats the earlier measurement.
+- **Mode 0, arguments once:** binding 1 is the input itself, and no lane loads its arguments.
+
+The mode is the same for every lane of a job, and both modes compile into one program with 18 temps, as the
+four-elements-per-lane add has. [checks/gpu-queue-inline.py](../../checks/gpu-queue-inline.py) checks that the queue's
+PDS data and program write the unified registers this program's compiler record reads.
+
+**The counter build.** The counter build of accel-overlap runs eight phases in order: idle, GPU mode 1, GPU mode 0,
+the relu at 176, 128, 192 and 256 values per row (1,024 rows each), and the core-2 stream. Each phase starts its
+devices, waits 20 ms, then counts both ports over five 100 ms periods. It samples both banks 3 ms before and 2 ms
+after each period end, so each pre sample shows the previous period's total and each post sample shows the period just
+ended. Every job count is sampled at the same times, and the decoder interpolates the jobs of each period between its
+two samples. The core-2 stream and idle are controls: neither moves data through ports 6 or 18. The result is
+9,496 bytes, and [host.py](../../apps/accel-overlap/host.py) decodes it with the predictions below
+([checks/accel-overlap-counters.py](../../checks/accel-overlap-counters.py) decodes modeled records of each outcome).
+
+**GPU predictions, per job.** Mode 1 must repeat the earlier counts within 2% and its rate within 10%; a miss voids
+the comparison. Mode 0 drops the argument requests and their beats and keeps the writes.
+
+| Phase | Read requests | Read units | Write requests | Write units | Jobs/s |
+|---|---|---|---|---|---|
+| GPU mode 1 | 102,859 | 201,867 | 32,833 | 131,235 | 606-741 |
+| GPU mode 0 | 35,000-40,000 (37,323) | 136,331 | 32,833 | 131,235 | Request rate: 1,302-1,855; residency: at most 841 |
+
+If reads alone are limited, mode 0 runs at mode 1's read-request rate: 69.2 M/s, 1,855 jobs/s, 2.76 times mode 1. If
+reads and writes share the limit, it runs at mode 1's combined rate: 91.4 M/s, 1,302 jobs/s, 1.93 times. A ratio of at least 1.5 decides for the request-rate model, at most 1.25 for residency, and a ratio between
+them decides neither. At 1,855 jobs/s the add would move 5.8 GB/s of vector data, so DRAM bandwidth may bound the
+gain first.
+
+**NPU predictions, per job.** Two rules fit the relu's 32,768 write units at 176 values per row:
+
+- **Rows:** every row of at most 512 bytes writes one 512-byte unit.
+- **Bursts:** each row rounds up to a whole number of 256-byte bursts.
+
+| Width | Bytes per row | Known units | Rows rule | Bursts rule |
+|---|---|---|---|---|
+| 176 | 352 | 22,528 | 32,768 | 32,768 |
+| 128 | 256 | 16,384 | 32,768 | 16,384 |
+| 192 | 384 | 24,576 | 32,768 | 32,768 |
+| 256 | 512 | 32,768 | 32,768 | 32,768 |
+
+A rule holds when its write units fit every width within 1%. Width 128 separates the two rules, and width 192 tests
+both against the known bytes. Each width's read units are the rule's units plus the 3,404-unit residual, within 3%.
+No rate model exists for the other widths, so their rates are checked only at 1,000 jobs/s or more. The controls must
+move fewer than 10,000 units per period on each port, 0.05% of a GPU period.
+
+**What a rule means for tile graphs.** The tile-graph planner of
+[npu-tiled-execution.md](npu-tiled-execution.md) chooses tensor shapes without regard to row length. Under the rows
+rule, a tile whose rows hold fewer than 256 16-bit values moves 512 bytes per row: a 176-value row costs 1.45 times
+its bytes, and a 128-value row twice. The planner would then prefer innermost dimensions of 256 values. Under the
+bursts rule, rows round up to multiples of 128 values: 128 costs nothing extra and 176 costs as much as 256. If
+neither rule holds, the counts give no shape rule. The planner stays unchanged until a run decides.
+
+**Results.** One returning run on port 3-1 (entry `1794731628675614053-3bc9fbc0`, image built from 3c1d021c7) gave
+these counts per job:
+
+| Phase | Read requests | Read units | Write requests | Write units | Jobs/s |
+|---|---|---|---|---|---|
+| GPU mode 1 | 102,767 | 201,687 | 32,800 | 131,107 | 699.9 |
+| GPU mode 0 | 37,219 | 136,118 | 32,797 | 131,096 | 1,080.2 |
+| NPU, 176 values per row | 3,228 | 36,145 | 2,688 | 32,765 | 10,189 |
+| NPU, 128 | 3,100 | 24,884 | 2,048 | 20,480 | 14,654 |
+| NPU, 192 | 3,612 | 37,169 | 3,072 | 30,718 | 10,257 |
+| NPU, 256 | 5,149 | 45,373 | 4,097 | 40,968 | 8,189 |
+
+Every sample fell on the predicted side of its period end, every pre sample showed the previous period, idle and the
+core-2 stream counted 0 on both ports, every output matched its reference, and PLL_NPU and the top point held.
+
+- **GPU: both models missed.** Mode 1 repeated the four-elements-per-lane counts within 0.2% and ran 4% faster.
+  Mode 0 dropped 65,548 read requests per job, the 65,536 per-lane argument loads, and kept the writes within 0.05%.
+  The rate rose 1.54 times. The decoder's threshold of 1.5 classed this as the request-rate model, but that model
+  predicted 1,302 to 1,855 jobs/s and the run measured 1,080, below its range; residency predicted at most 1.25
+  times, which the run exceeded. The read-request rate fell from
+  71.9 M/s to 40.2 M/s, and the mean read latency from 245.6 to 173.1 NSI cycles. Reads outstanding, rate times
+  latency, fell from about 29 to about 12. The port therefore did not run at a fixed request rate in mode 0.
+- **NPU: the row-rule prediction missed.** Neither rule fits the four widths, and the read units missed their
+  range at 128 and 256 values per row. At 128, 192 and 256 values per row, each write request carries 10 units and
+  there is one request per 64 values, so the write units are 1.25 times the bytes written divided by 16. At 176
+  values per row the write units equal 512 bytes per row, 1.45 times the bytes. The rows of 192 values moved fewer
+  write units than the rows of 176 values, at the same job rate.
+
+| Width | Write units, rows rule | Bursts rule | Measured | Read units predicted (rows rule) | Measured |
+|---|---|---|---|---|---|
+| 176 | 32,768 | 32,768 | 32,765 | 35,087-37,257 | 36,145 |
+| 128 | 32,768 | 16,384 | 20,480 | 35,087-37,257 | 24,884 (miss) |
+| 192 | 32,768 | 32,768 | 30,718 | 35,087-37,257 | 37,169 |
+| 256 | 32,768 | 32,768 | 40,968 | 35,087-37,257 | 45,373 (miss) |
+
+The arguments-once gain is measured; the GPU throughput model and the NPU row rule remain open. The run returned in
+4.50 s from arming, with 4.23 s of phases, against a 55 s session bound.
+
 
 ## Stage 2: DMA completion timing
 

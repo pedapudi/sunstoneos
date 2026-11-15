@@ -40,7 +40,22 @@ maintenance. Its result is 2,944 bytes (version 3).
 the add of [add4/vector_add4.cl](add4/vector_add4.cl), in which each lane adds four consecutive elements, and only the
 GPU-alone phase. A job runs 2,048 workgroups. [add4/program.h](add4/program.h) holds the compiled program and
 [add4/sources.json](add4/sources.json) its compiler record; `apps/gpu-program/compile.py compile --profile 3
---queue-program` reproduces it. The result keeps the 2,944-byte layout with version 4 and the later phases zero.
+--queue-program --inline-arguments` reproduces it. Like the one-element add, it receives its arguments in unified
+registers once per task. The result keeps the 2,944-byte layout with version 4 and the later phases zero.
+
+`--define SUNSTONE_ACCEL_OVERLAP_COUNTERS=ON`, with the OS option `SUNSTONE_ACCEL_NSI_COUNTERS=ON` and `--manifest
+manifest-counters.json`, builds the NSI counter run. Its graphs directory names four relu graphs of 1,024 rows, in
+this order: `relu-large` (176 values per row), `relu-w128`, `relu-w192` and `relu-w256`; pack.py then writes a version-2
+vectors region with one input and one reference per graph. The GPU runs the dual-mode add of
+[add4inline/vector_add4_inline.cl](add4inline/vector_add4_inline.cl), compiled with `compile.py compile --profile 3
+--queue-program --inline-arguments` into [add4inline/program.h](add4inline/program.h), which receives its arguments in
+unified registers. The build runs eight phases: idle, the GPU add with its arguments loaded by every lane, the same
+add with the arguments loaded once per task, the four relu widths, and the core-2 stream. Each phase starts its
+devices, waits 20 ms, then counts NSI ports 6 and 18 over five 100 ms periods and samples both banks 3 ms before and
+2 ms after every period end. The result is the larger-job layout with version 6 and eight phases, followed by the counter
+record, 9,496 bytes in all (result.h, struct accel_overlap_counter_result). A counter call that fails ends the phases
+after the one it happened in, and the record keeps its status. host.py decodes the counts of each period, the jobs per
+period and the predictions of [the design](../../docs/designs/concurrent-accel.md#arguments-once-per-task).
 
 A failure ends the session with `ss_fail_value`: the low 12 bits name the check in [main.c](main.c), bits 16 to 19 the
 phase (5 after the last phase), and the value the measured operand.

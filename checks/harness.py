@@ -322,6 +322,29 @@ class Image:
         return next(iter(values))
 
 
+def flat_members(type_die):
+    """Member offsets of a DWARF structure type, with the members of every nested structure member, at any depth, at
+    their offset in the outer one. Each member is listed under its dotted path: 'result' at the top level,
+    'dev.fault_step' for a service's struct os_device_fault."""
+    paths = {}
+
+    def walk(die, base, prefix):
+        for c in die.iter_children():
+            if c.tag != 'DW_TAG_member' or 'DW_AT_name' not in c.attributes:
+                continue
+            name, at = c.attributes['DW_AT_name'].value.decode(), base + int(c.attributes['DW_AT_data_member_location'].value)
+            paths[prefix + name] = at
+            t = c.get_DIE_from_attribute('DW_AT_type') if 'DW_AT_type' in c.attributes else None
+            while t is not None and t.tag in ('DW_TAG_typedef', 'DW_TAG_const_type', 'DW_TAG_volatile_type',
+                                              'DW_TAG_atomic_type'):
+                t = t.get_DIE_from_attribute('DW_AT_type') if 'DW_AT_type' in t.attributes else None
+            if t is not None and t.tag == 'DW_TAG_structure_type':
+                walk(t, at, prefix + name + '.')
+
+    walk(type_die, 0, '')
+    return paths
+
+
 def instruction_sites(parts, match):
     """Addresses of the 32-bit words in loaded image parts for which match(word) is true.
 
@@ -349,9 +372,22 @@ def trace_sections(log, classify, names):
     translated blocks (in_asm) and their executions (exec, nochain), and, for
     each name in names, the instructions for which classify(word) returns a
     list containing that name. Code before the first call is not counted.
+
+    QEMU logs "Trace" when it enters a block. When the block's first check
+    finds an exit request or a spent instruction budget, the block leaves
+    before its first instruction: QEMU logs "Stopped execution of TB chain
+    before HOST [PC]" for that block and enters it again later. The stopped
+    entry executed nothing, so it is taken back out. Both lines come from one
+    block entry in the TCG thread, and -icount runs every vCPU in one thread,
+    so the stopped entry is the nearest preceding Trace line of any CPU; it
+    must name the same host block and guest address, or the log is refused.
+    The Stopped line names no CPU, so a log from multi-threaded TCG, where
+    CPUs log at the same time, cannot be paired and is not supported.
     """
     blocks, sections, counts, words, address = {}, [], None, None, None
-    exec_line = re.compile(r'^Trace 0: \S+ \[[0-9a-f]+/([0-9a-f]+)/')
+    exec_line = re.compile(r'^Trace (\d+): (\S+) \[[0-9a-f]+/([0-9a-f]+)/')
+    stopped_line = re.compile(r'^Stopped execution of TB chain before (\S+) \[([0-9a-f]+)\]')
+    entry = None  # (host block, guest address, the section it was counted in, its words) of the last Trace line
     with Path(log).open(errors='replace') as stream:
         for line in stream:
             if line.startswith('IN:'):
@@ -372,11 +408,26 @@ def trace_sections(log, classify, names):
                 sections.append(counts)
                 continue
             match = exec_line.match(line)
-            if match and counts is not None:
-                for word in blocks[int(match[1], 16)]:
-                    counts['instructions'] += 1
-                    for name in classify(word):
-                        counts[name] += 1
+            if match:
+                pc = int(match[3], 16)
+                counted = counts if match[1] == '0' and counts is not None else None
+                entry = (match[2], pc, counted, blocks[pc] if counted is not None else None)
+                if counted is not None:
+                    for word in entry[3]:
+                        counted['instructions'] += 1
+                        for name in classify(word):
+                            counted[name] += 1
+                continue
+            match = stopped_line.match(line)
+            if match:
+                if entry is None or entry[:2] != (match[1], int(match[2], 16)):
+                    raise RuntimeError(f'{log}: {line.strip()} follows no entry of that block')
+                if entry[2] is not None:
+                    for word in entry[3]:
+                        entry[2]['instructions'] -= 1
+                        for name in classify(word):
+                            entry[2][name] -= 1
+                entry = None
     return sections
 
 

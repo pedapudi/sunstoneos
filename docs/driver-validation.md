@@ -40,6 +40,23 @@ can latch a fault during a valid transition.
    the architectural transaction; an interconnect may acknowledge Device-nGnRE
    writes early, so DSB does not replace device status or settle requirements.
    Model posted writes separately from device application and readiness.
+7. **Use only general registers in interrupt code.** In the A733 images that
+   `checks/irq-general-regs.py` walks, IRQ entry does not save the FP and SIMD
+   registers (`configSS_IRQ_SAVES_FP` is 0 through the CMake option
+   `SUNSTONE_IRQ_FP_UNSAVED`), so an interrupt that changes one corrupts the
+   interrupted task's float state. Every other build keeps the save, including
+   a hand-built board image configured without the option. Every function an interrupt reaches is
+   compiled with `-mgeneral-regs-only`: the driver's ISR, everything it calls,
+   `vApplicationIRQHandler`, the scheduler service and the panic path. The flag
+   also keeps the compiler from using SIMD registers for an inlined `memcpy`,
+   `memset` or structure copy. An ISR must not call newlib's `printf` family,
+   `memchr` or other library routines that use SIMD registers, and must not
+   contain FP or SIMD assembly. This holds for camera, USB, NPU and every
+   other device class; put float work in the task that the ISR notifies.
+   [`checks/irq-general-regs.py`](../checks/irq-general-regs.py) walks each
+   image linked with 0 from its EL1 vector table and fails on any FP or SIMD
+   instruction it reaches, apart from the port's guarded task context save
+   and restore, and on any reached unit compiled without the flag.
 
 Select checks under [the validation policy](validation.md). Keep hardware
 safety checks when consolidating fixtures. Submit eligible physical tests

@@ -12,6 +12,7 @@
 #include "a733_platform_locks.h"
 #include "a733_power_domains.h"
 #include "a733_video_platform.h"
+#include "device-fault.h"
 #include "quiesce.h"
 #include "sunstone_crumb.h"
 #include "sunstone_deadline.h"
@@ -41,7 +42,6 @@
  * The binding's deadline is fixed for the whole cold start. */
 #define VD_CALL_US 500000u
 #define VD_BUSY_US 500u /* the block after the binding gives up on a busy registry or register lock */
-enum phase {CLOSED,OPENING,OPEN,CLOSING,FAULT};
 enum op {OPEN_OP=1,CLOSE_OP};
 enum {POSTED=1,DONE=2};
 /* Fault steps (ss_video_decode_fault). Steps below VD_STEP_WRITES write nothing, so a refusal there leaves the decoder
@@ -51,6 +51,7 @@ enum {
     VD_STEP_ENTRY, VD_STEP_ROW, VD_STEP_ROW_TIMEOUT, VD_STEP_WRITES=16, VD_STEP_COLD, VD_STEP_STARTED_WORDS,
     VD_STEP_CLOSE=32, VD_STEP_CLOSED_WORDS
 };
+static TaskHandle_t owner;
 static struct {
     struct a733_power_domain_row row;
     struct a733_rail_token rail;
@@ -59,19 +60,14 @@ static struct {
     uint64_t pck_token;
     unsigned pck_client,initialized,closed; /* closed: the decoder is closed for this power lifetime */
     RECORD(struct vdec_check_record info;)
-    atomic_uint phase,request,quiesce_wanted,quiesced;
-    atomic_uint close_started; /* 1 once a close has started since the last open: a FAULT service gets one close. Only
-                                * the owner task reads it. */
-    /* 1 once the fault must be reported: a close step failed, or the unit's failure was uncertain, which no close
-     * settles. The owner task stores it after the fault fields; quiesce_step loads it and nothing else, see there. A
-     * reported service stays FAULT, so it is never cleared. */
-    atomic_uint reported;
+    /* The phase and the fault report (apps/os/device-fault.h). The fault must be reported once a close step failed,
+     * or when the unit's failure was uncertain, which no close settles. */
+    struct os_device_fault dev;
+    atomic_uint request;
     unsigned op;int result;
-    uint32_t fault_step,fault_value;
     uint64_t limit;
     TaskHandle_t waiter;
-} vd;
-static TaskHandle_t owner;
+} vd={.dev={.site=0x941,.owner=&owner}};
 static StaticTask_t owner_tcb;
 static StackType_t owner_stack[2048];
 
@@ -81,36 +77,20 @@ static uint64_t owner_us(void){uint64_t t=0;return a733_pmic_now(&providers.shar
 static uint64_t session_deadline(void){return board.session.deadline_us-10000;}
 static int timely(void){uint64_t t=lease_now();return t&&t<vd.limit&&board_live(NULL);}
 static void pause_us(uint32_t us){const uint64_t t=now_us()+us;while(now_us()<t)(void)sunstone_deadline_wait_until(t);}
-static int refuse(unsigned step,uint32_t value){vd.fault_step=step;vd.fault_value=value;return -1;}
-static int fail(unsigned step,uint32_t value)
-{
-    if(!vd.fault_step){vd.fault_step=step;vd.fault_value=value;}
-    atomic_store(&vd.phase,FAULT);
-    if(atomic_load(&vd.close_started)||vd.decoder.unit.uncertain)atomic_store_explicit(&vd.reported,1,memory_order_release);
-    return -1;
-}
+static int refuse(unsigned step,uint32_t value){return os_device_refuse(&vd.dev,step,value);}
+static int fail(unsigned step,uint32_t value){return os_device_fail(&vd.dev,step,value,vd.decoder.unit.uncertain);}
 static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner);}
-/* The bound on the owner's answer to the row, in the PMIC clock (docs/designs/power-domains.md, "Transitions and
- * polling", and the NPU startup's two waits). Until supply verification ends with DCDC2 verified or the done bit, the
- * answer cannot come before verification does: verification may start A733_POWER_SUPPLY_SETTLE_US after the
- * service's first step, ends within A733_POWER_SUPPLY_BUDGET_US once the provider is READY, and READY comes by the
- * PMIC's startup deadline; the bound is anchored at that deadline or now, whichever is later, plus one tick for the
- * service's wake. Once verification has ended, the owner admits the row at its next step and the transition ends
- * within A733_POWER_PCK_BOUND_US of its command: the bound is that, plus two ticks, from the first time this task saw
- * verification ended. The wait itself is capped by the open's deadline. */
-#define VD_TICK_US (1000000u/configTICK_RATE_HZ)
+/* The bound on the owner's answer to the row (include/a733_power_domains.h): the supply deadline until verification
+ * ends with DCDC2 verified or the done bit, then the row deadline from the first time this task saw verification
+ * ended. Each is taken once, when its wait begins, and clipped to the open's deadline. */
 static uint64_t row_bound(uint64_t *supply,uint64_t *verified)
 {
-    const uint64_t t=owner_us();
     const unsigned w=a733_power_authority_load(&providers.shared.rails.authority);
     if(w&(A733_POWER_SUPPLY_DONE|A733_POWER_DCDC2_VERIFIED)){
-        if(!*verified)*verified=t+A733_POWER_PCK_BOUND_US+2u*VD_TICK_US;
+        if(!*verified)*verified=a733_power_row_deadline(&providers.domains,owner_us(),vd.limit);
         return *verified;
     }
-    if(!*supply){
-        const uint64_t anchor=providers.domains.pmic->config.startup_deadline;
-        *supply=(anchor>t?anchor:t)+A733_POWER_SUPPLY_SETTLE_US+A733_POWER_SUPPLY_BUDGET_US+VD_TICK_US;
-    }
+    if(!*supply)*supply=a733_power_supply_deadline(&providers.domains,vd.limit);
     return *supply;
 }
 
@@ -224,7 +204,7 @@ static void copy_record(void)
     i->version_high=(uint32_t)(p->version>>32);i->version_low=(uint32_t)p->version;
     i->cold_phase=p->cold_step;
     i->failed=p->unit.failed|p->unit.locked<<1|p->unit.uncertain<<2|p->unit.late<<3;
-    i->fault_step=vd.fault_step;i->fault_value=vd.fault_value;
+    i->fault_step=vd.dev.fault_step;i->fault_value=vd.dev.fault_value;
     i->measured=providers.domains.measure_transitions;
     if(a733_power_domain_state(&vd.row)!=A733_POWER_ROW_PENDING)i->transition=vd.row.transition;
     if(a733_power_authority_load(&providers.shared.rails.authority)&A733_POWER_DCDC2_VERIFIED){
@@ -244,11 +224,9 @@ static int fault(unsigned step,uint32_t value)
 }
 static int do_open(void)
 {
-    atomic_store(&vd.phase,OPENING);
-    atomic_store(&vd.close_started,0);
+    os_device_open_begin(&vd.dev);
     RECORD(memset(&vd.info,0,sizeof(vd.info));vd.info.magic=VDEC_CHECK_INFO_MAGIC;vd.info.bytes=sizeof(vd.info);
         vd.info.requested_ticks=ss_counter_ticks();)
-    vd.fault_step=0;vd.fault_value=0;
     vd.limit=lease_now()+VD_CALL_US;
     if(vd.limit>session_deadline())vd.limit=session_deadline();
     if(tokens()<0)goto refused;
@@ -297,10 +275,10 @@ static int do_open(void)
     RECORD(vd.info.started_ticks=ss_counter_ticks();
         if(!read_words(vd.info.started))return fault(VD_STEP_STARTED_WORDS,0);)
     copy_record();
-    atomic_store(&vd.phase,OPEN);
+    atomic_store(&vd.dev.phase,OS_DEVICE_OPEN);
     return 1;
 refused:
-    atomic_store(&vd.phase,CLOSED);
+    atomic_store(&vd.dev.phase,OS_DEVICE_CLOSED);
     return -1;
 }
 /* The close of an open service, and the one close of a FAULT service
@@ -310,9 +288,7 @@ refused:
  * record and, when every step reads back, ends CLOSED; a step that fails leaves it FAULT. */
 static int do_close(void)
 {
-    const unsigned faulted=atomic_load(&vd.phase)==FAULT;
-    atomic_store(&vd.close_started,1);
-    atomic_store(&vd.phase,CLOSING);
+    const unsigned faulted=os_device_close_begin(&vd.dev);
     vd.limit=lease_now()+VD_CALL_US;
     if(vd.limit>session_deadline())vd.limit=session_deadline();
     RECORD(const uint32_t at_fault=vd.info.failed;)
@@ -331,18 +307,18 @@ static int do_close(void)
     copy_record();
     RECORD(if(faulted)vd.info.failed=at_fault;)
     vd.closed=1;
-    atomic_store(&vd.phase,CLOSED);
+    atomic_store(&vd.dev.phase,OS_DEVICE_CLOSED);
     return faulted?-1:1;
 }
 /* An open service, or a FAULT one whose close has not started. */
-static int closable(unsigned phase){return phase==OPEN||(phase==FAULT&&!atomic_load(&vd.close_started));}
+static int closable(void){return os_device_closable(&vd.dev,1);}
 static void serve(void)
 {
     if(atomic_load_explicit(&vd.request,memory_order_acquire)!=POSTED)return;
-    const unsigned phase=atomic_load(&vd.phase);
+    const unsigned phase=atomic_load(&vd.dev.phase);
     int r=-1;
-    if(vd.op==OPEN_OP)r=phase==CLOSED&&!vd.closed?do_open():phase==OPEN?1:-1;
-    else if(vd.op==CLOSE_OP)r=closable(phase)?do_close():phase==CLOSED?1:-1;
+    if(vd.op==OPEN_OP)r=phase==OS_DEVICE_CLOSED&&!vd.closed?do_open():phase==OS_DEVICE_OPEN?1:-1;
+    else if(vd.op==CLOSE_OP)r=closable()?do_close():phase==OS_DEVICE_CLOSED?1:-1;
     vd.result=r;
     atomic_store_explicit(&vd.request,DONE,memory_order_release);
     os_application_wake_task(vd.waiter);
@@ -353,9 +329,9 @@ static void os_video_decode_task(void *unused)
     if(sunstone_deadline_register()!=1)for(;;)vTaskSuspend(NULL);
     for(;;){
         serve();
-        if(atomic_load(&vd.quiesce_wanted)&&atomic_load(&vd.request)!=POSTED){
-            if(closable(atomic_load(&vd.phase)))(void)do_close();
-            if(atomic_load(&vd.phase)==CLOSED)atomic_store(&vd.quiesced,1);
+        if(atomic_load(&vd.dev.quiesce_wanted)&&atomic_load(&vd.request)!=POSTED){
+            if(closable())(void)do_close();
+            if(atomic_load(&vd.dev.phase)==OS_DEVICE_CLOSED)atomic_store(&vd.dev.quiesced,1);
         }
         /* Every input notifies this task: an application request, the quiesce and the row's wake. */
         (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
@@ -367,25 +343,9 @@ void os_video_decode_irq(void){}
 
 int os_video_decode_task_privileged(void (*entry)(void *),void *context){return !context&&entry==os_video_decode_task;}
 int os_video_decode_pins(struct a733_pin_handoff *pins){return pins!=NULL;}
-/* A FAULT service first gets its close (docs/designs/failure-return-audit.md, "A faulted device service closes before
- * it reports"): DONE once it is CLOSED, FAULT (site 0x941) when a close step failed or the failure was uncertain.
- *
- * This step runs on the supervisor's core while the owner task closes, so it decides from the one word the owner
- * publishes, reported, and from quiesced. Deciding from phase and close_started together is racy in either load
- * order: two loads can fall on either side of the close's stores, and the step then reports 0x941 while a close that
- * will succeed is running; the sticky report ends the session at 0x742. */
-static enum os_quiesce_result quiesce_step(struct os_quiesce *q)
-{
-    if(atomic_load_explicit(&vd.reported,memory_order_acquire)){
-        (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x941,
-            vd.fault_step<<24|(vd.fault_value&0xffffff),SUNSTONE_CRUMB_HERE());
-        return OS_QUIESCE_FAULT;
-    }
-    if(atomic_load(&vd.quiesced))return OS_QUIESCE_DONE;
-    atomic_store(&vd.quiesce_wanted,1);
-    wake_owner(NULL);
-    return OS_QUIESCE_PENDING;
-}
+/* A FAULT service first gets its close: DONE once it is CLOSED, FAULT (site 0x941) when a close step failed or the
+ * failure was uncertain (apps/os/device-fault.h). */
+static enum os_quiesce_result quiesce_step(struct os_quiesce *q){return os_device_quiesce_step(&vd.dev,q);}
 static struct os_quiesce video_decode_quiesce={.owner=OS_QUIESCE_VIDEO_DECODE,.order=OS_QUIESCE_DEVICES,.step=quiesce_step};
 int os_video_decode_start(void)
 {
@@ -410,7 +370,7 @@ int os_video_decode_start(void)
 static int granted(void){const struct ss_grant *g=ss_grant();return g&&(g->devices&SS_DEVICE_VIDEO_DECODE)&&owner;}
 static int call(unsigned op)
 {
-    if(!granted()||atomic_load(&vd.quiesce_wanted))return -1;
+    if(!granted()||atomic_load(&vd.dev.quiesce_wanted))return -1;
     const unsigned state=atomic_load_explicit(&vd.request,memory_order_acquire);
     if(state==DONE){
         if(vd.op!=op)return -1;
@@ -437,12 +397,12 @@ int vdec_check_record(struct vdec_check_record *out)
 int ss_video_decode_fault(uint32_t *step,uint32_t *value)
 {
     if(!granted())return -1;
-    if(step)*step=vd.fault_step;
-    if(value)*value=vd.fault_value;
-    return vd.fault_step?1:0;
+    if(step)*step=vd.dev.fault_step;
+    if(value)*value=vd.dev.fault_value;
+    return vd.dev.fault_step?1:0;
 }
 static int ready(void)
-{const unsigned r=atomic_load(&vd.request);return r==DONE||(r!=POSTED&&atomic_load(&vd.phase)==FAULT);}
+{const unsigned r=atomic_load(&vd.request);return r==DONE||(r!=POSTED&&atomic_load(&vd.dev.phase)==OS_DEVICE_FAULT);}
 void ss_video_decode_wait(uint32_t wait_us)
 {
     const uint64_t until=now_us()+(wait_us?wait_us:1);

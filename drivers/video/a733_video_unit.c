@@ -139,6 +139,14 @@ int a733_video_unit_read(struct a733_video_unit *u,uintptr_t a,uint32_t *v)
     u->last_word=*v;
     return 1;
 }
+int a733_video_unit_read_unlocked(struct a733_video_unit *u,uintptr_t a,uint32_t *v)
+{
+    if(u->failed||u->locked)return 0;
+    u->last_address=a;
+    if(u->ops.read(u->cookie,a,v)!=1){u->uncertain=1;return -1;}
+    u->last_word=*v;
+    return 1;
+}
 int a733_video_unit_write(struct a733_video_unit *u,uintptr_t a,unsigned width,uint32_t v)
 {
     if(u->failed||!u->locked)return a733_video_unit_fail(u);
@@ -290,11 +298,7 @@ static int unlocked_read(void *v,uint32_t *out)
 {
     struct a733_video_unit *u=v;
     ++u->pll_reads;
-    if(u->locked)return 0;
-    u->last_address=PLL;
-    if(u->ops.read(u->cookie,PLL,out)!=1){u->uncertain=1;return 0;}
-    u->last_word=*out;
-    return a733_video_unit_timely(u);
+    return a733_video_unit_read_unlocked(u,PLL,out)==1&&a733_video_unit_timely(u);
 }
 /* The gap and settle clock: the plain per-core clock when given, which the lock wait reads in a spin. */
 static int unit_now(void *v,uint64_t *out)

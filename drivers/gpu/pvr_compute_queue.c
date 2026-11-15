@@ -123,7 +123,8 @@ static int maintain(struct pvr_compute_queue *q,int output)
 static unsigned admit(const struct pvr_compute_queue *q,const struct gpu_queue_job *j)
 {
     if (!j->bindings || j->bindings>GPU_QUEUE_BINDINGS || j->reserved) return GPU_QUEUE_BINDING;
-    if (j->argument_bytes>GPU_QUEUE_ARGUMENT_BYTES) return GPU_QUEUE_ARGUMENTS;
+    if (j->argument_bytes>GPU_QUEUE_ARGUMENT_BYTES || (q->abi==GPU_QUEUE_ABI_GRID_INLINE &&
+        8u*(j->bindings-1u)+j->argument_bytes>GPU_QUEUE_INLINE_BYTES)) return GPU_QUEUE_ARGUMENTS;
     if (!j->groups[0] || !j->groups[1] || !j->groups[2]) return GPU_QUEUE_GRID;
     struct pvr_compute_queue_client_view v;
     if (!pvr_compute_queue_client_view((struct pvr_compute_queue *)q,q->active_client,&v) ||
@@ -179,16 +180,18 @@ int pvr_compute_queue_create(struct pvr_compute_queue *q,const struct gpu_queue_
     memset(page,0,PREFIX_BYTES);
     memcpy(page+A733_GPU_QUEUE_JOB_PAGES*PAGE,p.code,p.code_bytes);
     q->task_word=(A733_GPU_QUEUE_PROGRAM_GPU-UINT64_C(0xe000000000))|((uint64_t)((p.temps+3)/4)<<35);
-    q->coefficients=p.coefficients; q->common_words=common_words; q->job_us=c->job_us;
+    q->coefficients=p.coefficients; q->common_words=common_words; q->job_us=c->job_us; q->abi=p.abi;
     const uint32_t zero[3]={0,0,0};
+    const int inline_block=p.abi==GPU_QUEUE_ABI_GRID_INLINE;
     q->binding0=q->lease[0].address;
-    pvr_compute_job_grid_pds(page,q->task_word,zero,A733_GPU_QUEUE_JOB_GPU+PVR_COMPUTE_QUEUE_ARGUMENTS,q->binding0);
+    pvr_compute_job_grid_pds_abi(page,p.abi,q->task_word,zero,
+        inline_block?0:A733_GPU_QUEUE_JOB_GPU+PVR_COMPUTE_QUEUE_ARGUMENTS,q->binding0);
     pvr_compute_job_fence_pds(page+PVR_COMPUTE_QUEUE_FENCE);
     if (q->service->config.job_irq_ack) for (unsigned i=0;i<PVR_COMPUTE_FAST_DEPTH;++i) {
         unsigned char *slot=q->job_cpu+i*PVR_COMPUTE_FAST_STRIDE;
         memset(slot,0,PVR_COMPUTE_FAST_STRIDE);
-        pvr_compute_job_grid_pds(slot,q->task_word,zero,
-            q->job_gpu+i*PVR_COMPUTE_FAST_STRIDE+PVR_COMPUTE_QUEUE_ARGUMENTS,q->binding0);
+        pvr_compute_job_grid_pds_abi(slot,p.abi,q->task_word,zero,
+            inline_block?0:q->job_gpu+i*PVR_COMPUTE_FAST_STRIDE+PVR_COMPUTE_QUEUE_ARGUMENTS,q->binding0);
         pvr_compute_job_fence_pds(slot+PVR_COMPUTE_QUEUE_FENCE);
         q->fast.payload[i].binding0=q->binding0;
     }
@@ -307,23 +310,32 @@ static int take(struct pvr_compute_queue *q)
     uint64_t binding0=q->lease[q->job.binding[0].lease].address+q->job.binding[0].address;
     int pointer_changed=q->binding0!=binding0;
     int groups_changed=q->coefficients==7 && memcmp(q->groups,q->job.groups,sizeof(q->groups));
+    const int inline_block=q->abi==GPU_QUEUE_ABI_GRID_INLINE;
     if (pointer_changed || groups_changed) {
         const uint32_t zero[3]={0,0,0};
-        pvr_compute_job_grid_pds(page,q->task_word,q->coefficients==7?q->job.groups:zero,
-            A733_GPU_QUEUE_JOB_GPU+PVR_COMPUTE_QUEUE_ARGUMENTS,binding0);
+        pvr_compute_job_grid_pds_abi(page,q->abi,q->task_word,q->coefficients==7?q->job.groups:zero,
+            inline_block?0:A733_GPU_QUEUE_JOB_GPU+PVR_COMPUTE_QUEUE_ARGUMENTS,binding0);
         q->binding0=binding0; memcpy(q->groups,q->job.groups,sizeof(q->groups));
     }
-    unsigned char *args=page+PVR_COMPUTE_QUEUE_ARGUMENTS;
-    for (unsigned i=1;i<q->job.bindings;++i)
-        put64(args+8*(i-1),q->lease[q->job.binding[i].lease].address+q->job.binding[i].address);
-    unsigned bytes=8*(q->job.bindings-1)+q->job.argument_bytes;
-    memcpy(args+8*(q->job.bindings-1),q->job.arguments,q->job.argument_bytes);
+    unsigned bytes=0;
+    if (inline_block) {
+        /* The block goes into the PDS data line at bytes 64-127, every job;
+         * admit() refused a longer block. */
+        (void)pvr_compute_job_grid_inline(page,q->lease,&q->job);
+    } else {
+        unsigned char *args=page+PVR_COMPUTE_QUEUE_ARGUMENTS;
+        for (unsigned i=1;i<q->job.bindings;++i)
+            put64(args+8*(i-1),q->lease[q->job.binding[i].lease].address+q->job.binding[i].address);
+        bytes=8*(q->job.bindings-1)+q->job.argument_bytes;
+        memcpy(args+8*(q->job.bindings-1),q->job.arguments,q->job.argument_bytes);
+    }
+    const int line1=pointer_changed || inline_block;
     uint32_t pds=(uint32_t)(A733_GPU_QUEUE_JOB_GPU-UINT64_C(0xda00000000));
-    (void)pvr_compute_job_grid_cdm_resources(page+PVR_COMPUTE_QUEUE_CDM,pds,
-        pds+PVR_COMPUTE_QUEUE_FENCE,q->job.groups,q->common_words);
+    (void)pvr_compute_job_grid_cdm_data(page+PVR_COMPUTE_QUEUE_CDM,pds,
+        pds+PVR_COMPUTE_QUEUE_FENCE,q->job.groups,q->common_words,pvr_compute_job_pds_data_units(q->abi));
     if (!maintain(q,0) ||
-        ((pointer_changed || groups_changed) && !aarch64_device_cache(AARCH64_CACHE_CLEAN,
-            (uintptr_t)page+(groups_changed?0:64),groups_changed && pointer_changed?128:64)) ||
+        ((line1 || groups_changed) && !aarch64_device_cache(AARCH64_CACHE_CLEAN,
+            (uintptr_t)page+(groups_changed?0:64),groups_changed && line1?128:64)) ||
         !aarch64_device_cache(AARCH64_CACHE_CLEAN,(uintptr_t)page+PVR_COMPUTE_QUEUE_CDM,
             (PVR_COMPUTE_QUEUE_ARGUMENTS-PVR_COMPUTE_QUEUE_CDM+bytes+63)&~63u)) return fault(q,GPU_QUEUE_MAINTENANCE);
     if (pvr_gpu_service_now(q->service,&now)!=1) return fault(q,GPU_QUEUE_SERVICE);

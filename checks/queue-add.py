@@ -37,7 +37,7 @@ int gpu_queue_context_create(const struct gpu_queue_context_config *c, uint32_t 
 {
     ++creates;
     assert(ticks && c->lease_count == 2 && c->job_us == 200000);
-    assert(c->program->abi == GPU_QUEUE_ABI_GRID && c->program->coefficients == 3);
+    assert(c->program->abi == GPU_QUEUE_ABI_GRID_INLINE && c->program->coefficients == 3);
     assert(c->program->local_size[0] == 32 && c->program->code_bytes > 0);
     assert(c->lease[0].region == QUEUE_ADD_REGION_OUTPUT && c->lease[1].region == QUEUE_ADD_REGION_INPUT);
     assert(!c->lease[0].bytes && !c->lease[1].bytes);

@@ -345,8 +345,16 @@ static void golden_tables(void)
 uint64_t a733_smp_counter(void)
 {uint64_t v;__asm__ volatile("isb\n mrs %0,cntpct_el0":"=r"(v));return v;}
 static void barrier(void){__asm__ volatile("dsb sy":::"memory");}
+/* Waiting cores sleep in WFE, and every store they wait for is followed by SEV.
+ * An -icount run gives the vCPUs turns of several million instructions each,
+ * one after another, and the counter counts every core's instructions. A core
+ * that spins uses its whole turn; one in WFE yields at once. Host exit requests
+ * move where the turns fall, so with spinning cores a turn change between CPU 0's
+ * counter read and the 240,000-tick table flush deadline in
+ * a733_cached_memory_prepare refused the flush in 6 of 2,000 boots (FAIL 0000016b). */
+static void publish(volatile uint64_t *v){barrier();*v=1;__asm__ volatile("dsb sy\n sev":::"memory");}
 static void wait(volatile uint64_t *v)
-{while(!*v){CHECK(a733_smp_counter()<UINT32_MAX);barrier();}}
+{while(!*v){CHECK(a733_smp_counter()<UINT32_MAX);__asm__ volatile("wfe":::"memory");}barrier();}
 void fixture_el3_prepare(unsigned core)
 {
     if(core){wait(&tables_published);return;}
@@ -372,13 +380,13 @@ void fixture_el3_prepare(unsigned core)
     if(fixture_mode==1){a733_cached_el1_table_sum[0]-=a733_cached_el1_l2[100];a733_cached_el1_l2[100]=0;}
     CHECK(a733_cpu_coherence_publish(0x41000000,0x200000,UINT32_MAX)==1);
     CHECK(a733_cpu_coherence_publish(0x41200000,(uintptr_t)__bss_end-0x41200000,UINT32_MAX)==1);
-    barrier();tables_published=1;barrier();
+    publish(&tables_published);
 }
 static uint64_t translate3(uintptr_t a)
 {uint64_t p;__asm__ volatile("at s1e3w,%1\n isb\n mrs %0,par_el1":"=r"(p):"r"(a):"memory");return p;}
 void fixture_el3_mapped(unsigned core)
 {
-    barrier();el3_active[core]=1;barrier();for(unsigned i=0;i<8;++i)wait(&el3_active[i]);
+    publish(&el3_active[core]);for(unsigned i=0;i<8;++i)wait(&el3_active[i]);
     if(!core)for(uintptr_t a=0x48000000;a<0x79000000;a+=0x200000) {
         uint64_t p=translate3(a),q=translate3(a+0x1ff000);
         CHECK(!(p&1) && !(q&1) && (p>>56)==(a<0x78000000?0xffu:0x44u));

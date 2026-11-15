@@ -16,7 +16,11 @@ Cases, each starting from a service that failed during its open (phase FAULT):
 - fault-before-bus-gate: the fault came before the bus clock opened (step G2D_STEP_BUS_GATE, G2D reset deasserted).
   The close touches no G2D register, and the registry reaches DONE.
 - close-step-fails: the CCU bus-gate word does not hold its write. The close fails, the quiesce step reports FAULT
-  with site 0x931 once, and the registry never reaches DONE: the session fails at the bound.
+  with site 0x931 once, with value step << 24, and the registry never reaches DONE: the session fails at the bound.
+- run-after-failed-close: as close-step-fails, then the application posts a run. The owner refuses it (result -1)
+  with nothing recorded: the fault step and value, which ss_g2d_fault returns and the reported 0x931 note carries
+  as step << 24 | value, stay those of the first fault. An image whose owner records a refused run on a FAULT service
+  (bringup at 903da3dfa) rewrites them to G2D_STEP_RUN and the phase.
 - quiesce-among-close-stores: as fault-after-engine-open, but the quiesce step that runs during the close is placed
   at every point among the close's stores to the words the step reads (phase, close_started, reported and quiesced),
   with a pause after each of its first three loads of them so that its loads can straddle one or more stores
@@ -32,7 +36,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import (UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_X0,
                                  UC_ARM64_REG_X1, UC_ARM64_REG_X2)
-from harness import machine as harness_machine, Image, hook_addresses, save, skip_crumbs, TwoCores
+from harness import machine as harness_machine, flat_members, Image, hook_addresses, save, skip_crumbs, TwoCores
 
 GATE_RUNS = [['--image', '{elf:ret-g2d}', '--output', '{output}']]
 UNIT = '/apps/os/g2d.c'
@@ -58,7 +62,7 @@ class Registers:
         self.words[offset] = self.stuck.get(offset, value)
 
 
-def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=None, schedule=None):
+def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=None, schedule=None, run_after=False):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -84,7 +88,7 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
     board = image.address('board')
     put(board + image.layouts['board_application']['session'] + image.layouts['a733_board_session']['deadline_us'],
         60_000_000, 8)
-    put(field('phase'), FAULT_PHASE); put(field('fault_step'), fault_step); put(field('fault_value'), 0)
+    put(field('dev.phase'), FAULT_PHASE); put(field('dev.fault_step'), fault_step); put(field('dev.fault_value'), 0)
 
     def ret(m, value=None):
         if value is not None:
@@ -159,7 +163,7 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
         state['slice_done'] = False
         if schedule and events is None:
             # The owner's close, with one more quiesce step on the supervisor's core placed among its stores.
-            shared = [(field(n), 4) for n in ('phase', 'close_started', 'reported', 'quiesced') if n in layout]
+            shared = [(field('dev.' + n), 4) for n in ('phase', 'close_started', 'reported', 'quiesced')]
             cores = TwoCores(uc, shared, SENTINEL)
             enter(task, 0, stack=STACKS + 0x40000)
             writer = uc.context_save()
@@ -175,11 +179,24 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
             call(task, 0, stack=STACKS + 0x40000)
         assert state['slice_done'], (name, 'the owner task did not reach its wait')
         state['time'] += PASS_US
+    run = None
+    if run_after:
+        # The application's run, posted after the failed close, then one more supervisor pass.
+        before = (get(field('dev.fault_step')), get(field('dev.fault_value')), get(field('dev.phase')))
+        put(field('op'), steps['RUN_OP']); put(field('request'), steps['POSTED'])
+        state['slice_done'] = False
+        call(task, 0, stack=STACKS + 0x40000)
+        assert state['slice_done'] and get(field('request')) == steps['DONE'], (name, 'the run was not answered')
+        result = int.from_bytes(uc.mem_read(field('result'), 4), 'little', signed=True)
+        results.append(call(image.address('os_quiesce_step'), NOTE) & 0xffffffff)
+        run = {'result': result, 'before': before,
+               'after': (get(field('dev.fault_step')), get(field('dev.fault_value')), get(field('dev.phase')))}
     return {
+        'run': run,
         'case': name, 'fault_step': fault_step, 'passes': len(results), 'last_result': results[-1],
         'done_within_bound': results[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
         'schedule': schedule, 'events': events, 'any_fault': QUIESCE['FAULT'] in results,
-        'phase': get(field('phase')), 'recorded_fault_step': get(field('fault_step')),
+        'phase': get(field('dev.phase')), 'recorded_fault_step': get(field('dev.fault_step')),
         'notes': [(hex(s), hex(v)) for s, v in state['notes']],
         'ccu': {hex(k): hex(v) for k, v in sorted(ccu.words.items())},
         'g2d_accesses': len(g2d_regs.reads) + len(g2d_regs.writes), 'g2d_20': hex(g2d_regs.words.get(0x20, 0)),
@@ -204,26 +221,34 @@ def main():
             for die in cu.iter_DIEs():
                 if die.tag == 'DW_TAG_variable' and die.attributes.get('DW_AT_name') and \
                         die.attributes['DW_AT_name'].value == b'g2d' and 'DW_AT_type' in die.attributes:
-                    layout = {c.attributes['DW_AT_name'].value.decode(): c.attributes['DW_AT_data_member_location'].value
-                              for c in die.get_DIE_from_attribute('DW_AT_type').iter_children() if c.tag == 'DW_TAG_member'}
+                    layout = flat_members(die.get_DIE_from_attribute('DW_AT_type'))
                 if die.tag == 'DW_TAG_enumerator':
                     steps[die.attributes['DW_AT_name'].value.decode()] = die.attributes['DW_AT_const_value'].value
-    assert layout and steps['FAULT'] == FAULT_PHASE and steps['CLOSED'] == CLOSED_PHASE
+    assert layout and steps['OS_DEVICE_FAULT'] == FAULT_PHASE and steps['OS_DEVICE_CLOSED'] == CLOSED_PHASE
     opened = {0xa40: 0x80000000, 0xa44: 0x00010001, 0xa74: 0x00010000}
     cases = [
         ('fault-after-engine-open', steps['G2D_STEP_TOP'], opened, None),
         ('fault-before-bus-gate', steps['G2D_STEP_BUS_GATE'], {0xa40: 0, 0xa44: 0x00010000, 0xa74: 0x00010000}, None),
         ('close-step-fails', steps['G2D_STEP_TOP'], opened, {0xa44: 0x00010001}),
+        ('run-after-failed-close', steps['G2D_STEP_TOP'], opened, {0xa44: 0x00010001}),
     ]
     rows, failures = [], []
     for name, step, words, stuck in cases:
-        row = run_case(image, parts, layout, steps, name, step, words, stuck)
+        row = run_case(image, parts, layout, steps, name, step, words, stuck, run_after=name == 'run-after-failed-close')
         problems = []
-        if name == 'close-step-fails':
+        if name == 'run-after-failed-close':
+            run = row['run']
+            if run['result'] != -1:
+                problems.append(f"a run on a FAULT service must be refused: result {run['result']}")
+            if run['after'] != run['before'] or run['before'] != (step, 0, FAULT_PHASE):
+                problems.append(f"the refused run must leave the fault and the phase unchanged: {run['before']} -> {run['after']}")
+        if name in ('close-step-fails', 'run-after-failed-close'):
             if row['done_within_bound'] or row['last_result'] != QUIESCE['FAULT']:
                 problems.append('a failed close step must leave the service FAULT')
             if len(row['notes']) != 1 or int(row['notes'][0][0], 16) & 0xfff != SITE_G2D:
                 problems.append('one fault note with site 0x931 expected')
+            elif int(row['notes'][0][1], 16) != step << 24:
+                problems.append(f"the note's value must be the first fault, {step << 24:#x}: {row['notes'][0][1]}")
         else:
             if not row['done_within_bound']:
                 problems.append(f'the registry did not reach DONE within {BOUND_US} us: the return stops at 0x742')
