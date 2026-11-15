@@ -26,6 +26,10 @@ Cases, each starting from a service that failed during its open (phase FAULT):
   with a pause after each of its first three loads of them so that its loads can straddle one or more stores
   (harness.TwoCores). No placement may report 0x931; every one must reach DONE with the service CLOSED. An image whose
   quiesce step decides from phase and close_started (bringup at 566574ee3) fails this case.
+- request-during-close: as fault-after-engine-open, with a run posted by the application while the owner closes (its
+  post tested quiesce_wanted before the quiesce set it). A wait inside the close can take the post's notification, so
+  the owner must answer the run (refused, result -1, the service being CLOSED) before it blocks with no timeout. An
+  image whose owner blocks with a request posted strands the application's run.
 An image built before the close of a faulted service (the stage-2 board run 1794711214889069759-0a9ae5d4, the
 stage-1 image) fails the first two cases: its registry reports FAULT on every pass until the bound.
 
@@ -62,7 +66,8 @@ class Registers:
         self.words[offset] = self.stuck.get(offset, value)
 
 
-def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=None, schedule=None, run_after=False):
+def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=None, schedule=None, run_after=False,
+             post_in_close=False):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -111,7 +116,16 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
 
     def wait(m):
         state['slice_done'] = True
+        if state.get('posted') and 'request_at_block' not in state:
+            state['request_at_block'] = get(field('request'))
         m.emu_stop()
+
+    def mask(m):
+        if post_in_close and not state.get('posted'):
+            # The application's run, posted during the close: its notification is taken by any wait in the close.
+            put(field('op'), steps['RUN_OP']); put(field('request'), steps['POSTED'])
+            state['posted'] = True
+        ret(m, 1)
 
     def note(m):
         state['notes'].append((m.reg_read(UC_ARM64_REG_X0), m.reg_read(UC_ARM64_REG_X1)))
@@ -121,6 +135,7 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
         'sunstone_deadline_register': lambda m: ret(m, 1),
         'sunstone_deadline_now_us': now,
         'sunstone_deadline_wait_until': wait,
+        'ulTaskGenericNotifyTake': wait,  # the owner task's block with no timeout
         'a733_counter_clock_now': counter_now,
         'ss_counter_ticks': lambda m: ret(m, state['time'] * 24),
         'aarch64_device_translate': translate,
@@ -130,7 +145,7 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
         'os_cpu_return_requested': lambda m: ret(m, state['requested']),
         'os_cpu_return_failing': lambda m: ret(m, 0),
         'os_application_wake_task': lambda m: ret(m),
-        'gicv3_spi_mask': lambda m: ret(m, 1),
+        'gicv3_spi_mask': mask,
         'gicv3_spi_masked': lambda m: ret(m, 1),
     }
     for symbol, callback in hooks.items():
@@ -191,7 +206,12 @@ def run_case(image, parts, layout, steps, name, fault_step, ccu_words, stuck=Non
         results.append(call(image.address('os_quiesce_step'), NOTE) & 0xffffffff)
         run = {'result': result, 'before': before,
                'after': (get(field('dev.fault_step')), get(field('dev.fault_value')), get(field('dev.phase')))}
+    posted = None
+    if post_in_close:
+        posted = {'posted': bool(state.get('posted')), 'request_at_block': state.get('request_at_block'),
+                  'result': int.from_bytes(uc.mem_read(field('result'), 4), 'little', signed=True)}
     return {
+        'posted': posted,
         'run': run,
         'case': name, 'fault_step': fault_step, 'passes': len(results), 'last_result': results[-1],
         'done_within_bound': results[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
@@ -233,9 +253,18 @@ def main():
         ('run-after-failed-close', steps['G2D_STEP_TOP'], opened, {0xa44: 0x00010001}),
     ]
     rows, failures = [], []
+    cases.append(('request-during-close', steps['G2D_STEP_TOP'], opened, None))
     for name, step, words, stuck in cases:
-        row = run_case(image, parts, layout, steps, name, step, words, stuck, run_after=name == 'run-after-failed-close')
+        row = run_case(image, parts, layout, steps, name, step, words, stuck, run_after=name == 'run-after-failed-close',
+                       post_in_close=name == 'request-during-close')
         problems = []
+        if name == 'request-during-close':
+            p = row['posted']
+            if not p['posted']:
+                problems.append('the close did not mask INTID 83, so no run was posted during it')
+            elif p['request_at_block'] != steps['DONE'] or p['result'] != -1:
+                problems.append(f"the owner blocked with the run unanswered: request {p['request_at_block']}, "
+                                f"result {p['result']} (expected DONE, -1)")
         if name == 'run-after-failed-close':
             run = row['run']
             if run['result'] != -1:

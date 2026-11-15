@@ -747,7 +747,10 @@ static void os_g2d_task(void *unused)
             if(closable())(void)do_close();
             if(atomic_load(&g2d.dev.phase)==OS_DEVICE_CLOSED)atomic_store(&g2d.dev.quiesced,1);
         }
-        (void)sunstone_deadline_wait_until(now_us()+10000000);
+        /* Every input notifies this task: an application request, the quiesce, the row's wake and INTID 83. A wait
+         * inside the close above can take a request's notification (a request posted after the test there), so a
+         * posted request is served before the task blocks. */
+        if(atomic_load_explicit(&g2d.request,memory_order_acquire)!=POSTED)(void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
     }
 }
 
