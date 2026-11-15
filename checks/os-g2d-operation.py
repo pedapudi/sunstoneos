@@ -385,7 +385,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         for key in ('output', 'source'):
             for k, v in op.get(key, {}).items():
                 put(job + jl[key] + sl[k], v, 8 if k in ('offset', 'chroma_offset') else 4)
-        for k in ('sx', 'sy', 'dx', 'dy', 'w', 'h', 'degrees', 'flip', 'color', 'ow', 'oh', 'csc'):
+        for k in ('sx', 'sy', 'dx', 'dy', 'w', 'h', 'degrees', 'flip', 'color', 'ow', 'oh', 'csc', 'reserved'):
             put(job + jl[k], op.get(k, 0))
         put(field('request'), 0); put(field('op'), RUN_OP); put(field('request'), POSTED)
     if converts:
@@ -961,6 +961,9 @@ def main():
         'refuse-convert-rgb-source': (dict(convert, source=RGB_FRAME, w=256, h=160, ow=256, oh=160), 48, 4),
         'refuse-convert-degrees': (dict(convert, degrees=90), 48, 4),
         'refuse-convert-color': (dict(convert, color=1), 48, 4),
+        # The shipped image refuses a convert's diagnostic variant (include/a733_g2d_convert.h) like any reserved bit.
+        'refuse-convert-variant': (dict(convert, reserved=1), 48, 4),
+        'refuse-blit-reserved': (dict(op='blit', source=RGB_FRAME, output=rgb_output, w=64, h=32, reserved=8), 48, 2),
         'refuse-blit-scale': (dict(op='blit', source=RGB_FRAME, output=rgb_output, w=64, h=32, ow=64), 48, 2),
         'refuse-rgb-chroma': (dict(convert, output=dict(convert['output'], chroma_stride=2624)), 49, 0),
         'refuse-nv16-output': (dict(convert, output=dict(frame, region=0)), 49, 0),

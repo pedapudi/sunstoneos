@@ -56,7 +56,11 @@ elseif(SUNSTONE_APPLICATION STREQUAL "g2d-rotate")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/g2d-rotate/manifest.json")
   add_sunstone_image(sunstone-a733-os-g2d-rotate LIFETIME ${os_lifetime} APPLICATION g2d-rotate)
 elseif(SUNSTONE_APPLICATION STREQUAL "g2d-convert")
-  # The camera-frame conversion stage: NV16 to ARGB8888 and scaling for model input (docs/g2d-os.md#camera-frame-conversion).
+  # The camera-frame conversion stage: NV16 to ARGB8888, the diagnostic variants and scaling for model input
+  # (docs/g2d-os.md#second-conversion-stage).
+  if(NOT SUNSTONE_G2D_CONVERT_VARIANTS)
+    message(FATAL_ERROR "g2d-convert programs the diagnostic variants: configure with -DSUNSTONE_G2D_CONVERT_VARIANTS=ON")
+  endif()
   add_sunstone_application(g2d-convert
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/g2d-convert/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/g2d-convert/manifest.json")

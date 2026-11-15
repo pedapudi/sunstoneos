@@ -2,19 +2,19 @@
 """Build apps/g2d-convert/main.c on the host and decode its result with apps/g2d-convert/host.py.
 
 checks/g2d-convert-host/sdk.c supplies the SDK: host buffers for the three large regions, a clock at the approved
-points, and an ss_g2d_run that performs each convert on the CPU with the predicted outcome (the scaler model, then the
-programmed table rounded to nearest, U first). The decoder must find each conversion's predicted model, the lanczos
-chroma model in the sampled rows, the board CPU's conversion equal to the model and to the engine's output, and each
+points, and an ss_g2d_run that performs each convert on the CPU with the engine's model from stage 7 (the scaler model,
+luma below 16 raised to 16, the programmed table rounded down, U first, the row's last pixel with its own pair), and
+one outcome per variant: B and D keep luma below 16, C changes nothing, E rounds to nearest. The decoder must find A
+predicted (rule raised/down in the exact region and the model's rectangle CRC-32), name each variant's candidate
+(kept/down, raised/down, kept/down, raised/nearest), find the board CPU's conversion equal to the model, and each
 scale flat, row-invariant, monotone and within 2 of the scaler model; the record must be predicted. The decoder's
 copy of the Lanczos bank must equal drivers/g2d/a733_g2d_convert.c's. Mutants follow, and the decoder must name each:
-- -DFLOOR, rounding down: both conversions match the down/uv model, the board's rule is 2, the scales still run, and the
-  stage is not predicted.
-- -DSWAP_UV, V read first: the nearest/vu model and rule 3.
-- -DNEAREST_CHROMA, no chroma interpolation: the exact region still matches the predicted model, the sampled rows name
-  the nearest chroma model, and the board CPU's conversion differs from the engine's output.
-- -DMISS, one pixel changed in the first conversion's exact region: no model, rule 0, the scales skipped and the
-  status missed.
-- -DFAIL_OP=2, the first scale times out: step 62, its rectangle untouched, the second scale not run.
+- -DNO_FLOOR, luma below 16 kept everywhere: A's rule is kept/down, the application stops after A, and the stage is
+  not predicted.
+- -DNEAREST_CHROMA, no chroma interpolation: A's exact region still has rule raised/down, its rectangle matches no
+  candidate, and the stage is not predicted.
+- -DMISS, one pixel changed in A's exact region: no rule, the application stops after A, status missed.
+- -DFAIL_OP=5, the first scale times out: step 62, its rectangle untouched, the second scale not run.
 
 Usage: g2d-convert-host.py --output DIR"""
 import argparse
@@ -51,10 +51,6 @@ def build_and_run(out, name, defines):
     return result.read_bytes()
 
 
-def models(record):
-    return [o.get('model') for o in record['ops'][:2]]
-
-
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output', type=Path, required=True)
@@ -68,49 +64,43 @@ def main():
     record = host.decode(build_and_run(a.output, 'predicted', []))
     reference = host.predicted()
     ops = record['ops']
-    if not record['predicted'] or record['status'] != 'done' or record['stage'] != 7 or record['main_core'] != 6:
-        problems.append(f"predicted outcome not decoded: status {record['status']}, models {models(record)}, "
-                        f"scales {[{k: o.get(k) for k in ('flat_exact', 'rows_identical', 'monotone', 'within_2')} for o in ops[2:]]}")
-    for k, (o, want) in enumerate(zip(ops, reference)):
-        same = o['rect_crc'] == f"0x{want['rect_crc']:08x}" if 'rect_crc' in want else o.get('middle_row_equals_model')
-        if not same:
-            problems.append(f'operation {k + 1}: {o["rect_crc"]} is not the reference')
-    first = ops[0]
-    if not (first['chroma_model'] == 'lanczos' and first['cpu_equals_full_model'] and first['cpu_equals_engine'] and
-            first['rule_agrees'] and ops[1]['rule_agrees']):
-        problems.append(f"chroma or CPU reference not decoded: {first['chroma_model']}, {first.get('cpu_equals_engine')}")
-    floor = host.decode(build_and_run(a.output, 'floor', ['-DFLOOR']))
-    if models(floor) != ['601@0x00/down/uv', '709@0x18/down/uv'] or floor['ops'][0]['board_rule'] != 'down/uv' or \
-            floor['predicted'] or floor['stopped_before_scales'] or not all(o['run'] for o in floor['ops']):
-        problems.append(f'the rounding-down engine was not named: {models(floor)}')
-    swapped = host.decode(build_and_run(a.output, 'swap-uv', ['-DSWAP_UV']))
-    if models(swapped) != ['601@0x00/nearest/vu', '709@0x18/nearest/vu'] or \
-            swapped['ops'][0]['board_rule'] != 'nearest/vu' or swapped['predicted']:
-        problems.append(f'the V-first engine was not named: {models(swapped)}')
+    want_variants = {'B fill colours luma 0': 'kept/down', 'C pipe 0 fill colour off': 'raised/down',
+                     'D csc0, RGB blend': 'kept/down', 'E write-back rounding': 'raised/nearest'}
+    if not record['predicted'] or record['status'] != 'done' or record['stage'] != 8 or record['main_core'] != 6:
+        problems.append(f"predicted outcome not decoded: status {record['status']}, A {record['a_predicted']}, scales "
+                        f"{[{k: o.get(k) for k in ('flat_exact', 'rows_identical', 'monotone', 'within_2')} for o in ops[5:]]}")
+    if ops[0]['rect_crc'] != f"0x{reference[0]['rect_crc']:08x}" or ops[0]['exact_crc'] != f"0x{reference[0]['exact_crc']:08x}":
+        problems.append(f"A's CRC-32 values are not the reference: {ops[0]['rect_crc']} {ops[0]['exact_crc']}")
+    if record['variants'] != want_variants:
+        problems.append(f"the variants were not named: {record['variants']}")
+    if not (ops[0]['chroma_model'] == 'lanczos' and record['cpu']['equals_model'] and
+            all(o['rule_agrees'] for o in ops[:5])):
+        problems.append(f"chroma or CPU reference not decoded: {ops[0]['chroma_model']}, {record['cpu']}")
+    floor = host.decode(build_and_run(a.output, 'no-floor', ['-DNO_FLOOR']))
+    if floor['ops'][0]['board_rule'] != 'kept/down' or not floor['stopped_after_a'] or floor['ops'][1]['run'] or \
+            floor['status'] != 'missed' or floor['predicted']:
+        problems.append(f"the engine without the floor was not named: {floor['ops'][0]['board_rule']}")
     nearest = host.decode(build_and_run(a.output, 'nearest-chroma', ['-DNEAREST_CHROMA']))
-    if models(nearest) != ['601@0x00/nearest/uv', '709@0x18/nearest/uv'] or \
-            nearest['ops'][0]['chroma_model'] != 'nearest' or nearest['ops'][0]['cpu_equals_engine'] or \
-            not nearest['conversions_predicted']:
-        problems.append(f'the uninterpolated chroma was not named: {nearest["ops"][0]["chroma_model"]}')
+    if nearest['ops'][0]['board_rule'] != 'raised/down' or nearest['ops'][0]['rect_rule'] is not None or \
+            nearest['a_predicted'] or nearest['ops'][0]['chroma_model'] != 'nearest':
+        problems.append(f"the uninterpolated chroma was not named: {nearest['ops'][0]['chroma_model']}")
     missed = host.decode(build_and_run(a.output, 'miss', ['-DMISS']))
-    mops = missed['ops']
-    if missed['status'] != 'missed' or not missed['stopped_before_scales'] or mops[0]['model'] is not None or \
-            mops[0]['board_rule'] is not None or mops[2]['run'] or mops[3]['run'] or missed['predicted'] or \
-            mops[0]['mismatch']['nearest/uv'] != 1:
-        problems.append(f'the missed conversion was not reported: {missed["status"]}, {models(missed)}')
-    failed = host.decode(build_and_run(a.output, 'fail-scale', ['-DFAIL_OP=2']))
+    if missed['status'] != 'missed' or not missed['stopped_after_a'] or missed['ops'][0]['board_rule'] is not None or \
+            missed['ops'][1]['run'] or missed['predicted'] or missed['ops'][0]['mismatch']['raised/down'] != 1:
+        problems.append(f"the missed conversion was not reported: {missed['status']}")
+    failed = host.decode(build_and_run(a.output, 'fail-scale', ['-DFAIL_OP=5']))
     fops = failed['ops']
-    if failed['status'] != 'run failed' or failed['fault_step'] != 62 or fops[2]['result'] != -1 or \
-            not fops[2]['untouched'] or fops[3]['run'] or failed['predicted'] or not failed['conversions_predicted']:
-        problems.append(f'the failed scale was not reported: {failed["status"]}, {failed["fault_step"]}')
-    summary = {'passed': not problems, 'problems': problems, 'record': record, 'floor': floor, 'swap_uv': swapped,
+    if failed['status'] != 'run failed' or failed['fault_step'] != 62 or fops[5]['result'] != -1 or \
+            not fops[5]['untouched'] or fops[6]['run'] or failed['predicted'] or not failed['a_predicted']:
+        problems.append(f"the failed scale was not reported: {failed['status']}, {failed['fault_step']}")
+    summary = {'passed': not problems, 'problems': problems, 'record': record, 'no_floor': floor,
                'nearest_chroma': nearest, 'miss': missed, 'fail_scale': failed}
     (a.output / 'result.json').write_text(json.dumps(summary, indent=2, default=str) + '\n')
     if problems:
         sys.exit('FAIL ' + '; '.join(problems))
-    print(f"PASS g2d-convert plan and decoder agree: models {models(record)}, chroma {first['chroma_model']}, scales "
-          f"within {max(o['ramp_max_difference'] for o in ops[2:])}; rounding down, V first, uninterpolated chroma, a "
-          f"missed conversion and a failed scale are named")
+    print(f"PASS g2d-convert plan and decoder agree: A {ops[0]['rect_crc']} under raised/down, variants "
+          f"{list(record['variants'].values())}, scales within {max(o['ramp_max_difference'] for o in ops[5:])}; the "
+          f"engine without the floor, uninterpolated chroma, a missed conversion and a failed scale are named")
 
 
 if __name__ == '__main__':

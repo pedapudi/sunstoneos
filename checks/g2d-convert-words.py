@@ -26,6 +26,11 @@ orders and the four tables. Each accepted job must give the vendor's words in ev
 builder's contract must be refused. It also checks that the builder's Lanczos bank is drivers/g2d/a733_g2d.c's, and
 that every phase of every bank sums to 64, so a flat field passes the scaler unchanged.
 
+The builder is built twice: as shipped, and with SUNSTONE_G2D_CONVERT_VARIANTS, the diagnostic changes the second
+conversion stage measures (docs/g2d-os.md#second-conversion-stage). The variant build must give the shipped words for
+variant 0, each variant's words (vendor_blocks' variant argument says where each comes from), and must refuse a variant
+bit above the four.
+
 Usage: g2d-convert-words.py --output DIR"""
 import argparse
 import json
@@ -54,6 +59,7 @@ YCBCR2RGB_709 = [
     0x0400, 0x0, 0x64D, 0xFFFC9980, 0x0400, 0xFFFFFF40, 0xFFFFFE21, 0x10F80, 0x0400, 0x076C, 0x0, 0xFFFC0A00,
     0x36f, 0x0, 0x0569, 0xFFFD5490, 0x36f, 0xFFFFFF5B, 0xFFFFFE64, 0x12990, 0x36f, 0x0660, 0x0, 0xFFFCD910]
 COLOR_RANGE_0_255, COLOR_RANGE_16_235 = 0, 1
+FILL_Y0, NO_FILL, CSC0, ROUND = 1, 2, 4, 8                               # A733_G2D_CONVERT_*
 G2D_BT601, G2D_BT709 = 0, 1
 # The builder's table (A733_G2D_CSC_*) and the vendor request that programs the same block: gamut, src_cr, dst_cr.
 CSC = {1: (G2D_BT601, COLOR_RANGE_0_255, COLOR_RANGE_16_235), 2: (G2D_BT601, COLOR_RANGE_0_255, COLOR_RANGE_0_255),
@@ -86,10 +92,11 @@ def fir_coef(step):
     return offset * 32
 
 
-def vendor_blocks(src, dst, gamut, src_cr, dst_cr, lan2):
+def vendor_blocks(src, dst, gamut, src_cr, dst_cr, lan2, variant=0):
     """The vendor's register images for one blit, as {block: {offset: word}} for the words it sets.
 
     src: format, width, align (3), laddr (3), clip x, y, w, h. dst: format, width, align (3), laddr (3), clip x, y, w, h.
+    variant: the A733_G2D_CONVERT_* diagnostic bits (include/a733_g2d_convert.h), applied after the vendor's words.
     """
     v, vs, b, wb = {}, {}, {}, {}
     # g2d_vlayer_set (g2d_ovl_v.c 244-335)
@@ -185,6 +192,20 @@ def vendor_blocks(src, dst, gamut, src_cr, dst_cr, lan2):
     addr0 = dst['laddr'][0] + pitch0 * dst['clip_y'] + 4 * dst['clip_x']  # 152-154
     wb[0x14], wb[0x18] = addr0 & M32, (addr0 >> 32) & 0xff              # 155-156
     wb[0x1c], wb[0x20], wb[0x24], wb[0x28] = dst['laddr'][1], 0, dst['laddr'][2], 0  # 157-164: cw 0
+    if variant & CSC0:
+        # g2d_bsp_bld's order (g2d_mixer.c 216-220): bld_csc_reg_set(0, ...) sets cs0_en and copies the same 12 words
+        # to csc0 (g2d_bld.c 261-264, at blender 0x110, g2d_mixer_type.h 452-455), and bld_cs_set(BGRA1010102)
+        # (g2d_mixer.c 287) keeps the blender in RGB, out_color 0. csc2 is not written.
+        b[0x100] = 1
+        for i in range(12):
+            b[0x110 + 4 * i], b[0x170 + 4 * i] = b[0x170 + 4 * i], 0
+        b[0x60] = 0
+    if variant & FILL_Y0:
+        b[0x10] = b[0x14] = 0x00008080                                  # g2d_bld.c 257-258 with luma 0
+    if variant & NO_FILL:
+        b[0x00] = 1 << 8                                                # g2d_bld.c 95 without 97 (p0_fcen)
+    if variant & ROUND:
+        wb[0x00] |= 1 << 8                                              # wb_attr round_en, g2d_mixer_type.h 508
     return {G2D_V0: v, G2D_VSU: vs, G2D_BLD: b, G2D_WB: wb}
 
 
@@ -198,11 +219,18 @@ HARNESS = r'''
 static _Alignas(32) unsigned char page[4096];
 int main(void)
 {
-    unsigned v[18];
+    unsigned v[19];
     while (1) {
-        for (int i = 0; i < 18; ++i) if (scanf("%u", &v[i]) != 1) return 0;
+        for (int i = 0; i < 19; ++i) if (scanf("%u", &v[i]) != 1) return 0;
         const struct a733_g2d_convert c = {v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11],
-                                           v[12], v[13], v[14], v[15], v[16]};
+                                           v[12], v[13], v[14], v[15], v[16],
+#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
+                                           v[18]
+#endif
+        };
+#ifndef SUNSTONE_G2D_CONVERT_VARIANTS
+        if (v[18]) return 2;
+#endif
         if (!a733_g2d_convert_commands(page, sizeof(page), &c, v[17])) { printf("refused\n"); continue; }
         for (unsigned i = 0; i < sizeof(page); ++i) printf("%02x", page[i]);
         printf("\n");
@@ -211,25 +239,27 @@ int main(void)
 '''
 
 
-def build(out):
+def build(out, variants):
     cc = shutil.which('clang-21') or shutil.which('clang') or shutil.which('gcc')
     (out / 'harness.c').write_text(HARNESS)
-    binary = out / 'harness'
+    binary = out / ('harness-variants' if variants else 'harness')
     done = subprocess.run([cc, '-std=c11', '-O1', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
                            '-fno-sanitize-recover=all', '-Iinclude', '-Idrivers/g2d', str(out / 'harness.c'),
-                           'drivers/g2d/a733_g2d_convert.c', '-o', str(binary)], cwd=ROOT, capture_output=True, text=True)
+                           'drivers/g2d/a733_g2d_convert.c', '-o', str(binary)]
+                          + (['-DSUNSTONE_G2D_CONVERT_VARIANTS=1'] if variants else []),
+                          cwd=ROOT, capture_output=True, text=True)
     if done.returncode:
         sys.exit(done.stderr)
     return binary
 
 
-def job(src, dst, csc, rcq=0x10800000):
+def job(src, dst, csc, rcq=0x10800000, variant=0):
     """The builder's job for the vendor's images: the vendor's pitches and first-pixel bases."""
     pitch0 = cal_align(src['width'], src['align'][0])
     pitch1 = cal_align(2 * (src['width'] >> 1), src['align'][1])
     return [src['laddr'][0], src['laddr'][1], pitch0, pitch1, src['clip_x'], src['clip_y'], src['w'], src['h'],
             src['format'], dst['laddr'][0], cal_align(4 * dst['width'], dst['align'][0]), dst['clip_x'], dst['clip_y'],
-            dst['w'], dst['h'], dst['format'], csc, rcq]
+            dst['w'], dst['h'], dst['format'], csc, rcq, variant]
 
 
 def image(fmt, width, x, y, w, h, laddr, align=(0, 0, 0)):
@@ -268,7 +298,7 @@ def refusals():
                image(0, 640, 0, 0, 320, 240, (0x10400000, 0, 0)), 1)
     def with_(**kw):
         names = ['luma', 'chroma', 'luma_stride', 'chroma_stride', 'sx', 'sy', 'w', 'h', 'format', 'output',
-                 'output_stride', 'dx', 'dy', 'ow', 'oh', 'out_format', 'csc', 'rcq']
+                 'output_stride', 'dx', 'dy', 'ow', 'oh', 'out_format', 'csc', 'rcq', 'variant']
         j = list(base)
         for k, value in kw.items():
             j[names.index(k)] = value
@@ -282,6 +312,29 @@ def refusals():
             ('chroma-align', with_(chroma=0x10050002)), ('output-align', with_(output=0x10400002)),
             ('stride-align', with_(luma_stride=642, chroma_stride=642)), ('rcq-align', with_(rcq=0x10800040)),
             ('output-past-4g', with_(output=0xffff0000, dy=200)), ('luma-past-4g', with_(luma=0xffff0000, sy=479))]
+
+
+def variant_cases():
+    """(name, src, dst, csc, variant) cases for the variant build: every combination on the stage's unscaled job, and
+    each single variant on a scaled job with the other tables."""
+    y, c, out = 0x10000000, 0x10050000, 0x10400000
+    full = [(f'variant-{v}', image(0x24, 640, 0, 0, 640, 480, (y, c, 0)), image(0, 656, 0, 0, 640, 480, (out, 0, 0)),
+             4, v) for v in range(16)]
+    return full + [(f'variant-{v}-scale-csc{csc}', image(0x24, 640, 0, 0, 640, 480, (y, c, 0)),
+                    image(0, 320, 0, 0, 320, 240, (out, 0, 0)), csc, v) for v in (1, 2, 4, 8) for csc in (1, 2, 3)]
+
+
+def variant_refusals():
+    base = job(image(0x24, 640, 0, 0, 640, 480, (0x10000000, 0x10050000, 0)),
+               image(0, 640, 0, 0, 320, 240, (0x10400000, 0, 0)), 1)
+    return [(f'variant-{v:#x}', base[:-1] + [v]) for v in (16, 17, 0x80000000, 0xffffffff)]
+
+
+def run(binary, lines):
+    done = subprocess.run([str(binary)], input='\n'.join(lines) + '\n', capture_output=True, text=True)
+    if done.returncode:
+        sys.exit(f'{binary.name} exited {done.returncode}: {done.stderr}')
+    return done.stdout.split('\n')
 
 
 def parse(page):
@@ -340,30 +393,34 @@ def main():
                 sums[(bank, phase)] = sum(taps)
     if sums:
         problems.append(f'phases whose taps do not sum to 64: {sorted(sums.items())[:8]}')
-    accepted = cases()
+    accepted = [(name, src, dst, csc, 0) for name, src, dst, csc in cases()]
     rejected = refusals()
-    lines = [' '.join(str(x) for x in job(src, dst, csc)) for _, src, dst, csc in accepted]
-    lines += [' '.join(str(x) for x in j) for _, j in rejected]
-    done = subprocess.run([str(build(a.output))], input='\n'.join(lines) + '\n', capture_output=True, text=True)
-    if done.returncode:
-        sys.exit(f'harness exited {done.returncode}: {done.stderr}')
-    out = done.stdout.split('\n')
-    for k, (name, src, dst, csc) in enumerate(accepted):
-        if out[k] == 'refused':
-            problems.append(f'{name}: refused')
-            continue
-        page = bytes.fromhex(out[k])
-        problems += check_page(name, page, vendor_blocks(src, dst, *CSC[csc], lan2), 0x10800000)
-    for k, (name, _) in enumerate(rejected):
-        if out[len(accepted) + k] != 'refused':
-            problems.append(f'{name}: accepted')
+    variants = variant_cases()
+    vrejected = variant_refusals()
+    def lines(acc, rej):
+        return [' '.join(str(x) for x in job(src, dst, csc, variant=v)) for _, src, dst, csc, v in acc] + \
+            [' '.join(str(x) for x in j) for _, j in rej]
+    shipped = run(build(a.output, False), lines(accepted, rejected))
+    built = run(build(a.output, True), lines(accepted + variants, rejected + vrejected))
+    for label, out, acc, rej in (('', shipped, accepted, rejected),
+                                 ('variant build ', built, accepted + variants, rejected + vrejected)):
+        for k, (name, src, dst, csc, v) in enumerate(acc):
+            if out[k] == 'refused':
+                problems.append(f'{label}{name}: refused')
+                continue
+            page = bytes.fromhex(out[k])
+            problems += check_page(label + name, page, vendor_blocks(src, dst, *CSC[csc], lan2, v), 0x10800000)
+        for k, (name, _) in enumerate(rej):
+            if out[len(acc) + k] != 'refused':
+                problems.append(f'{label}{name}: accepted')
     (a.output / 'result.json').write_text(json.dumps({'passed': not problems, 'problems': problems,
-                                                      'accepted': [c[0] for c in accepted],
-                                                      'refused': [r[0] for r in rejected]}, indent=2) + '\n')
+                                                      'accepted': [c[0] for c in accepted + variants],
+                                                      'refused': [r[0] for r in rejected + vrejected]}, indent=2) + '\n')
     if problems:
         sys.exit('FAIL ' + '; '.join(problems[:12]))
     print(f'PASS the conversion builder gives the vendor\'s words for {len(accepted)} jobs and refuses {len(rejected)}; '
-          f'its Lanczos bank is a733_g2d.c\'s and every phase sums to 64')
+          f'built with the variants, it gives the same words, the variants\' words for {len(variants)} jobs and refuses '
+          f'{len(vrejected)} variant values; its Lanczos bank is a733_g2d.c\'s and every phase sums to 64')
 
 
 if __name__ == '__main__':

@@ -1,15 +1,18 @@
 /* A host SDK for apps/g2d-convert/main.c (checks/g2d-convert-host.py). The large regions are host buffers, the clock
- * is ready with the approved points, and ss_g2d_run performs each convert on the CPU with the outcome the hypothesis
- * predicts: the scaler model (the job's steps and Lanczos banks, as drivers/g2d/a733_g2d_convert.c programs them, with
- * taps at positions -1 to +2, the edge samples repeated, each pass rounded to nearest and clamped) followed by the
- * programmed table, rounded to nearest, with U the first byte of each chroma pair. Mutants:
- * - -DFLOOR rounds the table's result down, -DSWAP_UV reads V first, -DNEAREST_CHROMA gives odd pixels the chroma of
- *   their own pair (no interpolation);
+ * is ready with the approved points, and ss_g2d_run performs each convert on the CPU with the engine's model from
+ * stage 7: the scaler model (the job's steps and Lanczos banks, as drivers/g2d/a733_g2d_convert.c programs them, with
+ * taps at positions -1 to +2, the edge samples repeated, each pass rounded to nearest and clamped; an unscaled row's
+ * last pixel takes its own chroma pair), luma below 16 raised to 16, then the programmed table rounded down, with U
+ * the first byte of each chroma pair. The variants model one outcome each, for the decoder to name: FILL_Y0 and CSC0
+ * keep luma below 16, NO_FILL changes nothing, ROUND rounds to nearest. Mutants:
+ * - -DNO_FLOOR keeps luma below 16 in every operation, -DNEAREST_CHROMA gives odd pixels the chroma of their own pair
+ *   (no interpolation);
  * - -DMISS changes one pixel of the first conversion's exact region;
  * - -DFAIL_OP=n fails operation n (counted from 0) at step 62 (a timeout) with nothing written.
  * ss_finish writes the result to the file named by the first argument. */
 #include "g2d_convert-app.h"
 #include "sunstone_g2d.h"
+#define SUNSTONE_G2D_CONVERT_VARIANTS 1
 #include "a733_g2d_convert.c"
 #include <stdio.h>
 #include <stdlib.h>
@@ -100,17 +103,13 @@ int ss_g2d_run(const struct ss_g2d_job *j, struct ss_g2d_done *done)
     if (run == FAIL_OP) { fault_step = 62; fault_value = 0x4; return -1; }
 #endif
     const int32_t *t = a733_g2d_csc_table(j->csc);
-    const uint32_t w = j->w, h = j->h, ow = j->ow, oh = j->oh;
+    const uint32_t w = j->w, h = j->h, ow = j->ow, oh = j->oh, variant = j->reserved;
     const uint32_t hstep = (w << 19) / ow, vstep = (h << 19) / oh;
     uint8_t *y = malloc((size_t)ow * oh), *u = malloc((size_t)ow * oh), *v = malloc((size_t)ow * oh);
     const uint8_t *luma = source + j->source.offset, *chroma = source + j->source.chroma_offset;
     scale_plane(luma, (int32_t)w, (int32_t)h, 1, j->source.stride, y, ow, oh, hstep << 1, fir_coef(hstep),
                 vstep << 1, fir_coef(vstep));
-#ifdef SWAP_UV
-    const unsigned first = 1;
-#else
     const unsigned first = 0;
-#endif
 #ifdef NEAREST_CHROMA
     /* Each pixel takes its own pair: the chroma plane scaled as 640 samples, each pair repeated. */
     for (uint32_t r = 0; r < oh; ++r)
@@ -123,19 +122,26 @@ int ss_g2d_run(const struct ss_g2d_job *j, struct ss_g2d_done *done)
                 fir_coef(hstep >> 1), vstep << 1, fir_coef(vstep));
     scale_plane(chroma + 1 - first, (int32_t)(w + 1) / 2, (int32_t)h, 2, j->source.chroma_stride, v, ow, oh, hstep,
                 fir_coef(hstep >> 1), vstep << 1, fir_coef(vstep));
+    if (ow == w && oh == h)
+        for (uint32_t r = 0; r < oh; ++r) {
+            u[(size_t)r * ow + ow - 1] = chroma[(size_t)r * j->source.chroma_stride + 2 * ((w - 1) / 2) + first];
+            v[(size_t)r * ow + ow - 1] = chroma[(size_t)r * j->source.chroma_stride + 2 * ((w - 1) / 2) + 1 - first];
+        }
 #endif
-#ifdef FLOOR
-    const int32_t round = 0;
+    const int32_t round = variant & A733_G2D_CONVERT_ROUND ? 512 : 0;
+#ifdef NO_FLOOR
+    const int floor16 = 0;
 #else
-    const int32_t round = 512;
+    const int floor16 = !(variant & (A733_G2D_CONVERT_FILL_Y0 | A733_G2D_CONVERT_CSC0));
 #endif
     for (uint32_t r = 0; r < oh; ++r)
         for (uint32_t x = 0; x < ow; ++x) {
             const size_t i = (size_t)r * ow + x;
             uint32_t word = UINT32_C(0xff) << 24;
+            const int32_t luma_value = floor16 && y[i] < 16 ? 16 : y[i];
             for (unsigned c = 0; c < 3; ++c)
-                word |= (uint32_t)clip((t[4 * c] * y[i] + t[4 * c + 1] * u[i] + t[4 * c + 2] * v[i] + t[4 * c + 3] +
-                                        round) >> 10) << (16 - 8 * c);
+                word |= (uint32_t)clip((t[4 * c] * luma_value + t[4 * c + 1] * u[i] + t[4 * c + 2] * v[i] +
+                                        t[4 * c + 3] + round) >> 10) << (16 - 8 * c);
 #ifdef MISS
             if (run == 0 && r == 7 && x == 9) word ^= 0x100;
 #endif

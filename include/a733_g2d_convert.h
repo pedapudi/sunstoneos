@@ -29,7 +29,22 @@ struct a733_g2d_convert {
     uint32_t sx, sy, w, h, format;
     uint32_t output, output_stride, dx, dy, ow, oh, out_format;
     uint32_t csc;
+#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
+    uint32_t variant;
+#endif
 };
+#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
+/* Diagnostic changes to the vendor's page, built only with SUNSTONE_G2D_CONVERT_VARIANTS for the board stage that
+ * finds which block raises luma below 16 to 16 and which rounds the table's result down
+ * (docs/g2d-os.md#second-conversion-stage). The change that makes the measured control the default removes them.
+ * - FILL_Y0: both blender fill colours 0x00008080 (luma 0) instead of 0x00108080.
+ * - NO_FILL: pipe 0's fill colour off (bld_en_ctrl 0x100).
+ * - CSC0: g2d_bsp_bld's order (g2d_mixer.c 157-300): csc0 converts at pipe 0's input, the blender works in RGB
+ *   (out_color 0), csc2 is off.
+ * - ROUND: the write-back's round_en (wb_attr bit 8), which the vendor never sets. */
+enum { A733_G2D_CONVERT_FILL_Y0 = 1, A733_G2D_CONVERT_NO_FILL = 2, A733_G2D_CONVERT_CSC0 = 4,
+       A733_G2D_CONVERT_ROUND = 8, A733_G2D_CONVERT_VARIANT_BITS = 15 };
+#endif
 /* The 12 csc2 words for a table (bld_csc_reg_set's 12-word copy: per output channel R, G, B the Y, U and V
  * coefficients with 10 fraction bits, then the constant scaled by 1024), or null for an unknown table. */
 const int32_t *a733_g2d_csc_table(uint32_t csc);

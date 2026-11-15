@@ -180,7 +180,7 @@ An NV16 surface (`SS_G2D_FORMAT_NV16`) has two planes in one large region:
 - the chroma plane at `chroma_offset`, one U and V pair for every two pixels of each row, `chroma_stride` bytes a row (at least `width` rounded up to even).
 
 Both planes start 4-byte aligned, and both strides are multiples of 4. An RGB surface leaves `chroma_offset` and `chroma_stride` 0. The convert reads the `w` by `h` rectangle at (`sx`, `sy`) and writes the `ow` by `oh` rectangle at (`dx`, `dy`); `sx` is even, so no chroma pair is split. Every size is 1 to 8192. The service refuses before any mapping:
-- at step 48: a table outside 1 to 4, an odd `sx`, a source other than NV16, a degree, flip or colour, and `ow`, `oh` or `csc` set on any other operation;
+- at step 48: a table outside 1 to 4, an odd `sx`, a source other than NV16, a degree, flip or colour, `ow`, `oh` or `csc` set on any other operation, and a nonzero `reserved` word (an image built for the [second conversion stage](#second-conversion-stage) accepts a convert's variant bits there);
 - at step 49: an NV16 output, chroma fields on an RGB surface, and a chroma plane outside its region or narrower than the frame;
 - at step 50: a rectangle that leaves its surface.
 
@@ -216,9 +216,9 @@ The builder writes nothing for a job that the vendor refuses or that the registe
 - a stride narrower than its rectangle, or an address that is not 4-byte aligned;
 - a rectangle whose first byte is at or above 2^32.
 
-[g2d-convert-words.py](../checks/g2d-convert-words.py) compares the builder with a Python transcription of the vendor functions, word for word, over 46 jobs: the stage's geometries, both coarse-decimation boundaries, the 2048 limit, odd widths, offsets, both format codes, the eight output formats and the four tables. It also checks 22 refusals, that the bank equals a733_g2d.c's, and that every phase's four taps sum to 64.
+[g2d-convert-words.py](../checks/g2d-convert-words.py) compares the builder with a Python transcription of the vendor functions, word for word, over 46 jobs: the stage's geometries, both coarse-decimation boundaries, the 2048 limit, odd widths, offsets, both format codes, the eight output formats and the four tables. It also checks 22 refusals, that the bank equals a733_g2d.c's, and that every phase's four taps sum to 64. It builds the builder a second time with the second stage's variants and checks the same jobs, 28 variant jobs and 4 refused variant values.
 
-The service runs a convert as a blit. It maps the output read-write and the source read-only, builds the page at the planes' device addresses, cleans and invalidates the output's lines, and cleans the luma plane's and then the chroma plane's lines. It launches the mixer with the blit's sequence and, after the interrupt, cleans and invalidates the output's lines again. A builder refusal after the mapping fails at step 50 with value 3, and a plane at or above 4 GiB in device space at step 50 with value 4. [os-g2d-operation.py](../checks/os-g2d-operation.py) runs the image's convert path with three converts in one session (unscaled, 224 by 224, and an offset window scaled 2:1 into a BGRA output). Each command page must equal the transcription's words at the device addresses the service used, with the plane maintenance in that order. It also runs 13 convert refusals, each of which must touch nothing.
+The service runs a convert as a blit. It maps the output read-write and the source read-only, builds the page at the planes' device addresses, cleans and invalidates the output's lines, and cleans the luma plane's and then the chroma plane's lines. It launches the mixer with the blit's sequence and, after the interrupt, cleans and invalidates the output's lines again. A builder refusal after the mapping fails at step 50 with value 3, and a plane at or above 4 GiB in device space at step 50 with value 4. [os-g2d-operation.py](../checks/os-g2d-operation.py) runs the image's convert path with three converts in one session (unscaled, 224 by 224, and an offset window scaled 2:1 into a BGRA output). Each command page must equal the transcription's words at the device addresses the service used, with the plane maintenance in that order. It also runs 15 refusals of jobs with their own surfaces, each of which must touch nothing, among them a convert and a blit with a nonzero `reserved` word.
 
 ### First conversion stage
 
@@ -254,6 +254,50 @@ One model of the engine reproduces both 640 by 480 rectangles: its CRC-32 values
 - **Byte order.** U is the first byte of each chroma pair, so code 0x24 is NV16.
 - **Chroma interpolation.** An odd pixel's chroma is the scaler's half phase, (-4, 36, 36, -4) over 64 rounded to nearest, over the neighbouring pairs. The last pixel of a row (x = 639) takes its own pair.
 
-The model was derived from the run's records: the exact region's mismatch counts, its CRC-32 (0xa2d55262 and 0x24b4dc15, equal to the model's) and the two sampled rows of each conversion. It has not been tested on a second frame. The vendor source does not show which block applies the luma floor. A full-range camera frame therefore loses luma 0 to 15.
+The model was derived from the run's records: the exact region's mismatch counts, its CRC-32 (0xa2d55262 and 0x24b4dc15, equal to the model's) and the two sampled rows of each conversion. It has not been tested on a second frame. A full-range camera frame therefore loses luma 0 to 15. The [second conversion stage](#second-conversion-stage) tests the model on a new frame and measures which block applies the floor.
 
 The engine converted 640 by 480 pixels in 1050 µs, 292 Mpixel/s at a module clock of 300 MHz. One A76 core at 2002 MHz took 2718 µs on the first run and 2696 and 2697 µs on the next two, 114 Mpixel/s, with the predicted rule rather than the engine's. That reference is scalar integer C without NEON, so it is a lower bound on the CPU's rate: the engine is 2.6 times faster than scalar C. Whether the engine is faster than a NEON conversion is not measured, and the 2:1 and 224 by 224 scales did not run.
+
+### Second conversion stage
+
+The second stage tests the engine model of the first stage on a new frame, measures which block raises luma below 16, and runs the two scales.
+
+No register in the vendor's mixer layout (g2d_mixer_type.h) is named for a range, a clip or a clamp. These settings of the vendor's page can produce the floor or the rounding:
+- **Fill colours.** `bld_csc_reg_set` writes both blender fill colours as 0x00108080, luma 16 with neutral chroma (g2d_bld.c 257-258), and `bld_in_set` turns pipe 0's fill colour on (`p0_fcen`, g2d_bld.c 97).
+- **Blending in YUV.** With a YUV source, `bld_cs_set` sets the blender's output colour to YUV (g2d_bld.c 227-230), so the blender works on luma before csc2 converts it. The vendor's other path, `g2d_bsp_bld`, converts at pipe 0's input with csc0 (g2d_mixer.c 216-220) and blends in RGB (line 287); line 202 makes it unreachable.
+- **Write-back rounding.** The write-back's format word has a `round_en` bit (bit 8, g2d_mixer_type.h 508), which the vendor never sets.
+
+An image built with `SUNSTONE_G2D_CONVERT_VARIANTS` accepts a convert's diagnostic variant in the job's `reserved` word ([a733_g2d_convert.h](../include/a733_g2d_convert.h)). Each bit changes one setting after the vendor's words:
+
+| Variant | Bit | Change to the vendor's page | Expected rule if this setting causes the effect |
+| --- | --- | --- | --- |
+| B | 1 | both fill colours 0x00008080 (luma 0) | luma kept, rounded down |
+| C | 2 | pipe 0's fill colour off (`bld_en_ctrl` 0x100) | luma kept, rounded down |
+| D | 4 | csc0 at blender + 0x110 converts at pipe 0's input, `cs_ctrl` 1, `out_color` 0, csc2 zero | luma kept, rounded down |
+| E | 8 | write-back `round_en` | luma raised, rounded to nearest |
+
+Only the g2d-convert application builds with the option, and the g2d-convert application builds only with it (cmake/a733-os.cmake). Every other image, the shipped OS included, refuses a nonzero `reserved` word at step 48. The change that makes the measured setting the default removes the option and the variant code.
+
+[g2d-convert](../apps/g2d-convert/main.c) runs seven operations into the "surface" region, each output filled with 0x5a bytes first:
+
+| Operation | Frame | Table | Variant | Output | Stride |
+| --- | --- | --- | --- | --- | --- |
+| A | luma sweep, 640 by 480 | BT.709 full | none | 640 by 480 | 2624 |
+| B to E | luma sweep | BT.709 full | B, C, D, E | 640 by 480 | 2624 |
+| scale 1 | first stage's B, 640 by 480 | BT.601 limited | none | 320 by 240 | 1344 |
+| scale 2 | first stage's B | BT.601 limited | none | 224 by 224 | 960 |
+
+The luma-sweep frame, from seed 0x6a09e667, has the first stage's frame A layout with random luma, except that every fourth row y steps through every luma value across the exact region, (x - 8 + y) mod 256 at pixel x. Every value from 0 to 255 therefore appears in the exact region, the values below 16 and above 234 included. The scales read the first stage's frame B, its flat colour and luma ramp. The application counts the exact region's mismatches against four candidate rules: luma below 16 raised to 16 or kept, each rounded down or to nearest.
+
+The engine model predicts operation A: luma raised and rounded down, rectangle CRC-32 0x5551ee74 and exact-region CRC-32 0x0f05ef24. If A follows another rule or none, the stage stops before the variants and the scales. Variants B to E are measurements: each one's result is the candidate whose rectangle CRC-32 it equals, or none.
+
+| Rule | Rectangle CRC-32 | Exact-region CRC-32 |
+| --- | --- | --- |
+| luma raised, rounded down | 0x5551ee74 | 0x0f05ef24 |
+| luma raised, rounded to nearest | 0x9c066707 | 0x43eb5d93 |
+| luma kept, rounded down | 0xb9c1df94 | 0xe1f6034c |
+| luma kept, rounded to nearest | 0x32db2f17 | 0xf7ff37dc |
+
+For each scale, the flat region must equal the flat colour converted under the model (0xffdf884f), every row must equal the middle row, the ramp must not decrease, and the middle row must lie within 2 of the decoder's scaler model in each channel.
+
+After the engine is closed, one A76 core at 2002 MHz converts the luma-sweep frame with the BT.709 full table under the model's rule three times in scalar C, as in the first stage. [The decoder](../apps/g2d-convert/host.py) reports A's rule, each variant's rule and the scales' checks. [g2d-convert-host.py](../checks/g2d-convert-host.py) builds the application on the host with the engine model, whose variants B and D keep luma and E rounds to nearest. It checks the decoder against that model and four mutant engines: one without the floor, one with uninterpolated chroma, one that misses a conversion and one whose scale fails.

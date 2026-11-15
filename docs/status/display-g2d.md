@@ -44,7 +44,7 @@ The OS-image service is described in [g2d-os.md](../g2d-os.md). Exact copies of 
 2. Establish DisplayPort negotiation: analog and SERDES authority, AUX clock, board revision, orientation, link training and sink output.
 3. Obtain panel-bound electrical, PLL, rail and wiring evidence, and the DSI read transactions.
 4. Add per-access ownership checks to the G2D command path.
-5. Qualify NV16-to-RGB conversion against the derived model on a second frame, and the 2:1 and 224 by 224 scales; measure a NEON conversion on one A76, since the engine is 2.6 times faster than scalar C only; then RGB888 output, NV12 input, NV12 and YUV420 camera rotation, flips on the board, a mixer job and a rotate in one session (the stray masking), other pixel sizes and translucent solid backgrounds.
+5. Qualify NV16-to-RGB conversion against the derived model on a second frame, measure which block raises luma below 16, and run the 2:1 and 224 by 224 scales ([second conversion stage](../g2d-os.md#second-conversion-stage), built, not yet run); measure a NEON conversion on one A76 once applications may use FP and SIMD registers, since the engine is 2.6 times faster than scalar C only; then RGB888 output, NV12 input, NV12 and YUV420 camera rotation, flips on the board, a mixer job and a rotate in one session (the stray masking), other pixel sizes and translucent solid backgrounds.
 
 ## Evidence
 
