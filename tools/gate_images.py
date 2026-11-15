@@ -16,6 +16,7 @@ FIXTURES = {
 
 IMAGES = {
     'os-usb-ledger': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=hello-compute',
         '-DSUNSTONE_A733_OS_USB_CLASSES=ON', '-DSUNSTONE_BOARD_USB2_IRQ=ON',
     ], 'target': 'sunstone-a733-os-hello', 'elf': 'sunstone-a733-os-hello.elf'},
@@ -23,21 +24,26 @@ IMAGES = {
         '-DSUNSTONE_A733_CARD_FEL_RECOVERY=ON',
     ], 'target': 'a733-card-fel-recovery', 'elf': 'a733-card-fel-recovery.elf'},
     'ret-walks-uncached': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_APPLICATION=table-walks', '-DSUNSTONE_A733_TABLE_WALKS=uncached',
     ], 'target': 'sunstone-a733-os-table-walks', 'elf': 'sunstone-a733-os-table-walks.elf'},
     'ret-walks-cached': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_APPLICATION=table-walks', '-DSUNSTONE_A733_TABLE_WALKS=cached',
     ], 'target': 'sunstone-a733-os-table-walks', 'elf': 'sunstone-a733-os-table-walks.elf'},
     'resident-stop': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=hello-compute',
         '-DSUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH=ON',
     ], 'target': 'sunstone-a733-os-hello', 'elf': 'sunstone-a733-os-hello.elf'},
     'card-profile': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=hello-compute',
         '-DSUNSTONE_A733_OS_RESIDENT_STOP_ON_FINISH=OFF',
     ], 'target': 'sunstone-a733-os-hello', 'elf': 'sunstone-a733-os-hello.elf'},
     # the returning NPU image of apps/cpu-npu-concurrency (apps/cpu-npu-concurrency/README.md)
     'ret-npu-load': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON',
         '-DSUNSTONE_APPLICATION=cpu-npu-load',
         '-DSUNSTONE_APPLICATION_cpu-npu-load_ROOT={source}/apps/cpu-npu-concurrency',
@@ -45,24 +51,29 @@ IMAGES = {
     ], 'target': 'sunstone-a733-os', 'elf': 'sunstone-a733-os.elf'},
     # the returning GPU image of apps/gpu-lifecycle (apps/gpu-lifecycle/README.md)
     'ret-gpu': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_APPLICATION=gpu-lifecycle',
         '-DSUNSTONE_A733_OS_GPU=ON',
     ], 'target': 'sunstone-a733-os-gpu-lifecycle', 'elf': 'sunstone-a733-os-gpu-lifecycle.elf'},
     # the returning G2D check image (apps/g2d-check, docs/g2d-os.md), whose fault return checks/os-g2d-fault-return.py runs
     'ret-g2d': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_APPLICATION=g2d-check',
     ], 'target': 'sunstone-a733-os-g2d-check', 'elf': 'sunstone-a733-os-g2d-check.elf'},
     # the returning latency diagnostic image
     'ret-latency': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_LATENCY=ON',
         '-DSUNSTONE_APPLICATION=latency',
     ], 'target': 'sunstone-a733-os-latency', 'elf': 'sunstone-a733-os-latency.elf'},
     # the supervised SD0 read image (apps/storage-read); the host session is modeled by checks/storage-read-fixture.py (tools/gate_session.py), at profile 2, or the profile in the image name (storage-read-p1: profile 1)
     'storage-read': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_A733_STORAGE_READ=ON',
     ], 'target': 'sunstone-a733-storage-read', 'elf': 'sunstone-a733-storage-read.elf'},
     # the supervised SD0 read image (apps/storage-read); the host session is modeled by checks/storage-read-fixture.py (tools/gate_session.py), at profile 2, or the profile in the image name (storage-read-p1: profile 1)
     'storage-read-p1': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_A733_STORAGE_READ=ON',
     ], 'target': 'sunstone-a733-storage-read', 'elf': 'sunstone-a733-storage-read.elf'},
     # the cold-entry monitor with the stage-2 slot loader (boot/a733/stage2); the stage-2 and standalone-boot checks load its ELF and binary from the build directory
@@ -125,12 +136,14 @@ IMAGES = {
     # and the pinned kernel only (no cfg.sh, which configures the top-level project)
     'latency-cost-model': {'project': 'apps/latency-cost', 'configure': ['-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'],
                            'target': 'latency-cost-model', 'elf': 'latency-cost-model.elf'},
-    'cpu-reliability-model': {'project': 'checks/cpu-reliability-model', 'configure': ['-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'],
+    'cpu-reliability-model': {'project': 'checks/cpu-reliability-model',
+                              'configure': ['-DSUNSTONE_IRQ_FP_UNSAVED=ON', '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'],
                               'target': 'a733-smp-cached-diagnostic', 'elf': 'a733-smp-cached-diagnostic.elf'},
     # the A733 board and diagnostic images outside the OS, with the options that add the board applications;
     # checks/irq-general-regs.py walks every executable it links with configSS_IRQ_SAVES_FP 0. The OS option is off,
     # after the gate's own -DSUNSTONE_A733_OS=ON: with it, the storage-maintenance image does not link.
     'a733-applications': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_A733_OS=OFF',
         '-DSUNSTONE_A733_ADC=ON', '-DSUNSTONE_A733_DEINTERLACE=ON', '-DSUNSTONE_A733_MONITOR=ON',
         '-DSUNSTONE_A733_PCIE=ON', '-DSUNSTONE_A733_PCIE_NVME=ON', '-DSUNSTONE_A733_PCIE_TEST=ON',
@@ -145,6 +158,7 @@ IMAGES = {
     ], 'elf': 'a733-smp-cached-diagnostic.elf'},
     # the returning scanning radio image
     'ret-radio-scan': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_APPLICATION=radio-scan',
         '-DSUNSTONE_A733_OS_RADIO_SCAN=ON',
     ], 'target': 'sunstone-a733-os-radio-scan', 'elf': 'sunstone-a733-os-radio-scan.elf'},

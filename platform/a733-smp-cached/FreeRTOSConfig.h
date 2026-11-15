@@ -11,10 +11,16 @@
  * deleted tasks runs on core 0, which the tick wakes every millisecond. */
 #define configUSE_PASSIVE_IDLE_HOOK 1
 #define configIDLE_AFFINITY 1
-/* Interrupt code is built with -mgeneral-regs-only and leaves the FP and SIMD
- * registers alone, so IRQ entry does not save them (docs/driver-validation.md,
- * rule 7; checks/irq-general-regs.py checks each linked image). */
+/* IRQ entry saves the FP and SIMD registers unless the build sets
+ * SUNSTONE_IRQ_FP_UNSAVED (cmake/irq-fp.cmake). Only the gate builds that
+ * checks/irq-general-regs.py walks set it: their interrupt code is built with
+ * -mgeneral-regs-only and the check proves each linked image leaves the FP
+ * registers alone (docs/driver-validation.md, rule 7). */
+#ifdef SUNSTONE_IRQ_FP_UNSAVED
 #define configSS_IRQ_SAVES_FP 0
+#else
+#define configSS_IRQ_SAVES_FP 1
+#endif
 #include "../../include/a733_smp_placement.h"
 #ifdef SUNSTONE_A733_OS
 /* The integrated OS image keeps every task created without an affinity on

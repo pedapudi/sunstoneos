@@ -2,17 +2,25 @@
 """Exception code of each image linked with configSS_IRQ_SAVES_FP 0 uses no FP or SIMD register outside a task's own
 context save and restore.
 
-With configSS_IRQ_SAVES_FP 0 (platform/a733-smp-cached/FreeRTOSConfig.h, which every A733 configuration includes),
-IRQ entry does not save the 32 Q registers, FPSR and FPCR, because nothing an exception runs may change them
-(docs/driver-validation.md, rule 7). This check proves that for every such image the gate builds. The QEMU OS board
-(platform/qemu-os/FreeRTOSConfig.h) also sets 0; checks/qemu-os-boot.py builds and runs its images, and this check
-does not walk them. It finds them itself: in each build directory it gives, the compile command of each FreeRTOS port
-assembly unit is run through the preprocessor to read configSS_IRQ_SAVES_FP, and the CMake link commands
-(CMakeFiles/TARGET.dir/link.txt) name the executables that link each unit, their ELF and their linker map. Every
-built executable linked with 0 is walked. An executable that a build configures with 0 but that no build links fails
-the check, and GATE_RUNS must name every image recipe of tools/gate_images.py and every OS variant, so a new image
-cannot skip it. The unpatched FreeRTOS port, which some probes link, defines no setting: its IRQ entry has never saved
-the FP registers.
+IRQ entry saves the 32 Q registers, FPSR and FPCR unless the build sets SUNSTONE_IRQ_FP_UNSAVED (cmake/irq-fp.cmake),
+which makes configSS_IRQ_SAVES_FP 0 in platform/a733-smp-cached/FreeRTOSConfig.h; every A733 configuration includes
+that file. An image may skip the save only when nothing an exception runs changes those registers
+(docs/driver-validation.md, rule 7), and this check proves that for every image the gate builds with 0. GATE_RUNS gives
+it every gate build: --walk for the recipes and OS variants that set the option, --build for the rest. The check
+refuses a GATE_RUNS that misses an image recipe of tools/gate_images.py or an OS variant, or whose --walk builds are not
+exactly those whose configuration sets the option, so a new image keeps the save until it is walked. Builds outside the
+gate keep it too: the QEMU OS images (platform/qemu-os/FreeRTOSConfig.h sets 1) because checks/qemu-os-boot.py builds
+them inside its own run, where this check cannot read them, and the application variants that no gate build configures.
+
+The check finds the images itself. In each build, the compile command of each FreeRTOS port assembly unit is run through
+the preprocessor to read configSS_IRQ_SAVES_FP, and the CMake link commands (CMakeFiles/TARGET.dir/link.txt) name the
+executables that link each unit, their ELF and their linker map. Every built executable of a --walk build linked with 0
+is walked. It fails when a --build build sets the option or links an executable with 0, when a --walk build does not
+set it, and when a --walk build configures an executable with 0 that no given build built. The unpatched FreeRTOS port,
+which some probes link, defines no setting: its IRQ entry has never saved the FP registers.
+
+The check needs every gate build and takes about 11 minutes on all of them. To cut that, walk only the images whose
+inputs changed.
 
 The walk starts at every slot of the EL1 vector table a733_cached_el1_vectors (IRQ, SVC and fault entries) and follows
 every direct branch and call. An indirect call or tail call may reach every function whose address the image takes, in
@@ -52,15 +60,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'checks'))
 import harness  # noqa: E402,F401  Refuses to run with assertions disabled.
 
-# Every build of the gate: the check finds the executables linked with configSS_IRQ_SAVES_FP 0 in them, and main
-# refuses a GATE_RUNS that misses an image recipe of tools/gate_images.py or an OS variant.
+# Every build of the gate. The --walk builds are those whose configuration sets SUNSTONE_IRQ_FP_UNSAVED; main refuses a
+# GATE_RUNS that misses an image recipe of tools/gate_images.py or an OS variant, or walks a different set.
 GATE_RUNS = [[
-    '--build', '{build:sup}', '--build', '{build:headset}', '--build', '{build:os-usb-ledger}',
-    '--build', '{build:resident-stop}', '--build', '{build:card-profile}', '--build', '{build:ret-npu-load}',
-    '--build', '{build:ret-gpu}', '--build', '{build:ret-g2d}', '--build', '{build:ret-latency}',
-    '--build', '{build:ret-radio-scan}', '--build', '{build:ret-walks-cached}',
-    '--build', '{build:ret-walks-uncached}', '--build', '{build:storage-read}', '--build', '{build:storage-read-p1}',
-    '--build', '{build:a733-applications}', '--build', '{build:cpu-reliability-model}',
+    '--walk', '{build:sup}', '--walk', '{build:headset}', '--walk', '{build:os-usb-ledger}',
+    '--walk', '{build:resident-stop}', '--walk', '{build:card-profile}', '--walk', '{build:ret-npu-load}',
+    '--walk', '{build:ret-gpu}', '--walk', '{build:ret-g2d}', '--walk', '{build:ret-latency}',
+    '--walk', '{build:ret-radio-scan}', '--walk', '{build:ret-walks-cached}', '--walk', '{build:ret-walks-uncached}',
+    '--walk', '{build:storage-read}', '--walk', '{build:storage-read-p1}', '--walk', '{build:a733-applications}',
+    '--walk', '{build:cpu-reliability-model}',
     '--build', '{build:card-fel-recovery}', '--build', '{build:stage2}', '--build', '{build:stage2-armed-stop}',
     '--build', '{build:smp-models}', '--build', '{build:scheduler-control-models}',
     '--build', '{build:latency-control-busy-model}', '--build', '{build:latency-control-idle-model}',
@@ -484,15 +492,26 @@ def linked_images(build):
     return found
 
 
+UNSAVED = '-DSUNSTONE_IRQ_FP_UNSAVED=ON'
+
+
 def gate_builds():
-    """Every image recipe of tools/gate_images.py and every OS variant of tools/integration-gate.py."""
+    """Every image recipe of tools/gate_images.py and OS variant of tools/integration-gate.py: name -> whether its
+    configuration sets SUNSTONE_IRQ_FP_UNSAVED (cmake/irq-fp.cmake)."""
     spec = importlib.util.spec_from_file_location('gate_images', ROOT / 'tools/gate_images.py')
     images = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(images)
     tree = ast.parse((ROOT / 'tools/integration-gate.py').read_text())
     variants = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
                     and any(isinstance(t, ast.Name) and t.id == 'VARIANTS' for t in node.targets))
-    return set(images.IMAGES) | set(variants)
+    return {**{name: UNSAVED in recipe['configure'] for name, recipe in images.IMAGES.items()},
+            **{name: UNSAVED in options for name, options in variants.items()}}
+
+
+def cache_sets_unsaved(build):
+    """Whether the CMake cache of a build has SUNSTONE_IRQ_FP_UNSAVED on."""
+    cache = (build / 'CMakeCache.txt').read_text()
+    return re.search(r'^SUNSTONE_IRQ_FP_UNSAVED:BOOL=(ON|1|TRUE|YES)$', cache, re.M | re.I) is not None
 
 
 def prove(build, elf, map_path):
@@ -551,20 +570,32 @@ def prove(build, elf, map_path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--build', action='append', type=Path, required=True,
-                        help='a gate build directory, configured with compile_commands.json and built')
+    parser.add_argument('--walk', action='append', type=Path, required=True,
+                        help='a gate build that sets SUNSTONE_IRQ_FP_UNSAVED, configured with compile_commands.json '
+                             'and built: every executable it links with configSS_IRQ_SAVES_FP 0 is walked')
+    parser.add_argument('--build', action='append', type=Path, default=[],
+                        help='a gate build that keeps the save: no executable it configures may link 0')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    named = {m.group(1) for part in GATE_RUNS[0] for m in re.finditer(r'\{build:([A-Za-z0-9_-]+)\}', part)}
-    unnamed = sorted(gate_builds() - named)
+    named = {kind: {m.group(1) for at, part in enumerate(GATE_RUNS[0][1:], 1) if GATE_RUNS[0][at - 1] == kind
+                    for m in re.finditer(r'\{build:([A-Za-z0-9_-]+)\}', part)} for kind in ('--walk', '--build')}
+    builds = gate_builds()
+    unnamed = sorted(set(builds) - named['--walk'] - named['--build'])
     assert not unnamed, 'GATE_RUNS must give the check every gate build; it misses %s' % ', '.join(unnamed)
+    setting = {name for name, unsaved in builds.items() if unsaved}
+    assert setting == named['--walk'], ('GATE_RUNS must walk exactly the builds that set SUNSTONE_IRQ_FP_UNSAVED: '
+                                        'it walks %s, and %s set it' % (sorted(named['--walk']), sorted(setting)))
     results, configured, walked = [], {}, set()
-    for build in args.build:
+    for build in args.walk + args.build:
         assert (build / 'compile_commands.json').is_file(), 'no compile_commands.json in %s' % build
-        for target, elf, map_path, setting in linked_images(build):
-            if setting != '0':
+        walking = build in args.walk
+        assert cache_sets_unsaved(build) == walking, ('%s %s SUNSTONE_IRQ_FP_UNSAVED' %
+                                                      (build, 'does not set' if walking else 'sets'))
+        for target, elf, map_path, value in linked_images(build):
+            if value != '0':
                 continue
+            assert walking, '%s links %s with configSS_IRQ_SAVES_FP 0, but the check does not walk it' % (build, target)
             configured.setdefault(target, set()).add(str(build))
             if not elf.is_file():
                 continue

@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(sunstoneos LANGUAGES C ASM)
 set(SUNSTONE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
+include(cmake/irq-fp.cmake)
 set(SUNSTONE_EXTERNAL_APPLICATIONS "" CACHE STRING "External application checkout paths")
 # Compatibility example: -DMIMUS_DIR=CHECKOUT selects apps/mimus/source.json.
 # The metadata directory defines the alias; no application is required by default.
