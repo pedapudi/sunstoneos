@@ -266,6 +266,10 @@ static void *arena_allocate(void *context,size_t bytes)
     void *p=report_arena+report_used;report_used+=bytes;return p;
 }
 static void arena_release(void *context,void *memory){assert(context==&allocations);(void)memory;}
+/* The controller view at a fault: the SDIO interrupt latched and unmasked. */
+static unsigned irq_views;
+int a733_radio_platform_sdio_irq_view(struct a733_radio_platform *p,uint32_t *raw,uint32_t *mask)
+{assert(p==&app.platform);++irq_views;*raw=1u<<16;*mask=1u<<16;return 1;}
 /* Shutdown model: the platform steps PENDING twice, then DOWN. */
 static unsigned shutdown_calls,shutdown_ok=1,platform_steps;
 int a733_radio_platform_shutdown(struct a733_radio_platform *p,const struct a733_radio_borrow *t,uint64_t d)
@@ -608,12 +612,18 @@ int main(void)
                 app.session.security.expected_cfm=37;app.session.supplicant.initialized=1;app.session.supplicant.count=1;
                 app.session.supplicant.actions[0].kind=AIC8800_SUPPLICANT_KEY;app.session.supplicant.action_active=1;
                 app.session.supplicant.completed=1;
+                app.session.transport.trace_tx_id=36;app.session.transport.trace_tx_flags=3;app.session.transport.trace_credit=4;
+                app.session.transport.trace_status_reads=1;app.session.transport.irq_wait=1;
                 time_us=app.operation_deadline+1;end=board_radio_poll(&app);
                 const struct a733_radio_report *failed=&app.report;const struct aic8800_fault_site *f=&failed->fault;
                 assert(failed->has_fault&&f->security==AIC8800_SECURITY_WAITING&&f->expected_cfm==37&&!f->cfm_bytes&&
                     (f->supplicant>>4)==1&&f->actions==(1u|2u|8u)&&f->ms==(uint16_t)((app.operation_deadline+1)/1000u));
                 uint8_t encoded[1024];size_t n=a733_radio_report_encode(failed,encoded,sizeof(encoded));
-                assert(n==a733_radio_report_bytes(failed)&&(encoded[37]&16u)&&!memcmp(encoded+n-16,f,16));
+                const struct aic8800_transport_trace *tr=&failed->trace;
+                assert(failed->has_trace&&irq_views==1&&tr->tx_id==36&&(tr->tx_flags&(1u|2u|8u))==(1u|2u|8u)&&tr->credit==4&&
+                    tr->status_reads==1&&!tr->rx_records&&(tr->irq&(2u|4u|8u))==(2u|4u|8u)&&tr->held_type==255u);
+                assert(n==a733_radio_report_bytes(failed)&&(encoded[37]&16u)&&(encoded[37]&32u)&&
+                    !memcmp(encoded+n-24,tr,24)&&!memcmp(encoded+n-40,f,16));
                 break;}
             case STARTUP_DEADLINE:time_us=assoc.startup_deadline_us;end=board_radio_poll(&app);break;
             case BOARD_FAILED:end=board_radio_external_failure(&app);break;

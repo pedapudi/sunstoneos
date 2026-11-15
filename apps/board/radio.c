@@ -227,9 +227,19 @@ static enum board_radio_result retain(struct board_radio *r)
         r->failing=1;r->failing_since=now;
         /* A failure once the security stage attached names its site, before the failure shutdown changes anything. */
         if(r->config.associate&&r->config.report_memory.allocate&&r->session.transport.security){
-            struct aic8800_fault_site site;
+            struct aic8800_fault_site site;struct aic8800_transport_trace trace;
             aic8800_fault_site_capture(&site,&r->session.transport,&r->session.supplicant,(unsigned)(now/1000u)&0xffffu);
-            a733_radio_report_fault_site(&r->report,&site);
+            unsigned masked=0;uint64_t interrupts=0,wakes=0;
+#ifdef SUNSTONE_A733_RADIO_IRQ
+            /* A write completed in the failing pass has no wait after it: its counts are zero. */
+            masked=r->events.masked;
+            if(r->session.transport.trace_tx_at==r->trace_tx_at){
+                interrupts=r->events.interrupts-r->trace_interrupts;wakes=r->events.wakes-r->trace_wakes;}
+#endif
+            uint32_t raw=0,mask=0;unsigned controller=a733_radio_platform_sdio_irq_view(&r->platform,&raw,&mask);
+            aic8800_transport_trace_capture(&trace,&r->session.transport,
+                r->session.dispatcher.initialized?&r->session.dispatcher:0,masked,interrupts,wakes,controller,raw,mask);
+            a733_radio_report_fault_site(&r->report,&site,&trace);
         }
     }
     unsigned was_failed=atomic_exchange_explicit(&r->failed,1,memory_order_acq_rel);
@@ -554,6 +564,10 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
             break;
         }
     }
+#ifdef SUNSTONE_A733_RADIO_IRQ
+    if((r->session.transport.trace_tx_flags&2u)&&r->session.transport.trace_tx_at!=r->trace_tx_at){
+        r->trace_tx_at=r->session.transport.trace_tx_at;r->trace_interrupts=r->events.interrupts;r->trace_wakes=r->events.wakes;}
+#endif
     if(result==A733_SESSION_RETAINED||result==A733_SESSION_INVALID)return retain(r);
     if(result==A733_SESSION_BUSY)return publish(r,BOARD_RADIO_PENDING);
     report_progress(r);

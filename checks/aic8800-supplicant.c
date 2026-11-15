@@ -66,6 +66,9 @@ static int late_now(void *context,uint64_t *out)
         security.completion_deadline){m.now=security.completion_deadline;late_completion=2;}
     return now_cb(context,out);
 }
+/* window-events variants after the first key add is written: 1 silent (no reply), 2 the reply sits in the card with
+ * its function interrupt raised but the owner never polls, 3 a different message arrives instead of the reply. */
+static int key_variant;
 static int entropy(void *ctx,uint8_t *out,size_t bytes)
 {
     assert(ctx==&m&&bytes==32);++entropy_calls;
@@ -100,6 +103,11 @@ static int security_write(void *ctx,uint32_t off,uint32_t value)
                 unsigned which=p[59]?1:(p[16]==1?2:3);assert(!memcmp(p+24,vectors[which],16));
                 ++key_adds;uint8_t cfm[]={reject_key?7:0,(uint8_t)(10+which),0xa5,0x5a};control_reply(37,cfm,4);
                 if(drop_key_reply){memset(receive,0,sizeof(receive));m.card[1][4]=0;}
+                if(key_variant&&key_adds==1){
+                    memset(receive,0,sizeof(receive));m.card[1][4]=0;
+                    if(key_variant==2)control_reply(37,cfm,4);
+                    else if(key_variant==3){const uint8_t credits[4]={3,0,8,0};message(receive,0x140b,credits,4);m.card[1][4]=1;}
+                }
             } else if(id==38) {
                 assert(p[16]>=11&&p[16]<=13);++deletes;uint8_t opaque[]={0xa5,0x5a};control_reply(39,opaque,2);
             } else {
@@ -194,7 +202,7 @@ static void authorized(void)
 static int allzero(const void *p,size_t n){const uint8_t *b=p;for(size_t i=0;i<n;++i)if(b[i])return 0;return 1;}
 int main(int argc,char **argv)
 {
-    assert(argc==3||argc==4);FILE *f=fopen(argv[1],"rb");assert(f);
+    assert(argc>=3&&argc<=5);FILE *f=fopen(argv[1],"rb");assert(f);
     for(unsigned i=0;i<15;++i){uint8_t n[2];assert(fread(n,1,2,f)==2);sizes[i]=n[0]|(unsigned)n[1]<<8;assert(sizes[i]<=256&&fread(vectors[i],1,sizes[i],f)==sizes[i]);}
     assert(fgetc(f)==EOF&&!fclose(f));checkpoint();
     if(!strcmp(argv[2],"lifecycle")) {
@@ -264,9 +272,17 @@ int main(int argc,char **argv)
          * controller latches the card's function interrupt, and otherwise sleeps to the transport's next deadline. */
         int events=argc>3&&!strcmp(argv[3],"events");unsigned sleeps=0;
         if(events){host.events=1;m.allow_irq_ack=1;window_latency=20;}
+        if(events&&argc>4)key_variant=!strcmp(argv[4],"silent")?1:!strcmp(argv[4],"unserviced")?2:!strcmp(argv[4],"other")?3:-1;
+        assert(key_variant>=0);
         for(unsigned i=0;i<20000;++i) {
             if(window_held_blocks&&!m.card[1][4]&&m.now>=window_release){
                 memcpy(receive,window_held,sizeof(receive));m.card[1][4]=window_held_blocks;window_held_blocks=0;}
+            if(key_variant==2&&key_adds==1&&security.state==AIC8800_SECURITY_WAITING&&!transport.pending&&
+                (m.card[1][4]||window_held_blocks)){
+                /* The card raises its interrupt for the reply; the owner sleeps on to the key add's deadline. */
+                if(window_held_blocks){memcpy(receive,window_held,sizeof(receive));m.card[1][4]=window_held_blocks;window_held_blocks=0;}
+                m.irq_level=1;m.now=security.deadline;++sleeps;
+            }
             if(events) {
                 m.irq_level=m.card[1][4]!=0;uint64_t until=0;
                 /* A command in flight completes in microseconds on the board; only an idle bus sleeps. */
@@ -293,6 +309,27 @@ int main(int argc,char **argv)
         fprintf(stderr,"window%s: sleeps=%u now=%llu transport=%u error=%u dispatcher=%u RSN=%u internal=%d data=%u/%u security=%u op=%u eapol=%u keys=%u ports=%u records=%u data=%u events=%u\n",events?"-events":"",sleeps,(unsigned long long)m.now,
             transport.state,transport.error,dispatcher.faulted,supplicant.state,supplicant.rsn_state,data.state,data.error,
             security.state,security.operation,eapol_tx,key_adds,ports,window_records,window_data,window_events);
+        if(key_variant){
+            /* The record's transport trace separates the three: nothing came, the reply waited behind an unserviced
+             * interrupt, or another message came. */
+            assert(transport.state==AIC8800_TRANSPORT_FAULT&&supplicant.state==AIC8800_SUPPLICANT_FAULT&&key_adds==1);
+            uint32_t raw=0,mask=0;assert(host.config.ops.read32(host.config.context,0x38,&raw)&&host.config.ops.read32(host.config.context,0x30,&mask));
+            struct aic8800_transport_trace tr;aic8800_transport_trace_capture(&tr,&transport,&dispatcher,0,0,0,1,raw,mask);
+            struct aic8800_fault_site site;aic8800_fault_site_capture(&site,&transport,&supplicant,1234);
+            fprintf(stderr,"trace %s: tx %u flags %#x credit %u age %u rx %u kinds %u/%u/%u/%u aggregates %u status %u last %#x phase %u "
+                "queued %#x kinds %#x held %u data_cfm %#x irq %#x site %#x reason %u\n",argv[4],tr.tx_id,tr.tx_flags,tr.credit,
+                tr.tx_age_ms,tr.rx_records,tr.rx_kind[0],tr.rx_kind[1],tr.rx_kind[2],tr.rx_kind[3],tr.rx_aggregates,
+                tr.status_reads,tr.rx_last_id,tr.phase,tr.queued,tr.queued_kinds,tr.held_type,tr.data_cfm,tr.irq,
+                site.transport_site,site.slot>>4);
+            assert(tr.tx_id==36&&(tr.tx_flags&3u)==3u&&tr.credit&&(tr.irq&2u)&&(site.slot>>4)==AIC8800_SECURITY_STOP_DEADLINE&&
+                (site.security&15u)==AIC8800_SECURITY_WAITING&&tr.data_cfm==9);
+            if(key_variant==1)assert(!tr.rx_records&&!tr.rx_aggregates&&!(tr.irq&4u)&&(tr.tx_flags&8u));
+            if(key_variant==2)assert(!tr.rx_records&&!tr.rx_aggregates&&(tr.irq&4u)&&(tr.tx_flags&8u));
+            if(key_variant==3)assert(tr.rx_records&&tr.rx_kind[0]&&tr.rx_last_id==0x140b&&!(tr.irq&4u));
+            printf("transport trace: a key add %s\n",key_variant==1?"answered by nothing":key_variant==2?
+                "answered in the card behind an unserviced interrupt":"answered by another message");
+            return 0;
+        }
         assert(transport.state!=AIC8800_TRANSPORT_FAULT&&!dispatcher.faulted);
         assert(supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&wifi.link==AIC8800_WIFI_SECURED&&key_adds==2&&ports==1);
         puts("RSN window: message 4 to the open port with the station's other receive records through the dispatcher");return 0;

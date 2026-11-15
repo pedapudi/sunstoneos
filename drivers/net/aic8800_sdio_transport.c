@@ -459,7 +459,14 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
         if(t->irq_wait)return 1;
         ok = cmd52(t, 1, 4, 0, 0, &r); break;
     case RX_LENGTH: ok = cmd52(t, 1, 5, 0, 0, &r); break;
-    case TX: ok = sdio_card_cmd53(t->card, 1, 0x10, 1, 0, 512, t->data_tx ? t->data->request : t->tx,
+    case TX:
+        if(t->data_tx)t->trace_tx_flags|=4u;
+        else {
+            t->trace_tx_id=(uint16_t)(t->tx[8]|(unsigned)t->tx[9]<<8);t->trace_tx_flags=1u;t->trace_rx_records=0;
+            t->trace_rx_last_id=0;memset(t->trace_rx_kind,0,sizeof(t->trace_rx_kind));t->trace_rx_aggregates=0;
+            t->trace_status_reads=0;t->trace_tx_at=0;
+        }
+        ok = sdio_card_cmd53(t->card, 1, 0x10, 1, 0, 512, t->data_tx ? t->data->request : t->tx,
                      t->tx_bytes, &r); break;
     case RX: ok = sdio_card_cmd53(t->card, 1, 0x0f, 0, 0,
                      t->rx_bytes > 512 ? 512 : 0, t->rx, t->rx_bytes, &r); break;
@@ -489,6 +496,15 @@ static void rx_size(struct aic8800_sdio_transport *t, size_t bytes)
     }
     t->phase = RX;
 }
+static void trace_count(uint8_t *v){if(*v!=UINT8_MAX)++*v;}
+/* One receive record decoded or retired since the last command write: its transport type, and a command response's id. */
+static void trace_record(struct aic8800_sdio_transport *t, uint8_t type, int has_message, uint16_t id)
+{
+    if(t->trace_rx_records!=UINT16_MAX)++t->trace_rx_records;
+    type&=0x7f;
+    trace_count(&t->trace_rx_kind[type==0x11?0:!(type&0x10)?1:type==0x12?2:3]);
+    if(type==0x11&&has_message)t->trace_rx_last_id=id;
+}
 static void completed(struct aic8800_sdio_transport *t, uint64_t now)
 {
     uint8_t value = (uint8_t)t->last_result.response;
@@ -516,10 +532,12 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
     case FUNCTION_IRQ_READ: t->prior_function_irq = value; ++t->phase; break;
     case FUNCTION_IRQ_WRITE: t->state = AIC8800_TRANSPORT_READY; break;
     case CREDIT:
-        if (t->data_tx ? value >= 3 : (value && t->tx_bytes < (size_t)value * 1536)) t->phase = TX;
-        else delay(t, now, t->config.poll_interval);
+        if (t->data_tx ? value >= 3 : (value && t->tx_bytes < (size_t)value * 1536)) {
+            t->phase = TX; if (!t->data_tx) t->trace_credit = value;
+        } else delay(t, now, t->config.poll_interval);
         break;
     case TX:
+        if(!t->data_tx){t->trace_tx_flags=(uint8_t)((t->trace_tx_flags|2u)&~4u);t->trace_tx_at=now;}
         if(t->security_tx) {
             if(!aic8800_security_sent(t->security,t)) {fail(t,AIC8800_TRANSPORT_DATA_ERROR);break;}
             t->security_tx=0;aic8800_security_zero(t->tx,sizeof(t->tx));
@@ -533,7 +551,7 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
         } else if (t->firmware && !aic8800_firmware_sent(t->firmware, t)) { fail(t, AIC8800_TRANSPORT_FIRMWARE_ERROR); break; }
         t->irq_wait=0;t->phase = RX_STATUS; break;
     case RX_STATUS:
-        t->raw_rx_status = value;
+        t->raw_rx_status = value; trace_count(&t->trace_status_reads);
         if (value & 0x80) { fail(t, AIC8800_TRANSPORT_UNSUPPORTED_IRQ); break; }
         if (!value) {
             if(t->card->host->events){
@@ -555,7 +573,7 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
         else rx_size(t, (value & 0x7fu) * 512u);
         break;
     case RX_LENGTH: t->byte_length = value; rx_size(t, (size_t)value * 4); break;
-    case RX: t->phase = PARSE; break;
+    case RX: trace_count(&t->trace_rx_aggregates); t->phase = PARSE; break;
     default: ++t->phase; break;
     }
 }
@@ -645,6 +663,8 @@ static void parse(struct aic8800_sdio_transport *t, uint64_t now)
     else t->codec_result = aic8800_sdio_decode_identity_response(t->rx + t->cursor,
         t->rx_bytes - t->cursor, (enum aic8800_identity_register)t->expected, &r);
     if (t->codec_result == AIC8800_CODEC_END) { aggregate_done(t); return; }
+    if (t->codec_result == AIC8800_CODEC_OK || t->codec_result == AIC8800_CODEC_UNRELATED)
+        trace_record(t, r.transport_type, r.has_message, r.message_id);
     if (t->runtime) {
         if (t->runtime->state == AIC8800_RUNTIME_FAULT) { fail(t, AIC8800_TRANSPORT_RUNTIME_ERROR); return; }
         if (t->wifi && t->codec_result == AIC8800_CODEC_UNRELATED) {
@@ -797,6 +817,7 @@ int aic8800_transport_retire_record(struct aic8800_sdio_transport *t,const void 
     size_t expected=(record[2]&0x10)?4+((length+3)&~(size_t)3):((length+60+3)&~(size_t)3);
     if(consumed!=expected||consumed>available)return 0;
     uint64_t now;t->entered=1;int ok=observe(t,&now);
+    if(ok)trace_record(t,record[2],(record[2]&0x7f)==0x11&&length>=12,(uint16_t)(record[4]|(unsigned)record[5]<<8));
     if(ok){t->cursor+=consumed;advanced(t);ok=observe(t,&now);}
     t->entered=0;return ok;
 }

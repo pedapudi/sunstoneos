@@ -80,6 +80,11 @@ struct aic8800_sdio_transport {
     uint16_t fail_site; /* AIC8800_SITE of the first fault, for the record */
     uint8_t initialized, entered, pending, phase, expected, have[2], held, setup_confirmed,irq_wait;
     uint8_t prior_enable, prior_irq, prior_function_irq, raw_rx_status, byte_length;
+    /* Since the last command write, for the record's transport trace (include/aic8800_fault_site.h). tx_at: the host
+     * clock when that write completed. rx_kind: command responses, data, data confirmations, prints and others. */
+    uint64_t trace_tx_at;
+    uint16_t trace_tx_id, trace_rx_records, trace_rx_last_id;
+    uint8_t trace_tx_flags, trace_credit, trace_rx_kind[4], trace_rx_aggregates, trace_status_reads;
     uint8_t tx[AIC8800_TRANSPORT_TX_BYTES], rx[AIC8800_TRANSPORT_RX_BYTES];
 };
 
