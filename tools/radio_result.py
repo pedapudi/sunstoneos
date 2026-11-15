@@ -12,6 +12,7 @@ RAILS = {0: 'dcdc1', 7: 'dcdc8', 19: 'bldo5', 20: 'cldo1'}
 
 
 ASSOC_BYTES = 48
+SCAN_COUNTS_BYTES = 16   # struct a733_radio_scan_counts, present when head flags bit 10 is set
 ASSOC_FIELDS = ('stage', 'link', 'status', 'supplicant', 'rsn', 'eapol_rx', 'eapol_tx', 'flags', 'candidates',
                 'frequency_rssi', 'ms_connect', 'ms_authorized')
 
@@ -37,7 +38,7 @@ def decode(data):
         raise ValueError('radio result record is shorter than its header says')
     data = data[:total]
     ap_count = struct.unpack_from('<I', data, 216)[0]
-    tail = ASSOC_BYTES if flags_of(data) & 512 else 0
+    tail = (ASSOC_BYTES if flags_of(data) & 512 else 0) + (SCAN_COUNTS_BYTES if flags_of(data) & 1024 else 0)
     if total != HEAD_BYTES + ap_count * AP_BYTES + tail:
         raise ValueError('radio result length does not match its access point count')
     stage, failed, failure_stage, flags = struct.unpack_from('<4I', data, 24)
@@ -127,6 +128,13 @@ def decode(data):
                     'frequency_mhz': freq, 'channel': channel, 'rssi_dbm': rssi})
     result['scan'] = {'listed': ap_count, 'reported': reported, 'dropped': dropped,
                       'aps': sorted(aps, key=lambda a: -a['rssi_dbm'])}
+    if flags & 1024:
+        # Records from images before flag bit 10 have only 'reported': the larger of the sightings and the firmware's
+        # count, which cannot tell repeated BSSIDs from results that never became events.
+        sightings, firmware, merges, set_aside = struct.unpack_from('<4I', data, HEAD_BYTES + ap_count * AP_BYTES)
+        if sightings != 0xffffffff and ap_count != sightings - merges - dropped:
+            raise ValueError('radio result scan counts do not match its access point count')
+        result['scan'].update(sightings=sightings, firmware_reported=firmware, merges=merges, set_aside=set_aside)
     result['association'] = None
     if flags & 512:
         values = dict(zip(ASSOC_FIELDS, struct.unpack_from('<12I', data, total - ASSOC_BYTES)))

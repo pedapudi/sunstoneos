@@ -73,6 +73,18 @@ def main():
     struct.pack_into('<I', listed, 216, 1)
     assert radio_result.decode(bytes(listed) + entry)['scan']['aps'] == [
         {'bssid': '02:11:22:33:44:55', 'frequency_mhz': 2437, 'channel': 6, 'rssi_dbm': -61}]
+    # The scan counts (flags bit 10) follow the list: 3 sightings, firmware count 12, 2 merges, 4 set aside.
+    counted = bytearray(listed)
+    struct.pack_into('<I', counted, 12, len(RECORD) + len(entry) + 16)
+    struct.pack_into('<I', counted, 36, head_flags | 1024)
+    scan = radio_result.decode(bytes(counted) + entry + struct.pack('<4I', 3, 12, 2, 4))['scan']
+    assert (scan['sightings'], scan['firmware_reported'], scan['merges'], scan['set_aside']) == (3, 12, 2, 4), scan
+    try:
+        radio_result.decode(bytes(counted) + entry + struct.pack('<4I', 3, 12, 1, 4))
+    except ValueError:
+        pass
+    else:
+        raise SystemExit('scan counts that disagree with the listed count were accepted')
     for named in (entry[:6] + bytes([4]) + entry[7:], entry[:12] + b'case' + entry[16:]):
         try:
             radio_result.decode(bytes(listed) + named)

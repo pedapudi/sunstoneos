@@ -349,7 +349,9 @@ int main(void)
             report->aps[0].rssi_dbm==-41&&report->aps[0].channel==6);
         assert(!report->aps[1].ssid_bytes&&!memcmp(report->aps[1].ssid,no_name,32)&&report->aps[1].channel==36);
         uint8_t record[512];size_t bytes=a733_radio_report_encode(report,record,sizeof(record));
-        assert(bytes==sizeof(report->head)+2*sizeof(struct a733_radio_result_ap));
+        assert(bytes==sizeof(report->head)+2*sizeof(struct a733_radio_result_ap)+sizeof(struct a733_radio_scan_counts));
+        /* Three sightings of two BSSIDs: listed = sightings - merges. */
+        assert(report->scan.sightings==3&&report->scan.merges==1&&report->scan.sightings-report->scan.merges==report->ap_count);
     }
     assert(entropy_calls==entropy_before&&connects==connects_before&&network_calls==network_before&&security_calls==security_before);
     /* Shutdown: refused unless the transport is quiet, then only the platform is polled until DOWN. */
@@ -410,7 +412,7 @@ int main(void)
             report->assoc.link==AIC8800_WIFI_SECURED&&(report->assoc.flags&0x3f)==0x3f&&report->assoc.candidates==2);
         assert(report->ap_count==2&&!report->aps[0].ssid_bytes&&!report->aps[1].ssid_bytes);
         uint8_t record[512];size_t bytes=a733_radio_report_encode(report,record,sizeof(record));
-        assert(bytes==a733_radio_report_bytes(report)&&bytes==sizeof(report->head)+2*sizeof(struct a733_radio_result_ap)+sizeof(struct a733_radio_assoc));
+        assert(bytes==a733_radio_report_bytes(report)&&bytes==sizeof(report->head)+2*sizeof(struct a733_radio_result_ap)+sizeof(struct a733_radio_scan_counts)+sizeof(struct a733_radio_assoc));
         for(size_t i=0;i+8<=bytes;++i)assert(memcmp(record+i,cred_ssid,8)&&memcmp(record+i,cred_pmk,8));
         a733_radio_report_release(&app.report);
         /* No candidate, and a missing credential, end as a retained failure with the record. */
@@ -444,6 +446,8 @@ int main(void)
             (void)board_radio_poll(&app);assert(app.stage==CONNECTING&&app.cand_found);
             app.session.wifi.link=AIC8800_WIFI_SECURITY_PENDING;
             if(path!=CONNECT_TIMEOUT){(void)board_radio_poll(&app);assert(app.stage==SECURING);}
+            /* The two timeouts run the failure shutdown, which reads back every step on its first poll. */
+            abort_model=path==HANDSHAKE_TIMEOUT||path==CONNECT_TIMEOUT;abort_steps_left=abort_model;
             memcpy(app.diagnostic.payload,cred_ssid,sizeof(cred_ssid)); /* an owner copy of a record that carried the SSID */
             enum board_radio_result end;
             switch(path){
@@ -489,6 +493,15 @@ int main(void)
             if(path!=OK&&path!=STOP_OK){assert(end==BOARD_RADIO_RETAINED);if(path!=STOP_FAULT)assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED);}
             if(path==STOP_FAULT)continue; /* Accepted transfer storage remains owned and unchanged. */
             assert(app.wiped);
+            if(path==HANDSHAKE_TIMEOUT||path==CONNECT_TIMEOUT){
+                /* An association miss with a failure shutdown that reads back every step: the record says the failure
+                 * left nothing powered, the board's failure bit stays clear, and the platform is clean, which is what
+                 * os_radio_failure_closed needs to close the station and complete the return with the record. */
+                assert(abort_model&&app.platform.abort_done&&a733_radio_platform_clean(&app.platform));
+                assert(!(atomic_load(&recovery_state)&4));
+                const struct a733_radio_report *report=board_radio_report(&app);
+                assert(report->head.failed&&(report->head.flags&256u)&&report->assoc.stage);
+            }
             /* The report survives the wipe: the failure site and the tail were written before it. */
             assert(board_radio_report(&app)->has_assoc);
             const struct { const uint8_t *memory; size_t bytes; } places[]={{(const uint8_t *)&app,sizeof(app)},{report_arena,sizeof(report_arena)}};

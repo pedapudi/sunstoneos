@@ -77,11 +77,16 @@ assert ready['stage'] == 'enumerated' and not ready['failed'] and ready['card'][
 assert ready['card']['rca'] == 0x1234 and ready['card']['ocr'] and ready['card']['functions']
 assert [r['rail'] for r in ready['rails']] == ['dcdc1', 'bldo5', 'cldo1'] and all(r['enabled'] for r in ready['rails'])
 assert scanned['stage'] == 'scanned' and scanned['scan']['listed'] == 2 and scanned['scan']['reported'] == 3
+# Three sightings of two BSSIDs: one merge, the firmware's count of 3, nothing set aside, so listed = sightings - merges.
+assert {k: scanned['scan'][k] for k in ('sightings', 'firmware_reported', 'merges', 'set_aside')} == \
+    {'sightings': 3, 'firmware_reported': 3, 'merges': 1, 'set_aside': 0}, scanned['scan']
 assert [a['bssid'] for a in scanned['scan']['aps']] == ['02:aa:bb:cc:dd:ee', '02:11:22:33:44:55'] and scanned['scan']['aps'][0]['channel'] == 36
 assert scanned['scan']['aps'][1]['rssi_dbm'] == -55 and scanned['scan']['aps'][1]['channel'] == 6
 assert scanned['identity']['chip_word'] == 0x00080001
 many = records['ready-many']
 assert many['scan']['listed'] == 302 and many['scan']['reported'] == 303 and many['scan']['dropped'] == 0
+assert many['scan']['sightings'] == 303 and many['scan']['merges'] == 1 and many['scan']['firmware_reported'] == 303
+assert 'sightings' not in ready['scan'] # no scan ran, so the record has no counts tail
 assert len(many['scan']['aps']) == 302 and many['stage'] == 'scanned'
 for name in ('ready', 'ready-scanned', 'ready-many'): # The decoder reads the length from the head.
     raw = [bytes.fromhex(l.split()[2]) for l in ''.join(outputs).splitlines() if l.startswith('RESULT ' + name + ' ')][0]

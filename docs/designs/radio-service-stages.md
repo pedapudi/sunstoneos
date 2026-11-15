@@ -21,7 +21,7 @@ association, and what it reports to the host.
 | `enumerated` | CMD5, CMD3, CMD7 and the CCCR and tuple reads complete | OCR offered and selected, RCA, CCCR, SDIO and SD revisions, capabilities, function count, each function's manufacturer and device identity, bus width and card clock |
 | `firmware` | The firmware is loaded and started | Firmware flags |
 | `identified` | The chip and subrevision words are read | Both words |
-| `scanned` | A scan completes | Every access point found: BSSID, channel, frequency and RSSI, one entry per BSSID (the latest sighting), the count the firmware reported and the count dropped for lack of memory |
+| `scanned` | A scan completes | Every access point found: BSSID, channel, frequency and RSSI, one entry per BSSID (the latest sighting), the count dropped for lack of memory, and the scan counts below |
 | `associated` | The four-way handshake reaches authorized and secured state | Stage, link status, supplicant and RSN states, EAPOL counts, selected frequency and timing; no credential bytes |
 
 A failure keeps the stage reached and names the stage that did not complete. A
@@ -33,7 +33,24 @@ heap in the radio build), and grows with what the scan finds. The only counts
 fixed in the record are protocol or topology counts: SDIO function numbers 0 to
 7, and the four observed supplies. A report encodes to a variable-length record:
 a 232-byte head that gives the total length and the access point count, then one
-44-byte entry per access point. `tools/radio_result.py` reads the length from the
+44-byte entry per access point, then the 16-byte scan counts when head flags
+bit 10 is set, then the 48-byte association tail when bit 9 is set. The scan
+counts are:
+
+- **Sightings:** scan results delivered to the owner as events.
+- **Firmware count:** the count in the firmware's scan-end event
+  (`result_cnt`, which the vendor header describes as the number of scan
+  results available; the vendor driver does not read it).
+- **Merges:** sightings of a BSSID already listed, which replace its entry.
+- **Set aside:** scan result records that the dispatcher retired without an
+  event, because they were for another interface or arrived after the scan-end
+  event.
+
+The listed count equals sightings minus merges minus dropped, and the decoder
+refuses a record where it does not. The head's `aps_reported` is the larger of
+the sightings and the firmware count; records from images before bit 10 carry
+only that, which cannot separate repeated BSSIDs from results that never became
+events. `tools/radio_result.py` reads the length from the
 head (`record_length()` on the first 232 bytes tells a reader how much more to
 fetch). `a733_radio_report_platform()` fills the platform's part from its own
 state; the later stages add their facts through the setters in the same header.
@@ -111,10 +128,17 @@ scan-only record holds no name although the scan heard two, and
 `checks/radio-result-decode.py` checks the refusal.
 
 An association miss (a refused association, a timeout or a handshake that never
-completes) retains the radio, so its return ends at the watchdog and the record
-is lost. Its first failure record therefore carries the tail's codes: bits 31:16
-the association status code, bit 15 set, bits 14:12 the link, 11:8 the EAPOL
-frames sent and 7:4 those received (each at most 15), and 3:0 the stage.
+completes) retains the radio, which runs the failure shutdown in the vendor
+order. When every step reads back, the platform is clean, and the radio quiesce
+closes the station: it retires the association stage's CE, waits for the
+credential wipe and completes the return, so the host reads the record with its
+association tail. `checks/board-radio.c` checks that both timeouts end clean
+with the tail written and no credential byte left, and
+`checks/os-quiesce-radio.py` checks the close. When a step does not read back,
+the fault stays and the return ends at the watchdog; the first failure record
+then carries the tail's codes: bits 31:16 the association status code, bit 15
+set, bits 14:12 the link, 11:8 the EAPOL frames sent and 7:4 those received
+(each at most 15), and 3:0 the stage.
 
 ## Entropy and credentials gate association only
 

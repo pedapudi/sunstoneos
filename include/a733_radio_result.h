@@ -62,6 +62,14 @@ struct a733_radio_assoc {
     uint32_t stage, link, status, supplicant, rsn, eapol_rx, eapol_tx, flags, candidates, frequency_rssi, ms_connect, ms_authorized;
 };
 _Static_assert(sizeof(struct a733_radio_assoc)==48,"association tail");
+/* The scan's counts, appended after the access point list and before any association tail when head flags bit 10 is
+ * set. sightings: scan results delivered as events. firmware_reported: the count in the firmware's scan-end event
+ * (SCANU_START_CFM result_cnt, which the vendor header describes as "Number of scan results available"). merges:
+ * sightings of a BSSID already listed, which replace its entry. set_aside: scan result records that the dispatcher
+ * retired without an event (another interface, or after the scan-end event). The listed count is sightings - merges -
+ * dropped. */
+struct a733_radio_scan_counts { uint32_t sightings, firmware_reported, merges, set_aside; };
+_Static_assert(sizeof(struct a733_radio_scan_counts)==16,"scan counts tail");
 /* Memory comes from the caller: the radio build supplies the FreeRTOS heap. */
 struct a733_radio_allocator {
     void *(*allocate)(void *context,size_t bytes);
@@ -74,7 +82,8 @@ struct a733_radio_report {
     size_t ap_count,ap_capacity;
     struct a733_radio_allocator memory;
     struct a733_radio_assoc assoc;
-    unsigned has_assoc;
+    struct a733_radio_scan_counts scan;
+    unsigned has_assoc,has_scan;
 };
 /* Zero storage. Returns 0 if the allocator is incomplete. */
 int a733_radio_report_init(struct a733_radio_report *,const struct a733_radio_allocator *);
@@ -99,6 +108,8 @@ void a733_radio_report_identity(struct a733_radio_report *,uint32_t chip_word,ui
  * host decoder refuses an entry whose length is not 0. */
 void a733_radio_report_ap(struct a733_radio_report *,const uint8_t bssid[6],uint16_t frequency_mhz,int8_t rssi_dbm);
 void a733_radio_report_scan_done(struct a733_radio_report *,unsigned reported);
+/* The dispatcher's count of scan result records retired without an event (saturates at UINT32_MAX). */
+void a733_radio_report_set_aside(struct a733_radio_report *,uint64_t set_aside);
 /* Length of the encoded record, and the encoding. encode returns the bytes
  * written, or 0 when capacity is smaller than the length. */
 size_t a733_radio_report_bytes(const struct a733_radio_report *);

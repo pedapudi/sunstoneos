@@ -448,6 +448,7 @@ static void report_progress(struct board_radio *r)
             r->session.transport.identity.subrevision_word);
     a733_radio_report_firmware_progress(&r->report,&r->session.firmware,r->session.transport.config.ticks_per_ms);
     if(r->session.firmware.state==AIC8800_FW_START_CONFIRMED)a733_radio_report_firmware(&r->report);
+    if(r->session.dispatcher.initialized)a733_radio_report_set_aside(&r->report,r->session.dispatcher.unclaimed_scan_results);
     /* Identity is read before the firmware loads; keep the later stage. */
     assoc_update(r);
 }
