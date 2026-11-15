@@ -57,6 +57,8 @@ static uint64_t cycles(void)
 }
 #endif
 
+/* The model image overrides this to report a peer's failure when it happens (apps/latency/workload.c). */
+__attribute__((weak)) void ss_latency_cause_ping_failed(unsigned pair, unsigned status) { (void)pair; (void)status; }
 static uint64_t group(unsigned core)
 {
     /* Cached startup validates the six-A55/two-A76 placement. Both groups
@@ -118,8 +120,10 @@ static void peer(void *argument)
     }
     atomic_store_explicit(&peer_control[pair].status, status, memory_order_relaxed);
     atomic_store_explicit(&peer_control[pair].done, 1, memory_order_release);
-    if (status != LATENCY_CAUSE_PING_OK)
+    if (status != LATENCY_CAUSE_PING_OK) {
         atomic_store_explicit(&cause_ping_turn.value, ABORT_TURN, memory_order_release);
+        ss_latency_cause_ping_failed(pair, status);
+    }
     park(index);
 }
 static unsigned reference(unsigned core, uint64_t deadline)
