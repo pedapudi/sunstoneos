@@ -35,6 +35,12 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     target_sources(sunstone-a733-os-hello PRIVATE ${hello_pmu_inputs})
     target_link_options(sunstone-a733-os-hello PRIVATE -Wl,--wrap=hello_compute_main)
   endif()
+elseif(SUNSTONE_APPLICATION STREQUAL "g2d-check")
+  # Declares the G2D device: the session grants it and the image routes INTID 83 (docs/g2d-os.md).
+  add_sunstone_application(g2d-check
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/g2d-check/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/g2d-check/manifest.json")
+  add_sunstone_image(sunstone-a733-os-g2d-check LIFETIME ${os_lifetime} APPLICATION g2d-check)
 elseif(SUNSTONE_APPLICATION STREQUAL "i2c-scan")
   add_sunstone_application(i2c-scan
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/i2c-scan/main.c"
