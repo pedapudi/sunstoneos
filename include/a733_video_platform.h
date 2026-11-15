@@ -93,6 +93,7 @@ struct a733_video_cold_record {
     uint32_t entry_gates[3], gates[3], mclk_written, mclk_readback;
     uint64_t entry_at, entered_at, on_at, hold_a_at, locked_at, hold_b_at;
     unsigned lock_reads;
+    uint32_t vcu[2]; /* VE+0x804 read before the pulse's set and before its clear write */
 };
 struct a733_video_decoder {
     struct a733_video_unit unit;
@@ -121,6 +122,15 @@ struct a733_video_platform {
  * decoder is closed for the rest of its power lifetime: every later acquire
  * returns -1 with no register access. */
 int a733_video_decoder_quiesce(struct a733_video_decoder *,uint64_t d);
+/* After a fault in a cold start or a later call: the same close, in the same
+ * order with each write read back, on a unit that failed on a value it read
+ * completely or on a deadline. A unit whose failure was uncertain (an access
+ * or mutex operation with an unknown effect) is never touched: -1 with no
+ * access. A late failure inside a hold closes in that hold; otherwise the
+ * mutex is taken first. d is a new deadline. 1 closed (the decoder stays
+ * closed for the power lifetime and failed), 0 effect-free busy lock (call
+ * again), -1 refused: a close step whose readback differs fails the unit. */
+int a733_video_decoder_fault_close(struct a733_video_decoder *,uint64_t d);
 /* Pure scope derivation; requires the exclusive scopes below and the exact
  * shared result.
  * Preparation never releases, powers down, or claims physical qualification.
@@ -148,6 +158,8 @@ int a733_video_platform_retained_copy(void *,uint64_t,uint64_t,
  */
 int a733_video_platform_native_read(void *,uintptr_t,uint32_t *);
 int a733_video_platform_native_write(void *,uintptr_t,unsigned,uint32_t);
+/* The native read allowlist as a pure rule, for native_read and models: 1 readable. */
+int a733_video_platform_native_readable(uintptr_t);
 /* The native write allowlist as a pure rule, for native_write and models:
  * returns 1 allowed with the owned mask for a733_video_unit_native_write, 0
  * refused and -1 when read fails. read observes the PLL_VE0 consumers. */

@@ -165,8 +165,11 @@ reset. The package policy table and instruction paths establish these choices:
 For the external-reset path, `IOCTL_RESET_VE` calls the CCU reset controller.
 That controller asserts decoder reset at CCU `0xa8c` bit 18, holds it for
 10 microseconds, then deasserts it. The A733 kernel then sets and clears bits
-0 and 4 at decoder-window offset `0x804`. The binding preserves unrelated fields,
-checks readbacks and retains ownership through the timed interval.
+0 and 4 at decoder-window offset `0x804`. The binding preserves unrelated fields
+and retains ownership through the timed interval. It checks the readbacks of the
+reset word; the `0x804` pulse it writes as the kernel does, read, write, read,
+write, with no readback check, because no source documents how those bits read
+back.
 
 The package disables the decoder by selecting mode seven before reset, then
 selects MPEG mode zero for legacy JPEG. It establishes top-level output defaults,
@@ -342,7 +345,7 @@ a domain already ON. The sequence has five phases.
 | Row request and wait | no | `a733_power_domain_request(row, 1)` once; the binding returns pending until the owner answers. REFUSED or FAILED fails the unit with nothing written. |
 | Hold A | yes | Open `0x5e4` bit 18 (below); A1 reads the three critical gates and refuses unless `0x5c0` bit 0, `0x5e0` bit 14 and `0x5e4` bit 18 are set; release reset (`0xa8c` bit 18); open the bus gate (`0xa8c` bit 2); the module selector and divider and the PLL_VE0 table up to lock enable ([video-pll.md](designs/video-pll.md)). |
 | PLL lock wait | no | At most about 420 µs. |
-| Hold B | yes | PLL output gate and module gate (`0xa88` bit 31); the powered baseline, which rereads PCK2 policy and status; the cold VCU pulse at `0x01c0e804`, bits 0 and 4 set and then cleared. |
+| Hold B | yes | PLL output gate and module gate (`0xa88` bit 31); the powered baseline, which rereads PCK2 policy and status; the cold VCU pulse at `0x01c0e804`, bits 0 and 4 set and then cleared with no readback check (the two words read are recorded). |
 
 From the row's ON answer to a started decoder the three last phases run in one
 acquire call. A busy register lock is effect-free: the call returns pending and
@@ -385,7 +388,21 @@ keeps PCK2 policy and status for the baseline and no delay-row word.
 **Failures.** A refusal on a value that was read completely releases the
 register lock before the unit fails; an uncertain access retains the lock and
 every token. Every failure inside a hold goes through one helper,
-`a733_video_unit_refuse_held`, which the encoder binding also uses. There is no rollback or power-down.
+`a733_video_unit_refuse_held`, which the encoder binding also uses. The unit
+records why it failed: `uncertain` for an access or lock operation that did not
+return exactly 1, `late` for a deadline found passed. It also keeps the address
+and word of its latest access.
+
+**Fault close.** `a733_video_decoder_fault_close` runs the quiesce's close
+steps, in the same order with each write read back, on a unit that failed on a
+value or a deadline. A late failure inside a hold closes in that hold;
+otherwise the close takes the lock first. A unit whose failure was uncertain is
+never touched. The close writes only CCU words, so the state a fault left
+(PLL enabled with its output open or closed, the module gate open or closed)
+needs no decoder access. A close step whose readback differs fails the unit
+with the lock released. On success the decoder stays closed for the power
+lifetime. The OS service calls this close once after a fault
+([video-decode-os.md](video-decode-os.md#faults-after-the-first-write)).
 
 The A733 kernel performs the cold VCU pulse without inspecting compound identity.
 Its `CONFIG_ARCH_SUN60IW2` path applies before any of the three runtime policies
@@ -419,12 +436,20 @@ fixture. PCK domain 2 exists only in the owner model. The cases cover:
   open;
 - two lifetimes: the first from 0/0 ends in the quiesce, and the second starts
   from its words, once with the CCU as the quiesce left it and once at the FEL
-  words. Domain 2 stays 8/8 and is adopted.
+  words. Domain 2 stays 8/8 and is adopted;
+- the VCU pulse when its bits read zero and when they stay set; both start, and
+  an exact readback (the stage-1 board image's code) fails the first;
+- faults after the first write and the fault close: INTID 81 pending once the
+  module gate opens (refused in hold B's baseline) and a module gate that does
+  not open (refused at its readback) both close to the quiesce's state; a bus
+  gate that does not close refuses the close with the lock released; an
+  uncertain first write is not touched.
 
 The model asserts that the decoder writes nothing before the ON answer, never
-a PCK600 word or a master gate, that A1 precedes the reset release, and that
-the phases from ON to started take one acquire call. Twenty-eight driver
-mutants must each fail it. It prints the accesses of each lock hold; the
+a PCK600 word or a master gate, that A1 precedes the reset release, that the
+phases from ON to started take one acquire call, and that every read passes the
+native read allowlist (`a733_video_platform_native_readable`). Thirty-five
+driver mutants must each fail it. It prints the accesses of each lock hold; the
 budget in [video-pll.md](designs/video-pll.md) uses them. A focused
 changed-order case uses identity `0x0003331000021320`: the cold VCU pulse
 precedes identity reads, while its later package reset still uses decoder

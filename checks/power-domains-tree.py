@@ -201,7 +201,7 @@ def main():
     # Seeded mutant: a decoder write through its PCK macro must be reported.
     video = 'drivers/video/a733_video_platform.c'
     video_text = (root / video).read_text()
-    anchor = '    p->checked=p->prepared=0;p->quiesced=1;'
+    anchor = '    p->checked=p->prepared=0;p->quiesced=1;\n    return 1;'
     if video_text.count(anchor) != 1:
         problems.append(f'{video}: the PCK-macro write mutant has no unique site')
     elif not domain_problems(video, video_text.replace(anchor, '    (void)update(u,PCK,15,8);\n' + anchor)):

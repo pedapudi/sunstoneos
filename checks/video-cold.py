@@ -6,8 +6,10 @@ managers, and the actual PMIC provider, rail ledger and power-domain owner (chec
 register model of the CCU, the published nonsecure boot ROM and the decoder. PCK domain 2 exists only in the owner
 model's PPU words: the decoder requests it through its row and writes no PCK600 register. The model starts from the
 port 3-3 FEL words (gates 0x5c0 0x110103ff, 0x5e0 0xf1055803, 0x5e4 0x4; PLL_VE0 0x41305a00) and from fifteen other
-PLL entry and lock cases, domain 2 OFF, ON or incoherent, critical gates clear after ON, and two power lifetimes
-joined by the quiesce (docs/designs/video-pll.md). Each mutant changes one text in one driver source; the model must
+PLL entry and lock cases, domain 2 OFF, ON or incoherent, critical gates clear after ON, two power lifetimes
+joined by the quiesce (docs/designs/video-pll.md), the VE+0x804 pulse under two readbacks that no source documents,
+and faults after the first write closed by a733_video_decoder_fault_close. Every read the binding makes must pass the
+native read allowlist. Each mutant changes one text in one driver source; the model must
 fail with it.
 """
 import argparse
@@ -41,8 +43,8 @@ CHECK_INPUTS = ['drivers/video/a733_video_platform.c', 'drivers/video/a733_video
 MUTANTS = [
     ('drivers/video/a733_video_platform.c', 'check(u,CCU+0x1b10,0x30001,0x20000)', 'check(u,CCU+0x1b10,0x30001,0x10000)',
      'entry requires 0x1b10 at POWER_OFF'),
-    ('drivers/video/a733_video_platform.c', 'p->checked=p->prepared=0;p->quiesced=1;', 'p->checked=p->prepared=0;',
-     'reopen after the quiesce'),
+    ('drivers/video/a733_video_platform.c', 'p->checked=p->prepared=0;p->quiesced=1;\n    return 1;',
+     'p->checked=p->prepared=0;\n    return 1;', 'reopen after the quiesce'),
     ('drivers/video/a733_video_unit.c', '    if(!u->failed)(void)a733_video_unit_unlock(u);\n    return a733_video_unit_fail(u);',
      '    return a733_video_unit_fail(u);', 'refusal inside a hold keeps the mutex'),
     ('drivers/video/a733_video_unit.c', '!(w&UINT32_C(0xb8000000))', '!(w&UINT32_C(0x38000000))', 'entry with enable set'),
@@ -88,11 +90,25 @@ MUTANTS = [
      '    return actual==p->cold.mclk_written;', 'exact 0x5e4 readback'),
     ('drivers/video/a733_video_platform.c', '            if((m^value)!=BIT(31))return 0;\n', '', 'module word change with the gate open'),
     ('drivers/video/a733_video_platform.c',
-     "    if(!update(u,CCU+0xa88,BIT(31),0)||!update(u,CCU+0xa8c,BIT(2),0)||!update(u,CCU+0xa8c,BIT(18),0)||\n       !a733_video_unit_pll_stop(u))return",
-     "    if(!a733_video_unit_pll_stop(u)||!update(u,CCU+0xa88,BIT(31),0)||!update(u,CCU+0xa8c,BIT(2),0)||\n       !update(u,CCU+0xa8c,BIT(18),0))return",
+     "    return update(u,CCU+0xa88,BIT(31),0)&&update(u,CCU+0xa8c,BIT(2),0)&&update(u,CCU+0xa8c,BIT(18),0)&&\n        a733_video_unit_pll_stop(u);",
+     "    return a733_video_unit_pll_stop(u)&&update(u,CCU+0xa88,BIT(31),0)&&update(u,CCU+0xa8c,BIT(2),0)&&\n        update(u,CCU+0xa8c,BIT(18),0);",
      'PLL stopped before the module gate closes'),
     ('drivers/video/a733_video_unit.c', '    static const uint32_t disable[4]={BIT(27),BIT(29),BIT(31),BIT(30)};',
      '    static const uint32_t disable[4]={BIT(31),BIT(27),BIT(29),BIT(30)};', 'PLL disabled before its output gate'),
+    ('drivers/video/a733_video_platform.c',
+     '    return a733_video_unit_rmw(u,VE+0x804,0x11,0x11,vcu?&vcu[0]:NULL)&&\n'
+     '        a733_video_unit_rmw(u,VE+0x804,0x11,0,vcu?&vcu[1]:NULL);',
+     '    (void)vcu;return update(u,VE+0x804,0x11,0x11)&&update(u,VE+0x804,0x11,0);', 'VCU pulse read back exactly'),
+    ('drivers/video/a733_video_platform.c', 'if(!u->initialized||u->uncertain||p->quiesced||!d)return -1;',
+     'if(!u->initialized||p->quiesced||!d)return -1;', 'fault close after an uncertain access'),
+    ('drivers/video/a733_video_platform.c',
+     '    return update(u,CCU+0xa88,BIT(31),0)&&update(u,CCU+0xa8c,BIT(2),0)&&update(u,CCU+0xa8c,BIT(18),0)&&',
+     '    return update(u,CCU+0xa88,BIT(31),0)&&a733_video_unit_rmw(u,CCU+0xa8c,BIT(2),0,NULL)&&update(u,CCU+0xa8c,BIT(18),0)&&',
+     'bus gate close not read back'),
+    ('drivers/video/a733_video_platform.c', '    if(!close_steps(u))return a733_video_unit_refuse_held(u);\n    if(unlock(u)!=1)return -1;\n    p->checked=p->prepared=0;p->quiesced=1;u->failed=1;',
+     '    (void)close_steps;\n    if(unlock(u)!=1)return -1;\n    p->checked=p->prepared=0;p->quiesced=1;u->failed=1;', 'fault close writes nothing'),
+    ('drivers/video/a733_video_unit.c', '    u->last_word=*v;\n    return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);',
+     '    return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);', 'failing word not kept'),
 ]
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -136,6 +152,8 @@ for extra in ([], ['--reset']):
 assert any(line.startswith('PASS: decoder cold start on the actual owner') for line in runs['cold'])
 assert any(line.startswith('lifetime2 (CCU at the FEL words): result1') for line in runs['cold'])
 assert any(line.startswith('service: result1') and 'adopted result1' in line for line in runs['cold'])
+assert sum(line.startswith('vcu ') for line in runs['cold']) == 2
+assert sum(line.startswith('fault') and ' closed' in line for line in runs['cold']) == 4
 holds = [line for line in runs['cold'] if line.startswith('holds ')]
 refused = []
 for i, (path, old, new, name) in enumerate(MUTANTS):

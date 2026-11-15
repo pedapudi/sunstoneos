@@ -127,16 +127,25 @@ static int hold_a(struct a733_video_decoder *p)
     return update(u,CCU+0xa8c,BIT(18),BIT(18))&&update(u,CCU+0xa8c,BIT(2),BIT(2))&&
         a733_video_unit_pll_start(u);
 }
+/* The VE top reset pulse as the vendor writes it (set_vcu_en_regmode_to1_to0,
+ * cedar_ve.c lines 389-405): read, write bits 0 and 4 set, read, write them
+ * clear, with no readback check. No source documents how the pulse bits read
+ * back (the manual has no VE register section), so the two words read are
+ * kept, through vcu, for the board to show. */
+static int vcu_pulse(struct a733_video_unit *u,uint32_t *vcu)
+{
+    return a733_video_unit_rmw(u,VE+0x804,0x11,0x11,vcu?&vcu[0]:NULL)&&
+        a733_video_unit_rmw(u,VE+0x804,0x11,0,vcu?&vcu[1]:NULL);
+}
 /* Hold B, after the lock wait: the PLL output gate and the module gate,
  * the powered baseline, then the VCU pulse that the A733 kernel's cold
- * startup always makes before any compound-ID lookup
- * (set_vcu_en_regmode_to1_to0, cedar_ve.c lines 389-405, called at 535).
- * Immutable ROM/resource admission authorizes only this reset. */
+ * startup always makes before any compound-ID lookup (called at cedar_ve.c
+ * line 535). Immutable ROM/resource admission authorizes only this reset. */
 static int hold_b(struct a733_video_decoder *p)
 {
     struct a733_video_unit *u=&p->unit;
     return a733_video_unit_pll_open(u)&&update(u,CCU+0xa88,BIT(31),BIT(31))&&a733_video_unit_baseline(u)&&
-        update(u,VE+0x804,0x11,0x11)&&update(u,VE+0x804,0x11,0);
+        vcu_pulse(u,p->cold.vcu);
 }
 /* The cold start's phases. From the row's ON answer to a started decoder it
  * runs in one acquire call: hold A, the lock wait without the register
@@ -209,6 +218,12 @@ static int acquire(struct a733_video_decoder *p,const void *j,uint64_t d,uint64_
     }
     p->checked=1;return 1;
 }
+/* The close in the vendor order, under the held mutex, each write read back. */
+static int close_steps(struct a733_video_unit *u)
+{
+    return update(u,CCU+0xa88,BIT(31),0)&&update(u,CCU+0xa8c,BIT(2),0)&&update(u,CCU+0xa8c,BIT(18),0)&&
+        a733_video_unit_pll_stop(u);
+}
 int a733_video_decoder_quiesce(struct a733_video_decoder *p,uint64_t d)
 {
     if(!p)return -1;
@@ -216,10 +231,26 @@ int a733_video_decoder_quiesce(struct a733_video_decoder *p,uint64_t d)
     if(!u->initialized||u->failed||u->locked||!d)return -1;
     u->deadline=d;
     int r=lock(u);if(r!=1)return r;
-    if(!update(u,CCU+0xa88,BIT(31),0)||!update(u,CCU+0xa8c,BIT(2),0)||!update(u,CCU+0xa8c,BIT(18),0)||
-       !a733_video_unit_pll_stop(u))return a733_video_unit_refuse_held(u);
+    if(!close_steps(u))return a733_video_unit_refuse_held(u);
     if(unlock(u)!=1)return -1;
     p->checked=p->prepared=0;p->quiesced=1;
+    return 1;
+}
+int a733_video_decoder_fault_close(struct a733_video_decoder *p,uint64_t d)
+{
+    if(!p)return -1;
+    struct a733_video_unit *u=&p->unit;
+    if(!u->initialized||u->uncertain||p->quiesced||!d)return -1;
+    /* A refusal released the mutex; a late access or check kept it, and the close continues in that hold. */
+    const unsigned held_on=u->locked;
+    u->failed=0;u->late=0;u->deadline=d;
+    if(!held_on) {
+        int r=lock(u);
+        if(r!=1){if(!r)u->failed=1;return r;}
+    }
+    if(!close_steps(u))return a733_video_unit_refuse_held(u);
+    if(unlock(u)!=1)return -1;
+    p->checked=p->prepared=0;p->quiesced=1;u->failed=1;
     return 1;
 }
 /* VeReset policy45/52 delegates external reset; policy51 uses top+4 bit16.
@@ -237,8 +268,8 @@ static int prep_step(struct a733_video_decoder *p,unsigned codec)
         if(!local&&!a733_deadline_after(u->last_now,11,&p->reset_until))return 0;
         return 1;
     case 2:return update(u,local?VE+4:CCU+0xa8c,local?BIT(16):BIT(18),local?0:BIT(18));
-    case 3:return local?1:update(u,VE+0x804,0x11,0x11);
-    case 4:return local?1:update(u,VE+0x804,0x11,0);
+    case 3:return local?1:a733_video_unit_rmw(u,VE+0x804,0x11,0x11,NULL);
+    case 4:return local?1:a733_video_unit_rmw(u,VE+0x804,0x11,0,NULL);
     case 5:return local?1:update(u,VE,0x130000,0x130000);
     case 6:return update(u,VE,0x2c00101f,codec);
     case 7:return update(u,VE+0x1c,0x100,0);
@@ -520,7 +551,7 @@ const struct a733_hevc_ops *a733_video_platform_hevc_ops(void)
     static const struct a733_hevc_ops ops={hevc_clock,hevc_acquire,hevc_prepare,hevc_read,hevc_write,hevc_copied};
     return &ops;
 }
-static int readable(uintptr_t a)
+int a733_video_platform_native_readable(uintptr_t a)
 {
     for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)
         if(a==rom_identity[i].address)return 1;
@@ -543,7 +574,7 @@ static int readable(uintptr_t a)
 int a733_video_platform_native_read(void *cookie,uintptr_t a,uint32_t *out)
 {
     (void)cookie;
-    if(!out||!readable(a))return -1;
+    if(!out||!a733_video_platform_native_readable(a))return -1;
     return a733_video_unit_native_read(a,out);
 }
 /* PLL_VE0 feeds three module clocks (ccu-sun60iw2.c lines 965-1015): the

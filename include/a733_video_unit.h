@@ -73,6 +73,12 @@ struct a733_video_unit {
     a733_clock_mask_t shared;
     uint32_t selected_mhz[3];
     unsigned initialized,failed,locked;
+    /* Why a unit failed: uncertain, an access or a mutex operation that did not return exactly 1 (its effect is
+     * unknown); late, a deadline check that found the deadline passed. The address and word of the latest read (the
+     * address alone for a write that did not complete), which is the word a refused comparison judged. */
+    unsigned uncertain,late;
+    uintptr_t last_address;
+    uint32_t last_word;
     /* PLL programming: the entry state, bit 24 as read, progress, and the
      * lock wait's PLL reads. */
     uint32_t pll_inherited;
@@ -113,6 +119,9 @@ int a733_video_unit_write(struct a733_video_unit *,uintptr_t,unsigned,uint32_t);
 int a733_video_unit_check(struct a733_video_unit *,uintptr_t,uint32_t mask,uint32_t expected);
 /* Read-modify-write of mask bits, then verify the readback. */
 int a733_video_unit_update(struct a733_video_unit *,uintptr_t,uint32_t mask,uint32_t value);
+/* Read-modify-write of mask bits with no readback, for a register the vendor writes without one and whose readback
+ * no source documents: the word read before the write is stored through before (may be NULL). 1 written. */
+int a733_video_unit_rmw(struct a733_video_unit *,uintptr_t,uint32_t mask,uint32_t value,uint32_t *before);
 /* Fabric words, DCXO/reference, selected VE PLL, PERI0 outputs and the shared
  * PCK clock gate, in that order. Returns 1 when all match the configuration. */
 int a733_video_unit_clocks(struct a733_video_unit *);

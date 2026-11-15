@@ -35,7 +35,16 @@ struct cold_model {
     struct a733_power_domain_row row;struct a733_rail_token token;
     unsigned wakes,gate_reads,key_reads_zero,pck_reads,quiesced;
     unsigned hold_start,holds,hold_accesses[8],hold_writes[8],pll_policy_writes,writes_at_hold[8];
+    /* Board-like behaviour no source documents: the VE+0x804 pulse bits read
+     * zero (VCU_CLEARS) or stay set once written (VCU_STICKS); INTID 81 reads
+     * pending once the module gate is open; the module gate does not open;
+     * the bus gate does not close in the fault close. */
+    unsigned vcu,irq_pending,stuck;
 };
+#define VCU_CLEARS 1u
+#define VCU_STICKS 2u
+#define STUCK_MODULE 1u
+#define STUCK_BUS 2u
 static unsigned domain_on(void){return (d.ppu[2][0]&15)==8&&(d.ppu[2][2]&15)==8;}
 static unsigned row_on(struct cold_model *c){return a733_power_domain_state(&c->row)==A733_POWER_ROW_ON;}
 #define PLL_LOCKS 1u   /* LOCK appears from the third read after lock enable. */
@@ -133,6 +142,8 @@ static const uint32_t gate_bits[3][2]={{0x5c0,1u<<0},{0x5e0,1u<<14},{0x5e4,1u<<1
 static int cold_read(void *v,uintptr_t a,uint32_t *out)
 {
     struct cold_model *c=v;struct model *m=&c->m;
+    /* Every read the binding makes passes the native read allowlist, as on the board. */
+    assert(a733_video_platform_native_readable(a));
     if(a>=0x17000&&a<0x22000) {
         assert(m->lock&&!m->writes);++c->rom_reads;
         memcpy(out,c->rom+(a-0x17000),4);return 1;
@@ -151,8 +162,15 @@ static int cold_read(void *v,uintptr_t a,uint32_t *out)
         assert((m->ccu[0xa8c/4]&0x40004)==0x40004);
         assert(m->ccu[0xa88/4]&0x80000000);
         if(a==VE+0xe0||a==VE+0xe4||a==VE+0xf0)assert(c->cold_pulse==2);
+        if(a==VE+0x804&&c->vcu) {
+            assert(m->lock);++m->reads;
+            *out=c->vcu==VCU_CLEARS?m->ve[0x804/4]&~0x11u:m->ve[0x804/4]|(c->cold_pulse?0x11u:0);
+            return 1;
+        }
     }
-    return read_reg(v,a,out);
+    const int r=read_reg(v,a,out);
+    if(a==GIC+0x208&&c->irq_pending&&(m->ccu[0xa88/4]&0x80000000))*out|=1u<<17;
+    return r;
 }
 static int cold_write(void *v,uintptr_t a,unsigned width,uint32_t value)
 {
@@ -198,6 +216,8 @@ static int cold_write(void *v,uintptr_t a,unsigned width,uint32_t value)
             for(unsigned i=0;i<3;++i)assert(m->ccu[gate_bits[i][0]/4]&gate_bits[i][1]);
         }
         if(a==CCU+0xa88&&(value&0x80000000)&&c->pll)assert((m->ccu[0x220/4]&0xf8000000u)==0xf8000000u);
+        if(a==CCU+0xa88&&c->stuck==STUCK_MODULE)value&=~0x80000000u;
+        if(a==CCU+0xa8c&&c->stuck==STUCK_BUS&&c->quiesced)value|=cur&4u;
         m->ccu[(a-CCU)/4]=value;
     }
     return 1;
@@ -258,10 +278,14 @@ struct lifetime {
     uint32_t policy,status;unsigned ack_us,stall,fault,pll;uint32_t pll_entry;unsigned key_zero;
     void (*edit)(struct model *);
     unsigned service; /* the OS service's open (apps/os/video_decode.c) instead of the JPEG job */
+    unsigned vcu,irq_pending,stuck; /* struct cold_model */
+    unsigned fault_close; /* after a refused start, the service's fault close (a733_video_decoder_fault_close) */
 };
 struct outcome {
     int result;unsigned writes,owner_ppu_writes,owner_commands,decoder_pck_reads,polls_after_on;
     enum a733_power_row_state row;struct a733_video_cold_record rec;
+    /* The fault close: its result and accesses, and the unit's last access and uncertain flag before it. */
+    int closed;unsigned close_accesses,uncertain;uint32_t last_address,last_word;
 };
 static uint8_t jpeg_bytes[65536];static size_t jpeg_n;static uint8_t rom_bytes[45056];static uint64_t version;
 /* The entry words: the platform model's, with the decoder in reset and
@@ -305,6 +329,7 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
     d.ppu[2][0]|=pol;d.ppu[2][2]|=sta;d.ack_us=l->ack_us;d.stall[2]=l->stall;
     memset(c,0,sizeof(*c));
     c->fault=l->fault;c->pll=l->pll;c->key_reads_zero=l->key_zero;
+    c->vcu=l->vcu;c->irq_pending=l->irq_pending;c->stuck=l->stuck;
     setup(m,version);memcpy(c->rom,rom_bytes,sizeof(c->rom));
     fel_words(c,l);
     if(ccu_in)memcpy(m->ccu,ccu_in,sizeof(m->ccu));
@@ -363,6 +388,19 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
     /* The decoder's row is answered ON before its first write. Adopted ON,
      * the first poll's request is answered at once. */
     if(checked_poll&&on_poll)assert(o.polls_after_on==1);
+    if(result==-1&&l->fault_close) {
+        o.last_address=(uint32_t)p.decoder.unit.last_address;o.last_word=p.decoder.unit.last_word;
+        o.uncertain=p.decoder.unit.uncertain;
+        const unsigned accesses=m->reads+m->writes;c->quiesced=1;c->stopping=1;c->pll_seq=0;
+        o.closed=a733_video_decoder_fault_close(&p.decoder,run.deadline+200000);
+        o.close_accesses=m->reads+m->writes-accesses;
+        if(o.closed==1) {
+            /* Closed for the rest of the power lifetime: a later open is refused with no access. */
+            const unsigned after=m->reads+m->writes;uint64_t t=0;
+            assert(a733_video_platform_jpeg_ops()->acquire(&p,&no_job,run.deadline+200000,&t)==-1&&
+                m->reads+m->writes==after&&!m->lock&&p.decoder.quiesced);
+        }
+    }
     if(result==1&&quiesce) {
         const unsigned before=m->writes;c->quiesced=1;c->stopping=1;c->pll_seq=0;
         assert(a733_video_decoder_quiesce(&p.decoder,run.deadline+200000)==1);
@@ -522,6 +560,48 @@ int main(int argc,char **argv)
         }
         printf("domain%u %s: result%d writes%u owner_ppu_writes%u\n",k,domain_cases[k].name,o.result,o.writes,
             o.owner_ppu_writes);
+    }
+    /* The VCU pulse as the vendor writes it, with no readback check, under
+     * two readbacks no source documents: the pulse bits read zero, or stay
+     * set. Both start; the two words read are kept. */
+    for(unsigned k=0;k<2;++k) {
+        const struct lifetime l={.ack_us=10,.pll=PLL_LOCKS,.pll_entry=FEL_PLL,.vcu=k?VCU_STICKS:VCU_CLEARS};
+        const struct outcome o=lifetime(&c,&l,0,0,0);
+        assert(o.result==1&&c.cold_pulse==2&&vm->trigger&&!vm->lock);
+        assert((o.rec.vcu[0]&0x11)==0&&(o.rec.vcu[1]&0x11)==(k?0x11u:0));
+        printf("vcu %s: result%d vcu %08x %08x\n",k?"bits stay set":"bits read zero",o.result,o.rec.vcu[0],o.rec.vcu[1]);
+    }
+    /* Faults after the first write, then the service's fault close: a
+     * refusal in hold B's baseline (INTID 81 pending once the module gate is
+     * open) or at the module gate's readback (it does not open) is closed in
+     * the vendor order to the quiesce's state, with the failing word kept; a
+     * close step whose readback differs refuses with the mutex released; an
+     * uncertain access is never touched. */
+    {
+        static const struct {unsigned pll,irq,stuck,fault;uint32_t address;int closed;const char *name;} faults[]={
+            {PLL_LOCKS,1,0,0,GIC+0x208,1,"INTID 81 pending in hold B: closed"},
+            {PLL_LOCKS,0,STUCK_MODULE,0,CCU+0xa88,1,"module gate does not open: closed"},
+            {PLL_LOCKS,1,STUCK_BUS,0,GIC+0x208,-1,"bus gate does not close: close refused"},
+            {0,0,0,4,CCU+0x5e4,-1,"uncertain first write: not touched"},
+        };
+        for(unsigned k=0;k<sizeof(faults)/sizeof(faults[0]);++k) {
+            const struct lifetime l={.ack_us=10,.pll=faults[k].pll,.pll_entry=FEL_PLL,.irq_pending=faults[k].irq,
+                .stuck=faults[k].stuck,.fault=faults[k].fault,.fault_close=1};
+            const struct outcome o=lifetime(&c,&l,0,0,0);
+            assert(o.result==-1&&!vm->trigger&&o.closed==faults[k].closed&&o.last_address==faults[k].address);
+            if(faults[k].irq)assert(o.last_word&(1u<<17));
+            if(faults[k].stuck==STUCK_MODULE)assert(o.last_word==0x01000000u);
+            if(o.closed==1) {
+                assert(!vm->lock&&!o.uncertain&&!(vm->ccu[0xa88/4]&0x80000000)&&!(vm->ccu[0xa8c/4]&0x40004)&&domain_on());
+                assert(vm->ccu[0x220/4]==0x01204d00u&&vm->ccu[0x5e4/4]==0x40306);
+            }else if(faults[k].fault) {
+                assert(o.uncertain&&!o.close_accesses&&vm->lock);
+            }else {
+                assert(!vm->lock&&!o.uncertain&&(vm->ccu[0xa8c/4]&4)&&!(vm->ccu[0xa88/4]&0x80000000));
+            }
+            printf("fault%u %s: closed%d close_accesses%u last %08x=%08x\n",k,faults[k].name,o.closed,o.close_accesses,
+                o.last_address,o.last_word);
+        }
     }
     /* Two lifetimes: the first from domain 0/0 and the FEL words, ending in
      * the quiesce; the second from the domain words it left, once with the

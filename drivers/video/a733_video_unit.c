@@ -80,7 +80,12 @@ int a733_video_unit_now(struct a733_video_unit *u,uint64_t *out)
     *out=n;return 1;
 }
 int a733_video_unit_timely(struct a733_video_unit *u)
-{uint64_t n;return a733_video_unit_now(u,&n)==1&&n<u->deadline;}
+{
+    uint64_t n;
+    if(a733_video_unit_now(u,&n)!=1)return 0;
+    if(n>=u->deadline){u->late=1;return 0;}
+    return 1;
+}
 /* A busy registry is effect-free: another task is inside its short critical
  * section. Retry for at most two scheduler ticks, so an equal-priority holder
  * on this core can finish after a time slice; then report 0 (not held). */
@@ -108,13 +113,14 @@ int a733_video_unit_lock(struct a733_video_unit *u)
     if(u->locked)return a733_video_unit_fail(u);
     int r=u->ops.enter(u->cookie,u->deadline);
     if(r==1)u->locked=1;
+    if(r!=0&&r!=1)u->uncertain=1;
     if((r!=0&&r!=1)||!a733_video_unit_timely(u))return a733_video_unit_fail(u);
     return r;
 }
 int a733_video_unit_unlock(struct a733_video_unit *u)
 {
     if(u->failed||!u->locked||!a733_video_unit_timely(u))return a733_video_unit_fail(u);
-    if(u->ops.leave(u->cookie)!=1)return a733_video_unit_fail(u);
+    if(u->ops.leave(u->cookie)!=1){u->uncertain=1;return a733_video_unit_fail(u);}
     u->locked=0;
     return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);
 }
@@ -125,15 +131,17 @@ int a733_video_unit_refuse_held(struct a733_video_unit *u)
 }
 int a733_video_unit_read(struct a733_video_unit *u,uintptr_t a,uint32_t *v)
 {
-    if(!u->locked||!a733_video_unit_timely(u)||u->ops.read(u->cookie,a,v)!=1||
-       !a733_video_unit_timely(u))return a733_video_unit_fail(u);
-    return 1;
+    if(!u->locked||!a733_video_unit_timely(u))return a733_video_unit_fail(u);
+    u->last_address=a;
+    if(u->ops.read(u->cookie,a,v)!=1){u->uncertain=1;return a733_video_unit_fail(u);}
+    u->last_word=*v;
+    return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);
 }
 int a733_video_unit_write(struct a733_video_unit *u,uintptr_t a,unsigned width,uint32_t v)
 {
-    if(!u->locked||!a733_video_unit_timely(u)||u->ops.write(u->cookie,a,width,v)!=1||
-       !a733_video_unit_timely(u))return a733_video_unit_fail(u);
-    return 1;
+    if(!u->locked||!a733_video_unit_timely(u))return a733_video_unit_fail(u);
+    if(u->ops.write(u->cookie,a,width,v)!=1){u->uncertain=1;u->last_address=a;return a733_video_unit_fail(u);}
+    return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);
 }
 int a733_video_unit_check(struct a733_video_unit *u,uintptr_t a,uint32_t mask,uint32_t expected)
 {uint32_t v;return a733_video_unit_read(u,a,&v)==1&&(v&mask)==expected;}
@@ -143,6 +151,13 @@ int a733_video_unit_update(struct a733_video_unit *u,uintptr_t a,uint32_t mask,u
     if(a733_video_unit_read(u,a,&old)!=1)return 0;
     value=(old&~mask)|(value&mask);
     return a733_video_unit_write(u,a,4,value)==1&&a733_video_unit_read(u,a,&actual)==1&&actual==value;
+}
+int a733_video_unit_rmw(struct a733_video_unit *u,uintptr_t a,uint32_t mask,uint32_t value,uint32_t *before)
+{
+    uint32_t old;
+    if(a733_video_unit_read(u,a,&old)!=1)return 0;
+    if(before)*before=old;
+    return a733_video_unit_write(u,a,4,(old&~mask)|(value&mask))==1;
 }
 /* PLL_VE0 at CCU+0x220, A733 User Manual V1.00 4.1.6.36: enable 31, LDO 30,
  * lock enable 29, LOCK 28 (read-only status), output gate 27, P0 22:20,
@@ -273,7 +288,11 @@ static int unlocked_read(void *v,uint32_t *out)
 {
     struct a733_video_unit *u=v;
     ++u->pll_reads;
-    return !u->locked&&u->ops.read(u->cookie,PLL,out)==1&&a733_video_unit_timely(u);
+    if(u->locked)return 0;
+    u->last_address=PLL;
+    if(u->ops.read(u->cookie,PLL,out)!=1){u->uncertain=1;return 0;}
+    u->last_word=*out;
+    return a733_video_unit_timely(u);
 }
 /* The gap and settle clock: the plain per-core clock when given, which the lock wait reads in a spin. */
 static int unit_now(void *v,uint64_t *out)
