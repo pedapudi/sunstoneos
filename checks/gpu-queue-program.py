@@ -20,20 +20,47 @@ p.add_argument('--ld',default='ld.lld',help='configured AArch64-capable linker; 
 a=p.parse_args();a.build.mkdir(parents=True,exist_ok=True)
 spec=importlib.util.spec_from_file_location('program_compile',ROOT/'apps/gpu-program/compile.py')
 c=importlib.util.module_from_spec(spec);spec.loader.exec_module(c)
-m=json.loads((ROOT/'apps/queue-add/sources.json').read_text())
-header=(ROOT/'apps/queue-add/program.h').read_text()
-words=[int(w,16) for w in re.findall(r'0x([0-9a-f]{8})u',header)]
-code=struct.pack('<'+'I'*len(words),*words)
-blob=bytes([m['metadata'][0],5,3,0,0])+struct.pack('<H',len(words))+bytes(1)+code
-assert hashlib.sha256((ROOT/'apps/queue-add/vector_add.cl').read_bytes()).hexdigest()==m['source_sha256']
-assert c.emit_queue_program(blob,m)==header
-cases=['reproducible-real-grid-descriptor']
+def program(folder,source):
+    """A shipped queue program: its record, descriptor and the compiler binary rebuilt from the descriptor's words."""
+    record=json.loads((ROOT/folder/'sources.json').read_text())
+    text=(ROOT/folder/'program.h').read_text()
+    words=[int(w,16) for w in re.findall(r'0x([0-9a-f]{8})u',text)]
+    binary=bytes(c.precomp_prefix(record['metadata']))+struct.pack('<H',len(words))+bytes(1)+struct.pack('<'+'I'*len(words),*words)
+    assert hashlib.sha256((ROOT/folder/source).read_bytes()).hexdigest()==record['source_sha256'],folder
+    return record,text,binary
+
+# Every shipped queue program reads its arguments once per task in unified registers (GPU_QUEUE_ABI_GRID_INLINE),
+# and its descriptor reproduces from its compiler record.
+PROGRAMS=[('apps/queue-add','vector_add.cl'),('apps/accel-overlap/add4','vector_add4.cl'),
+          ('apps/accel-overlap/add4inline','vector_add4_inline.cl')]
+cases=[]
+for folder,source in PROGRAMS:
+    record,text,binary=program(folder,source)
+    assert record['queue_abi']=='grid_inline' and '.abi = GPU_QUEUE_ABI_GRID_INLINE,' in text,folder
+    assert c.emit_queue_program(binary,record)==text,folder
+    cases.append('reproducible-inline-descriptor-'+Path(folder).name)
+mi,header,blobi=program('apps/queue-add','vector_add.cl')
+code=blobi[8:]   # the instruction words that program.h links
 
 def refused(name,binary,manifest):
     try:c.emit_queue_program(binary,manifest)
     except ValueError:cases.append(name)
     else:raise AssertionError(name+' accepted')
 
+def grid_record(record):
+    """A GRID record built from an inline one, as the compiler's GRID profile writes it: no queue program in this
+    repository uses the GRID ABI, which the mimus kernel still does."""
+    other=copy.deepcopy(record);del other['queue_abi']
+    other['metadata'][1]=c.GRID_VTXINS+1;other['abi_vtxins']=c.GRID_VTXINS+1;other['explicit_vtxin_mask']=15
+    other['sysval_ranges']=c.expected_sysvals(other['metadata'],3,False)
+    words=blobi[8:]
+    binary=bytes(c.precomp_prefix(other['metadata']))+struct.pack('<H',len(words)//4)+bytes(1)+words
+    other['program_sha256']=c.digest(binary)
+    return other,binary
+
+m,blob=grid_record(mi)
+assert '.abi = GPU_QUEUE_ABI_GRID,' in c.emit_queue_program(blob,m)
+cases.append('accept-grid-contract-record')
 for field,value in [('profile',2),('mesa_revision','0'*40),('schema','wrong'),
                     ('program_sha256','0'*64),('compiler_sha256','x'*64),
                     ('source_sha256','a'),('explicit_vtxin_mask',31),('abi_vtxins',6),
@@ -52,22 +79,14 @@ for size,coeff in [(8128,3),(4,7)]:
     other=copy.deepcopy(m);other['metadata'][2]=coeff
     other['sysval_ranges']=[4,1,0,3]+([4,3] if coeff==7 else [0,0])
     binary=bytes([10,5,coeff,0,0])+struct.pack('<H',size//4)+bytes(1)+bytes(size)
+    other['metadata'][0]=10
     other['program_sha256']=c.digest(binary)
     assert '.coefficients = %uu'%coeff in c.emit_queue_program(binary,other)
     cases.append('accept-%d-bytes-%d-coefficients'%(size,coeff))
-other=copy.deepcopy(m)
+other=copy.deepcopy(m);other['metadata'][0]=10
 binary=bytes([10,5,3,0,0])+struct.pack('<H',2033)+bytes(1)+bytes(8132)
 other['program_sha256']=c.digest(binary);refused('reject-over-two-pages',binary,other)
-# The inline-argument add (GPU_QUEUE_ABI_GRID_INLINE): the descriptor reproduces
-# from its record, and a record whose registers do not fit its ABI is refused.
-mi=json.loads((ROOT/'apps/accel-overlap/add4inline/sources.json').read_text())
-hi=(ROOT/'apps/accel-overlap/add4inline/program.h').read_text()
-wi=[int(w,16) for w in re.findall(r'0x([0-9a-f]{8})u',hi)]
-blobi=bytes(mi['metadata'][:2]+[3,0,0])+struct.pack('<H',len(wi))+bytes(1)+struct.pack('<'+'I'*len(wi),*wi)
-assert hashlib.sha256((ROOT/'apps/accel-overlap/add4inline/vector_add4_inline.cl').read_bytes()).hexdigest()==mi['source_sha256']
-assert mi['queue_abi']=='grid_inline' and '.abi = GPU_QUEUE_ABI_GRID_INLINE,' in hi
-assert c.emit_queue_program(blobi,mi)==hi
-cases.append('reproducible-inline-descriptor')
+# A record whose registers do not fit the inline ABI is refused.
 for field,value in [('queue_abi','grid'),('queue_abi','local'),('abi_vtxins',5),('sysval_ranges',[4,1,0,3,0,0]),
                     ('explicit_vtxin_mask',64),('explicit_vtxin_mask',0),('profile',4)]:
     other=copy.deepcopy(mi);other[field]=value;refused('reject-inline-'+field+'-'+str(value),blobi,other)
@@ -115,6 +134,6 @@ for script in ('platform/a733-smp-cached/link.ld','platform/qemu-smp/link.ld'):
             linked.append({'case':tag,'start':hex(start),'stop':hex(stop),'bytes':stop-start})
             cases.append(tag+'-immutable-code-bounds' if nonempty else tag+'-defined-bounds')
 result={'schema':'sunstone-gpu-queue-program-host-v2','physical_access':False,'cases':cases,
-        'program_sha256':m['program_sha256'],'linked_sections':linked}
+        'program_sha256':mi['program_sha256'],'linked_sections':linked}
 (a.build/'result.json').write_text(json.dumps(result,indent=2)+'\n')
-print(json.dumps({'cases':len(cases),'program_sha256':m['program_sha256'],'linked_sections':linked}))
+print(json.dumps({'cases':len(cases),'program_sha256':mi['program_sha256'],'linked_sections':linked}))

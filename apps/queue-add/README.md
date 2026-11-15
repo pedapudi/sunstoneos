@@ -19,7 +19,9 @@ most one outstanding job.
 The shader admits indices below 65. Its two reads span the 520 initialized
 input bytes, and its stores span 260 output bytes. Binding zero supplies the
 output address. The queue puts binding one's input
-address before the four-byte element count in the shader's argument block.
+address before the four-byte element count in the job's argument block. The
+program uses the inline argument ABI (`GPU_QUEUE_ABI_GRID_INLINE`): the PDS writes
+that 12-byte block into unified registers once per task, so no lane loads it.
 
 `main.c` includes `program.h`, so the image needs only `main.c` and the manifest's
 generated sources. The application kit must generate `queue_add-app.h` from
@@ -33,7 +35,7 @@ the generated instructions run on the GPU. The source and descriptor are
 available under the MIT license.
 
 Reproduce the descriptor with `apps/gpu-program/compile.py compile --profile 3
---queue-program`, supplying `--source apps/queue-add/vector_add.cl`, the pinned
+--queue-program --inline-arguments`, supplying `--source apps/queue-add/vector_add.cl`, the pinned
 Mesa source and build directories, the Ninja executable and an output directory.
 The output's `program.h` must match this application's descriptor.
 

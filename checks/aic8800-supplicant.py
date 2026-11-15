@@ -81,7 +81,8 @@ def main():
         native,external=sae.NATIVE,[n for n in EXTERNAL if n not in sae.INTERNAL]+sae.SAE
         flags+=["-DSUNSTONE_AIC8800_SAE","-I",str(library.parent/"include"),"-I",str(tree/"include")]
     objects=[];result["source_sha256"]={str(n.relative_to(ROOT)):digest(n) for n in ROOT.glob("include/*") if n.is_file()}
-    source_list=[ROOT/n for n in native]+[ROOT/"checks/aic8800-supplicant.c"]+[up/"src"/n for n in external]
+    # The window case owns the receive with the real dispatcher, as the session does.
+    source_list=[ROOT/n for n in native]+[ROOT/"drivers/net/aic8800_dispatch.c",ROOT/"checks/aic8800-supplicant.c"]+[up/"src"/n for n in external]
     for source in source_list:
         obj=out/(str(source.relative_to(up if source.is_relative_to(up) else ROOT)).replace("/","_")+".o")
         cmd=[a.cc]+flags
@@ -97,7 +98,7 @@ def main():
         exe=out/"supplicant-check";cmd=[a.cc,"-fsanitize=address,undefined","-Wl,--gc-sections"]+objects+([str(library)] if library else [])+["-o",str(exe)]
         run=subprocess.run(cmd,capture_output=True,text=True);result["commands"].append({"command":cmd,"exit_code":run.returncode,"stderr":run.stderr})
         if not run.returncode:
-            cmd=[str(exe),str(out/"vectors.bin"),a.case];run=subprocess.run(cmd,capture_output=True,text=True)
+            cmd=[str(exe),str(out/"vectors.bin")]+a.case.split(":");run=subprocess.run(cmd,capture_output=True,text=True)
             result.update(executable_sha256=digest(exe),run_command=cmd,stdout=run.stdout,stderr=run.stderr)
     for name in ["checks/aic8800-runtime.c","checks/aic8800-sdio-transport.c","checks/sdio-controller.c","checks/aic8800-supplicant.py"]:
         result["source_sha256"][name]=digest(ROOT/name)

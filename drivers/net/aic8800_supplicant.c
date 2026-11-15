@@ -1,5 +1,6 @@
 /* Adapter for the unmodified, pinned BSD RSN supplicant. Crypto and handshake
  * validation execute in that implementation; firmware actions remain native. */
+#define AIC8800_SITE_FILE 1u
 #include "aic8800_supplicant_port.h"
 #include "aic8800_supplicant.h"
 #include "aic8800_sdio_transport.h"
@@ -10,9 +11,10 @@
 #include "common/ieee802_11_defs.h"
 #include "aic8800_supplicant_rsn.h"
 static const uint8_t own_rsn[]={48,20,1,0,0,15,172,4,1,0,0,15,172,4,1,0,0,15,172,2,0,0};
-void aic8800_supplicant_stop(struct aic8800_supplicant *s)
+void aic8800_supplicant_stop_at(struct aic8800_supplicant *s,unsigned site)
 {
     if(!s||!s->initialized||s->state==AIC8800_SUPPLICANT_RETIRED)return;
+    if(s->state!=AIC8800_SUPPLICANT_FAULT&&!s->stop_site)s->stop_site=(uint16_t)site;
     s->state=AIC8800_SUPPLICANT_FAULT;if(s->security)aic8800_security_stop(s->security,s->owner);
 }
 static struct aic8800_supplicant_action *reserve(struct aic8800_supplicant *s)

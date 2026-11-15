@@ -326,8 +326,9 @@ dispatch, as host analysis of the program and the queue shows:
 - **Dispatch.** A job runs 8,192 workgroups, each one 32-lane task. The BXM-4-64 MC1 has one cluster, 64 USC slots
   and at most 156 USC tasks (pinned Mesa `src/imagination/common/device_info/bxm-4-64.h`). Less the 103 µs per-job
   overhead that a three-task job measured in stage 1, each task takes 535 ns, 539 GPU clocks at 1008 MHz.
-- **Program.** The compiled `apps/queue-add/vector_add.cl` is 28 instruction groups with 10 temps. It loads the
-  argument words, `a[i]` and `b[i]`, and stores the sum, each through one DMA access of 4 bytes per lane (12 for the
+- **Program.** The compiled `apps/queue-add/vector_add.cl` that stages 1 to 1c ran is 28 instruction groups with 10
+  temps. (The add now takes its arguments in unified registers once per task, as described in "Arguments once per
+  task" below.) It loads the argument words, `a[i]` and `b[i]`, and stores the sum, each through one DMA access of 4 bytes per lane (12 for the
   arguments). The pinned compiler's scheduler (`pco_schedule.c`) puts a data-fence wait after every DMA access and an
   extra fence after the store, so a task waits on memory four times in series. Only other resident tasks overlap
   those waits. No host source determines whether the hardware merges the 32 lanes' accesses into line requests.
@@ -352,8 +353,10 @@ shown. No vendor figure for this GPU's buffer bandwidth exists in the datasheet,
 
 The width build of accel-overlap (`SUNSTONE_ACCEL_OVERLAP_WIDTH`) runs the GPU-alone phase with
 [add4/vector_add4.cl](../../apps/accel-overlap/add4/vector_add4.cl). Each lane loads four consecutive words of each
-vector with one access and stores the four sums with two 2-word stores, so a job runs 2,048 workgroups. The compiled
-program has 18 temps and five serial memory waits per task.
+vector with one access and stores the four sums with two 2-word stores, so a job runs 2,048 workgroups. The program
+that this run used loaded its arguments in every lane; it had 18 temps and five serial memory waits per task. The
+add now takes its arguments in unified registers once per task, and the counter build's per-lane mode reproduces the
+earlier form.
 
 One returning run on port 3-1 (entry `1794714617637336813-d6d9ac0d`) gave:
 

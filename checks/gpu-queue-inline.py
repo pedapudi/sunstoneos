@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Check that the queue's job slot and the compiled GRID and GRID_INLINE programs agree on the unified registers: the
-driver's PDS and CDM encoders are emulated for all 32 lanes and compared with each program's compiler record; mutations
-of the encoders must fail."""
+"""Check that the queue's job slot and the compiled queue programs agree on the unified registers: the driver's PDS
+and CDM encoders are emulated for all 32 lanes and compared with each shipped GRID_INLINE program's compiler record and
+with the compiler's GRID profile contract; mutations of the encoders must fail."""
 import argparse
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -16,7 +17,8 @@ import harness
 ROOT = Path(__file__).resolve().parents[1]
 JOB = 'drivers/gpu/pvr_compute_job.c'
 SOURCES = ['checks/gpu-queue-inline.c', JOB]
-PROGRAMS = {'GPU_QUEUE_ABI_GRID': 'apps/accel-overlap/add4', 'GPU_QUEUE_ABI_GRID_INLINE': 'apps/accel-overlap/add4inline'}
+# Every shipped queue program; each uses the inline argument ABI.
+PROGRAMS = ('apps/queue-add', 'apps/accel-overlap/add4', 'apps/accel-overlap/add4inline')
 THIRD = '0xf01e0e01u,0xf0074001u,0xfc000002u,0xd3000000u'
 
 
@@ -51,16 +53,23 @@ def slot_defines():
     return defines
 
 
+def compiler():
+    spec = importlib.util.spec_from_file_location('program_compile', ROOT / 'apps/gpu-program/compile.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def records():
-    """abi local_start local_count mask vtxins for each program, from its compiler record and descriptor."""
-    values = []
-    for abi, folder in PROGRAMS.items():
+    """abi local_start local_count mask vtxins: the compiler's GRID contract, then each shipped program's record."""
+    c = compiler()
+    values = ['1', str(c.GRID_VTXINS), '1', '15', str(c.GRID_VTXINS + 1)]
+    for folder in PROGRAMS:
         m = json.loads((ROOT / folder / 'sources.json').read_text())
-        if f'.abi = {abi},' not in (ROOT / folder / 'program.h').read_text():
-            raise SystemExit(f'{folder}/program.h is not {abi}')
-        number = 1 if abi == 'GPU_QUEUE_ABI_GRID' else 3
+        if m.get('queue_abi') != 'grid_inline' or '.abi = GPU_QUEUE_ABI_GRID_INLINE,' not in (ROOT / folder / 'program.h').read_text():
+            raise SystemExit(f'{folder} is not a GRID_INLINE program')
         start, count = m['sysval_ranges'][:2]
-        values += [str(number), str(start), str(count), str(m['explicit_vtxin_mask']), str(m['abi_vtxins'])]
+        values += ['3', str(start), str(count), str(m['explicit_vtxin_mask']), str(m['abi_vtxins'])]
     return values
 
 

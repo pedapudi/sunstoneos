@@ -1,3 +1,4 @@
+#define AIC8800_SITE_FILE 2u
 #include "aic8800_supplicant_port.h"
 #include "aic8800_supplicant.h"
 #include "utils/common.h"
