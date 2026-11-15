@@ -131,7 +131,7 @@ struct ss_g2d_done {
     /* Read by the owner after the handler: G2D 0x28 (RCQ update) and 0x100 (mixer control). */
     uint32_t update_after, mixer_after;
     /* After this operation's attach, IOMMU bank 0 and bank 1 prefetch words (0x0390002c, 0x0391002c); 0 when this
-     * operation made no attach. */
+     * operation made no attach, all ones when the read was refused. */
     uint32_t iommu_prefetch[2];
     uint32_t source_iova;      /* device address of the source surface's first byte; 0 for a fill */
     uint32_t reserved;

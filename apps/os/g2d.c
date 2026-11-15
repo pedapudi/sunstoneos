@@ -483,8 +483,9 @@ static int map_regions(const struct need *need,unsigned count)
         }
         d->attach_us=now_us()-t0;
         g2d.attached=1;d->iommu_attached=1;
-        /* The prefetch words the attach wrote and read back, for the record (docs/iommu.md). */
-        (void)os_iommu_prefetch(d->iommu_prefetch);
+        /* The prefetch words the attach wrote and read back, for the record (docs/iommu.md); all ones when the read
+         * was refused, which no prefetch word can be. */
+        if(os_iommu_prefetch(d->iommu_prefetch)!=1)d->iommu_prefetch[0]=d->iommu_prefetch[1]=UINT32_MAX;
     }else if(n&&os_iommu_map(fresh,n)!=1){
         unreserve(slots,n);
         record_owner(d);

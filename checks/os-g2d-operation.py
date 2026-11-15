@@ -39,6 +39,8 @@ Cases:
   lines, and the record holds the prefetch words once and the after-operation 0x24, 0x28 and 0x100 words. The engine
   model leaves the update bit set after a job in the first case and clears it in the second. The stage-2 image fails
   both cases (it refuses a blit) and every surface case (it reads 0x28 before writing it).
+- fills-update-sticks: two stage-2 fills in one session with an engine that leaves 0x28 bit 0 set after a job. Both
+  must complete. The stage-2 image fails the second at step 60 (RUN_BUSY), because it reads 0x28 before writing it.
 
 Usage: os-g2d-operation.py --image ELF --output DIR"""
 import argparse
@@ -160,7 +162,8 @@ class Registers:
 
 
 def run_case(image, parts, fields, name, width, height, stride, offset, refuse_cache=False, completes=True,
-             stuck=False, launch_fault=False, attach_fault=False, close=False, blits=(), update_sticks=False):
+             stuck=False, launch_fault=False, attach_fault=False, close=False, blits=(), update_sticks=False,
+             fills=1):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -396,6 +399,13 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
             record[k] = get(done + dl[k]) if k in dl else None
         record['iommu_prefetch'] = [get(done + dl['iommu_prefetch'] + 4 * b) for b in (0, 1)] if 'iommu_prefetch' in dl else None
         return record
+    if fills > 1:
+        ops.append(op_record())
+        for _ in range(fills - 1):
+            engine.writes.clear()
+            put(field('request'), 0); put(field('op'), RUN_OP); put(field('request'), POSTED)
+            serve('fill %d' % (len(ops) + 1))
+            ops.append(op_record())
     if blits:
         ops.append(op_record())
         for op in blits[1:]:
@@ -515,6 +525,15 @@ def check_blits(record, state, engine, update_sticks):
             first - at < LINE and at + n - end < LINE, (name, 'maintenance must cover the surface in whole lines', hex(at), n)
 
 
+def check_fills(record):
+    """Two fills in one session with an engine that leaves the update bit set: the second one launches."""
+    name, ops = record['case'], record['ops']
+    assert [(o['result'], o['fault_step']) for o in ops] == [(1, 0), (1, 0)] and record['phase'] == OPEN, \
+        (name, 'the second operation must launch although 0x28 read 1 after the first',
+         [(o['result'], o['fault_step'], hex(o['fault_value'])) for o in ops])
+    assert [o['irq_count'] for o in ops] == [1, 2], (name, ops)
+
+
 def check_close(record, step, closes):
     name, run, events = record['case'], record['run'], record['events']
     assert run['result'] == -1 and run['phase'] == FAULT and run['fault_step'] == step, (name, 'operation', run)
@@ -575,11 +594,14 @@ def main():
     # and cleared by it.
     blits = {'blits-update-sticks': True, 'blits-update-clears': False}
     cases += [(n, STAGE3 + (0,), {'blits': STAGE3_OPS, 'update_sticks': v}) for n, v in blits.items()]
+    cases += [('fills-update-sticks', stage2(), {'fills': 2, 'update_sticks': True})]
     for name, shape, options in cases:
         try:
             record, state, engine = run_case(image, parts, fields, name, *shape, **options)
             if name.startswith('surface'):
                 check_surface(record, state, engine)
+            elif name == 'fills-update-sticks':
+                check_fills(record)
             elif name in blits:
                 check_blits(record, state, engine, blits[name])
             elif name in closes:
@@ -607,8 +629,9 @@ def main():
             if not row['passed']:
                 print('FAIL', row['case'], row['error'][:600])
         raise SystemExit(f'{len(failures)} of {len(rows)} cases failed')
-    print(f'PASS G2D operation path: {len(rows) - 2 - len(closes) - len(blits)} surfaces, cache refusal leaves the '
-          f'service open, timeout faults, {len(closes)} closes after a fault, both stage-3 copies in one session')
+    print(f'PASS G2D operation path: {len(rows) - 3 - len(closes) - len(blits)} surfaces, cache refusal leaves the '
+          f'service open, timeout faults, {len(closes)} closes after a fault, both stage-3 copies in one session, two '
+          f'fills with the update bit left set')
 
 
 if __name__ == '__main__':

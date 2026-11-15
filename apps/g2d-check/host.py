@@ -10,7 +10,8 @@ no input beyond the seed compiled into main.c.
 
 Converting ARGB8888 to BGRA8888 reverses the bytes of each 32-bit word: both names list channels from the most
 significant byte. The decoder also reports whether the board's output CRC-32 equals the output with both copies
-unconverted, which identifies a conversion that did not happen.
+unconverted, which identifies a conversion that did not happen, or the output with every copied pixel's alpha byte
+0xff, which identifies a copy that forces alpha.
 """
 import struct
 import zlib
@@ -80,16 +81,16 @@ def surfaces(seed):
     return p, bytes(out[0]), out[1]
 
 
-def convert(word, source_format, output_format, converted=True):
+def convert(word, source_format, output_format, converted=True, opaque=False):
     """One pixel from the source format to the output format. Only ARGB8888 (0) to ARGB8888 or BGRA8888 (3) is
-    modeled; with converted False the word is copied as it is."""
+    modeled; with converted False the word is copied as it is, and with opaque the output's alpha byte is 0xff."""
     assert source_format == 0 and output_format in (0, 3)
     if output_format == 0 or not converted:
-        return word
-    return int.from_bytes(word.to_bytes(4, 'little'), 'big')
+        return word | (0xff000000 if opaque else 0)
+    return int.from_bytes(word.to_bytes(4, 'little'), 'big') | (0xff if opaque else 0)
 
 
-def expected(seed, converted=True, count=OPS):
+def expected(seed, converted=True, count=OPS, opaque=False):
     """The plan, the source bytes, and the output bytes after the first count operations."""
     p, source, out = surfaces(seed)
     s = p['stride']
@@ -97,7 +98,7 @@ def expected(seed, converted=True, count=OPS):
         for y in range(op['h']):
             row = struct.unpack_from(f'<{op["w"]}I', source, (op['sy'] + y) * s + op['sx'] * 4)
             struct.pack_into(f'<{op["w"]}I', out, (op['dy'] + y) * s + op['dx'] * 4,
-                             *(convert(w, op['format'], op['output_format'], converted) for w in row))
+                             *(convert(w, op['format'], op['output_format'], converted, opaque) for w in row))
     return p, source, bytes(out)
 
 
@@ -165,11 +166,13 @@ def runs(payload, at):
     seed, width, height, stride, output_crc, source_crc, output_before, source_before = PLAN.unpack_from(payload, at)
     p, source, reference = expected(seed)
     _, _, unconverted = expected(seed, converted=False)
+    _, _, opaque = expected(seed, opaque=True)
     _, _, background = surfaces(seed)
     out = {'plan': {'seed': f'0x{seed:08x}', 'width': width, 'height': height, 'stride': stride,
                     'matches_seed': (width, height, stride) == (p['width'], p['height'], p['stride'])},
            'crc': {'output': f'0x{output_crc:08x}', 'expected_output': f'0x{zlib.crc32(reference):08x}',
                    'unconverted_output': f'0x{zlib.crc32(unconverted):08x}',
+                   'opaque_output': f'0x{zlib.crc32(opaque):08x}',
                    'source': f'0x{source_crc:08x}', 'expected_source': f'0x{zlib.crc32(source):08x}',
                    'output_before': f'0x{output_before:08x}', 'expected_output_before': f'0x{zlib.crc32(bytes(background)):08x}',
                    'source_before': f'0x{source_before:08x}'}}
@@ -181,6 +184,7 @@ def runs(payload, at):
     done = all(o['result'] == 1 for o in ops)
     out['crc']['output_matches'] = done and output_crc == zlib.crc32(reference)
     out['crc']['output_unconverted'] = done and output_crc == zlib.crc32(unconverted)
+    out['crc']['output_opaque'] = done and output_crc == zlib.crc32(opaque)
     out['crc']['source_unchanged'] = done and source_crc == zlib.crc32(source) == source_before
     out['crc']['before_match'] = output_before == zlib.crc32(bytes(background)) and source_before == zlib.crc32(source)
     out['plan']['matches_seed'] = out['plan']['matches_seed'] and all(o['plan_matches_seed'] for o in ops)
