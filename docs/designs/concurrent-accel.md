@@ -318,6 +318,90 @@ listed under stage 1b, read without writes. That limiter bounds bytes per period
 loss that follows bytes weakly. A counter run that measures outstanding requests and latency per master would show
 whether a byte limit can help before any limiter write.
 
+## The AXI2HIF limiter in the vendor driver
+
+**The limiter bounds the eight CPU cores together, so it cannot exempt the real-time cores.** The DSU (the cluster's
+shared unit, which holds the L3 cache and the bus ports) sends every core's DRAM traffic through both AXI2HIF bridges.
+A bandwidth cap on the bridges therefore also delays the cache misses of cores 1-7 and of the core-0 chase. Any policy
+that applies the cap is judged first by the worst-case latency on cores 1-7 with the cap on, and NPU throughput counts
+only under that bar.
+
+The sources are the vendor kernel's `drivers/bus/sunxi-nsi.c`, `sunxi-nsi.h` and `sunxi-nsi-bw.c`, the A733 device
+tree `sun60iw2p1.dtsi` and the vendor A733 kernel configuration.
+
+### The limiter counts CPU traffic only
+
+- The device tree's NSI node (lines 1470-1503) names two CPU-direct masters: `cpu0` (NSI id 19) with registers at
+  0x0a030000 and `cpu1` (id 20) at 0x0a040000. Both use `cpu_direct_mux = <0x08000200 bit 0>`. The GPU (port 6),
+  display (2), NPU (18), ISP and CSI (16, 17), video units, IOMMUs and USB/PCIe are NSI ports, which reach DRAM through
+  the target agents (ports 32 and 33).
+- The vendor driver computes DRAM bandwidth as the bridge counters plus the target-agent counters
+  (`sunxi-nsi-bw.c` lines 70-79 and 146-155). The bridges and the NSI are separate paths to the DRAM controller.
+- `CLUSTERCFR_EL1` reads 0x073fc237 on the board (the scheduler latency report). Bits 10:9 = 01 mean two 128-bit ACE
+  master ports, bit 11 = 0 means no accelerator coherency port, and bit 12 = 0 means no peripheral port, so no device
+  enters through the DSU. The two bridges are the two ACE ports. The DSU sends each request to one port by one bit of
+  its physical address (`INTERLEAVE_ADDR_BIT`, a build parameter between 6 and 12 that software cannot read; DSU TRM
+  100453, Table A1-1), so every core's traffic reaches both bridges.
+
+That every core reaches both bridges rests on these sources and on the one measured register.
+
+### Registers, clock and units
+
+Each bridge has the same words (`sunxi-nsi.h` lines 394-420):
+
+- +0x20, +0x24, +0x28: counter enable, clear and period. +0x80 to +0x94: read and write requests, data and latency.
+- +0x2c QoS, +0x34 priority and +0x38 input/output select, which the vendor writes for no CPU-direct master.
+- +0x30 (`CPU_IAG_MODE`): bit 0 enables the limiter and bit 16+p enables limit p.
+- +0x48 + 8p: bandwidth, 12 bits. +0x4c + 8p: saturation, 10 bits. Limit p = 0 bounds the total, 1 the reads and 2
+  the writes.
+
+The counting clock is the device tree's `cpu_direct` clock, `CLK_DRAM0` (CCU 0x0c00). Every rate computation in the
+driver prefers it (`sunxi-nsi.c` lines 442-447, 647-652 and 1694-1699). DRAM0 runs at PLL_DDR ÷ 4 (CCU word
+0x80000003). PLL_DDR is 24 MHz × (N+1)/(M+1), with its VCO at most 2.52 GHz, and boot0 reports a 2,040 MHz DRAM clock,
+so DRAM0 is predicted at 510 MHz. No run has read PLL_DDR yet.
+
+The vendor's arithmetic (`sunxi-nsi.c` lines 251-262 and 401-488), which the vendor never ran on the A733, at
+f = 510 MHz:
+
+- Bandwidth word = 256 × MB/s ÷ f, so one unit is 1/256 byte per DRAM0 cycle. 1,000 MB/s gives 501, which the
+  driver reads back as 998 MB/s. The largest word, 4,095, is 8,158 MB/s per bridge; two bridges together reach
+  16.3 GB/s, the DRAM pin rate.
+- Saturation word = the bytes of 2,630 cycles (5.16 µs) in 16-byte units: 321 for 1,000 MB/s. The word reaches its
+  10-bit limit above 3,174 MB/s per bridge. The 16-byte unit is the NSI ports' unit and is unverified for the bridges,
+  whose counters count 64-byte units (device tree `cpu_pmu_data_unit`).
+- The vendor's limit request divides the asked total between the bridges (`sunxi-nsi.c` lines 2061-2077).
+
+### Vendor sequence
+
+For each bridge, under one mutex (`nsi_set_cpu_rw_bwl`, `sunxi-nsi.c` lines 401-488):
+
+1. Read +0x30 and write it back with bit 16+p clear.
+2. Write the bandwidth word to +0x48 + 8p and the saturation word to +0x4c + 8p, each clamped to its width.
+3. If limits are enabled, write the value of step 1 with bit 16+p and bit 0 set.
+
+Enabling all configured limits is one read-modify-write of +0x30 that sets bit 0 and the limit bits
+(`nsi_set_cpu_rw_bw_en`, lines 337-395). Disabling clears bits 16-18 and bit 0 and leaves the bandwidth and saturation
+words. A policy that writes those words once can therefore switch the cap with one read and one write of +0x30 per
+bridge: four device accesses, at most 6.4 µs at the 1.6 µs per access measured for translated register accesses
+([NPU full model](npu-full-model.md)).
+
+Every access to +0x30 and +0x48 to +0x5c is in these functions, their show routine (lines 1674-1717), the limit
+ioctls (lines 2054-2080), the `cpu_rw_bwl` sysfs store (lines 1788-1796) and resume (lines 2002-2007). The sysfs store
+cannot work with this device tree: it passes `ia_master.ia_index`, which shares a union with the bridge's mapped
+address (`sunxi-nsi.h` lines 53-66), as the limit number. All of them build only with `CONFIG_AW_NSI_CPU_CHANNEL`, which
+the vendor A733 configuration leaves unset, so the shipped kernel never writes the limiter. Boot0 writes +0x18 and
++0x68 only, and the SCP firmware writes +0x08, +0x18 and +0x68 on both bridges.
+
+The shipped kernel (`CONFIG_AW_NSI=y`) does reach the bridges from Non-secure EL1 without the limiter code: it reads
+0x08000200 at probe (line 1304), maps both bridges (line 1326), writes +0x20 to +0x28 when a user sets the counter
+period (lines 626-709) and reads +0x80 to +0x94 in its bandwidth, latency and request reports (`sunxi-nsi-bw.c`).
+
+### Reading the bridges at EL1
+
+The hardware facts probe ([facts probe](../hardware/a733-facts-probe.md)) reads the DRAM0 clock words, PLL_DDR, the
+path select and both bridges at EL1 on core 0, reads only, before any limiter write is proposed. Its result gives the
+reset values that a limiter owner restores and the clock that sets the units.
+
 ## The GPU add waits on memory four times per task
 
 Alone, the stage-1c GPU add ran 4.48 ms per job and moved 0.70 GB/s. The time comes from the program and the
