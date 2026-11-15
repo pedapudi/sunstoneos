@@ -55,6 +55,9 @@ static struct {
     struct {uint64_t ticket,end,outer,last;unsigned action;} performance;
 } gpu;
 static enum os_quiesce_result gpu_quiesce_step(struct os_quiesce *);
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+void os_nsi_counters_quiesce(void);   /* drivers/dram/a733_nsi_counters_guard.c */
+#endif
 static struct os_quiesce gpu_quiesce={.owner=OS_QUIESCE_GPU,
     .order=OS_QUIESCE_QUEUES,.step=gpu_quiesce_step};
 
@@ -520,6 +523,9 @@ static enum os_quiesce_result gpu_quiesce_step(struct os_quiesce *entry)
     if(os_gpu_return_ready()){os_quiesce_complete(entry);return OS_QUIESCE_DONE;}
     if(os_quiesce_result(entry)==OS_QUIESCE_DONE)goto fault;
     if(!os_cpu_return_failing())return OS_QUIESCE_PENDING;
+#ifdef SUNSTONE_ACCEL_NSI_COUNTERS
+    os_nsi_counters_quiesce();   /* the counter diagnostic's banks, restored before the GPU parks */
+#endif
     if(gpu.failed)goto fault;
     if(gpu.constructor_refusal){
         if(!gpu_return_untouched_body(1))goto fault;

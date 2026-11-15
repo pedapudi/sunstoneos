@@ -79,6 +79,23 @@ unsigned pvr_compute_job_common_words(const struct gpu_queue_program *);
  * have the same prevalidated lifetime and extent contract as grid_cdm. */
 int pvr_compute_job_grid_cdm_resources(void *cdm, uint32_t pds, uint32_t fence,
                                       const uint32_t groups[3], unsigned common_words);
+/* The queue's program ABIs (gpu_queue.h). grid_pds_abi: grid_pds, and for
+ * GRID_INLINE the third pointer write (data bytes 112-127, code to byte 191)
+ * and the local index at unified register 6. grid_inline: writes the first
+ * 16 bytes of a job's argument block, zero-filled, into the PDS data at
+ * bytes 80 and 112; returns zero without writing when the block is longer.
+ * The job's bindings are admitted against lease. pds_data_units: the CDM's
+ * PDS data size, 7 or 8 16-byte units.
+ * grid_cdm_data: grid_cdm_resources with that data size; refuses a size
+ * other than 7 or 8 without changing cdm. */
+void pvr_compute_job_grid_pds_abi(void *pds, unsigned abi, uint64_t task, const uint32_t groups[3],
+                                  uint64_t input, uint64_t output);
+struct gpu_queue_lease_info;
+struct gpu_queue_job;
+int pvr_compute_job_grid_inline(void *pds, const struct gpu_queue_lease_info *lease, const struct gpu_queue_job *job);
+unsigned pvr_compute_job_pds_data_units(unsigned abi);
+int pvr_compute_job_grid_cdm_data(void *cdm, uint32_t pds, uint32_t fence, const uint32_t groups[3],
+                                  unsigned common_words, unsigned data_units);
 
 
 enum pvr_compute_job_phase { PVR_JOB_NEW, PVR_JOB_CHECK_FENCE, PVR_JOB_PUBLISH,
