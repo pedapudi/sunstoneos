@@ -577,9 +577,75 @@ static void domain2_cases(void)
     puts("PASS domain 2: no gate read, delay row and ON command, adoption, refusals with bit 14 alone, "
          "timeout retention, no power-off, transition record, back-to-back measurement");
 }
+/* The owner's two row deadlines (include/a733_power_domains.h). First, against the bounds that the decoder, G2D and
+ * the NPU startup computed before them, written here as arithmetic: the supply deadline is the later of the
+ * provider's startup deadline and now, plus 5,160 + 100,000 us and one tick; the row deadline is now plus 10,000 us
+ * and two ticks; each is clipped to the caller's limit and saturates rather than wraps. A failed clock read gives 0.
+ * Then, for domains 1, 2, 4 and 5 on the actual owner: supply verification ends by the supply deadline taken before
+ * the first step, and the ON answer comes by the row deadline taken at the request, also when a busy rail ledger
+ * delays the admission by one retry. */
+static unsigned failing_clock;
+static int row_deadline_clock(void *v,uint64_t *out){return failing_clock ? 0 : pmic_model_now(v,out);}
+static void row_deadline_cases(void)
+{
+    const uint64_t tick=TICK_US,supply=5160u+100000u+TICK_US,row=10000u+2u*TICK_US;
+    setup();
+    const uint64_t startup=m.provider.config.startup_deadline;
+    assert(startup>2000);
+    m.now=1000;
+    assert(a733_power_supply_deadline(&d.owner,UINT64_MAX)==startup+supply);
+    assert(a733_power_supply_deadline(&d.owner,startup+7)==startup+7);
+    m.now=startup+5000;
+    uint64_t before=m.now,b=a733_power_supply_deadline(&d.owner,UINT64_MAX),after=m.now;
+    assert(b>=before+supply && b<=after+supply);
+    m.now=UINT64_MAX-supply/2;
+    assert(a733_power_supply_deadline(&d.owner,UINT64_MAX)==UINT64_MAX);
+    assert(a733_power_supply_deadline(&d.owner,UINT64_MAX-1)==UINT64_MAX-1);
+    m.provider.pmic_bus_ops.now=row_deadline_clock;failing_clock=1;
+    assert(a733_power_supply_deadline(&d.owner,UINT64_MAX)==0);
+    failing_clock=0;
+    assert(a733_power_row_deadline(&d.owner,5000,UINT64_MAX)==5000+row);
+    assert(a733_power_row_deadline(&d.owner,5000,5000+row)==5000+row);
+    assert(a733_power_row_deadline(&d.owner,5000,7000)==7000);
+    assert(a733_power_row_deadline(&d.owner,UINT64_MAX-row/2,UINT64_MAX)==UINT64_MAX);
+    printf("row-deadlines supply %llu row %llu tick %llu\n",(unsigned long long)supply,(unsigned long long)row,
+           (unsigned long long)tick);
+
+    static const unsigned ids[]={1,2,4,5};
+    for(unsigned k=0;k<4;++k)for(unsigned busy=0;busy<2;++busy) {
+        setup();d.ack_us=120;
+        struct a733_rail_token t={0};struct a733_power_domain_row r={0};
+        assert(a733_power_domain_row_init(&r,&d.owner,ids[k],61,&t));
+        const uint64_t supply_bound=a733_power_supply_deadline(&d.owner,UINT64_MAX);
+        domains_boot();
+        const unsigned w=a733_power_authority_load(&m.rails.authority);
+        const uint64_t verified=m.now;
+        assert((w&A733_POWER_DCDC2_VERIFIED) && verified<=supply_bound);
+        t=domains_rail(61,ids[k]==5 ? A733_RAIL_DCDC4 : A733_RAIL_DCDC2);
+        if(busy)atomic_store(&m.rails.busy,1);
+        assert(a733_power_domain_request(&r,1));
+        const uint64_t requested=m.now,bound=a733_power_row_deadline(&d.owner,requested,UINT64_MAX);
+        if(busy) {
+            /* The service's wake on the request finds the ledger busy and retries one tick later. */
+            service_step();
+            assert(a733_power_domain_state(&r)==A733_POWER_ROW_PENDING && d.wake_at==m.now+TICK_US);
+            atomic_store(&m.rails.busy,0);
+        }
+        for(unsigned i=0;i<1000 && a733_power_domain_state(&r)==A733_POWER_ROW_PENDING;++i) {
+            if(d.notified || m.now>=d.wake_at){service_step();continue;}
+            m.now=d.wake_at;
+        }
+        assert(a733_power_domain_state(&r)==A733_POWER_ROW_ON && m.now<=bound);
+        printf("row-deadline domain %u%s: verified by %llu of %llu, ON %llu us after the request of %llu\n",ids[k],
+               busy ? " busy ledger" : "",(unsigned long long)verified,(unsigned long long)supply_bound,
+               (unsigned long long)(m.now-requested),(unsigned long long)(bound-requested));
+    }
+    puts("PASS row deadlines: consumer arithmetic, clip, saturation, clock failure, domains 1, 2, 4 and 5");
+}
 int main(int argc,char **argv)
 {
     assert(argc<=3);
+    if(argc==2 && !strcmp(argv[1],"--row-deadlines")){row_deadline_cases();return 0;}
     if(argc==3 && !strcmp(argv[1],"--gpu-trace")){gpu_trace_run(argv[2]);puts("PASS focused GPU TOP/CORE write trace");return 0;}
     if(argc==2 && !strcmp(argv[1],"--delays")) {
         transition_delays();puts("PASS first-transition delay initialization and retained failures");return 0;

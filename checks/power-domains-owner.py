@@ -13,7 +13,11 @@ supply verification over modeled PCK600, CCU and R_CCU registers (checks/power-d
   changes no access of the other domains;
 - checks/power-domains-service.c, the service task's PMIC and step bounds;
 - verified_at, the DCDC2 supply-verification time: written once, at the step that first publishes DCDC2 as verified,
-  both with a settled supply (DCDC2 alone, at its own result) and without (with the done bit).
+  both with a settled supply (DCDC2 alone, at its own result) and without (with the done bit);
+- the two row deadlines that the video decoder, G2D and the NPU startup wait on (--row-deadlines): the bounds those
+  consumers computed before the functions existed, as arithmetic, with the clip to the caller's limit, saturation and
+  a failed clock read; then, for domains 1, 2, 4 and 5, verification by the supply deadline and the ON answer by the
+  row deadline, also after one busy-ledger retry. HEADER_MUTANTS change the functions in the header.
 
 The five delay words and the policy nibble that the owner writes to domain 2 must equal the SUN60IW2_PCK_VE_DEC row
 of the hash-pinned vendor pck600_domains.c, written at the offsets of its sun60iw2 PMU table (sunxi_pd_init, then
@@ -73,6 +77,22 @@ MUTANTS = [
      'boot verification leaves verified_at unwritten'),
     ('    if(k>=0)r->transition=r->domains->transition[k];\n', '', 'row answered without its transition record'),
     ('d->running=1;d->started_at=now;', 'd->running=1;', 'first step not stamped'),
+]
+
+HEADER = 'include/a733_power_domains.h'
+HEADER_MUTANTS = [
+    ('    return bound < limit ? bound : limit;\n}\n/* Once supply', '    (void)limit;return bound;\n}\n/* Once supply',
+     'supply deadline not clipped'),
+    ('    return bound < limit ? bound : limit;\n}\n/* Service task only', '    (void)limit;return bound;\n}\n/* Service task only',
+     'row deadline not clipped'),
+    ('(uint64_t)A733_POWER_PCK_BOUND_US + 2u * (uint64_t)d->config.tick_us', '(uint64_t)A733_POWER_PCK_BOUND_US + d->config.tick_us',
+     'row deadline with one tick'),
+    ('const uint64_t anchor = d->pmic->config.startup_deadline > t ? d->pmic->config.startup_deadline : t;',
+     'const uint64_t anchor = t;', 'supply deadline anchored at now'),
+    ('A733_POWER_SUPPLY_SETTLE_US + A733_POWER_SUPPLY_BUDGET_US + d->config.tick_us);',
+     'A733_POWER_SUPPLY_SETTLE_US + A733_POWER_SUPPLY_BUDGET_US);', 'supply deadline with no tick'),
+    ('    if (a733_pmic_now(d->pmic, &t) != 1) return 0;\n', '    (void)a733_pmic_now(d->pmic, &t);\n',
+     'clock failure ignored'),
 ]
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -143,6 +163,10 @@ assert traces.stdout == TRACES.read_text(), 'domain 1, 4 or 5 accesses differ fr
 trace_lines = len(traces.stdout.splitlines())
 assert trace_lines > 100
 
+deadlines = run(binary, '--row-deadlines')
+assert deadlines.returncode == 0, deadlines.stdout[-2000:] + deadlines.stderr[-2000:]
+assert deadlines.stdout.splitlines()[-1].startswith('PASS row deadlines')
+
 service = out / 'service'
 build('power-domains-service.c', service)
 result = run(service)
@@ -163,6 +187,19 @@ for i, (old, new, name) in enumerate(MUTANTS):
     failed = [mode for mode in ([], ['--domain2']) if run(mutant, *mode).returncode != 0]
     assert failed, ('mutant survived', name)
     refused.append(dict(mutant=name, failed=[' '.join(m) or 'whole model' for m in failed]))
+
+for i, (old, new, name) in enumerate(HEADER_MUTANTS):
+    text = (ROOT / HEADER).read_text()
+    assert text.count(old) == 1, (name, old)
+    root = out / 'header-mutants' / str(i)
+    (root / OWNER_SOURCE).parent.mkdir(parents=True)
+    (root / OWNER_SOURCE).write_bytes((ROOT / OWNER_SOURCE).read_bytes())
+    (root / 'include').mkdir()
+    (root / HEADER).write_text(text.replace(old, new))
+    mutant = root / 'pck'
+    build('power-domains-pck.c', mutant, owner_root=root, strict=False)
+    assert run(mutant, '--row-deadlines').returncode != 0, ('mutant survived', name)
+    refused.append(dict(mutant=name, failed=['--row-deadlines']))
 
 summary = dict(vendor_sha256=VENDOR_SHA256, domain2_delay_row=[f'{a:#x}={v:#x}' for a, v in written],
                domain2_policy=f'{policy[0]:#010x}', slow_record=record, measured_record=measured,

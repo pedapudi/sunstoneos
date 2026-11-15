@@ -81,27 +81,17 @@ static void pause_us(uint32_t us){const uint64_t t=now_us()+us;while(now_us()<t)
 static int refuse(unsigned step,uint32_t value){vd.dev.fault_step=step;vd.dev.fault_value=value;return -1;}
 static int fail(unsigned step,uint32_t value){return os_device_fail(&vd.dev,step,value,vd.decoder.unit.uncertain);}
 static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner);}
-/* The bound on the owner's answer to the row, in the PMIC clock (docs/designs/power-domains.md, "Transitions and
- * polling", and the NPU startup's two waits). Until supply verification ends with DCDC2 verified or the done bit, the
- * answer cannot come before verification does: verification may start A733_POWER_SUPPLY_SETTLE_US after the
- * service's first step, ends within A733_POWER_SUPPLY_BUDGET_US once the provider is READY, and READY comes by the
- * PMIC's startup deadline; the bound is anchored at that deadline or now, whichever is later, plus one tick for the
- * service's wake. Once verification has ended, the owner admits the row at its next step and the transition ends
- * within A733_POWER_PCK_BOUND_US of its command: the bound is that, plus two ticks, from the first time this task saw
- * verification ended. The wait itself is capped by the open's deadline. */
-#define VD_TICK_US (1000000u/configTICK_RATE_HZ)
+/* The bound on the owner's answer to the row (include/a733_power_domains.h): the supply deadline until verification
+ * ends with DCDC2 verified or the done bit, then the row deadline from the first time this task saw verification
+ * ended. Each is taken once, when its wait begins, and clipped to the open's deadline. */
 static uint64_t row_bound(uint64_t *supply,uint64_t *verified)
 {
-    const uint64_t t=owner_us();
     const unsigned w=a733_power_authority_load(&providers.shared.rails.authority);
     if(w&(A733_POWER_SUPPLY_DONE|A733_POWER_DCDC2_VERIFIED)){
-        if(!*verified)*verified=t+A733_POWER_PCK_BOUND_US+2u*VD_TICK_US;
+        if(!*verified)*verified=a733_power_row_deadline(&providers.domains,owner_us(),vd.limit);
         return *verified;
     }
-    if(!*supply){
-        const uint64_t anchor=providers.domains.pmic->config.startup_deadline;
-        *supply=(anchor>t?anchor:t)+A733_POWER_SUPPLY_SETTLE_US+A733_POWER_SUPPLY_BUDGET_US+VD_TICK_US;
-    }
+    if(!*supply)*supply=a733_power_supply_deadline(&providers.domains,vd.limit);
     return *supply;
 }
 

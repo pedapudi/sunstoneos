@@ -200,9 +200,10 @@ static int tokens(void)
         if(r!=A733_GPU_RESOURCE_OK){g2d.pck_token=0;return refuse(G2D_STEP_PCK,r|g2d.pck_client<<8);}
     }
     /* The power-domain owner verifies DCDC2 enabled at 800 mV once per boot and wakes every registered row when it
-     * publishes the result. The service reads only the verified bit; every other supply, clock and PPU condition is
-     * the owner's admission of the row. The G2D service writes no PMIC register. */
-    const uint64_t until=now_us()+G2D_CALL_US;
+     * publishes the result, within its supply deadline (include/a733_power_domains.h). The service reads only the
+     * verified bit; every other supply, clock and PPU condition is the owner's admission of the row. The G2D service
+     * writes no PMIC register. */
+    const uint64_t until=a733_power_supply_deadline(&providers.domains,g2d.limit);
     for(;;){
         const unsigned w=a733_power_authority_load(&providers.shared.rails.authority);
         if(w&A733_POWER_DCDC2_VERIFIED){
@@ -212,23 +213,14 @@ static int tokens(void)
         (void)sunstone_deadline_wait_until(until);
     }
 }
-/* Domain-1 status at the request and at each row wake, read only. */
-static void sample_status(void)
-{
-    uint32_t v=0;
-    if(!rd(PCK1+8,&v))v=UINT32_MAX;
-    const unsigned i=g2d.info.status_reads++;
-    if(i<SS_G2D_STATUS_SAMPLES){
-        g2d.info.status_word[i]=v;
-        g2d.info.status_ticks[i]=(uint32_t)(ss_counter_ticks()-g2d.info.requested_ticks);
-    }
-}
-/* The owner's command time for domain 1, read after the row's ON answer has published it. */
-static uint64_t command_us(void)
-{
-    for(unsigned i=0;i<A733_POWER_DOMAINS;++i)if(providers.domains.domain[i].id==1)return providers.domains.domain[i].command_at;
-    return 0;
-}
+/* The transition record that the owner published with the row's answer; read after the answer is seen. */
+#define SAME(m) offsetof(struct ss_g2d_transition,m)==offsetof(struct a733_power_transition,m)
+_Static_assert(sizeof(struct ss_g2d_transition)==sizeof(struct a733_power_transition)&&SAME(policy_before)&&
+    SAME(status_before)&&SAME(policy_written)&&SAME(first_word)&&SAME(pending_word)&&SAME(reached_word)&&SAME(all_and)&&
+    SAME(all_or)&&SAME(reads)&&SAME(spin_reads)&&SAME(commands)&&SAME(command_at)&&SAME(first_at)&&SAME(pending_at)&&
+    SAME(reached_at),"struct ss_g2d_transition mirrors struct a733_power_transition");
+#undef SAME
+static void copy_transition(void){memcpy(&g2d.info.transition,&g2d.row.transition,sizeof(g2d.info.transition));}
 static unsigned bit8(const uint32_t *w){return (w[SS_G2D_PCK1_POLICY]>>8&1u)|(w[SS_G2D_PCK1_STATUS]>>8&1u)<<1;}
 static int lock(void){return a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,g2d.limit)==1;}
 static void unlock(void){a733_platform_lock_leave(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);}
@@ -273,21 +265,20 @@ static int do_open(void)
     /* The owner answers on the row's wake, which notifies this task; the wait blocks until that or the deadline. */
     g2d.info.row_request_us=owner_us();
     if(!a733_power_domain_request(&g2d.row,1))return fail(G2D_STEP_ROW,0);
-    sample_status();
-    const uint64_t row_limit=now_us()+A733_POWER_PCK_BOUND_US+4000;
+    /* Verification has ended (above), so the owner admits the row at its next step. */
+    const uint64_t row_limit=a733_power_row_deadline(&providers.domains,now_us(),g2d.limit);
     for(;;){
         const enum a733_power_row_state r=a733_power_domain_state(&g2d.row);
         if(r==A733_POWER_ROW_ON)break;
         /* A refused row is uncounted and nothing was written: the engine stays closed. */
-        if(r==A733_POWER_ROW_REFUSED){refuse(G2D_STEP_ROW,r);goto refused;}
+        if(r==A733_POWER_ROW_REFUSED){copy_transition();refuse(G2D_STEP_ROW,r);goto refused;}
         if(r!=A733_POWER_ROW_PENDING)return fail(G2D_STEP_ROW,r);
         if(now_us()>=row_limit||!timely())return fail(G2D_STEP_ROW_TIMEOUT,r);
         (void)sunstone_deadline_wait_until(row_limit);
-        sample_status();
     }
     g2d.info.domain_on_ticks=ss_counter_ticks();
     g2d.info.row_on_us=owner_us();
-    g2d.info.pck_command_us=command_us();
+    copy_transition();
     /* g2d_clock_enable: reset (rst_bus_g2d), then the shared DE_SYS reset; the assigned 300 MHz rate is set at probe
      * with the gate off; then the bus clock and the module clock. The DE AHB and DESYS MBUS gates are critical clocks,
      * already on (checked by the domain owner). */

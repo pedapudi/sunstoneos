@@ -18,14 +18,16 @@ PLATFORM = ('pll_ref', 'peri0', 'peri0_gates', 'peri0_status', 'g2d_clk', 'g2d_b
             'de_clk', 'de_bgr', 'di_clk', 'di_bgr', 'gicd_enable', 'gicd_pending', 'gicd_active')
 LOCAL = ('sclk_gate', 'hclk_gate', 'ahb_reset', 'sclk_div', 'version', 'mclk_gate', 'rcq_irq', 'rcq_status',
          'rcq_ctrl', 'mixer_ctrl', 'mixer_irq')
-SAMPLES = 8
+TRANSITION = ('policy_before', 'status_before', 'policy_written', 'first_word', 'pending_word', 'reached_word',
+              'all_and', 'all_or', 'reads', 'spin_reads', 'commands', 'command_at', 'first_at', 'pending_at', 'reached_at')
 HEAD = struct.Struct('<8I')
-INFO = struct.Struct(f'<4I{len(PLATFORM)}I{len(PLATFORM)}I{len(LOCAL)}I4x3Q3Q2I{SAMPLES}I{SAMPLES}I2Q2I')
+INFO = struct.Struct(f'<4I{len(PLATFORM)}I{len(PLATFORM)}I{len(LOCAL)}I4x3Q2Q2I2Q11I4x4Q')
 CLOSED = struct.Struct('<6IQ')
 RUN = struct.Struct('<16I')
 DONE = struct.Struct('<9I8I2I10I5I7Q')
 SIZE = HEAD.size + INFO.size + CLOSED.size + RUN.size + DONE.size
-CHECK_MAGIC, INFO_MAGIC, DONE_MAGIC = 0x4b433247, 0x49443247, 0x44443247
+CHECK_MAGIC, INFO_MAGIC, DONE_MAGIC = 0x4b433247, 0x54443247, 0x44443247
+EARLIER_INFO_MAGIC = 0x49443247  # "G2DI": the record of images before the transition record
 STATUS = {1: 'done', 2: 'refused', 3: 'close failed', 4: 'run failed', 5: 'no surface'}
 FAULT = ('bank_status0', 'bank_status1', 'l1_status0', 'l1_status1', 'l2_status0', 'l2_status1',
          'micro_status', 'micro_low', 'micro_high', 'micro_data')
@@ -90,9 +92,8 @@ def decode(payload):
     entry, after = v[4:4 + p], v[4 + p:4 + 2 * p]
     local = v[4 + 2 * p:4 + 2 * p + len(LOCAL)]
     rest = v[4 + 2 * p + len(LOCAL):]
-    requested, domain_on, opened, row_request_us, pck_command_us, row_on_us, bit8, reads = rest[:8]
-    status_word, status_ticks = rest[8:8 + SAMPLES], rest[8 + SAMPLES:8 + 2 * SAMPLES]
-    verify_at_us, verified_seen_us, settled_supply = rest[8 + 2 * SAMPLES:8 + 2 * SAMPLES + 3]
+    requested, domain_on, opened, row_request_us, row_on_us, bit8, settled_supply, verify_at_us, verified_seen_us = rest[:9]
+    transition = dict(zip(TRANSITION, rest[9:9 + len(TRANSITION)]))
     c = CLOSED.unpack_from(payload, HEAD.size + INFO.size)
     signed = lambda x: x - (1 << 32) if x & 0x80000000 else x
     record = {
@@ -100,6 +101,9 @@ def decode(payload):
         'open_result': signed(open_result), 'close_result': signed(close_result),
         'fault_step': fault_step, 'fault_value': f'0x{fault_value:08x}',
     }
+    if info_magic == EARLIER_INFO_MAGIC:
+        raise ValueError('ss_g2d_info is the earlier layout (magic G2DI, domain-1 status samples); '
+                         'decode it with the host.py of the image that produced it.')
     if info_magic != INFO_MAGIC:
         # A refusal before the owner took the request leaves no open record.
         record['info'] = None
@@ -118,13 +122,12 @@ def decode(payload):
         'version': {'ip_version': f'0x{version >> 16:04x}', 'low_fields': f'0x{version & 0xffff:04x}'},
         'open_us': (opened - requested) / TICKS_PER_US if opened else None,
         'domain_on_us': (domain_on - requested) / TICKS_PER_US if domain_on else None,
-        'owner_clock_us': {'row_request': row_request_us, 'pck_command': pck_command_us, 'row_on': row_on_us,
-                           'adopted': pck_command_us == 0},
+        'owner_clock_us': {'row_request': row_request_us, 'pck_command': transition['command_at'], 'row_on': row_on_us,
+                           'adopted': transition['commands'] == 0 if row_on_us else None},
         'pck_bit8': {'entry_policy': bit8 & 1, 'entry_status': bit8 >> 1 & 1,
                      'after_policy': bit8 >> 8 & 1, 'after_status': bit8 >> 9 & 1},
-        'status_reads': reads,
-        'status_samples': [{'word': f'0x{w:08x}', 'us': t / TICKS_PER_US}
-                           for w, t in list(zip(status_word, status_ticks))[:min(reads, SAMPLES)]],
+        'transition': {k: f'0x{v:08x}' if k.endswith(('_before', '_written', '_word', '_and', '_or')) else v
+                       for k, v in transition.items()},
         'supply': {'verify_at_us': verify_at_us, 'verified_seen_us': verified_seen_us,
                    'settled_supply': settled_supply,
                    'seen_after_request_us': verified_seen_us - row_request_us if verified_seen_us and row_request_us else None},

@@ -546,12 +546,9 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
             if(r==A733_GPU_RESOURCE_FAULT){STATE_FAIL(s,(uint32_t)r);return fault(s);}
             if(r!=A733_GPU_RESOURCE_OK){STATE_FAIL(s,(uint32_t)r);s->pck.token=0;return refuse(s);}
         }
-        /* The owner's done bit arrives within its own bound; anchor this wait
-         * at whichever of now and the PMIC provider's startup deadline is later. */
-        uint64_t anchor=s->providers.domains->pmic->config.startup_deadline;
-        if(anchor<t)anchor=t;
-        if(!a733_deadline_after(anchor,A733_POWER_SUPPLY_SETTLE_US+A733_POWER_SUPPLY_BUDGET_US+TICK_US,
-           &s->wait_until))return refuse(s);
+        /* The owner's done bit arrives within its supply deadline. */
+        s->wait_until=a733_power_supply_deadline(s->providers.domains,deadline);
+        if(!s->wait_until)return refuse(s);
         s->stage=A733_NPU_STARTUP_SUPPLY;
         break;
     }
@@ -588,8 +585,8 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
          * adopts an ON domain without a PCK600 write. The row was admitted
          * before the scheduler; a refusal of the request itself means an
          * earlier request is unanswered. */
-        if(!a733_power_domain_request(&s->row,1) || !now(s,&t) ||
-           !a733_deadline_after(t,A733_POWER_PCK_BOUND_US+2*TICK_US,&s->wait_until))return fault(s);
+        if(!a733_power_domain_request(&s->row,1) || !now(s,&t))return fault(s);
+        s->wait_until=a733_power_row_deadline(s->providers.domains,t,deadline);
         /* A domain that the pass read ON is already powered, so PLL_NPU,
          * which lies outside it, starts while the owner adopts the domain.
          * An OFF domain is powered first. The local open table waits for
