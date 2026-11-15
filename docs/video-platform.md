@@ -286,8 +286,11 @@ the two priorities do not lengthen the wait.
 The OS image's decoder task repeats `acquire` and `prepare` calls while they
 advance, rather than one call per tick: `prepare`'s eighteen steps run back to
 back, each in its own hold, so no hold exceeds four accesses there. From the
-ON answer, a cold start therefore makes about 120 native accesses, about
-240 µs at the measured 2 µs each, plus at most about 420 µs of waiting.
+ON answer, a cold start therefore makes about 120 native accesses plus at
+most about 420 µs of waiting. The accesses take at most about 240 µs: the
+2 µs each was measured on run `1794714415147688285-6b3ec3f5` (below), with code
+that walked the page tables and read the clock at every access. The current code does
+neither, so 240 µs is an upper bound until a board run measures it.
 
 The binding's cold record (`struct a733_video_cold_record`) stamps each phase
 in microseconds: the entry hold (`entry_at` to `entered_at`), hold A (`on_at`
