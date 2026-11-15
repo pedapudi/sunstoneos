@@ -3,7 +3,7 @@
 Status: **implemented**. The platform guard, power-on, enumeration, firmware
 start, passive scan and normal shutdown have finite board qualification
 ([radio status](../status/radio.md), [records](../evidence/radio.jsonl)).
-Association remains host-tested, and the address stage after it is host-tested. Registered failure return covers partial
+Association remains host-tested. Registered failure return covers partial
 startup and scan-only shutdown; its physical qualification awaits reviewed USB
 launch admission facts.
 
@@ -327,34 +327,54 @@ Head flags bit 14 marks a 56-byte address section, the last section of the recor
 - **Times:** the first frame of each kind, in milliseconds since the network started.
 - **Codes:** the lease time in seconds, the number of DNS servers the lease names, the DNS response code and answer
   count, and the resolve's reply code.
-- **Flags:** the lease was published; the leased address is in an RFC 1918 private range; the ACK named a router, and
-  the first router is private-range; the offer and the ACK name the same address and the same server; a host-name option
-  was sent; the ACK carried a lease time; a DNS response matched the query; the resolve returned an address; the IP task
-  acknowledged the offline fence; the bound passed; the ring was empty at a draw.
+- **Flags:**
+  - the lease was published;
+  - the leased address is in an RFC 1918 private range;
+  - the ACK named a router, and the first router is private-range;
+  - the offer and the ACK name the same address, and the same server;
+  - a sent DHCP message carried a host-name option;
+  - the ACK carried a lease time;
+  - a DNS response carried the query's identifier, and the resolve returned an address;
+  - the IP task acknowledged the offline fence;
+  - the stage's bound passed;
+  - the ring was empty at a draw.
 
 The section holds no address, MAC, host name or DNS name. The owner's frame observer keeps the transaction identifiers
 and the offered address in memory to compare with later frames; they never reach the record. `tools/evidence.py`
 refuses any record in `docs/evidence/radio.jsonl` that holds an IPv4 dotted quad or a 48-bit MAC in colon or hyphen form
 (`checks/evidence-addresses.py`).
 
-### The stage's bounds nest inside the startup deadline
+### The stage's bounds nest inside the startup deadline and the session
 
-Ticks are milliseconds. Each bound runs from the network's start, which follows authorization, and each also stops at
-the 50 s startup deadline, which leaves 10 s of the 60 s session for shutdown and the return.
+Ticks are milliseconds. The bounds start at three points:
 
-- **DHCP acquisition, 12 s.** The stack sends its first discover at 250 ms (`dhcpINITIAL_TIMER_PERIOD`) and waits 5 s
-  for an offer (`dhcpINITIAL_DHCP_TX_PERIOD`), then sends a second discover and waits 10 s; a request waits 5 s for its
-  ACK. 12 s holds two discovers, or one discover and the request with its full wait.
-- **Resolve, 16 s.** The resolve waits for the lease and then has at least 4 s for the query when the lease came within
-  12 s.
-- **Stage, 17 s.** The resolve's bound plus 1 s for the offline fence.
-- **Each frame:** 2 s to transmit and 3 s in the queue.
-- **Lease cap, 10 minutes.** The stage ends long before it.
+- **Stage, 17 s from authorization.** It covers the wait for an idle transport and four ring words, the network's
+  start, the resolve and the offline fence: the resolve's 16 s plus 1 s for the rest.
+- **DHCP acquisition, 12 s from the network's start.** The stack sends its first discover at 250 ms
+  (`dhcpINITIAL_TIMER_PERIOD`) and waits 5 s for an offer (`dhcpINITIAL_DHCP_TX_PERIOD`), then sends a second discover
+  and waits 10 s; a request waits 5 s for its ACK. 12 s holds two discovers, or one discover and the request with its
+  full wait.
+- **Resolve, 16 s from the client's submit.** The resolve waits for the lease and then has at least 4 s for the query
+  when the lease came within 12 s.
 
-A normal run should hold its lease within 1 to 2 s of authorization and resolve within tens of milliseconds of the
-lease. `checks/radio-stage-limit.py` checks these relations on the prepared profile. `checks/radio-network-dhcp-dns.py`
-runs the stack against a scripted server for an offer and ACK, a NAK, and no reply, and `checks/board-radio.c` covers the
-fenced end, no lease and the bound.
+Each frame has 2 s to transmit and 3 s in the queue. The lease cap is 10 minutes, far beyond the stage. Every bound
+also stops at the 50 s startup deadline (`bounded_deadline` in `apps/board/radio.c`).
+
+Three later deadlines follow in session time. The radio client application must finish by 55 s: the 60 s session end
+less the 5 s return reserve in `apps/radio-scan/manifest.json`, which is earlier than its 52 s run bound from its start.
+The radio owner's deadline is 10 ms before the session end, and the session ends at 60 s.
+
+- **Nominal.** Firmware is confirmed near 16.7 s. The scan takes about 3 s, the join well under 1 s and each handshake
+  message tens of milliseconds, so authorization comes near 21 s. The lease should follow within 1 to 2 s and the DNS answer within tens of
+  milliseconds; the fence and the normal shutdown follow, and the stage ends near 24 s.
+- **Worst case.** The association bounds (scan 10 s, join 8 s, security 14 s) can carry authorization to 48.7 s, and
+  the stage's 17 s then stops at the 50 s startup deadline. The failure shutdown starts there, the client must finish by
+  55 s, and the return has the 5 s reserve before the 60 s session end.
+
+`checks/radio-stage-limit.py` checks the relations between the acquisition, resolve, frame and lease bounds and the
+association budget on the prepared profile. `checks/radio-network-dhcp-dns.py` runs the stack against a scripted
+server for an offer and ACK, a NAK, and no reply, and `checks/board-radio.c` covers the fenced end, no lease and the
+bound.
 
 ## Entropy and credentials gate association only
 
