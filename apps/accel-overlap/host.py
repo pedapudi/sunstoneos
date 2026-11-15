@@ -9,6 +9,17 @@ VERSION = 1
 BYTES = 1200
 SWEEP_VERSION = 2
 SWEEP_BYTES = 1488
+LARGE_VERSION = 3
+# The four-elements-per-lane GPU run (ACCEL_OVERLAP_WIDTH): the larger-job layout with only phase 0, the GPU alone.
+WIDTH_VERSION = 4
+LARGE_BYTES = 2944
+LARGE_PHASES = 9
+LARGE_NAMES = ('gpu-alone', 'npu-alone', 'none', 'core-2', 'core-7', 'cores-2-4', 'cores-2-5-7', 'core-2-x3', 'core-7-x3')
+LARGE_DEVICES = (1, 2, 3, 7, 7, 7, 7, 7, 7)
+LARGE_MODES = (0, 0, 0, 0x01, 0x10, 0x07, 0x1f, 0x101, 0x110)
+# Stage-1b losses in percent (docs/evidence/latency.jsonl, entry 1794709286170370328-b5d81897): small jobs, both devices.
+STAGE_1B_LOSS = {'core-2': {'gpu': 25.4, 'npu': 11.42}, 'core-7': {'gpu': 32.54, 'npu': 29.26},
+                 'cores-2-4': {'gpu': 51.12, 'npu': 48.07}, 'cores-2-5-7': {'gpu': 51.09, 'npu': 53.01}}
 PHASES = 5
 TICKS_PER_US = 24
 NAMES = ('gpu-alone', 'npu-alone', 'gpu-npu', 'gpu-npu-stream', 'pll-cycles')
@@ -40,6 +51,8 @@ def device(raw, at):
 
 
 def decode(raw):
+    if len(raw) == LARGE_BYTES:
+        return decode_large(raw)
     if len(raw) not in (BYTES, SWEEP_BYTES):
         raise ValueError('The result must hold exactly %d or %d bytes (a failure record, or another image).' %
                          (BYTES, SWEEP_BYTES))
@@ -179,6 +192,172 @@ def sweep_decision(r):
     return {'verdict': verdict, 'totals_within_15_percent': totals_close, 'all_track_chase_within_25_percent': tracks,
             'over_chase_by_more_than_50_percent': exceeds, 'core_2_costs_over_30_percent': core2,
             'ceiling_gb_per_second': CEILING_GB_PER_SECOND}
+
+
+def decode_large(raw):
+    """The larger-job sweep (struct accel_overlap_large_result)."""
+    magic, version, size, phases, clock0, clock1 = struct.unpack_from('<4I2Q', raw, 0)
+    if (magic, size, phases) != (MAGIC, LARGE_BYTES, LARGE_PHASES) or version not in (LARGE_VERSION, WIDTH_VERSION):
+        raise ValueError('The result header differs (a failure record, or another image).')
+    width = version == WIDTH_VERSION
+    initial_top, final_top, workers, worker_bytes = struct.unpack_from('<4I', raw, 32)
+    (reference, diff, last, unlocked, writes, in_flight, completions, first_site, first_word, cycles, cycle_mismatches,
+     close_ticks, open_ticks) = struct.unpack_from('<4I3Q4I2Q', raw, 48)
+    (chase_lines,) = struct.unpack_from('<Q', raw, 120)
+    gpu_elements, npu_bytes = struct.unpack_from('<2I', raw, 128)
+    r = {'clock': {'cpu_l_mhz': clock0 & 0xffff, 'cpu_b_mhz': clock0 >> 16 & 0xffff, 'cpu_l_mv': clock1 & 0xffff,
+                   'cpu_b_mv': clock1 >> 16 & 0xffff, 'dsu_mhz': clock1 >> 32 & 0xffff},
+         'initial_top': initial_top, 'final_top': final_top, 'stream_workers': workers,
+         'stream_bytes_per_worker': worker_bytes, 'chase_lines': chase_lines, 'gpu_elements': gpu_elements,
+         'npu_tensor_bytes': npu_bytes,
+         'pll': {'reference': '0x%08x' % reference, 'last': '0x%08x' % last, 'unlocked': unlocked, 'writes': writes,
+                 'first_site': first_site, 'first_word': '0x%08x' % first_word}, 'phases': []}
+    for i in range(1 if width else LARGE_PHASES):
+        at = 136 + 312 * i
+        devices, throttled = struct.unpack_from('<2I', raw, at)
+        overlap, ticks, sweeps, stream_ticks = struct.unpack_from('<4Q', raw, at + 184)
+        mask, per_sample = struct.unpack_from('<2I', raw, at + 216)
+        loads, chase_ticks = struct.unpack_from('<2Q', raw, at + 256)
+        mode, slot_jobs = struct.unpack_from('<2I', raw, at + 272)
+        plain_sum, plain_max, synced_sum, synced_max = struct.unpack_from('<4Q', raw, at + 280)
+        if devices != LARGE_DEVICES[i] or mode != LARGE_MODES[i] or mask != (mode & 0xff):
+            raise ValueError('Phase %d ran devices 0x%x with streaming 0x%x, not 0x%x with 0x%x.' %
+                             (i, devices, mode, LARGE_DEVICES[i], LARGE_MODES[i]))
+        chase = distribution(raw, at + 224)
+        ns = lambda k: None if chase[k] is None or not per_sample else round(chase[k] * 1000 / per_sample, 1)
+        phase = {'name': LARGE_NAMES[i], 'devices': devices, 'stream_mode': mode, 'throttled': throttled,
+                 'gpu': device(raw, at + 8), 'npu': device(raw, at + 96), 'overlap': overlap,
+                 'ms': round(ticks / TICKS_PER_US / 1000, 3), 'stream_sweeps': sweeps,
+                 'stream_gb_per_second': round(sweeps * worker_bytes * 2 * TICKS_PER_US * 1e6 / stream_ticks / 1e9, 2)
+                 if stream_ticks else 0.0,
+                 'chase': {'samples': chase['count'], 'overflow': chase['overflow'], 'p50_ns': ns('p50_us'),
+                           'p99_ns': ns('p99_us'), 'mean_ns': round(chase_ticks * 1000 / TICKS_PER_US / loads, 1) if loads else None},
+                 'slot_jobs': slot_jobs}
+        if slot_jobs:
+            phase['gpu_slot_job_us'] = round(plain_sum / slot_jobs / TICKS_PER_US, 1)
+            phase['gpu_slot_job_synced_us'] = round(synced_sum / slot_jobs / TICKS_PER_US, 1)
+            phase['gpu_output_maintenance_us'] = round((synced_sum - plain_sum) / slot_jobs / TICKS_PER_US, 1)
+            phase['gpu_output_maintenance_max_us'] = round((synced_max - plain_max) / TICKS_PER_US, 1)
+        r['phases'].append(phase)
+    if width:
+        if any(raw[136 + 312:]):
+            raise ValueError('The width run wrote phases after the GPU-alone phase.')
+        r['checks'] = width_checks(r)
+        r['in_range'] = all(c['ok'] for c in r['checks'])
+        return r
+    r['losses'] = large_losses(r['phases'])
+    r['checks'] = large_checks(r)
+    r['in_range'] = all(c['ok'] for c in r['checks'])
+    r['decision'] = large_decision(r)
+    return r
+
+
+def width_checks(r):
+    """The ranges of the GPU-width hypothesis (docs/designs/concurrent-accel.md, "The GPU add waits on memory")."""
+    out = []
+
+    def check(name, value, low=None, high=None):
+        ok = value is not None and (low is None or value >= low) and (high is None or value <= high)
+        out.append({'name': name, 'value': value, 'low': low, 'high': high, 'ok': ok})
+
+    p = r['phases'][0]
+    check('gpu alone jobs/s', p['gpu']['jobs_per_second'], 550, 850)
+    check('gpu serial slot job us', p.get('gpu_slot_job_us'), 1200, 1800)
+    check('gpu checked slot jobs', p['slot_jobs'], 4, 4)
+    check('gpu pipelined jobs', p['gpu']['pipelined_jobs'], 200)
+    check('mismatches', p['gpu']['mismatches'], 0, 0)
+    check('chase overflow', p['chase']['overflow'], 0, 0)
+    check('gpu elements per job', r['gpu_elements'], 262144, 262144)
+    check('pll_npu unlocked reads', r['pll']['unlocked'], 0, 0)
+    check('pll_npu first differing site', r['pll']['first_site'], 0, 0)
+    check('throttled', p['throttled'], 0, 0)
+    check('top point at start and end', r['initial_top'] + r['final_top'], 2, 2)
+    return out
+
+
+def large_losses(p):
+    """Each phase with both devices against phase 2 (both, no streaming), and phase 2 against each device alone."""
+    out = {}
+    for ph in p[2:]:
+        row = {}
+        for d in ('gpu', 'npu'):
+            b, v = p[2][d]['jobs_per_second'], ph[d]['jobs_per_second']
+            row[d] = round(100 * (1 - v / b), 2) if b and v is not None else None
+        out[ph['name']] = row
+    out['together-over-alone-percent'] = {
+        d: round(100 * p[2][d]['jobs_per_second'] / p[k][d]['jobs_per_second'], 1)
+        if p[2][d]['jobs_per_second'] and p[k][d]['jobs_per_second'] else None for d, k in (('gpu', 0), ('npu', 1))}
+    return out
+
+
+def large_checks(r):
+    """The ranges of the stage-1c hypothesis (docs/designs/concurrent-accel.md, "Stage 1c")."""
+    out = []
+
+    def check(name, value, low=None, high=None):
+        ok = value is not None and (low is None or value >= low) and (high is None or value <= high)
+        out.append({'name': name, 'value': value, 'low': low, 'high': high, 'ok': ok})
+
+    p, loss = r['phases'], r['losses']
+    check('gpu alone jobs/s', p[0]['gpu']['jobs_per_second'], 300, 2000)
+    check('npu alone jobs/s', p[1]['npu']['jobs_per_second'], 4000, 11000)
+    for d in ('gpu', 'npu'):
+        check('%s together over alone percent' % d, loss['together-over-alone-percent'][d], 80, 100)
+    for name, gpu, npu in (('core-2', (10, 40), (0, 26)), ('core-7', (18, 48), (14, 44)),
+                           ('cores-2-4', (36, 66), (33, 63)), ('cores-2-5-7', (36, 66), (38, 68))):
+        check('gpu loss percent %s' % name, loss[name]['gpu'], *gpu)
+        check('npu loss percent %s' % name, loss[name]['npu'], *npu)
+    for x3, single in (('core-2-x3', 'core-2'), ('core-7-x3', 'core-7')):
+        for d in ('gpu', 'npu'):
+            a, b = loss[x3][d], loss[single][d]
+            check('%s loss %s minus %s points' % (d, x3, single), None if a is None or b is None else round(a - b, 2), -10, 10)
+    for i, ph in enumerate(p):
+        for d, bit in (('gpu', 1), ('npu', 2)):
+            if ph['devices'] & bit:
+                check('%s pipelined jobs %s' % (d, ph['name']), ph[d]['pipelined_jobs'], 200)
+        if ph['devices'] & 3 == 3:
+            check('npu completions with a gpu job in flight %s' % ph['name'], ph['overlap'], 200)
+        if ph['devices'] & 1:
+            check('gpu checked slot jobs %s' % ph['name'], ph['slot_jobs'], 4, 4)
+        check('chase samples %s' % ph['name'], ph['chase']['samples'], 1000)
+        check('chase overflow %s' % ph['name'], ph['chase']['overflow'], 0, 0)
+    check('chase cycle lines', r['chase_lines'], 262144, 262144)
+    check('gpu elements per job', r['gpu_elements'], 262144, 262144)
+    check('npu tensor bytes', r['npu_tensor_bytes'], 360448, 360448)
+    check('phase longest ms', max(ph['ms'] for ph in p), None, 3000)
+    check('mismatches', sum(ph[d]['mismatches'] for ph in p for d in ('gpu', 'npu')), 0, 0)
+    check('pll_npu unlocked reads', r['pll']['unlocked'], 0, 0)
+    check('pll_npu first differing site', r['pll']['first_site'], 0, 0)
+    check('throttled phases', sum(1 for ph in p if ph['throttled']), 0, 0)
+    check('top point at start and end', r['initial_top'] + r['final_top'], 2, 2)
+    return out
+
+
+def large_decision(r):
+    """The stage-1c decision rules: validity, job structure at the stage-1 set, and stream count (one direction)."""
+    loss, out = r['losses'], {}
+    for d in ('gpu', 'npu'):
+        together = loss['together-over-alone-percent'][d]
+        now, before = loss['cores-2-5-7'][d], STAGE_1B_LOSS['cores-2-5-7'][d]
+        if now is None:
+            verdict = 'unknown'
+        elif now <= before / 2:
+            verdict = 'lever'
+        elif abs(now - before) <= 15:
+            verdict = 'not a lever'
+        elif now > before:
+            verdict = 'worse'  # larger jobs lose more than the small ones: not a lever
+        else:
+            verdict = 'partial'
+        out[d] = {'confounded': together is None or together < 80, 'stage_1c_loss': now, 'stage_1b_loss': before,
+                  'job_structure': verdict}
+    rows = {}
+    for x3, single in (('core-2-x3', 'core-2'), ('core-7-x3', 'core-7')):
+        rows[x3] = {d: ('requesting cores, not row interleaving'
+                        if loss[x3][d] is not None and loss[single][d] is not None and abs(loss[x3][d] - loss[single][d]) <= 10
+                        else 'not separated') for d in ('gpu', 'npu')}
+    out['stream_count'] = rows
+    return out
 
 
 def checks(r):

@@ -163,4 +163,13 @@ int os_iommu_scan(unsigned master, struct a733_iommu_owner_fault *out)
     leave();
     return r;
 }
+int os_iommu_prefetch(uint32_t words[2])
+{
+    if(!words || !enter()) return -1;
+    /* Only while active: the owner holds the clock lease, so the banks are clocked. */
+    const int r = iommu.owner.state == A733_IOMMU_OWNER_ACTIVE && reg_read(NULL, 0x2c, &words[0]) == 1 &&
+        reg_read(NULL, A733_IOMMU_BANK_BYTES + 0x2c, &words[1]) == 1 ? 1 : -1;
+    leave();
+    return r;
+}
 const struct a733_iommu_owner *os_iommu_owner(void) { return &iommu.owner; }

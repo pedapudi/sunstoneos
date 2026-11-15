@@ -19,14 +19,28 @@
 #include "sunstone_npu_queue.h"
 #include "sunstone_npu_queue_service.h"
 #include "gpu_queue.h"
+#ifdef ACCEL_OVERLAP_WIDTH
+#include "add4/program.h"           /* four consecutive elements per lane (add4/vector_add4.cl) */
+#define GPU_LANE_ELEMENTS 4u
+#else
 #include "../queue-add/program.h"
+#define GPU_LANE_ELEMENTS 1u
+#endif
 #include "result.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <stdatomic.h>
 #include <string.h>
 
+#ifdef ACCEL_OVERLAP_LARGE
+#define GPU_ELEMENTS 262144u            /* 2 MiB of inputs and 1 MiB of output per job */
+#define GPU_SLOT_BYTES (1u << 20)
+#else
 #define GPU_ELEMENTS 65u
+#define GPU_SLOT_BYTES 320u
+#endif
+#define GPU_GROUPS ((GPU_ELEMENTS / GPU_LANE_ELEMENTS + 31u) / 32u)
+_Static_assert(GPU_ELEMENTS % GPU_LANE_ELEMENTS == 0, "each lane adds whole groups of elements");
 #define GPU_SERIAL_JOBS 2000u
 #define NPU_SERIAL_JOBS 4000u
 #define PIPELINE_TICKS 24000000u        /* one second */
@@ -49,11 +63,27 @@ static const uint32_t phase_devices[ACCEL_OVERLAP_PHASES] = {
     ACCEL_OVERLAP_GPU | ACCEL_OVERLAP_NPU | ACCEL_OVERLAP_STREAM | ACCEL_OVERLAP_PLL_CYCLES};
 #else
 /* Streaming sets (bit w: the worker on stream_core[w]): none, core 2, cores 2-4, cores 2-5 and 7, core 7 alone. */
+#ifndef ACCEL_OVERLAP_LARGE
 static const uint32_t phase_streams[ACCEL_OVERLAP_PHASES] = {0x00, 0x01, 0x07, ALL_STREAMS, 0x10};
+#endif
 #define CHASE_CORE 0u
 #define CHASE_LINE 64u
 #define CHASE_LOADS 64u
+#ifdef ACCEL_OVERLAP_LARGE
+/* Phases of the larger-job build: each device alone, then both under no streaming, core 2, core 7, cores 2-4, cores 2-5 and
+ * 7, and core 2 and core 7 each streaming over three interleaved areas. */
+#define SWEEP_PHASES ACCEL_OVERLAP_LARGE_PHASES
+#define BOTH (ACCEL_OVERLAP_GPU | ACCEL_OVERLAP_NPU)
+static const uint32_t large_devices[SWEEP_PHASES] = {ACCEL_OVERLAP_GPU, ACCEL_OVERLAP_NPU, BOTH, BOTH, BOTH, BOTH, BOTH, BOTH, BOTH};
+static const uint32_t large_streams[SWEEP_PHASES] = {0, 0, 0, 0x01, 0x10, 0x07, ALL_STREAMS,
+                                                     0x01 | ACCEL_OVERLAP_INTERLEAVED, 0x10 | ACCEL_OVERLAP_INTERLEAVED};
+static struct accel_overlap_large_result large_result;
+#define CHASE_LINES_FIELD large_result.chase_lines
+#else
 static struct accel_overlap_sweep_result sweep_result;  /* its base is copied from result at the end */
+#define SWEEP_PHASES ACCEL_OVERLAP_PHASES
+#define CHASE_LINES_FIELD sweep_result.chase_lines
+#endif
 static uint32_t chase_histogram[HISTOGRAM];
 static atomic_uint chase_run, chase_done, chase_ready;
 static StaticTask_t chase_tcb;
@@ -62,6 +92,14 @@ static TaskHandle_t chase_task;
 static struct accel_overlap_sweep *chase_phase;
 #endif
 static struct accel_overlap_result result;
+#ifndef SWEEP_PHASES
+#define SWEEP_PHASES ACCEL_OVERLAP_PHASES
+#endif
+#ifdef ACCEL_OVERLAP_LARGE
+#define STREAM_AREAS (STREAM_WORKERS + 4u)  /* two more areas each for the workers on cores 2 and 7 */
+#else
+#define STREAM_AREAS STREAM_WORKERS
+#endif
 #ifndef ACCEL_OVERLAP_SWEEP
 static uint32_t gpu_histogram[2][HISTOGRAM];
 #endif
@@ -69,7 +107,7 @@ static uint32_t npu_histogram[2][HISTOGRAM];
 
 /* Commands from the main task to the NPU producer and the streaming workers. */
 enum { NPU_IDLE, NPU_SERIAL, NPU_PIPELINED, NPU_CONTINUOUS, NPU_EXIT };
-static atomic_uint npu_command, npu_done, npu_stop, stream_run, stream_stopped, stream_mask;
+static atomic_uint npu_command, npu_done, npu_stop, stream_run, stream_stopped, stream_mask, stream_interleaved;
 static atomic_uint_fast64_t pipeline_end, stream_sweeps;
 static atomic_uint gpu_outstanding;     /* GPU jobs submitted and not yet collected */
 static atomic_uint npu_ready;
@@ -146,6 +184,20 @@ static void stream_worker(void *argument)
     const size_t count = STREAM_BYTES / sizeof(uint64_t);
     uint64_t sweep = 0;
     for (size_t i = 0; i < count; ++i) words[i] = 0;
+#ifdef ACCEL_OVERLAP_LARGE
+    /* The workers on cores 2 (w 0) and 7 (w 4) each own two more 4 MiB areas after the five areas of the workers, which they
+     * stream together with their own in an interleaved phase. */
+    volatile uint64_t *extra[2] = {0, 0};
+    uint64_t extra_sweep = 0;
+    if (w == 0 || w == 4) {
+        uint8_t *after = (uint8_t *)grant->regions[ACCEL_OVERLAP_REGION_STREAM].base +
+                         (size_t)(STREAM_WORKERS + (w == 4 ? 2u : 0u)) * STREAM_BYTES;
+        for (unsigned k = 0; k < 2; ++k) {
+            extra[k] = (volatile uint64_t *)(after + (size_t)k * STREAM_BYTES);
+            for (size_t i = 0; i < count; ++i) extra[k][i] = 0;
+        }
+    }
+#endif
     for (;;) {
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         if (atomic_load_explicit(&npu_command, memory_order_acquire) == NPU_EXIT) break;
@@ -153,6 +205,20 @@ static void stream_worker(void *argument)
         if (!(atomic_load_explicit(&stream_mask, memory_order_acquire) >> w & 1u)) continue;
         while (atomic_load_explicit(&stream_run, memory_order_acquire)) {
             if (portGET_CORE_ID() != stream_core[w]) fail(0x010, portGET_CORE_ID());
+#ifdef ACCEL_OVERLAP_LARGE
+            if (atomic_load_explicit(&stream_interleaved, memory_order_acquire)) {
+                if (!extra[0]) fail(0x013, w);
+                /* Three sequential streams in one loop: each step reads and rewrites one word of each area. */
+                for (size_t i = 0; i < count; ++i) {
+                    const uint64_t a = words[i], b = extra[0][i], c = extra[1][i];
+                    if (a != sweep || b != extra_sweep || c != extra_sweep) fail(0x014, (uint32_t)i);
+                    words[i] = sweep + 1; extra[0][i] = extra_sweep + 1; extra[1][i] = extra_sweep + 1;
+                }
+                ++sweep; ++extra_sweep;
+                atomic_fetch_add_explicit(&stream_sweeps, 3, memory_order_relaxed);
+                continue;
+            }
+#endif
             for (size_t i = 0; i < count; ++i) {
                 const uint64_t old = words[i];
                 if (old != sweep) fail(0x011, (uint32_t)i);
@@ -168,6 +234,8 @@ static void stream_worker(void *argument)
 }
 static void stream_start(uint32_t mask)
 {
+    atomic_store_explicit(&stream_interleaved, mask >> 8 & 1u, memory_order_relaxed);
+    mask &= 0xffu;
     atomic_store_explicit(&stream_sweeps, 0, memory_order_relaxed);
     atomic_store_explicit(&stream_stopped, 0, memory_order_relaxed);
     atomic_store_explicit(&stream_mask, mask, memory_order_relaxed);
@@ -212,7 +280,7 @@ static void chase_task_entry(void *unused)
     uint64_t steps = 0;
     do { p = *(volatile uintptr_t *)p; ++steps; } while (p != (uintptr_t)base && steps <= lines);
     if (steps != lines) fail(0x081, (uint32_t)steps);
-    sweep_result.chase_lines = steps;
+    CHASE_LINES_FIELD = steps;
     atomic_store_explicit(&chase_ready, 1, memory_order_release);
     xTaskNotifyGive(main_task);
     for (;;) {
@@ -468,30 +536,84 @@ static void gpu_serial(struct accel_overlap_device *d)
 #endif
 /* Jobs in flight may not share an output range (drivers/gpu/pvr_compute_fast.c, conflicts): each of the GPU_QUEUE_DEPTH jobs
  * in flight writes its own slot of the output lease, a whole number of cache lines apart. */
-#define GPU_SLOT_BYTES 320u
 static void gpu_slot(unsigned slot)
 {
     gpu_job.binding[0].address = slot * GPU_SLOT_BYTES;
     gpu_job.binding[0].sync_offset = slot * GPU_SLOT_BYTES;
+#ifdef ACCEL_OVERLAP_LARGE
+    /* One cache line per pipelined job: the conflict check sees four distinct slots, and the queue maintains 64 bytes. The
+     * GPU MMU confines the program to the lease, not to the range, so the job still writes the whole slot. */
+    gpu_job.binding[0].sync_bytes = 64u;
+#endif
 }
+/* Progress at most every 100 ms of the pipelined segment, whatever the job length. */
+static uint64_t last_live;
+static void live_paced(void)
+{
+    const uint64_t t = now();
+    if (t - last_live >= 2400000u) { live(); last_live = t; }
+}
+#ifdef ACCEL_OVERLAP_LARGE
+static struct accel_overlap_large_phase *large_phase;
+/* After the pipelined second, each slot runs a serial job with a one-line sync range (plain), then one with the whole slot
+ * (synced), whose output is compared. The synced job's round trip less the plain one's is the slot's output maintenance. */
+static void gpu_slot_jobs(uint32_t rotation)
+{
+    struct accel_overlap_large_phase *l = large_phase;
+    const volatile uint32_t *base = gpu_out;
+    for (unsigned slot = 0; slot < GPU_QUEUE_DEPTH; ++slot) {
+        uint64_t trip[2];
+        for (unsigned synced = 0; synced < 2; ++synced) {
+            gpu_slot(slot);
+            if (synced) gpu_job.binding[0].sync_bytes = GPU_SLOT_BYTES;
+            const uint64_t t = now();
+            gpu_submit();
+            gpu_collect(gpu_sequence);
+            trip[synced] = now() - t;
+        }
+        l->plain_ticks_sum += trip[0]; if (trip[0] > l->plain_ticks_max) l->plain_ticks_max = trip[0];
+        l->synced_ticks_sum += trip[1]; if (trip[1] > l->synced_ticks_max) l->synced_ticks_max = trip[1];
+        ++l->slot_jobs;
+        gpu_out = base + slot * (GPU_SLOT_BYTES / 4u);
+        const uint32_t differs = gpu_output_differs(rotation);
+        gpu_out = base;
+        if (differs) { ++l->run.gpu.mismatches; fail(0x044, slot << 24 | (differs & 0xffffffu)); }
+        live();
+    }
+    gpu_slot(0);
+}
+#endif
 static void gpu_pipelined(struct accel_overlap_device *d)
 {
     const uint32_t rotation = gpu_sequence + 1u;
     gpu_inputs(rotation);
+#ifdef ACCEL_OVERLAP_LARGE
+    gpu_job.binding[1].sync_bytes = GPU_ELEMENTS * 8u;
+#endif
+    last_live = now();
     d->depth = GPU_QUEUE_DEPTH;
     const uint32_t first = gpu_sequence + 1u;
     uint32_t submitted = 0, collected = 0;
     const uint64_t began = now();
     for (;;) {
         const int more = now() < atomic_load_explicit(&pipeline_end, memory_order_acquire);
-        while (more && submitted - collected < GPU_QUEUE_DEPTH) { gpu_slot(submitted % GPU_QUEUE_DEPTH); gpu_submit(); ++submitted; }
+        while (more && submitted - collected < GPU_QUEUE_DEPTH) {
+            gpu_slot(submitted % GPU_QUEUE_DEPTH); gpu_submit(); ++submitted;
+#ifdef ACCEL_OVERLAP_LARGE
+            gpu_job.binding[1].sync_bytes = 0;  /* the first job cleaned the rewritten inputs; the others leave them alone */
+#endif
+        }
         if (collected == submitted) break;
         gpu_collect(first + collected);
         ++collected;
-        if (!(collected & 127)) live();
+        live_paced();
     }
     d->pipelined_ticks = now() - began;
     d->pipelined_jobs = collected;
+#ifdef ACCEL_OVERLAP_LARGE
+    gpu_slot_jobs(rotation);
+    return;
+#endif
     gpu_slot(0);
     /* The last job of every slot wrote the same sums. */
     const volatile uint32_t *base = gpu_out;
@@ -560,7 +682,7 @@ void accel_overlap_init(void)
     if (!g || g->main_core != MAIN_CORE || g->npu_core != NPU_CORE || !(g->worker_cores >> NPU_CORE & 1u)) ss_fail(0x060);
     for (unsigned w = 0; w < STREAM_WORKERS; ++w)
         if (!(g->worker_cores >> stream_core[w] & 1u)) ss_fail(0x061);
-    if (g->regions[ACCEL_OVERLAP_REGION_STREAM].bytes < (size_t)STREAM_WORKERS * STREAM_BYTES) ss_fail(0x062);
+    if (g->regions[ACCEL_OVERLAP_REGION_STREAM].bytes < (size_t)STREAM_AREAS * STREAM_BYTES) ss_fail(0x062);
     npu_task = ss_task_create_static_affinity_set(npu_producer, "npu-producer", sizeof(npu_stack) / sizeof(npu_stack[0]),
         NULL, 3, npu_stack, &npu_tcb, 1ul << NPU_CORE);
     if (!npu_task) ss_fail(0x063);
@@ -582,7 +704,7 @@ void accel_overlap_main(const struct ss_grant *grant)
     main_task = xTaskGetCurrentTaskHandle();
     if (!(grant->devices & SS_DEVICE_GPU) || grant->region_count != 6 ||
         grant->regions[ACCEL_OVERLAP_REGION_GPU_INPUT].bytes < GPU_ELEMENTS * 8u ||
-        grant->regions[ACCEL_OVERLAP_REGION_GPU_OUTPUT].bytes < GPU_QUEUE_DEPTH * 320u) fail(0x070, grant->region_count);
+        grant->regions[ACCEL_OVERLAP_REGION_GPU_OUTPUT].bytes < GPU_QUEUE_DEPTH * GPU_SLOT_BYTES) fail(0x070, grant->region_count);
     gpu_in = grant->regions[ACCEL_OVERLAP_REGION_GPU_INPUT].base;
     gpu_out = grant->regions[ACCEL_OVERLAP_REGION_GPU_OUTPUT].base;
     uint64_t began = now();
@@ -599,7 +721,7 @@ void accel_overlap_main(const struct ss_grant *grant)
     struct gpu_queue_lease_info info[2];
     if (gpu_queue_context_create(&config, 4000, &context, info) != GPU_QUEUE_OK) fail(0x073, 0);
     if (info[0].address != (uintptr_t)gpu_out || info[1].address != (uintptr_t)gpu_in) fail(0x074, 0);
-    gpu_job = (struct gpu_queue_job){.bindings = 2, .argument_bytes = sizeof(uint32_t), .groups = {3, 1, 1},
+    gpu_job = (struct gpu_queue_job){.bindings = 2, .argument_bytes = sizeof(uint32_t), .groups = {GPU_GROUPS, 1, 1},
         .binding = {{.lease = 0, .sync_bytes = GPU_ELEMENTS * 4u}, {.lease = 1, .sync_bytes = GPU_ELEMENTS * 8u}}};
     for (unsigned i = 0; i < sizeof(uint32_t); ++i) gpu_job.arguments[i] = (unsigned char)(GPU_ELEMENTS >> (8u * i));
     began = now();
@@ -617,20 +739,35 @@ void accel_overlap_main(const struct ss_grant *grant)
         if (now() - began > 240000000u) fail(0x078, 0);
         (void)ulTaskNotifyTake(pdTRUE, 10);
     }
-    for (phase_index = 0; phase_index < ACCEL_OVERLAP_PHASES; ++phase_index) {
+#ifdef ACCEL_OVERLAP_WIDTH
+    for (phase_index = 0; phase_index < 1u; ++phase_index) {   /* the GPU-alone phase only */
+#else
+    for (phase_index = 0; phase_index < SWEEP_PHASES; ++phase_index) {
+#endif
+#ifdef ACCEL_OVERLAP_LARGE
+        struct accel_overlap_large_phase *l = &large_result.phase[phase_index];
+        struct accel_overlap_phase *p = &l->run;
+        struct accel_overlap_sweep *c = &l->sweep;
+        large_phase = l;
+        l->stream_mode = large_streams[phase_index];
+        const uint32_t devices = large_devices[phase_index], mode = l->stream_mode;
+#else
         struct accel_overlap_phase *p = &result.phase[phase_index];
         struct accel_overlap_sweep *c = &sweep_result.sweep[phase_index];
+        const uint32_t devices = ACCEL_OVERLAP_GPU | ACCEL_OVERLAP_NPU, mode = phase_streams[phase_index];
+#endif
         current = p;
-        c->stream_mask = phase_streams[phase_index];
-        p->devices = ACCEL_OVERLAP_GPU | ACCEL_OVERLAP_NPU | (c->stream_mask ? ACCEL_OVERLAP_STREAM : 0u);
+        c->stream_mask = mode & 0xffu;
+        p->devices = devices | (c->stream_mask ? ACCEL_OVERLAP_STREAM : 0u);
+        const int gpu = devices & ACCEL_OVERLAP_GPU, npu = devices & ACCEL_OVERLAP_NPU;
         const uint64_t start = now();
         chase_begin(c);
-        if (c->stream_mask) stream_start(c->stream_mask);
+        if (c->stream_mask) stream_start(mode);
         atomic_store_explicit(&npu_stop, 1, memory_order_release);
         atomic_store_explicit(&pipeline_end, now() + PIPELINE_TICKS, memory_order_release);
-        npu_begin(NPU_PIPELINED);
-        gpu_pipelined(&p->gpu);
-        npu_end(NPU_PIPELINED);
+        if (npu) npu_begin(NPU_PIPELINED);
+        if (gpu) gpu_pipelined(&p->gpu);
+        if (npu) npu_end(NPU_PIPELINED);
         if (c->stream_mask) { stream_stop(); p->stream_ticks = now() - start; }
         chase_end();
         p->ticks = now() - start;
@@ -676,7 +813,7 @@ void accel_overlap_main(const struct ss_grant *grant)
         live();
     }
 #endif
-    phase_index = ACCEL_OVERLAP_PHASES;
+    phase_index = SWEEP_PHASES;
     npu_begin(NPU_EXIT);
     for (unsigned w = 0; w < STREAM_WORKERS; ++w) xTaskNotifyGive(stream_task[w]);
 #ifdef ACCEL_OVERLAP_SWEEP
@@ -687,7 +824,21 @@ void accel_overlap_main(const struct ss_grant *grant)
     result.final_top = (uint32_t)at_top();
     result.magic = ACCEL_OVERLAP_MAGIC; result.version = ACCEL_OVERLAP_VERSION; result.bytes = sizeof(result);
     result.phases = ACCEL_OVERLAP_PHASES;
-#ifdef ACCEL_OVERLAP_SWEEP
+#ifdef ACCEL_OVERLAP_LARGE
+    struct accel_overlap_large_result *r = &large_result;
+#ifdef ACCEL_OVERLAP_WIDTH
+    r->magic = ACCEL_OVERLAP_MAGIC; r->version = ACCEL_OVERLAP_WIDTH_VERSION; r->bytes = sizeof(*r);
+#else
+    r->magic = ACCEL_OVERLAP_MAGIC; r->version = ACCEL_OVERLAP_LARGE_VERSION; r->bytes = sizeof(*r);
+#endif
+    r->phases = ACCEL_OVERLAP_LARGE_PHASES;
+    memcpy(r->clock, result.clock, sizeof(r->clock));
+    r->initial_top = result.initial_top; r->final_top = result.final_top;
+    r->stream_workers = result.stream_workers; r->stream_bytes_per_worker = result.stream_bytes_per_worker;
+    r->pll = result.pll;
+    r->gpu_elements = GPU_ELEMENTS; r->npu_tensor_bytes = (uint32_t)npu_reference_bytes;
+    ss_finish(r, sizeof(*r));
+#elif defined(ACCEL_OVERLAP_SWEEP)
     result.version = ACCEL_OVERLAP_SWEEP_VERSION;
     sweep_result.base = result;
     sweep_result.base.bytes = sizeof(sweep_result);
