@@ -314,6 +314,8 @@ class Image:
         units += [(k / 'tasks.c', ()), (k / 'port.c', ('-Dnpu_service_task_privileged=a733_storage_native_task_privileged',)),
                   (k / 'portASM.S', ()), (k / 'queue.c' if self.partitioned else self.kernel / 'queue.c', ()),
                   (self.kernel / 'list.c', ())]
+        if not self.partitioned:
+            units += [(self.kernel / 'event_groups.c', ())]      # the SD owner's ready bit (apps/os/sd_owner.c)
         if self.partitioned:
             units += [(k / name, ()) for name in ('event_groups.c', 'stream_buffer.c', 'timers.c')]
             units += [(ROOT / 'kernel/scheduler' / name, ()) for name in
