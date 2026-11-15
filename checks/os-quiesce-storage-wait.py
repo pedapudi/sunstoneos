@@ -31,6 +31,7 @@ def main():
     a=source.index('        enum a733_mmc_platform_result c;',b)
     b=source.index('        memset(&platform, 0, sizeof platform);',a)
     helpers+='\nstatic const void *reentry_close(void) {\n'+source[a:b]+'return (const void *)1;}\n'
+    pauses=source.index('#define PMIC_PAUSES ');helpers+='\n'+source[pauses:source.index('\n',pauses)]+'\n'
     a=source.index('    for (unsigned waited = 0;');b=source.index('    struct device_memory_pool *pool',a)
     helpers+='\nstatic const void *pmic_wait(void) {\n#ifdef OS_SD_WRITE\n'+source[a:b]+'return (const void *)1;}\n'
     opening=owner_check.function(source,'os_sd_open_owner')
