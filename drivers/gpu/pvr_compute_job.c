@@ -168,10 +168,37 @@ __attribute__((always_inline)) void pvr_compute_job_grid_pds(void *pds,uint64_t 
     doutw_pair(pds,80,input);put32(pds,88,2);
     doutw_pair(pds,96,output);put32(pds,104,0x4002);
 }
+__attribute__((always_inline)) void pvr_compute_job_grid_pds_abi(void *pds,unsigned abi,uint64_t task,const uint32_t groups[3],uint64_t input,uint64_t output)
+{
+    pvr_compute_job_grid_pds(pds,task,groups,input,output);
+    if(abi!=GPU_QUEUE_ABI_GRID_INLINE)return;
+    /* A third ordinary-task DOUTW, before the local-index write: data pair
+     * 14 (byte 112, block bytes 8-15) under control word 30 (byte 120,
+     * unified, AO 4, both halves). The local index moves to AO 6 (control
+     * word 7: LAST, unified, AO 6, lower half). The code ends at byte 191. */
+    static const uint32_t code[]={0xf01e0e01u,0xf0074001u,0xfc000002u,0xd3000000u};
+    words(pds,128+4*12,code,4);
+    put32(pds,28,0x8000c000u);
+    put64(pds,112,0);put32(pds,120,0x8002u);put32(pds,124,0);
+}
+int pvr_compute_job_grid_inline(void *pds,const struct gpu_queue_lease_info *lease,const struct gpu_queue_job *job)
+{
+    if(!job->bindings||job->bindings>GPU_QUEUE_BINDINGS||job->argument_bytes>GPU_QUEUE_ARGUMENT_BYTES||
+       8u*(job->bindings-1u)+job->argument_bytes>GPU_QUEUE_INLINE_BYTES)return 0;
+    /* The argument block as the GRID ABI lays it out at byte 320, zero-filled. */
+    unsigned char b[GPU_QUEUE_INLINE_BYTES]={0};
+    for(unsigned i=1;i<job->bindings;++i)
+        put64(b,8*(i-1),lease[job->binding[i].lease].address+job->binding[i].address);
+    memcpy(b+8*(job->bindings-1),job->arguments,job->argument_bytes);
+    doutw_pair(pds,80,get64(b,0));doutw_pair(pds,112,get64(b,8));
+    return 1;
+}
+unsigned pvr_compute_job_pds_data_units(unsigned abi)
+{ return abi==GPU_QUEUE_ABI_GRID_INLINE?8u:7u; }
 unsigned pvr_compute_job_common_words(const struct gpu_queue_program *p)
 {
     if(!p||(p->coefficients!=3&&p->coefficients!=7))return 0;
-    if(p->abi==GPU_QUEUE_ABI_GRID)
+    if(p->abi==GPU_QUEUE_ABI_GRID||p->abi==GPU_QUEUE_ABI_GRID_INLINE)
         return p->local_words||p->barriers?0:p->coefficients;
     if(p->abi!=GPU_QUEUE_ABI_LOCAL||!p->local_words||p->local_words>GPU_QUEUE_LOCAL_WORDS||
        p->barriers>GPU_QUEUE_BARRIER_TASK||p->local_size[2]!=1||
@@ -179,18 +206,24 @@ unsigned pvr_compute_job_common_words(const struct gpu_queue_program *p)
        p->local_size[0]*p->local_size[1]!=32)return 0;
     return p->coefficients+p->local_words;
 }
-int pvr_compute_job_grid_cdm_resources(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3],unsigned common_words)
+int pvr_compute_job_grid_cdm_data(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3],unsigned common_words,
+                                  unsigned data_units)
 {
-    if(!common_words||common_words>7+GPU_QUEUE_LOCAL_WORDS)return 0;
-    /* Five unified regs ->2x16B; coefficients are allocated per workgroup.
-     * Three PDS temps ->1x16B;112 data bytes ->7x16B. */
-    put32(cdm,0,(((common_words+15)/16)<<18)|(2u<<12)|(1u<<8)|(7u<<2)|(1u<<1));
+    if(!common_words||common_words>7+GPU_QUEUE_LOCAL_WORDS||data_units<7||data_units>8)return 0;
+    /* Five unified regs (seven inline) ->2x16B; coefficients are allocated
+     * per workgroup. Three PDS temps ->1x16B; 112 data bytes ->7x16B, 128
+     * inline ->8x16B. */
+    put32(cdm,0,(((common_words+15)/16)<<18)|(2u<<12)|(1u<<8)|(data_units<<2)|(1u<<1));
     put32(cdm,4,pds);put32(cdm,8,pds+128);
     for(unsigned i=0;i<3;++i)put32(cdm,12+4*i,groups[i]-1);
     put32(cdm,24,31u<<18); /* One 32-lane hardware task per workgroup. */
     put32(cdm,28,(1u<<2)|(1u<<1)|1u);put32(cdm,32,fence|(1u<<2)|(1u<<1));
     put32(cdm,36,fence+16);put32(cdm,52,8u<<27);put32(cdm,56,2u<<30);
     return 1;
+}
+int pvr_compute_job_grid_cdm_resources(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3],unsigned common_words)
+{
+    return pvr_compute_job_grid_cdm_data(cdm,pds,fence,groups,common_words,7);
 }
 void pvr_compute_job_grid_cdm(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3])
 {

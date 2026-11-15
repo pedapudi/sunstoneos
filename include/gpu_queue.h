@@ -117,10 +117,16 @@ struct gpu_queue_fence {
  * admission stays an offline review step (include/pvr_compute_package.h). */
 #define GPU_QUEUE_ABI_GRID 1u
 #define GPU_QUEUE_ABI_LOCAL 2u
+/* GRID with the argument block in registers: compile --profile 3
+ * --inline-arguments. The PDS writes the block's first 16 bytes into unified
+ * registers with the pointer constants, so every lane reads its arguments
+ * without a memory load (registers under struct gpu_queue_job). */
+#define GPU_QUEUE_ABI_GRID_INLINE 3u
+#define GPU_QUEUE_INLINE_BYTES 16u
 #define GPU_QUEUE_LOCAL_WORDS 240u /* bounded on-chip allocation, 960 bytes */
 #define GPU_QUEUE_BARRIER_TASK 1u /* uniform barriers within one 32-lane task */
 struct gpu_queue_program {
-    uint32_t abi;              /* GPU_QUEUE_ABI_GRID or GPU_QUEUE_ABI_LOCAL */
+    uint32_t abi;              /* GPU_QUEUE_ABI_GRID, _LOCAL or _GRID_INLINE */
     uint32_t code_bytes;       /* USC code without the compiler's 8-byte header */
     uint32_t temps;            /* compiler metadata word 0 */
     uint32_t coefficients;     /* 3, or 7 when the program reads the group counts */
@@ -193,10 +199,21 @@ GPU_QUEUE_STATIC_ASSERT(sizeof(struct gpu_queue_binding) == 16, "binding record"
  * time at which the worker may kick the job; a later job is refused with
  * GPU_QUEUE_DEADLINE.
  *
- * The program's two pointer arguments:
- * - unified registers 0-1: the argument block, which holds the GPU addresses
- *   of bindings 1 .. bindings-1 as 64-bit words, then argument_bytes bytes;
- * - unified registers 2-3: the GPU address of binding 0. */
+ * The argument block holds the GPU addresses of bindings 1 .. bindings-1 as
+ * 64-bit words, then argument_bytes bytes. A GRID or LOCAL program receives:
+ * - unified registers 0-1: the GPU address of the argument block;
+ * - unified registers 2-3: the GPU address of binding 0;
+ * - unified register 4: the local invocation index.
+ * A GRID_INLINE program receives the block itself and no block address:
+ * - unified registers 0-1: block bytes 0-7;
+ * - unified registers 2-3: the GPU address of binding 0;
+ * - unified registers 4-5: block bytes 8-15;
+ * - unified register 6: the local invocation index.
+ * Bytes past the block's end read as zero. A GRID_INLINE job whose block is
+ * longer than GPU_QUEUE_INLINE_BYTES is refused with GPU_QUEUE_ARGUMENTS:
+ * the job slot holds 16 PDS instruction words (pvr_compute_queue.h), and the
+ * third pointer write fills the last one. A longer block needs the PDS
+ * program to move out of the slot's 64-byte code line. */
 struct gpu_queue_job {
     uint32_t sequence;
     uint16_t bindings, argument_bytes;

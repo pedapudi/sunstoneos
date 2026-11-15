@@ -40,7 +40,13 @@ def upstream_binary(build,out,compiler=None):
     if len(arrays)!=1:raise ValueError('Unexpected upstream program count')
     return b''.join(struct.pack('<I',int(x,16)) for x in re.findall(r'0x[0-9a-fA-F]+',arrays[0])),command
 
-def metadata_valid(meta,profile,session=False):
+# Unified registers before the local invocation index: two pointer arguments,
+# or for the inline-argument queue ABI (GPU_QUEUE_ABI_GRID_INLINE, gpu_queue.h)
+# block bytes 0-7, binding 0 and block bytes 8-15.
+GRID_VTXINS=4
+INLINE_VTXINS=6
+
+def metadata_valid(meta,profile,session=False,inline=False):
     if len(meta)!=18 or any(type(v) is not int or v<0 for v in meta) or (meta[0]+3)//4>63:return False
     if profile==4:
         # One hardware task: PCO removes workgroup barriers and emits direct
@@ -51,7 +57,8 @@ def metadata_valid(meta,profile,session=False):
             meta[12]==1 and 0<meta[10]<=32 and 0<meta[11]<=32 and meta[10]*meta[11]==32
     if any(meta[3:10]) or any(meta[13:]):return False
     if profile==3:
-        return (meta[1:3]==[5,7] or (session and meta[1:3]==[5,3])) and meta[12]==1 and \
+        vtxins=INLINE_VTXINS+1 if inline else GRID_VTXINS+1
+        return (meta[1:3]==[vtxins,7] or (session and meta[1:3]==[vtxins,3])) and meta[12]==1 and \
             0<meta[10]<=32 and 0<meta[11]<=32 and meta[10]*meta[11]==32
     return meta[2]==0 and meta[10:13]==[32,1,1] and meta[1]<=(6 if profile==2 else 4)
 
@@ -59,7 +66,7 @@ def precomp_prefix(meta):
     # PCO packs 12 coefficient bits followed by 12 shared-register bits.
     return bytes(meta[:2])+int(meta[2]|(meta[3]<<12)).to_bytes(3,'little')
 
-def grid_compiler_source(original,mesa,local_memory=False):
+def grid_compiler_source(original,mesa,local_memory=False,vtxins=GRID_VTXINS):
     pipeline=(mesa/'src/imagination/vulkan/pvr_arch_pipeline.c').read_text()
     if digest(pipeline.encode())!='4e2742f0534d9de7783cb1f7180b22f5c9ada27802c23a253d3143d73171c4e8':
         raise ValueError('Pinned compute sysval allocator differs')
@@ -80,6 +87,10 @@ def grid_compiler_source(original,mesa,local_memory=False):
    data->common.vtxins=4; /* Two explicit pointer arguments. */
    pvr_alloc_cs_sysvals(data,nir);
 '''
+    if vtxins==INLINE_VTXINS:
+        allocation=allocation.replace('data->common.vtxins=4; /* Two explicit pointer arguments. */',
+                                      'data->common.vtxins=6; /* Inline argument block and binding 0. */')
+    elif vtxins!=GRID_VTXINS:raise ValueError('Unsupported unified-register ABI')
     if local_memory:
         allocation += '\n   pvr_alloc_cs_shmem(data,nir);\n'
         # Preserve workgroup variables until the PCO lowering pass assigns their
@@ -100,10 +111,14 @@ def grid_compiler_source(original,mesa,local_memory=False):
             'struct pvr_device_runtime_info dev_runtime_info = { .cdm_max_local_mem_size_regs = 4096 };')
     return source.replace('   pco_postprocess_nir(ctx, nir, data);','   pco_postprocess_nir(ctx, nir, data);'+allocation)
 
-def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_program=False):
-    """Compile a supported GPU profile and check its resource metadata."""
+def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_program=False,inline_arguments=False):
+    """Compile a supported GPU profile and check its resource metadata.
+
+    inline_arguments: a profile 3 queue program for GPU_QUEUE_ABI_GRID_INLINE,
+    which reads its argument block from unified registers 0-1 and 4-5."""
     if queue_program:session=True
-    if profile not in (1,2,3,4) or (session and profile not in (3,4)) or (profile==4 and not session):raise ValueError('Unsupported register/dispatch ABI')
+    if profile not in (1,2,3,4) or (session and profile not in (3,4)) or (profile==4 and not session) or \
+       (inline_arguments and (profile!=3 or not queue_program)):raise ValueError('Unsupported register/dispatch ABI')
     source,mesa,build,out=map(lambda p:Path(p).resolve(),(source,mesa,build,out))
     out.mkdir(parents=True,exist_ok=True)
     if profile==4:
@@ -141,7 +156,8 @@ def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_pr
       }
    }
 '''
-    base_source=grid_compiler_source(original,mesa,profile==4) if profile>=3 else original.decode()
+    base_source=grid_compiler_source(original,mesa,profile==4,INLINE_VTXINS if inline_arguments else GRID_VTXINS) \
+        if profile>=3 else original.decode()
     patched=base_source.replace('static pco_shader *build_shader(', 'static unsigned sunstone_vtxin_mask;\nstatic pco_shader *build_shader(')
     patched=patched.replace('   pco_postprocess_nir(ctx, nir, data);', '   pco_postprocess_nir(ctx, nir, data);'+scan)
     patched=patched.replace(anchor,anchor+export+'\n            fprintf(stderr,"SUNSTONE_VTXIN_MASK %u\\n",sunstone_vtxin_mask);\n')
@@ -192,7 +208,7 @@ def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_pr
     if len(masks)!=1:raise ValueError('Missing explicit input-register use metadata')
     explicit_mask=int(masks[0])
     if profile==2 and explicit_mask!=63:raise ValueError('Profile2 requires exactly six explicit input registers')
-    if not metadata_valid(meta,profile,session):
+    if not metadata_valid(meta,profile,session,inline_arguments):
         raise ValueError('Unsupported compiler metadata: '+str(meta))
     arrays=re.findall(r'static const uint32_t \w+\[\d+\] = \{(.*?)\};',(out/'kernel.c').read_text(),re.S)
     if len(arrays)!=1:raise ValueError('Require exactly one common binary')
@@ -207,14 +223,14 @@ def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_pr
         fields=re.findall(r'^SUNSTONE_SYSVALS (.*)$',err,re.M)
         if len(fields)!=1:raise ValueError('Missing compiler sysval allocation')
         sysvals=list(map(int,fields[0].split()))
-        counts=[4,3] if (meta[2]-meta[13] if profile==4 else meta[2])==7 else [0,0]
-        if sysvals!=[4,1,0,3]+counts or explicit_mask!=15:raise ValueError('Grid register ABI differs')
+        if sysvals!=expected_sysvals(meta,profile,inline_arguments) or not explicit_mask_valid(explicit_mask,inline_arguments):
+            raise ValueError('Grid register ABI differs')
     if profile==4:
         starts=re.findall(r'^SUNSTONE_LOCAL_START (\d+)$',err,re.M)
         if starts!=[str(meta[2]-meta[13])]:raise ValueError('Local-memory allocator range differs')
     (out/'program.bin').write_bytes(blob)
     (out/'source.cl').write_bytes(source.read_bytes())
-    manifest={'schema':'sunstone-pco-profile-v'+str(profile),'profile':profile,'session':session,'explicit_vtxin_mask':explicit_mask,'abi_vtxins':5 if profile>=3 else 6 if profile==2 else 4,'sysval_ranges':sysvals,'mesa_revision':MESA,'source_sha256':digest(source.read_bytes()),
+    manifest={'schema':'sunstone-pco-profile-v'+str(profile),'profile':profile,'session':session,'explicit_vtxin_mask':explicit_mask,'abi_vtxins':(INLINE_VTXINS+1 if inline_arguments else GRID_VTXINS+1) if profile>=3 else 6 if profile==2 else 4,'sysval_ranges':sysvals,'mesa_revision':MESA,'source_sha256':digest(source.read_bytes()),
       'spirv_sha256':digest((out/'kernel.spv').read_bytes()),'program_sha256':digest(blob),'metadata':meta,
       'compiler_sha256':digest((out/'pco_clc_metadata').read_bytes()),
       'upstream_compiler_sha256':digest((build/'src/imagination/pco/uscgen/pco_clc').read_bytes()),
@@ -225,11 +241,21 @@ def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_pr
     if profile==4:
         manifest['local_source_hashes']=LOCAL_SOURCE_HASHES
         manifest['source_bounds']='Native queue admission checks descriptor and resource bounds; source review establishes accesses and uniform barriers.'
+    if inline_arguments:manifest['queue_abi']='grid_inline'
     if queue_program:
         manifest['queue_program']=True
         (out/'program.h').write_text(emit_queue_program(blob,manifest))
     (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     return manifest
+
+def expected_sysvals(meta,profile,inline=False):
+    """Local index, workgroup id and group counts: [start, count] each."""
+    coefficients=meta[2]-meta[13] if profile==4 else meta[2]
+    return [INLINE_VTXINS if inline else GRID_VTXINS,1,0,3]+([4,3] if coefficients==7 else [0,0])
+
+def explicit_mask_valid(mask,inline=False):
+    """GRID reads both pointer pairs; GRID_INLINE reads any of registers 0-5."""
+    return mask==15 if not inline else 0<mask<64
 
 def emit_queue_program(blob,manifest):
     """Emit a trusted grid program after checking its compiler metadata and identity.
@@ -243,12 +269,18 @@ def emit_queue_program(blob,manifest):
     profile=m.get('profile')
     if profile not in (3,4) or m.get('schema')!='sunstone-pco-profile-v'+str(profile) or m.get('mesa_revision')!=MESA:
         raise ValueError('Queue program requires the pinned grid profile')
+    abi=m.get('queue_abi','grid')
+    if abi not in ('grid','grid_inline') or (abi=='grid_inline' and profile!=3):
+        raise ValueError('Unsupported queue program ABI')
+    inline=abi=='grid_inline'
     if not isinstance(meta,list) or len(meta)!=18 or any(type(v) is not int or v<0 for v in meta) or \
-       not metadata_valid(meta,profile,True):
+       not metadata_valid(meta,profile,True,inline):
         raise ValueError('Unsupported queue program metadata')
     sysval_coeffs=meta[2]-meta[13] if profile==4 else meta[2]
-    expected_sysvals=[4,1,0,3]+([4,3] if sysval_coeffs==7 else [0,0])
-    if m.get('explicit_vtxin_mask')!=15 or m.get('abi_vtxins')!=5 or m.get('sysval_ranges')!=expected_sysvals:
+    mask=m.get('explicit_vtxin_mask')
+    if type(mask) is not int or not explicit_mask_valid(mask,inline) or \
+       m.get('abi_vtxins')!=(INLINE_VTXINS if inline else GRID_VTXINS)+1 or \
+       m.get('sysval_ranges')!=expected_sysvals(meta,profile,inline):
         raise ValueError('Queue program register ABI differs')
     if len(blob)<12 or len(blob)-8>SESSION_CODE or (len(blob)-8)%4 or \
        len(blob)!=8+int.from_bytes(blob[5:7],'little')*4 or blob[7]!=0 or \
@@ -267,7 +299,8 @@ def emit_queue_program(blob,manifest):
     for offset in range(0,len(words),8):
         lines.append('    '+', '.join('0x%08xu'%w for w in words[offset:offset+8])+',')
     lines+=['};','static const struct gpu_queue_program gpu_queue_program = {',
-            '    .abi = '+('GPU_QUEUE_ABI_LOCAL' if profile==4 else 'GPU_QUEUE_ABI_GRID')+', .code_bytes = sizeof(gpu_queue_code),',
+            '    .abi = '+('GPU_QUEUE_ABI_LOCAL' if profile==4 else 'GPU_QUEUE_ABI_GRID_INLINE' if inline else 'GPU_QUEUE_ABI_GRID')+
+            ', .code_bytes = sizeof(gpu_queue_code),',
             '    .temps = %uu, .coefficients = %uu,'%(meta[0],sysval_coeffs),
             '    .local_size = {%uu, %uu, %uu}, .reserved = 0,'%tuple(meta[10:13]),
             '    .code = gpu_queue_code,']
@@ -309,9 +342,10 @@ if __name__=='__main__':
     c.add_argument('--profile',type=int,choices=(1,2,3,4),default=1)
     c.add_argument('--session',action='store_true',help='Grid profile without a package: code linked into the image')
     c.add_argument('--queue-program',action='store_true',help='Grid profile with a gpu_queue_program descriptor in program.h')
+    c.add_argument('--inline-arguments',action='store_true',help='With --queue-program: the argument block in unified registers 0-1 and 4-5 (GPU_QUEUE_ABI_GRID_INLINE)')
     b=sub.add_parser('package')
     for x in ('program','manifest','input','output'):b.add_argument('--'+x,type=Path,required=True)
     for x in ('output-bytes','input-header-bytes','input-element-bytes','output-element-bytes'):b.add_argument('--'+x,type=int,required=True)
     a=p.parse_args()
-    if a.operation=='compile':compile_program(a.source,a.mesa,a.build,a.output,a.ninja,a.profile,a.session,a.queue_program)
+    if a.operation=='compile':compile_program(a.source,a.mesa,a.build,a.output,a.ninja,a.profile,a.session,a.queue_program,a.inline_arguments)
     else:a.output.write_bytes(package(a.program,a.manifest,a.input,a.output_bytes,a.input_header_bytes,a.input_element_bytes,a.output_element_bytes))
