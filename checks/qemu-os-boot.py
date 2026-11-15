@@ -11,6 +11,11 @@ and power-domain providers, the clock and CPU-operating-point providers, a
 fixed-state USB device transport and absent NPU and GPU services. No OS
 source is edited; the board's hooks sit in platform/qemu-os. No board is used.
 
+The OS sources are the OS image's own: image_sources() configures the image
+and reads its link, and EXCLUDED names, with reasons, the sources the virtual
+board replaces or cannot run. An exclusion that matches nothing fails the
+check, and so does a board source that the image links already.
+
 Cases: normal start to the first application and its normal finish; the zero
 sealed deadline that refused every application wait with failure 0x757
 (negative control: the check must fail with the earlier apps/os/services.c);
@@ -23,10 +28,12 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import struct
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -74,49 +81,97 @@ CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mge
           '-fno-builtin', '-fno-stack-protector', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables',
           '-ffunction-sections', '-fdata-sections', '-O2', '-g', '-Wall', '-Wextra', '-include', 'stdint.h']
 
-# OS and board sources that run unmodified.
-OS_SOURCES = ['apps/os/quiesce.c', 'apps/os/application.c', 'apps/os/large.c', 'apps/os/large_load.c', 'drivers/storage/fat32_ro.c', 'kernel/appmem/app_region.c', 'kernel/appmem/large_admit.c', 'kernel/umem/umem.c', 'apps/os/services.c', 'apps/os/capture.c', 'apps/os/usb-service.c', 'apps/os/session.c', 'apps/os/grants.c', 'apps/os/start.c',
-              'kernel/umem/umem_policy.c', 'arch/aarch64/umem_cpu.c',
-              'apps/os/thermal.c', 'apps/os/i2c.c', 'drivers/i2c/a733_i2c_bus.c', 'apps/os/rtc.c', 'apps/os/g2d.c', 'drivers/g2d/a733_g2d.c', 'drivers/g2d/a733_g2d_rotate.c', 'apps/os/iommu.c', 'drivers/iommu/a733_iommu_owner.c', 'drivers/rtc/a733_rtc.c', 'drivers/board/orangepi_zero3w.c', 'apps/os/cpu.c', 'apps/os/perf.c', 'drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_perf_mode.c', 'apps/os/admission.c', 'apps/board/main.c', 'apps/os/sealed.c',
-              'runtime/deadline.c', 'runtime/deadline-a733.c', 'platform/a733-smp-cached/irq_table.c',
-              # The I2S capture service is in every image; an ungranted session never opens its stream.
-              'apps/os/audio.c', 'platform/a733/dma_pool_session.c', 'platform/a733/dma_startup.c', 'platform/a733/dma_native.c',
-              'drivers/dma/dma_memory.c', 'drivers/dma/a733_dma.c', 'drivers/dma/a733_dma_controller.c',
-              'drivers/dma/a733_dma_platform.c', 'drivers/dma/a733_dma_platform_native.c', 'drivers/dma/dma_service.c',
-              'drivers/dma/dma_service_i2s.c', 'drivers/dma/dma_service_i2s_stream.c', 'drivers/audio/a733_i2s.c',
-              'drivers/audio/a733_i2s_stream.c', 'drivers/audio/a733_i2s_platform.c', 'drivers/audio/a733_i2s_platform_native.c',
-              'drivers/audio/a733_audio_leases.c', 'drivers/audio/dma_service_i2s_irq.c', 'runtime/device_memory_pool.c',
-              # The radio station is in every image; an ungranted session reads neither its profile nor its credential.
-              'apps/os/radio.c', 'apps/os/wifi_credential.c',
-              # The NPU service is in every image; an ungranted session binds no task, interrupt or register.
-              'apps/os/npu.c', 'apps/os/npu-declaration.c', 'apps/os/npu-graph-index.c', 'apps/os/npu-client.c', 'apps/os/npu-irq.c',
-              'platform/a733/npu_native.c', 'runtime/counter_clock.c', 'drivers/npu/a733_npu_runtime.c',
-              'drivers/npu/a733_npu_runtime_interim.c', 'drivers/npu/npu_pool.c', 'drivers/npu/npu_declaration.c',
-              'drivers/npu/npu_service.c', 'drivers/npu/npu_queue.c', 'drivers/npu/npu_runtime_queue.c', 'drivers/npu/npu_idle.c',
-              'drivers/npu/a733_npu_sequence.c', 'drivers/npu/a733_npu_controller.c', 'drivers/npu/a733_npu_memory.c',
-              'drivers/npu/a733_npu_mmu.c', 'drivers/npu/nbg_model.c', 'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_checksum.c',
-              'drivers/npu/nbg_relocation.c', 'drivers/npu/a733_npu_startup.c', 'drivers/npu/a733_npu_platform.c',
-              'drivers/npu/a733_npu_platform_native.c', 'runtime/npu_app.c',
-              # and its EL0 ring, which a declaration of more than one job in flight selects.
-              'apps/os/npu-queue.c', 'runtime/npu_app_queue.c']
-# Driver cores and their adapters, unmodified. The adapters reach registers
-# through a733_mmio.h, which the virtual board replaces (platform/qemu-os).
-DRIVER_SOURCES = ['drivers/thermal/a733_thermal.c', 'drivers/thermal/a733_thermal_native.c',
-                  'drivers/clock/a733_clock_leases.c', 'drivers/power/a733_rail_leases.c',
-                  'drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_native.c',
-                  'drivers/power/a733_pmic_consumer.c', 'drivers/power/a733_power_domains.c',
-                  'drivers/power/a733_power_domains_native.c', 'drivers/pinctrl/a733_pins.c',
-                  'drivers/pinctrl/a733_pin_tables.c', 'drivers/pinctrl/a733_pins_native.c',
-                  'drivers/gpu/a733_gpu_resources.c', 'drivers/i2c/a733_i2c.c', 'drivers/usb/a733_usb_platform.c',
-                  'drivers/storage/storage_digest.c', 'drivers/storage/storage_digest_extensions.c', 'drivers/storage/storage_digest_ce.S', 'platform/a733/shared_locks.c', 'platform/a733/native_usb.c',
-                  'platform/a733/counter_clock.c', 'arch/aarch64/device_memory.c', 'runtime/memory.c',
-                  'runtime/memmove.c', 'runtime/gpu_call.S']
+# The image's own sources. checks/qemu-os-boot.py does not keep a copy of the OS source list: image_sources()
+# configures the one OS image (sunstone-a733-os, the integration gate's "sup" variant) through the host
+# configuration, CACHE/bin/cfg.sh, and reads which sources its link takes from the build files CMake writes. So a
+# source added to the image's CMake lists (cmake/sunstone-os-core.cmake and the service libraries) is compiled here
+# too, unless an exclusion below names it. Each exclusion gives the reason the virtual board does not run it, and
+# must match a linked source: one that matches nothing fails the check, so the table cannot go stale.
+IMAGE_TARGET = 'sunstone-a733-os'
+IMAGE_CONFIGURE = ['-DSUNSTONE_APPLICATION=', '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
+                   '-DSUNSTONE_EXTERNAL_APPLICATIONS=']
+EXCLUDED = [
+    (r'^drivers/net/|^apps/board/radio\.c$|^apps/os/radio_profile(_supervised)?\.c$|^network/allocator\.c$|'
+     r'^apps/os/identity\.c$',
+     'the AIC8800 radio, its SDIO transport and network stack, and the chip-ID read: the virtual board has no radio '
+     '(platform/qemu-os/absent.c); apps/os/radio.c is linked and stays ungranted'),
+    (r'^drivers/crypto/', 'the Crypto Engine, which the virtual board does not model'),
+    (r'^drivers/usb/(?!a733_usb_platform\.c$)|^apps/os/usb0\.c$|^apps/os/client\.c$|^platform/a733/typec_native\.c$',
+     'the USB controllers, Type-C and the USB2 owner: board.c gives a fixed-state USB device transport instead; the '
+     'platform adapter a733_usb_platform.c is linked'),
+    (r'^drivers/storage/(sunxi_mmc|sunxi_sdio|sdio_card|a733_mmc_platform|a733_mmc_platform_native)\.c$',
+     'the SD/MMC and SDIO hosts; storage cases link platform/qemu-os/sd_hw.c, a RAM card'),
+    (r'^drivers/i2c/a733_twi(_native)?\.c$', 'the TWI controller adapter: mmio.c models S_TWI0 and the PMIC behind it'),
+    (r'^drivers/gpu/gicv3_spi\.c$', 'the GICv3 SPI helper: board.c supplies gicv3_spi_mask, _rearm and _masked'),
+    (r'^drivers/dram/', 'the DRAM decode probe, which needs the A733 DRAM controller'),
+    (r'^apps/os/cpu-return(-entry|-spi)?\.c$', 'the CPU-return lifetime: absent.c answers that no CPU return is '
+     'requested'),
+    (r'^apps/os/lifetime\.c$', 'replaced by platform/qemu-os/lifetime.c'),
+    (r'^apps/os/(irq|supervisor-wait|npu-observe)\.c$|^apps/board/audio\.c$',
+     'A733-only paths that platform/qemu-os/platform.c, board.c or absent.c supply'),
+    (r'^platform/a733-smp-cached/(memory\.c|start\.S)$|^platform/a733/(cpu_coherence|cpu_entry|cpu_entry_native|'
+     r'cpu_start|fault|memory_reservations|memory_uncached)\.(c|S)$|^runtime/(cpu_topology_app|memory_unaligned)\.c$',
+     'the A733 platform layer: platform/qemu-os/start.S and platform.c replace it'),
+    (r'^kernel/scheduler/', 'the partitioned scheduler: Image adds it for partitioned images'),
+    (r'^runtime/(newlib|newlib_smp|newlib_syscalls_smp)\.c$|^runtime/(cxx_terminate|new_delete)\.cc$',
+     'the C and C++ libraries: the virtual board links none (snprintf.c); a case adds runtime/newlib.c itself'),
+]
+# Sources the virtual board links that the image does not: apps/board/main.c, which the image links patched as
+# os-image/main.c, and the GPU call stub.
+ADDED = ['apps/board/main.c', 'runtime/gpu_call.S']
+_IMAGE_SOURCES, _IMAGE_SOURCES_LOCK = {}, threading.Lock()
+
+
+def image_sources(work):
+    """The repository sources the one OS image links, in link order: configure it into work, then map each object of
+    its link (link.txt) to its source through its library's build.make. Configured once per run: the images of a run
+    build in parallel threads and share the one configure."""
+    work = Path(work).resolve()
+    with _IMAGE_SOURCES_LOCK:
+        if work not in _IMAGE_SOURCES:
+            _IMAGE_SOURCES[work] = configured_sources(work)
+        return _IMAGE_SOURCES[work]
+
+
+def configured_sources(work):
+    work.mkdir(parents=True, exist_ok=True)
+    done = run([CACHE / 'bin/cfg.sh', ROOT, work / 'build', '-DPython3_EXECUTABLE=' + PYTHON, *IMAGE_CONFIGURE],
+               work / 'configure.log')
+    assert done.returncode == 0, 'the OS image configure failed:\n' + done.stdout[-2000:] + done.stderr[-2000:]
+    files = work / 'build/CMakeFiles'
+    link = shlex.split((files / (IMAGE_TARGET + '.dir') / 'link.txt').read_text())
+    objects = [w for w in link if w.endswith('.obj')]
+    source_of = {}
+    for library in sorted({o.split('/')[1] for o in objects}):
+        for line in (files / library / 'build.make').read_text().splitlines():
+            m = re.match(r'^(CMakeFiles/\S+\.obj): (\S+)$', line)
+            if m and not m.group(2).endswith(('flags.make', 'compiler_depend.ts')):
+                source_of[m.group(1)] = m.group(2)
+    root, sources = str(ROOT) + '/', []
+    for o in objects:
+        assert o in source_of, ('no source for a linked object', o)
+        # Generated units and the pinned third-party sources live outside the tree; the virtual board builds its own.
+        if source_of[o].startswith(root) and source_of[o][len(root):] not in sources:
+            sources.append(source_of[o][len(root):])
+    assert 'apps/os/start.c' in sources and len(sources) > 100, ('implausible OS image source list', len(sources))
+    return sources
+
+
+def qemu_sources(work):
+    """The OS and driver sources of the virtual board's image: the OS image's, without the exclusions, then ADDED."""
+    linked = image_sources(work)
+    unmatched = [pattern for pattern, _ in EXCLUDED if not any(re.search(pattern, s) for s in linked)]
+    assert not unmatched, ('an exclusion matches no source the OS image links; remove it', unmatched)
+    linked_too = [s for s in ADDED + BOARD_SOURCES if s in linked]
+    assert not linked_too, ('a source the virtual board adds is linked by the OS image already', linked_too)
+    return [s for s in linked if not any(re.search(p, s) for p, _ in EXCLUDED)] + ADDED
+
+
 # Units that include the A733 platform's boot.h.
 QUOTE_A733 = {'drivers/gpu/a733_gpu_resources_native.c', 'drivers/i2c/a733_i2c.c'}
 # The virtual board.
 BOARD_SOURCES = ['platform/qemu-os/start.S', 'platform/qemu-os/platform.c', 'platform/qemu-os/board.c', 'platform/qemu-os/lifetime.c',
-                 'platform/qemu-os/mmio.c', 'platform/qemu-os/absent.c', 'platform/qemu-os/snprintf.c', 'drivers/gpu/a733_gpu_resources_native.c',
-                 'apps/os/cpu-return-el0.S']
+                 'platform/qemu-os/mmio.c', 'platform/qemu-os/absent.c', 'platform/qemu-os/snprintf.c']
 
 
 class Image:
@@ -131,7 +186,7 @@ class Image:
         self.partitioned = partitioned
         # Every image admits both lifetimes; the scenario's lifetime picks one at launch. The resident supervisor
         # renews WDT0 while every service reports.
-        self.extra_sources = list(extra_sources) + ['apps/os/watchdog.c', 'platform/a733/maintenance_watchdog.c']
+        self.extra_sources = list(extra_sources)
         self.latency = latency
         self.services_source = Path(services_source) if services_source else ROOT / 'apps/os/services.c'
         self.defines = DEFINES + list(extra_defines)
@@ -241,8 +296,9 @@ class Image:
         """Link the image; returns the ELF path."""
         generated, app_units, wrap = application
         k = self.prepare_kernel()
+        sources = qemu_sources(self.work.parent / 'os-image-sources')
         units = [(ROOT / s, ('-iquote', str(ROOT / 'platform/a733')) if s in QUOTE_A733 else ())
-                 for s in OS_SOURCES + DRIVER_SOURCES + BOARD_SOURCES + self.extra_sources]
+                 for s in sources + BOARD_SOURCES + [e for e in self.extra_sources if e not in sources]]
         units += app_units
         units += [(k / 'tasks.c', ()), (k / 'port.c', ('-Dnpu_service_task_privileged=a733_storage_native_task_privileged',)),
                   (k / 'portASM.S', ()), (k / 'queue.c' if self.partitioned else self.kernel / 'queue.c', ()),
