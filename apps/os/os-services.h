@@ -125,7 +125,14 @@ enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICE
 #else
 #define OS_BG_DEADLINES 0u
 #endif
-#define OS_DEADLINE_OWNERS (OS_SERVICES + 9u + OS_WITH_GPU(2u +) OS_WITH_DMA(2u +) OS_WITH_TLBI(1u +) OS_SD_LOADER_DEADLINES + OS_BG_DEADLINES)
+/* The latency diagnostic's precise mode: a wake task on each core outside its release mask (apps/latency/workload.c). */
+#ifdef SUNSTONE_LATENCY_PRECISE
+#define OS_LATENCY_DEADLINES 8u
+#else
+#define OS_LATENCY_DEADLINES 0u
+#endif
+#define OS_DEADLINE_OWNERS (OS_SERVICES + 9u + OS_WITH_GPU(2u +) OS_WITH_DMA(2u +) OS_WITH_TLBI(1u +) OS_SD_LOADER_DEADLINES + OS_BG_DEADLINES + \
+                            OS_LATENCY_DEADLINES)
 /* The supervision table's rows after the application's, and the grant each one needs, indexed by service id. */
 #define OS_SERVICE_ENTRY_(NAME, name, window_us, grant, with) with({name, window_us},)
 #define OS_SERVICE_TABLE OS_SUPERVISED_ROWS(OS_SERVICE_ENTRY_)
