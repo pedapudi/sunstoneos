@@ -322,6 +322,29 @@ class Image:
         return next(iter(values))
 
 
+def flat_members(type_die):
+    """Member offsets of a DWARF structure type, with the members of every nested structure member, at any depth, at
+    their offset in the outer one. Each member is listed under its dotted path: 'result' at the top level,
+    'dev.fault_step' for a service's struct os_device_fault."""
+    paths = {}
+
+    def walk(die, base, prefix):
+        for c in die.iter_children():
+            if c.tag != 'DW_TAG_member' or 'DW_AT_name' not in c.attributes:
+                continue
+            name, at = c.attributes['DW_AT_name'].value.decode(), base + int(c.attributes['DW_AT_data_member_location'].value)
+            paths[prefix + name] = at
+            t = c.get_DIE_from_attribute('DW_AT_type') if 'DW_AT_type' in c.attributes else None
+            while t is not None and t.tag in ('DW_TAG_typedef', 'DW_TAG_const_type', 'DW_TAG_volatile_type',
+                                              'DW_TAG_atomic_type'):
+                t = t.get_DIE_from_attribute('DW_AT_type') if 'DW_AT_type' in t.attributes else None
+            if t is not None and t.tag == 'DW_TAG_structure_type':
+                walk(t, at, prefix + name + '.')
+
+    walk(type_die, 0, '')
+    return paths
+
+
 def instruction_sites(parts, match):
     """Addresses of the 32-bit words in loaded image parts for which match(word) is true.
 

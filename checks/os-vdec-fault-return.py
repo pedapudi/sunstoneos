@@ -53,7 +53,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import (UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_X0,
                                  UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3)
-from harness import machine as harness_machine, Image, hook_addresses, save, skip_crumbs, TwoCores
+from harness import machine as harness_machine, flat_members, Image, hook_addresses, save, skip_crumbs, TwoCores
 
 GATE_RUNS = [['--image', '{elf:ret-vdec}', '--output', '{output}']]
 UNIT = '/apps/os/video_decode.c'
@@ -86,7 +86,7 @@ LAYOUTS = {'board_application', 'a733_board_session', 'a733_video_decoder', 'a73
            'a733_video_platform_config', 'a733_clock_token', 'a733_gpu_resource_lease', 'a733_power_domain_row',
            'vdec_check_record', 'board_provider', 'a733_native_usb', 'a733_rail_leases', 'a733_power_domains',
            'a733_pmic', 'a733_pmic_config', 'a733_rail_token', 'a733_video_cold_record', 'a733_power_transition',
-           'video_decode_check_result'}
+           'a733_power_service_config', 'video_decode_check_result'}
 
 
 class Registers:
@@ -114,8 +114,7 @@ def members(image):
             for die in cu.iter_DIEs():
                 if die.tag == 'DW_TAG_variable' and die.attributes.get('DW_AT_name') and \
                         die.attributes['DW_AT_name'].value == b'vd' and 'DW_AT_type' in die.attributes:
-                    layout = {c.attributes['DW_AT_name'].value.decode(): c.attributes['DW_AT_data_member_location'].value
-                              for c in die.get_DIE_from_attribute('DW_AT_type').iter_children() if c.tag == 'DW_TAG_member'}
+                    layout = flat_members(die.get_DIE_from_attribute('DW_AT_type'))
                 if die.tag == 'DW_TAG_enumerator':
                     enums[die.attributes['DW_AT_name'].value.decode()] = die.attributes['DW_AT_const_value'].value
     return layout, enums
@@ -273,8 +272,8 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     for field, value in (('admitted', 1), ('requested', 1), ('cold_step', 4)):
         put(decoder + L['a733_video_decoder'][field], value)
     put(vd + layout['initialized'], 1)
-    put(vd + layout['phase'], enums['FAULT'])
-    put(vd + layout['fault_step'], enums['VD_STEP_COLD']); put(vd + layout['fault_value'], 0x204)
+    put(vd + layout['dev.phase'], enums['OS_DEVICE_FAULT'])
+    put(vd + layout['dev.fault_step'], enums['VD_STEP_COLD']); put(vd + layout['dev.fault_value'], 0x204)
     if 'info' in layout:
         info = vd + layout['info']
         put(info + L['vdec_check_record']['magic'], 0x49444556)
@@ -303,7 +302,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
             break
         if schedule and events is None:
             # The owner's close, with one more quiesce step on the supervisor's core placed among its stores.
-            shared = [(vd + layout[n], 4) for n in ('phase', 'close_started', 'reported', 'quiesced') if n in layout]
+            shared = [(vd + layout['dev.' + n], 4) for n in ('phase', 'close_started', 'reported', 'quiesced')]
             cores = TwoCores(uc, shared, SENTINEL)
             state['slice_done'] = False
             enter(task, 0, stack=STACKS + 0x40000)
@@ -326,7 +325,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     return {
         'case': name, 'passes': len(results), 'last_result': results[-1],
         'done_within_bound': results[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
-        'phase': get(vd + layout['phase']), 'recorded_fault_step': get(vd + layout['fault_step']),
+        'phase': get(vd + layout['dev.phase']), 'recorded_fault_step': get(vd + layout['dev.fault_step']),
         'close_answer': close_answer, 'record': record, 'schedule': schedule, 'events': events,
         'any_fault': QUIESCE['FAULT'] in results,
         'notes': [(hex(s), hex(v)) for s, v in state['notes']],
@@ -349,7 +348,10 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
     providers = image.address('providers')
     shared = providers + L['board_provider']['shared']
     pmic = shared + L['a733_native_usb']['pmic']
-    put(providers + L['board_provider']['domains'] + L['a733_power_domains']['pmic'], pmic, 8)
+    domains = providers + L['board_provider']['domains']
+    put(domains + L['a733_power_domains']['pmic'], pmic, 8)
+    # The owner's configured tick, as apps/board/main.c sets it (1000000 / configTICK_RATE_HZ): the row deadlines read it.
+    put(domains + L['a733_power_domains']['config'] + L['a733_power_service_config']['tick_us'], TICK_US)
     put(pmic + L['a733_pmic']['pmic_bus_ops'], PMIC_NOW, 8)  # its first member, now
     put(pmic + L['a733_pmic']['config'] + L['a733_pmic_config']['startup_deadline'], 0, 8)  # the provider started
     authority = shared + L['a733_native_usb']['rails'] + L['a733_rail_leases']['authority']
@@ -385,7 +387,7 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
         problems.append(f'after verification the wait must be the PCK600 bound plus two ticks, {verified} us: {rows[1]} us')
     if get(vd + layout['request']) != enums['DONE'] or get(vd + layout['result']) != 0xffffffff:
         problems.append('the open must be answered -1')
-    if get(vd + layout['phase']) != enums['CLOSED'] or get(vd + layout['fault_step']) != enums['VD_STEP_ROW_TIMEOUT']:
+    if get(vd + layout['dev.phase']) != enums['OS_DEVICE_CLOSED'] or get(vd + layout['dev.fault_step']) != enums['VD_STEP_ROW_TIMEOUT']:
         problems.append('the service must end CLOSED with step VD_STEP_ROW_TIMEOUT')
     if ccu.writes or others['ve'].reads or others['ve'].writes:
         problems.append('an unanswered row leaves nothing written and no close')
@@ -395,7 +397,7 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
     if get(unit + L['a733_video_unit']['deadline'], 8) or get(unit + L['a733_video_unit']['failed']):
         problems.append('the refused open must leave the binding with no deadline and not failed, so a reopen runs')
     return {'case': 'row-wait-deadline' if at_deadline else 'row-wait', 'waits_us': rows, 'passes': len(state['waits']), 'elapsed_us': state['time'],
-            'phase': get(vd + layout['phase']), 'recorded_fault_step': get(vd + layout['fault_step']),
+            'phase': get(vd + layout['dev.phase']), 'recorded_fault_step': get(vd + layout['dev.fault_step']),
             'ccu_writes': [(hex(a), hex(v)) for a, v in ccu.writes], 'problems': problems, 'passed': not problems,
             'notes': [(hex(s), hex(v)) for s, v in state['notes']]}
 
@@ -435,7 +437,7 @@ def main():
     with a.image.open('rb') as stream:
         parts = [(int(s['p_vaddr']), bytes(s.data()), int(s['p_memsz']))
                  for s in ELFFile(stream).iter_segments() if s['p_type'] == 'PT_LOAD']
-    assert layout and enums['CLOSED'] == 0 and enums['FAULT'] == 4
+    assert layout and enums['OS_DEVICE_CLOSED'] == 0 and enums['OS_DEVICE_FAULT'] == 4
     cases = [('quiesce-closes', {}), ('application-closes', {'application_close': True}),
              ('close-step-fails', {'stuck': {0xa8c: 0x00040004}}), ('uncertain-access', {'uncertain': True})]
     rows, failures = [], []
@@ -463,7 +465,7 @@ def main():
                 problems.append(f'the registry did not reach DONE within {BOUND_US} us: the return stops at 0x742')
             if row['notes']:
                 problems.append('a closed service must not publish a fault note')
-            if row['phase'] != enums['CLOSED'] or row['recorded_fault_step'] != enums['VD_STEP_COLD']:
+            if row['phase'] != enums['OS_DEVICE_CLOSED'] or row['recorded_fault_step'] != enums['VD_STEP_COLD']:
                 problems.append('the service must be CLOSED with its first fault kept')
             ccu = {int(k, 16): int(v, 16) for k, v in row['ccu'].items()}
             if ccu[0xa88] & 0x80000000 or ccu[0xa8c] & 0x40004 or ccu[0x220] != 0x01204d00 or ccu[0x5e4] != 0x40306:
@@ -488,7 +490,7 @@ def main():
     races = []
     for schedule in sweep:
         row = run_case(image, parts, layout, enums, 'quiesce-closes', schedule=schedule)
-        if row['any_fault'] or row['notes'] or not row['done_within_bound'] or row['phase'] != enums['CLOSED']:
+        if row['any_fault'] or row['notes'] or not row['done_within_bound'] or row['phase'] != enums['OS_DEVICE_CLOSED']:
             races.append({'schedule': schedule, 'events': row['events'], 'notes': row['notes'], 'phase': row['phase']})
     rows.append({'case': 'quiesce-among-close-stores', 'writer_events': writer_events, 'schedules': len(sweep),
                  'reported': races[:8], 'passed': not races and writer_events >= 2,

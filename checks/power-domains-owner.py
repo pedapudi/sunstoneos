@@ -13,7 +13,10 @@ supply verification over modeled PCK600, CCU and R_CCU registers (checks/power-d
   changes no access of the other domains;
 - checks/power-domains-service.c, the service task's PMIC and step bounds;
 - verified_at, the DCDC2 supply-verification time: written once, at the step that first publishes DCDC2 as verified,
-  both with a settled supply (DCDC2 alone, at its own result) and without (with the done bit).
+  both with a settled supply (DCDC2 alone, at its own result) and without (with the done bit);
+- the two row deadlines that the video decoder, G2D and the NPU startup wait on (--row-deadlines): for domains 1, 2,
+  4 and 5, verification by the supply deadline and the ON answer by the row deadline, also after one busy-ledger
+  retry. checks/os-g2d-open-wait.py checks a consumer's use of the two deadlines.
 
 The five delay words and the policy nibble that the owner writes to domain 2 must equal the SUN60IW2_PCK_VE_DEC row
 of the hash-pinned vendor pck600_domains.c, written at the offsets of its sun60iw2 PMU table (sunxi_pd_init, then
@@ -142,6 +145,10 @@ assert traces.returncode == 0, traces.stderr[-2000:]
 assert traces.stdout == TRACES.read_text(), 'domain 1, 4 or 5 accesses differ from checks/data/power-domains-traces.txt'
 trace_lines = len(traces.stdout.splitlines())
 assert trace_lines > 100
+
+deadlines = run(binary, '--row-deadlines')
+assert deadlines.returncode == 0, deadlines.stdout[-2000:] + deadlines.stderr[-2000:]
+assert deadlines.stdout.splitlines()[-1].startswith('PASS row deadlines')
 
 service = out / 'service'
 build('power-domains-service.c', service)

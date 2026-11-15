@@ -570,6 +570,37 @@ core-2 stream counted 0 on both ports, every output matched its reference, and P
 The arguments-once gain is measured; the GPU throughput model and the NPU row rule remain open. The run returned in
 4.50 s from arming, with 4.23 s of phases, against a 55 s session bound.
 
+### Two descriptions fit the GPU add's rates, and neither predicts them
+
+**Status: open, and the line is stopped.** Arguments once per task already took the measured gain, and no further run
+is planned for this question.
+
+The three measured rates of the four-elements-per-lane add come from two distinct configurations. The width build ran
+676 jobs/s and the counter build's mode 1 ran 699.9 jobs/s with the same request counts within 0.1%; mode 0 ran
+1,080.2 jobs/s. Each per-task time below is (1/rate − 103 µs) / 2,048 tasks, where 103 µs is the per-job overhead
+that stage 1 measured on a three-task job.
+
+- **Affine per-task cost.** Per-task time = a + b × read requests per task. Mode 1 makes 50.18 read requests per task
+  in 647.4 ns, and mode 0 makes 18.17 in 401.7 ns, so b = 7.67 ns per request and a = 262.3 ns. The fit treats the 16
+  write requests per task as part of a. It predicts 699.6 jobs/s for the width build (676 measured, +3.5%). It also
+  predicts 215–222 jobs/s for the stage-1c one-element add (225 measured), if that add's loads merge into 36 to 38 line
+  requests per task; that run had no counters. If a write request costs as much as a read, a = 139.4 ns and the
+  one-element prediction becomes 265–275 jobs/s.
+- **Fixed residency at the measured latency.** Five waits of 421 ns over 647 ns per task give 3.25 resident tasks, and
+  four waits of 297 ns over 402 ns give 2.96. About three resident tasks therefore describe both modes, with the
+  latency each run measured.
+
+Both descriptions have two parameters fitted to two points, and neither predicts the read latency. So neither predicts
+the reads in flight (29, then 12), which are the read request rate times the latency. A single-queue fit, latency =
+L0 / (1 − rate / capacity), passes through both points with L0 = 216 ns and a capacity of 148 M requests/s; it uses the
+same two points.
+
+A rate-only run cannot separate them. For the larger-job build with arguments once (8,192 tasks, about 4 read and 2
+write requests per task), the affine cost predicts 379–816 jobs/s, depending on whether writes cost and whether the
+1 MiB output maintenance adds to the overhead. Residency of 2.96 to 3.25 tasks with three waits of 250 to 421 ns
+predicts 278–502 jobs/s. The two ranges overlap. Separating the models would need the read latency and the requests
+per task of that program, which only a counter build measures.
+
 
 ### Width 144: per-row writes, contiguous chunks or whole units for misaligned rows
 
