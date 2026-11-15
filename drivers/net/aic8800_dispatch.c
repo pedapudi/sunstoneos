@@ -49,19 +49,19 @@ static int claimed_message(const struct aic8800_dispatch *d,uint16_t id,const ui
     if(t->security&&t->security->state==AIC8800_SECURITY_WAITING&&id==t->security->expected_cfm)return 1;
     const struct aic8800_wifi *w=t->wifi;if(!w)return 0;
     if(id==0x1802){
-        if(bytes!=852)return 1;
+        if(bytes<852)return 1;
         if(p[9]!=w->vif)return 0;
         if(p[8])return 1; /* Unsupported roaming remains unresolved. */
         return w->state==AIC8800_WIFI_WAITING&&w->expected_cfm==0x1801&&!w->station_indicated;
     }
     if(id==0x1805){
-        if(bytes!=6)return 1;
+        if(bytes<5)return 1;
         return p[2]==w->vif&&w->link!=AIC8800_WIFI_LINK_DOWN&&
             !(w->link==AIC8800_WIFI_CONNECTING&&w->state!=AIC8800_WIFI_WAITING);
     }
     if(w->state!=AIC8800_WIFI_WAITING)return 0;
     if(w->expected_cfm==0x1009&&id==0x1001)
-        return bytes!=3||(p[0]==w->vif&&!w->scan_done);
+        return bytes<3||(p[0]==w->vif&&!w->scan_done);
     if(w->expected_cfm==0x1009&&id==0x1004)
         return bytes==SIZE_MAX||bytes<12||p[8]==w->vif||p[8]==255;
     if(id!=w->expected_cfm)return 0;
