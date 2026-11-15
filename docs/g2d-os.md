@@ -103,3 +103,23 @@ Run `1794732202569746479-c9b5e324` (image 8e5cdd4c6929, source at 0da3883fe) cop
 So the zero comes from neither pipe 0's fill colour, the background nor the blend ROP. The layer and blender alpha path drops the colour of a pixel with alpha 0 in every configuration tried. The premultiplied words leave the output premultiplied. Every register word, interrupt and IOMMU word was as on the stage-3 runs, and every copy completed in 19 to 21 µs.
 
 The candidates are removed. The rotate module (`g2d_rotate_set_para`, reached by the vendor's `g2d_blit_h` with flag G2D_ROT_0) bypasses the blender, and it is the next candidate for an exact copy.
+
+## Rotate module
+
+The G2D's rotate module copies a rectangle with a rotation of 0, 90, 180 or 270 degrees and optional horizontal and vertical flips, without the blender. It is not used by the OS image yet. The reference is `g2d_rotate_set_para` in g2d_rotate.c (linux-orangepi 2ac08e8c, bsp/drivers/g2d/g2d_rcq; the board kernel builds it, CONFIG_G2D_ROTATE=y). The vendor reaches it from a blit whose flag sets any of bits 8-15 (`g2d_blit_h`, g2d.c 717-728), under the same mutex as the mixer.
+
+The vendor programs the module by direct register writes at G2D + 0x28000 (0x05468000), not through the mixer's RCQ command page. The image maps that address as Device-nGnRnE: the first gigabyte is one device block in the kernel's level-1 table (platform/a733/platform.c), and every task's table copies it. [a733_g2d_rotate_words](../drivers/g2d/a733_g2d_rotate.c) gives a job's 24 words in the vendor's order:
+- the control word: mode 1, the degree field in bits 4-5 (0 to 3 for 0 to 270), the vertical flip in bit 6 and the horizontal flip in bit 7;
+- the input format, the input size ((h - 1) << 16 | (w - 1), 13 bits each), three pitches and three plane addresses with their high bytes;
+- the output size, with w and h swapped for 90 and 270, three pitches and three addresses;
+- ROT_INT 0x10000, the finish-interrupt enable;
+- the control word again with the start bit, bit 31.
+
+The rotator does not convert formats. The vendor writes the second and third plane addresses for a single-plane format from the buffer layout on its dma-buf path, and from the caller on its physical-address path; the builder writes 0, as for a caller that gives none. The vendor refuses an input or output origin that is not 4-byte aligned and an output pitch that is not 8-byte aligned, but only after writing every register before the check. The builder refuses those jobs before any write, and also every job whose fields would overflow: w or h of 0 or above 8192, a rectangle wider than its stride, or an origin at or above 2^40. [g2d-rotate-words.py](../checks/g2d-rotate-words.py) compares the builder with a transcription of the vendor function, word for word, over 240 jobs: four degrees, four flip settings, three formats and five geometries, including a 40-bit address. The transcription was compared once with the vendor function itself, compiled on the host with its register writes recorded, over the same jobs and the three vendor refusals.
+
+The rotator shares everything else with the mixer:
+- **Gates and resets.** `g2d_bsp_open` sets the rotator's sclk and hclk gates and its AHB reset (bit 1 of 0x00, 0x04 and 0x08) with the mixer's, as the service's open does. The module clock, bus gate, DE_SYS reset and the PCK600 domain belong to the whole G2D.
+- **IOMMU.** The device tree gives the G2D one IOMMU master, `iommus = <&mmu_aw 10 1>`.
+- **Interrupt and timeout.** `g2d_handle_irq` (g2d.c 802-832) serves INTID 83 for both blocks: the mixer's task end first, then ROT_INT bit 0, which it clears by writing the read word back, with no reset pulse. The timeout is the mixer's 100 ms, after which `g2d_bsp_reset` pulses both AHB resets.
+
+The service runs one operation at a time, so its handler dispatches by the kind the owner armed ([a733_g2d_irq.h](../include/a733_g2d_irq.h)). Only the armed kind's finish completes the operation. A finish of the other kind is counted as a stray and left set. [g2d-irq-dispatch.py](../checks/g2d-irq-dispatch.py) checks the dispatch for every armed kind, both finish bits and the status words' other bits.
