@@ -509,6 +509,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
     uc.mmio_map(PCK1, 0x1000, pck.read, None, pck.write, None)
     hooks = {
         'sunstone_deadline_register': lambda m: ret(m, 1),
+        'sunstone_deadline_register_index': lambda m: ret(m, 1),
         'sunstone_deadline_now_us': now,
         'sunstone_deadline_wait_until': wait,
         'a733_counter_clock_now': counter_now,

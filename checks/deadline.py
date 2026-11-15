@@ -95,7 +95,11 @@ def main():
          'if(d&&d<=now){first=d;due=&slots[i];}'),
         ('slot-ownership-unchecked','runtime','runtime/deadline.c',
          'if(s<slots||s>=slots+DEADLINE_SLOTS||atomic_load_explicit(&s->owner,memory_order_relaxed)!=self)return NULL;',
-         '(void)self;')):
+         '(void)self;'),
+        # Deadline waits back on the task's default index, so an owner's index-0 input is taken by its waits.
+        ('deadline-waits-on-index-0','runtime','runtime/deadline.c',
+         'const unsigned index=s->own_index?s->own_index-1:sunstone_deadline_notify_index();',
+         'const unsigned index=sunstone_deadline_notify_index();')):
         sources=['checks/deadline-host.c','runtime/deadline.c']
         defines=list(owner_defines)
         if source.startswith('apps/'):

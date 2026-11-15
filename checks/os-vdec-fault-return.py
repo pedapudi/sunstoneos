@@ -56,6 +56,25 @@ words and the published nonsecure boot ROM mapped:
   the owner's transition record and the decode record embedded) and of the decode's answer in apps/vdec-check/host.py
   equals the image's DWARF, so the host decodes the bytes the image returns; and apps/vdec-check/fixture.h holds the
   bytes of apps/jpeg/fixture.py.
+Three cases run the owner task without a break at its deadline waits, with each task notification index's pending
+count modeled: a give adds one to the owner's count at its index, a deadline wait returns at once (notified) when its
+index has a count and otherwise at its deadline (expired), and takes its index's count on its way out, and the
+owner's block with no timeout returns when index 0 has a count and otherwise holds the owner until a give. Each starts
+as decode-timeout-closes, and the input arrives during the close's detach of masters 6 and 7, whose release of the
+IOMMU's clock lease finds the clock registry busy once and waits 50 us in the owner's task through the deadline
+runtime (clock_lease, apps/os/iommu.c):
+- request-during-close: the application posts a decode during the quiesce's close (its post tested quiesce_wanted
+  before the quiesce set it). The owner must answer it (refused, -1, the service being CLOSED). An owner whose
+  deadline waits take index 0 consumes the post's notification in the detach's wait, then blocks with the decode
+  posted and the application's call stranded (bringup at 5d3de101a).
+- quiesce-during-close: the application's close of the FAULT service runs first, and the quiesce arrives during it.
+  The owner answers the close (-1) and the registry reaches DONE. The owner tests quiesce_wanted after every request
+  and the supervisor's quiesce step notifies the owner again on every PENDING pass, so a quiesce notification taken by
+  a deadline wait does not strand the quiesce; the case guards that order.
+- hints-reach-deadline-waits: the power row's wake and INTID 81 (with nothing armed) each give the owner the index
+  its deadline waits take, which is not index 0.
+- deadline-waits-on-index-0: request-during-close with the owner's deadline index forced to 0. The case must fail,
+  which shows that request-during-close detects an owner whose deadline waits take its inputs' index.
 The image of the hold-B run (c1a4e4fc...) fails the first two cases: its quiesce step reports FAULT on every pass
 until the bound. The image of the stage-1 rerun (7d63776e...) fails quiesce-among-close-stores: its quiesce step
 decides from phase and close_started.
@@ -90,6 +109,7 @@ BOUND_US, PASS_US = 3_000_000, 10_000
 # translation (drivers/video/a733_video_unit.c, pages[]). A page walk per access would translate once per register
 # access instead.
 MAPPED_PAGES = 10
+FAKE_TASK = 0x60200000                                                    # the owner's handle; gives to it are counted
 QUIESCE = {'PENDING': 0, 'DONE': 1, 'FAULT': 2}
 SITE_DECODER = 0x941
 VD_OWNER = 0x5645440000000001
@@ -169,7 +189,7 @@ def members(image):
 
 
 def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, application_close=False, schedule=None,
-             row_wait=False, decode=None, detach=1):
+             row_wait=False, decode=None, detach=1, inject=None, mutant=False, hints=False):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -194,7 +214,8 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     for regs in (ccu, *others.values()):
         uc.mmio_map(regs.base, regs.size, regs.read, None, regs.write, None)
     state = {'time': 1000, 'requested': 0, 'notes': [], 'slice_done': False, 'waits': [], 'translations': 0,
-             'detaches': []}
+             'detaches': [], 'pending': [0, 0, 0], 'deadline_index': None, 'blocked': False, 'deadline_waits': []}
+    continuous = inject is not None
     L = image.layouts
     vd = image.address('vd', UNIT)
 
@@ -234,20 +255,83 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         uc.mem_write(out, address.to_bytes(8, 'little') + (0).to_bytes(4, 'little') + (2).to_bytes(4, 'little'))
         ret(m, 1)
 
-    def wait(m):
-        state['waits'].append((m.reg_read(UC_ARM64_REG_X0), state['time']))
+    def deadline_wait(until):
+        # The deadline wait: notified at once by a count at its index, otherwise expired at its deadline; it takes its
+        # index's count on its way out.
+        index = state['deadline_index']
+        notified = state['pending'][index] > 0
+        if not notified:
+            state['time'] = max(state['time'], until)
+        state['deadline_waits'].append({'index': index, 'notified': notified, 'pending': list(state['pending'])})
+        state['pending'][index] = 0
+        return 0 if notified else 1
+
+    def stop_slice(m, blocked):
+        state['blocked'] = blocked
         state['slice_done'] = True
         m.emu_stop()
+
+    def wait(m):
+        state['waits'].append((m.reg_read(UC_ARM64_REG_X0), state['time']))
+        if continuous:
+            until = m.reg_read(UC_ARM64_REG_X0)
+            if until - state['time'] > BOUND_US and not state['pending'][state['deadline_index']]:
+                stop_slice(m, True)                     # an idle wait past the supervisor's bound
+                return
+            ret(m, deadline_wait(until))
+            return
+        state['slice_done'] = True
+        m.emu_stop()
+
+    def block(m):
+        if not continuous:
+            wait(m)
+            return
+        index = m.reg_read(UC_ARM64_REG_X0)
+        if state['pending'][index]:
+            count, state['pending'][index] = state['pending'][index], 0
+            ret(m, count)
+            return
+        stop_slice(m, True)
+
+    def give(m):
+        if m.reg_read(UC_ARM64_REG_X0) == FAKE_TASK:
+            state['pending'][m.reg_read(UC_ARM64_REG_X1)] += 1
+            state.setdefault('gives', []).append(m.reg_read(UC_ARM64_REG_X1))
+        ret(m, 1)
+
+    def register(m, index):
+        if state['deadline_index'] is None:
+            state['deadline_index'] = index
+        ret(m, 1)
+
+    def iommu_detach(m):
+        state['detaches'].append((m.reg_read(UC_ARM64_REG_X0), len(ccu.writes)))
+        if continuous:
+            if not state.get('injected'):
+                # The input arrives during the detach, with its notification, as the application's call and the
+                # quiesce step give.
+                if inject == 'request':
+                    put(vd + layout['op'], enums['DECODE_OP']); put(vd + layout['request'], enums['POSTED'])
+                else:
+                    put(vd + layout['dev.quiesce_wanted'], 1)
+                state['pending'][0] += 1
+                state['injected'] = True
+            deadline_wait(state['time'] + 50)           # the clock-lease release, the registry busy once
+        ret(m, detach)
 
     def note(m):
         state['notes'].append((m.reg_read(UC_ARM64_REG_X0), m.reg_read(UC_ARM64_REG_X1)))
         ret(m)
 
     hooks = {
-        'sunstone_deadline_register': lambda m: ret(m, 1),
+        'sunstone_deadline_register': lambda m: register(m, 0),
+        'sunstone_deadline_register_index': lambda m: register(m, 0 if mutant else m.reg_read(UC_ARM64_REG_X0)),
         'sunstone_deadline_now_us': now,
         'sunstone_deadline_wait_until': wait,
-        'ulTaskGenericNotifyTake': wait,  # the owner task's idle block
+        'ulTaskGenericNotifyTake': block,  # the owner task's idle block
+        'xTaskGenericNotify': give,
+        'vTaskGenericNotifyGiveFromISR': give,
         'a733_counter_clock_now': counter_now,
         'a733_pmic_now': pmic_now,
         'ss_counter_ticks': lambda m: ret(m, state['time'] * 24),
@@ -263,8 +347,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         'os_session_admitted': lambda m: ret(m, SESSION),
         'a733_rail_poll': lambda m: ret(m, 0),                  # A733_RAIL_READY: the decoder's DCDC2 token
         # The IOMMU owner's detach of masters 6 and 7: when it comes among the CCU writes, and its answer.
-        'os_iommu_detach': lambda m: (state['detaches'].append((m.reg_read(UC_ARM64_REG_X0), len(ccu.writes))),
-                                      ret(m, detach)),
+        'os_iommu_detach': iommu_detach,
     }
     for symbol, callback in hooks.items():
         if symbol in image.symbols:
@@ -344,9 +427,20 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         info = vd + layout['info']
         put(info + L['vdec_check_record']['magic'], 0x49444556)
 
+    put(image.address('owner', UNIT), FAKE_TASK, 8)
     task = image.address('os_video_decode_task', UNIT)
+    if hints:
+        # The row's wake and INTID 81 with nothing armed: the notification index each gives the owner.
+        call(image.address('wake_owner', UNIT), 0)
+        call(image.address('os_video_decode_irq'))
+        return {'gives': state.get('gives', [])}
     def owner_slice():
         state['slice_done'] = False
+        if state['blocked']:
+            # A blocked owner runs again only after a give at index 0; it resumes at its loop's top.
+            if not state['pending'][0]:
+                return
+            state['pending'][0], state['blocked'] = 0, False
         call(task, 0, stack=STACKS + 0x40000)
         assert state['slice_done'], (name, 'the owner task did not reach its wait')
 
@@ -385,10 +479,18 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         else:
             owner_slice()
         state['time'] += PASS_US
+    posted = None
+    if inject:
+        result = get(vd + layout['result'])
+        posted = {'injected': bool(state.get('injected')), 'request': get(vd + layout['request']),
+                  'op': get(vd + layout['op']), 'result': result - (1 << 32) if result >> 31 else result,
+                  'deadline_index': state['deadline_index'], 'blocked': state['blocked'],
+                  'waits_with_input_pending': sum(1 for w in state['deadline_waits'] if w['pending'][0])}
     record = {}
     if 'info' in layout and 'fault_closed' in L['vdec_check_record']:
         record = {k: get(info + L['vdec_check_record'][k]) for k in ('fault_closed', 'fault_step', 'failed')}
     return {
+        'posted': posted,
         'case': name, 'passes': len(results), 'last_result': results[-1],
         'done_within_bound': results[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
         'phase': get(vd + layout['dev.phase']), 'recorded_fault_step': get(vd + layout['dev.fault_step']),
@@ -668,6 +770,9 @@ def main():
     # and only then returns masters 6 and 7 to bypass; a drained decode detaches them before any CCU write; a detach
     # that fails leaves the service FAULT.
     for name, options in (('decode-timeout-closes', {'decode': 'timeout'}),
+                          ('request-during-close', {'decode': 'timeout', 'inject': 'request'}),
+                          ('quiesce-during-close', {'decode': 'timeout', 'inject': 'quiesce', 'application_close': True}),
+                          ('deadline-waits-on-index-0', {'decode': 'timeout', 'inject': 'request', 'mutant': True}),
                           ('decode-drained-closes', {'decode': 'drained', 'application_close': True}),
                           ('decode-detach-fails', {'decode': 'timeout', 'detach': -1})):
         row = run_case(image, parts, layout, enums, name, **options)
@@ -694,11 +799,32 @@ def main():
                 problems.append('the close of a drained decode must be answered 1')
         if row['ve_accesses']:
             problems.append('the close must not touch a decoder register')
+        if options.get('inject'):
+            p, inject = row['posted'], options['inject']
+            want_op = enums['DECODE_OP'] if inject == 'request' else enums['CLOSE_OP']
+            if not p['injected'] or not p['waits_with_input_pending']:
+                problems.append('the input did not arrive during a deadline wait of the close')
+            elif p['request'] != enums['DONE'] or p['op'] != want_op or p['result'] != -1:
+                problems.append(f"the owner left the {inject} unanswered: request {p['request']}, op {p['op']}, "
+                                f"result {p['result']} (expected DONE, {want_op}, -1); deadline index "
+                                f"{p['deadline_index']}, owner blocked {p['blocked']}")
+            if options.get('mutant'):
+                # The mutant must fail; its row passes when it does.
+                problems = [] if problems else ['an owner whose deadline waits take index 0 was not detected']
         row['passed'] = not problems
         row['problems'] = problems
         if problems:
             failures.append(name)
         rows.append(row)
+    # The producers that end the owner's deadline waits give the index those waits take.
+    index = next(r['posted']['deadline_index'] for r in rows if r['case'] == 'request-during-close')
+    gives = run_case(image, parts, layout, enums, 'hints-reach-deadline-waits', decode='timeout', hints=True)['gives']
+    ok = index not in (None, 0) and gives == [index, index]
+    rows.append({'case': 'hints-reach-deadline-waits', 'deadline_index': index, 'gives': gives, 'passed': ok,
+                 'problems': [] if ok else [f'the row wake and INTID 81 must give the deadline index {index}, not '
+                                            f'index 0: gave {gives}']})
+    if not ok:
+        failures.append('hints-reach-deadline-waits')
     row = run_case(image, parts, layout, enums, 'decode-runs', decode='run')
     rows.append(row)
     if not row['passed']:
@@ -765,7 +891,8 @@ def main():
                                      'drivers/video/a733_video_unit.c', 'checks/os-vdec-fault-return.py')}})
     for row in rows:
         detail = f"{row['schedules']} placements over {row['writer_events']} close stores" if 'schedules' in row else \
-            f"{row['passes']} passes, {row['elapsed_us']} us" if 'passes' in row else 'host.py offsets match the DWARF'
+            f"{row['passes']} passes, {row['elapsed_us']} us" if 'passes' in row else \
+            f"gives {row['gives']}" if 'gives' in row else 'host.py offsets match the DWARF'
         print('PASS' if row['passed'] else 'FAIL', row['case'], detail, '; '.join(row['problems']))
     if failures:
         raise SystemExit(f'{len(failures)} of {len(rows)} cases failed')

@@ -30,6 +30,7 @@
 #include "quiesce.h"
 #include "sunstone_crumb.h"
 #include "sunstone_deadline.h"
+#include "sunstone_notify.h"
 #include "sunstone_g2d.h"
 #include <stdatomic.h>
 #include <string.h>
@@ -132,7 +133,8 @@ static int update(uintptr_t a,uint32_t mask,uint32_t value)
 }
 static int refuse(unsigned step,uint32_t value){return os_device_refuse(&g2d.dev,step,value);}
 static int fail(unsigned step,uint32_t value){return os_device_fail(&g2d.dev,step,value,0);}
-static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner);}
+/* The power row's wake ends the owner's deadline waits (SS_NOTIFY_DEADLINE); the owner's index 0 is for its inputs. */
+static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGiveIndexed(owner,SS_NOTIFY_DEADLINE);}
 static uint64_t owner_us(void){uint64_t t=0;return a733_pmic_now(&providers.shared.pmic,&t)==1?t:0;}
 static unsigned settled_supply;
 
@@ -740,17 +742,17 @@ static void serve(void)
 static void os_g2d_task(void *unused)
 {
     (void)unused;
-    if(sunstone_deadline_register()!=1)for(;;)vTaskSuspend(NULL);
+    /* Every deadline wait of this task is on SS_NOTIFY_DEADLINE, which INTID 83 and the row's wake give; index 0 is
+     * given only by the application's request and the quiesce, and only the block below takes it, so an input that
+     * arrives during a close or an operation stays pending until the block. */
+    if(sunstone_deadline_register_index(SS_NOTIFY_DEADLINE)!=1)for(;;)vTaskSuspend(NULL);
     for(;;){
         serve();
         if(atomic_load(&g2d.dev.quiesce_wanted)&&atomic_load(&g2d.request)!=POSTED){
             if(closable())(void)do_close();
             if(atomic_load(&g2d.dev.phase)==OS_DEVICE_CLOSED)atomic_store(&g2d.dev.quiesced,1);
         }
-        /* Every input notifies this task: an application request, the quiesce, the row's wake and INTID 83. A wait
-         * inside the close above can take a request's notification (a request posted after the test there), so a
-         * posted request is served before the task blocks. */
-        if(atomic_load_explicit(&g2d.request,memory_order_acquire)!=POSTED)(void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+        (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
     }
 }
 
@@ -797,7 +799,7 @@ void os_g2d_irq(void)
         else (void)gicv3_spi_mask(&g2d.gic);
         atomic_store_explicit(&g2d.irq_seen,a.seen==1?1u:2u,memory_order_release);
     }
-    if(owner)vTaskNotifyGiveFromISR(owner,&woken);
+    if(owner)vTaskNotifyGiveIndexedFromISR(owner,SS_NOTIFY_DEADLINE,&woken);
     portYIELD_FROM_ISR(woken);
 }
 

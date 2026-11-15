@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prove from the linked code of the OS images that the deadline-owner bound is exact (apps/os/os-services.h).
 
-Every task that calls sunstone_deadline_register takes one slot of a table that the image's own tables size by
+Every task that calls sunstone_deadline_register or sunstone_deadline_register_index takes one slot of a table that the image's own tables size by
 OS_DEADLINE_OWNERS (runtime/deadline.c, tools/sunstone-manifest.py). The bound is a sum of terms: the owners column of each
 linked start entry (OS_START_ROWS), less the DMA0 pool's two tasks when both the audio and the dma entries count them,
 plus the board's registering tasks, the application's, the large-region loader's, the SD0 owner's and the background
@@ -69,7 +69,8 @@ OBJDUMP = '/usr/lib/llvm-21/bin/llvm-objdump'
 # The task creations: the function and the argument register that holds the new task's entry function.
 CREATE = {'xTaskCreateStatic': 0, 'xTaskCreateStaticAffinitySet': 0, 'os_task_create_static': 1,
           'os_task_create_static_affinity_set': 1, 'ss_task_create_static_affinity_set': 0}
-REGISTER = 'sunstone_deadline_register'
+# The registration entry points: each takes one slot (runtime/deadline.c).
+REGISTER = ('sunstone_deadline_register', 'sunstone_deadline_register_index')
 # The roots of the terms outside the start list.
 APPLICATION_ROOT = 'os_application_prepare'
 BOARD_ROOT = 'a733_smp_diagnostic_start'
@@ -190,7 +191,7 @@ class Image:
             resolved.append((here, function, entry, candidates))
         self.sites = resolved
         self.stop = set(create)
-        self.register = set(self.byname.get(REGISTER, ()))
+        self.register = {a for name in REGISTER for a in self.byname.get(name, ())}
         self.reached = {}
 
     def read(self, address, size):
