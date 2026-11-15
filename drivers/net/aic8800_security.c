@@ -1,5 +1,6 @@
 /* Bounded D80 key/controlled-port worker. The pinned firmware ABI uses no
  * receive replay-counter field; host packet numbers are therefore retained. */
+#define AIC8800_SITE_FILE 5u
 #include "aic8800_security.h"
 static uint64_t pn48(const uint8_t *p)
 {uint64_t v=0;for(unsigned i=0;i<6;++i)v|=(uint64_t)p[i]<<(8*i);return v;}
@@ -13,7 +14,11 @@ static int same_link(const struct aic8800_security *s)
 static int active(const struct aic8800_security *s)
 {return s->state==AIC8800_SECURITY_REQUEST||s->state==AIC8800_SECURITY_WAITING;}
 void aic8800_security_stop(struct aic8800_security *s,const void *owner)
-{if(s&&s->initialized&&s->owner==owner){s->authorized=0;s->state=AIC8800_SECURITY_FAULT;}}
+{
+    if(!s||!s->initialized||s->owner!=owner)return;
+    if(s->state!=AIC8800_SECURITY_FAULT&&!s->stopped){s->stop_from=(uint8_t)s->state;s->stopped=1;}
+    s->authorized=0;s->state=AIC8800_SECURITY_FAULT;
+}
 void aic8800_security_observe(struct aic8800_security *s,const void *owner,uint64_t now)
 {
     if(!s||s->owner!=owner||s->state==AIC8800_SECURITY_FAULT)return;
@@ -39,6 +44,7 @@ static void encode(struct aic8800_security *s,uint16_t id,unsigned bytes)
 {
     for(unsigned i=0;i<sizeof(s->request);++i)s->request[i]=0;
     aic8800_sdio_command_header(s->request,id,(uint16_t)bytes);
+    s->seen_cfm_bytes=0;s->seen_cfm_status=0;
     s->expected_cfm=id+1;s->state=AIC8800_SECURITY_REQUEST;s->authorized=0;
 }
 static int admit(struct aic8800_security *s,const void *owner,uint64_t now,uint64_t deadline)
@@ -85,6 +91,7 @@ enum aic8800_codec_result aic8800_security_response(struct aic8800_security *s,c
     if(!s||s->owner!=owner||!r)return AIC8800_CODEC_UNRELATED;
     aic8800_security_observe(s,owner,now);if(s->state==AIC8800_SECURITY_FAULT)return AIC8800_CODEC_MALFORMED;
     if(s->state!=AIC8800_SECURITY_WAITING||!r->has_message||r->message_id!=s->expected_cfm)return AIC8800_CODEC_UNRELATED;
+    s->seen_cfm_bytes=r->parameter_bytes;s->seen_cfm_status=r->parameter_bytes?r->parameters[0]:0;
     if(r->parameter_bytes>sizeof(s->last_cfm)||(s->operation==AIC8800_SECURITY_ADD&&r->parameter_bytes!=4))goto fail;
     s->last_cfm_bytes=r->parameter_bytes;for(unsigned i=0;i<r->parameter_bytes;++i)s->last_cfm[i]=r->parameters[i];
     if(s->operation==AIC8800_SECURITY_ADD) {

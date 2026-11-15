@@ -139,7 +139,8 @@ int a733_radio_session_start_security(struct a733_radio_session *s,const struct 
 {if(app.config.associate){(void)d;assoc_security=*c;++security_calls;s->wifi.link=AIC8800_WIFI_CONNECTING;
  /* The supplicant keeps the configuration and derives keys into its slots; the transport queues key records. */
  s->supplicant.config=*c;memcpy(s->supplicant.small[0]+40,c->pmk,32);memcpy(s->supplicant.large[0]+100,c->pmk,32);
- memcpy(s->transport.rx+9,c->pmk,32);memcpy(s->security.keys,c->pmk,32);return 1;}
+ memcpy(s->transport.rx+9,c->pmk,32);memcpy(s->security.keys,c->pmk,32);
+ s->transport.security=&s->security;s->transport.supplicant=&s->supplicant;return 1;}
  assert(s==&app.session&&c->entropy==a733_radio_entropy_bytes&&c->entropy_context==&app.entropy&&d==2100);
  ++security_calls;return boundary;}
 int a733_radio_session_start_network(struct a733_radio_session *s,const struct sunstone_net_config *c)
@@ -601,7 +602,19 @@ int main(void)
                 assert(end==BOARD_RADIO_DOWN&&app.stage==DOWN&&app.wiped);
                 assert(board_radio_poll(&app)==BOARD_RADIO_DOWN); /* polled again after the wipe */
                 break;
-            case HANDSHAKE_TIMEOUT:time_us=app.operation_deadline+1;end=board_radio_poll(&app);break;
+            case HANDSHAKE_TIMEOUT:{
+                /* A key add awaiting its confirmation when the handshake bound passes: the record names the site. */
+                app.session.security.state=AIC8800_SECURITY_WAITING;app.session.security.operation=AIC8800_SECURITY_ADD;
+                app.session.security.expected_cfm=37;app.session.supplicant.initialized=1;app.session.supplicant.count=1;
+                app.session.supplicant.actions[0].kind=AIC8800_SUPPLICANT_KEY;app.session.supplicant.action_active=1;
+                app.session.supplicant.completed=1;
+                time_us=app.operation_deadline+1;end=board_radio_poll(&app);
+                const struct a733_radio_report *failed=&app.report;const struct aic8800_fault_site *f=&failed->fault;
+                assert(failed->has_fault&&f->security==AIC8800_SECURITY_WAITING&&f->expected_cfm==37&&!f->cfm_bytes&&
+                    (f->supplicant>>4)==1&&f->actions==(1u|2u|8u)&&f->ms==(uint16_t)((app.operation_deadline+1)/1000u));
+                uint8_t encoded[1024];size_t n=a733_radio_report_encode(failed,encoded,sizeof(encoded));
+                assert(n==a733_radio_report_bytes(failed)&&(encoded[37]&16u)&&!memcmp(encoded+n-16,f,16));
+                break;}
             case STARTUP_DEADLINE:time_us=assoc.startup_deadline_us;end=board_radio_poll(&app);break;
             case BOARD_FAILED:end=board_radio_external_failure(&app);break;
             case SESSION_RETAINED:{

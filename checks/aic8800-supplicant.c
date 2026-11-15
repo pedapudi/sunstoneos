@@ -4,6 +4,9 @@
 #include "aic8800-runtime.c"
 #undef AIC8800_RUNTIME_FIXTURE_MAIN
 #include "aic8800_supplicant.h"
+#include "aic8800_dispatch.h"
+#define SUNSTONE_AIC8800_FAULT_SITE_CAPTURE 1
+#include "aic8800_fault_site.h"
 #ifdef SUNSTONE_AIC8800_SAE
 /* OpenSSL allocates from the FreeRTOS heap in images. */
 void *pvPortMalloc(size_t n){return malloc(n);}
@@ -15,11 +18,46 @@ static struct aic8800_security security;
 static struct aic8800_supplicant supplicant;
 static uint8_t vectors[15][256];static unsigned sizes[15];
 static unsigned entropy_calls, key_adds, deletes, ports, eapol_tx, trace[64],trace_n;
-static int entropy_return=1, reject_key, drop_reply, uncertain_tx;
+static int entropy_return=1, reject_key, drop_reply, drop_key_reply, uncertain_tx;
 /* The firmware confirms the next EAPOL frame as processed but unacknowledged (tx_done and retry_required, no ack bit). */
 static int unacked_once;
 static unsigned hold_response,expected_eapol;
 static uint8_t delayed[512];
+/* The window between message 4 and the open port, as the board sees it: the dispatcher owns the receive, and each
+ * firmware reply arrives in an aggregate with the other records the reference receive path handles in a station
+ * (aicwf_sdio.h record types 0x00 data, 0x11 messages, 0x12 data confirmations, 0x13 prints; rwnx_msg_rx.c handlers).
+ * window: 0 off, 1 the extra records before and after each reply. */
+static struct aic8800_dispatch dispatcher;
+static int window;
+static unsigned window_records,window_data,window_events;
+static uint64_t window_pn=20,window_latency,window_release;
+static uint8_t window_held[AIC8800_TRANSPORT_RX_BYTES],window_held_blocks;
+static unsigned rx_frame(uint8_t *p,const uint8_t *eapol,unsigned n,int encrypted,uint64_t pn,unsigned keyid,int group);
+static unsigned window_data_record(uint8_t *p,int encrypted,int group,uint16_t ethertype)
+{
+    static const uint8_t arp[28]={0,1,8,0,6,4,0,1};
+    unsigned n=rx_frame(p,arp,sizeof(arp),encrypted,window_pn++,1,group),iv=encrypted?8:0;
+    p[84+iv+6]=(uint8_t)(ethertype>>8);p[84+iv+7]=(uint8_t)ethertype;return n;
+}
+static void window_surround(void)
+{
+    if(!window||!m.card[1][4])return;
+    uint8_t reply[512];unsigned bytes=((unsigned)receive[0]|(unsigned)receive[1]<<8)+4;bytes=(bytes+3)&~3u;
+    assert(bytes<=sizeof(reply));memcpy(reply,receive,bytes);memset(receive,0,sizeof(receive));
+    unsigned at=0;
+    receive[0]=3;receive[2]=0x13;receive[4]='o';receive[5]='k';receive[6]='\n';at=8;     /* firmware print */
+    const uint8_t credits[4]={3,0,8,0};at+=message(receive+at,0x140b,credits,4);          /* ME_TX_CREDITS_UPDATE_IND */
+    at+=window_data_record(receive+at,1,1,0x0806);                                       /* group-addressed, CCMP, key 1 */
+    memcpy(receive+at,reply,bytes);at+=bytes;
+    at+=window_data_record(receive+at,1,1,0x86dd);
+    at+=window_data_record(receive+at,0,0,0x0800);                                       /* unprotected unicast */
+    m.card[1][4]=(uint8_t)((at+511)/512);
+    if(window_latency){
+        /* The firmware answers later than the bus: the reply waits, the card's function interrupt low. */
+        assert(!window_held_blocks);memcpy(window_held,receive,sizeof(window_held));window_held_blocks=m.card[1][4];
+        window_release=m.now+window_latency;memset(receive,0,sizeof(receive));m.card[1][4]=0;
+    }
+}
 static int entropy(void *ctx,uint8_t *out,size_t bytes)
 {
     assert(ctx==&m&&bytes==32);++entropy_calls;
@@ -53,6 +91,7 @@ static int security_write(void *ctx,uint32_t off,uint32_t value)
                 assert(p[14]==44&&p[20]==16&&p[56]==2&&p[57]==1);
                 unsigned which=p[59]?1:(p[16]==1?2:3);assert(!memcmp(p+24,vectors[which],16));
                 ++key_adds;uint8_t cfm[]={reject_key?7:0,(uint8_t)(10+which),0xa5,0x5a};control_reply(37,cfm,4);
+                if(drop_key_reply){memset(receive,0,sizeof(receive));m.card[1][4]=0;}
             } else if(id==38) {
                 assert(p[16]>=11&&p[16]<=13);++deletes;uint8_t opaque[]={0xa5,0x5a};control_reply(39,opaque,2);
             } else {
@@ -60,6 +99,7 @@ static int security_write(void *ctx,uint32_t off,uint32_t value)
                 uint8_t opaque[]={0x12,0x34};control_reply(5125,opaque,2);
             }
         }
+        window_surround();
         if(hold_response){memcpy(delayed,receive,sizeof(delayed));memset(receive,0,sizeof(receive));m.card[1][4]=0;hold_response=0;}
         if(drop_reply){memset(receive,0,sizeof(receive));m.card[1][4]=0;}
     }
@@ -146,7 +186,7 @@ static void authorized(void)
 static int allzero(const void *p,size_t n){const uint8_t *b=p;for(size_t i=0;i<n;++i)if(b[i])return 0;return 1;}
 int main(int argc,char **argv)
 {
-    assert(argc==3);FILE *f=fopen(argv[1],"rb");assert(f);
+    assert(argc==3||argc==4);FILE *f=fopen(argv[1],"rb");assert(f);
     for(unsigned i=0;i<15;++i){uint8_t n[2];assert(fread(n,1,2,f)==2);sizes[i]=n[0]|(unsigned)n[1]<<8;assert(sizes[i]<=256&&fread(vectors[i],1,sizes[i],f)==sizes[i]);}
     assert(fgetc(f)==EOF&&!fclose(f));checkpoint();
     if(!strcmp(argv[2],"lifecycle")) {
@@ -207,15 +247,75 @@ int main(int argc,char **argv)
         assert(supplicant.state==AIC8800_SUPPLICANT_FAULT);retained_fault();
         puts("RSN input refusal: invalid MIC and oversized EAPOL length do not install keys or authorize data");return 0;
     }
+    if(!strcmp(argv[2],"window")) {
+        /* The board's receive ownership: the session's management stage drives the transport only through the
+         * dispatcher, discards ordinary data and drains events and diagnostic records, as a733_radio_session.c and
+         * apps/board/radio.c do. */
+        assert(aic8800_dispatch_init(&dispatcher,&transport));window=1;
+        /* window-events: the board's interrupt mode. The owner polls only when the transport reports work or the
+         * controller latches the card's function interrupt, and otherwise sleeps to the transport's next deadline. */
+        int events=argc>3&&!strcmp(argv[3],"events");unsigned sleeps=0;
+        if(events){host.events=1;m.allow_irq_ack=1;window_latency=20;}
+        for(unsigned i=0;i<20000;++i) {
+            if(window_held_blocks&&!m.card[1][4]&&m.now>=window_release){
+                memcpy(receive,window_held,sizeof(receive));m.card[1][4]=window_held_blocks;window_held_blocks=0;}
+            if(events) {
+                m.irq_level=m.card[1][4]!=0;uint64_t until=0;
+                /* A command in flight completes in microseconds on the board; only an idle bus sleeps. */
+                if(!transport.pending&&!aic8800_transport_event_work(&transport,m.now)&&sunxi_sdio_event_prepare(&host,&until)==0) {
+                    uint64_t next=aic8800_transport_event_deadline(&transport,m.now);
+                    if(until&&(!next||until<next))next=until;
+                    if(window_held_blocks&&window_release>m.now&&(!next||window_release<next))next=window_release;
+                    assert(next>m.now);m.now=next;++sleeps;
+                }else ++m.now;
+            }else ++m.now;
+            aic8800_dispatch_poll(&dispatcher);
+            struct aic8800_data_frame f;
+            if(aic8800_dispatch_peek_data(&dispatcher,&f)){assert(aic8800_dispatch_consume_data(&dispatcher));++window_data;}
+            struct aic8800_dispatch_event e;while(aic8800_dispatch_take_event(&dispatcher,&e))++window_events;
+            struct aic8800_dispatch_record r;while(aic8800_dispatch_take_record(&dispatcher,&r))++window_records;
+            if(transport.state==AIC8800_TRANSPORT_FAULT||dispatcher.faulted)break;
+            int quiet=!m.card[1][4]&&!window_held_blocks&&!transport.pending&&!transport.held&&transport.cursor==transport.rx_bytes&&
+                !supplicant.count&&!supplicant.action_active&&!supplicant.port_pending&&!supplicant.deferred_bytes&&
+                data.state==AIC8800_DATA_IDLE&&security.state==AIC8800_SECURITY_IDLE;
+            if(quiet&&!eapol_tx){memset(receive,0,sizeof(receive));rx_frame(receive,vectors[5],sizes[5],0,0,0,0);m.card[1][4]=1;}
+            else if(quiet&&eapol_tx==1&&!key_adds){memset(receive,0,sizeof(receive));rx_frame(receive,vectors[7],sizes[7],0,0,0,0);m.card[1][4]=1;}
+            else if(quiet&&supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED)break;
+        }
+        fprintf(stderr,"window%s: sleeps=%u now=%llu transport=%u error=%u dispatcher=%u RSN=%u internal=%d data=%u/%u security=%u op=%u eapol=%u keys=%u ports=%u records=%u data=%u events=%u\n",events?"-events":"",sleeps,(unsigned long long)m.now,
+            transport.state,transport.error,dispatcher.faulted,supplicant.state,supplicant.rsn_state,data.state,data.error,
+            security.state,security.operation,eapol_tx,key_adds,ports,window_records,window_data,window_events);
+        assert(transport.state!=AIC8800_TRANSPORT_FAULT&&!dispatcher.faulted);
+        assert(supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&wifi.link==AIC8800_WIFI_SECURED&&key_adds==2&&ports==1);
+        puts("RSN window: message 4 to the open port with the station's other receive records through the dispatcher");return 0;
+    }
     if(!strcmp(argv[2],"entropy")){entropy_return=-1;inject(5);}
     else if(!strcmp(argv[2],"key-failure")){inject(5);settled();reject_key=1;inject(7);}
     else if(!strcmp(argv[2],"tx-uncertain")){uncertain_tx=1;inject(5);}
     else if(!strcmp(argv[2],"timeout")){drop_reply=1;inject(5);}
+    else if(!strcmp(argv[2],"key-timeout")){inject(5);settled();drop_key_reply=1;inject(7);}
     else if(!strcmp(argv[2],"generation")){authorized();++wifi.association_generation;}
     else assert(0);
     for(unsigned i=0;i<5000&&transport.state!=AIC8800_TRANSPORT_FAULT;++i)step();
     assert(supplicant.state==AIC8800_SUPPLICANT_FAULT&&!aic8800_security_open(&security));
-    assert(supplicant.owner==&transport&&security.owner==&transport&&!allzero(supplicant.config.pmk,32));retained_fault();
+    assert(supplicant.owner==&transport&&security.owner==&transport&&!allzero(supplicant.config.pmk,32));
+    /* The record's fault site separates a confirmation that never came from one the firmware refused. */
+    struct aic8800_fault_site site;aic8800_fault_site_capture(&site,&transport,&supplicant,1234);
+    if(!strcmp(argv[2],"key-timeout")||!strcmp(argv[2],"key-failure")) {
+        unsigned refused=!strcmp(argv[2],"key-failure");
+        fprintf(stderr,"site: transport %#x/%u data %#x security %#x slot %u cfm %u/%u/%u supplicant %#x actions %#x stop %#x\n",
+            site.transport_site,site.transport_error,site.data,site.security,site.slot,site.expected_cfm,site.cfm_bytes,
+            site.cfm_status,site.supplicant,site.actions,site.stop_site);
+        assert(site.transport_error==AIC8800_TRANSPORT_DATA_ERROR&&(site.transport_site>>12)==4u&&site.ms==1234);
+        assert((site.security&15u)==AIC8800_SECURITY_WAITING&&(site.security&16u)&&
+            (site.security>>5)==AIC8800_SECURITY_ADD&&site.expected_cfm==37&&site.slot==0);
+        assert(refused?site.cfm_bytes==4&&site.cfm_status==7:!site.cfm_bytes&&!site.cfm_status);
+        assert((site.supplicant&15u)==AIC8800_SUPPLICANT_FAULT&&(site.actions&1u)&&(site.actions&2u)&&(site.actions&8u));
+        /* The security worker stopped first; the transport's fault then stopped the supplicant. */
+        assert((site.stop_site>>12)==4u);
+        printf("fault site: %s\n",refused?"refused key add names its status":"unanswered key add names the outstanding confirmation");
+    }
+    retained_fault();
     assert(!aic8800_transport_finish_security(&transport));
     puts("RSN refusal: terminal fault retains ownership and denies ordinary data");return 0;
 }

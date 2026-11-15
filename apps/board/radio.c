@@ -1,3 +1,4 @@
+#define SUNSTONE_AIC8800_FAULT_SITE_CAPTURE 1
 #include "radio.h"
 #include "a733_ce_native.h"
 #include "a733_range.h"
@@ -222,7 +223,15 @@ static enum board_radio_result retain(struct board_radio *r)
 {
     uint64_t now=0;
     int have=a733_counter_clock_now(&r->config.shared->counter,&now);
-    if(!r->failing){r->failing=1;r->failing_since=now;}
+    if(!r->failing){
+        r->failing=1;r->failing_since=now;
+        /* A failure once the security stage attached names its site, before the failure shutdown changes anything. */
+        if(r->config.associate&&r->config.report_memory.allocate&&r->session.transport.security){
+            struct aic8800_fault_site site;
+            aic8800_fault_site_capture(&site,&r->session.transport,&r->session.supplicant,(unsigned)(now/1000u)&0xffffu);
+            a733_radio_report_fault_site(&r->report,&site);
+        }
+    }
     unsigned was_failed=atomic_exchange_explicit(&r->failed,1,memory_order_acq_rel);
 #ifdef SUNSTONE_A733_RADIO_IRQ
     if(!was_failed&&r->config.network.clients[0])xTaskNotifyGive(r->config.network.clients[0]);

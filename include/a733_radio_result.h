@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_A733_RADIO_RESULT_H
 #define SUNSTONE_A733_RADIO_RESULT_H
 #include "a733_radio_platform.h"
+#include "aic8800_fault_site.h"
 /* The radio service's result: the stage it reached and the facts observed on
  * the way. The service keeps a report object; its scan list is allocated from
  * memory and grows with what the scan finds. A report encodes to a
@@ -31,7 +32,7 @@ struct a733_radio_result_head {
     uint64_t magic;
     uint32_t version, bytes, head_bytes, ap_entry_bytes;
     uint32_t stage, failed, failure_stage, flags; /* flags: bit0 guard asked, bit1 guard observed, bit2 BLDO5 needs power-on (the rails showed it off; the writes ran only once the stage reaches powered), bit3 the orderly shutdown reached down with every step read back (a failure runs the failure shutdown of bits 5 and 6 instead, so a failed run leaves it clear), bit4 BLDO5 was already on (guard
- * accepted it), bit5 the failure shutdown ran, bit6 every step of it that applied read back matched, bit7 the first-run guard refused before any write (fail_site then holds 0x400 | PG bits << 4 | unmet mask, shifted into the line field), bit9 an association tail follows the access point list (struct a733_radio_assoc), bit8 the failure left nothing powered (a refusal, or a failure shutdown that finished with every readback matched) and ended without a reset */
+ * accepted it), bit5 the failure shutdown ran, bit6 every step of it that applied read back matched, bit7 the first-run guard refused before any write (fail_site then holds 0x400 | PG bits << 4 | unmet mask, shifted into the line field), bit9 an association tail follows the access point list (struct a733_radio_assoc), bit8 the failure left nothing powered (a refusal, or a failure shutdown that finished with every readback matched) and ended without a reset, bit12 a fault site section (struct aic8800_fault_site) follows the RSN summary */
     uint32_t pad_power[4];                         /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL */
     struct a733_radio_result_rail rails[A733_RADIO_RESULT_RAILS];
     uint32_t rail_count, platform_stage, ocr, selected_ocr;
@@ -115,7 +116,8 @@ struct a733_radio_report {
     struct a733_radio_assoc assoc;
     struct a733_radio_scan_counts scan;
     struct a733_radio_rsn rsn;
-    unsigned has_assoc,has_scan,has_rsn;
+    struct aic8800_fault_site fault;
+    unsigned has_assoc,has_scan,has_rsn,has_fault;
 };
 /* Zero storage. Returns 0 if the allocator is incomplete. */
 int a733_radio_report_init(struct a733_radio_report *,const struct a733_radio_allocator *);
@@ -129,6 +131,8 @@ void a733_radio_report_platform(struct a733_radio_report *,const struct a733_rad
 void a733_radio_report_session_failure(struct a733_radio_report *,unsigned line,unsigned stage);
 /* Set the RSN summary (and head flags bit 11). */
 void a733_radio_report_rsn(struct a733_radio_report *,const struct a733_radio_rsn *);
+/* Set the fault site section (and head flags bit 12); the first one set is kept. It is the record's last section. */
+void a733_radio_report_fault_site(struct a733_radio_report *,const struct aic8800_fault_site *);
 /* Set the association tail (and head flags bit 9). */
 void a733_radio_report_association(struct a733_radio_report *,const struct a733_radio_assoc *);
 void a733_radio_report_firmware(struct a733_radio_report *);

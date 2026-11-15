@@ -19,7 +19,7 @@ EXTERNAL = ["rsn_supp/wpa.c", "rsn_supp/wpa_ie.c", "rsn_supp/pmksa_cache.c",
 NATIVE = ["drivers/net/aic8800_supplicant.c", "drivers/net/aic8800_supplicant_os.c",
     "drivers/net/aic8800_security.c", "drivers/net/aic8800_data.c", "drivers/net/aic8800_wifi.c",
     "drivers/net/aic8800_runtime.c", "drivers/net/aic8800_firmware.c",
-    "drivers/net/aic8800_sdio_transport.c", "drivers/net/aic8800_sdio_codec.c", "drivers/storage/storage_digest.c",
+    "drivers/net/aic8800_sdio_transport.c", "drivers/net/aic8800_sdio_codec.c", "drivers/net/aic8800_dispatch.c", "drivers/storage/storage_digest.c",
     "drivers/storage/sdio_card.c", "drivers/storage/sunxi_sdio.c"]
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 def vectors(path):
@@ -97,7 +97,7 @@ def main():
         exe=out/"supplicant-check";cmd=[a.cc,"-fsanitize=address,undefined","-Wl,--gc-sections"]+objects+([str(library)] if library else [])+["-o",str(exe)]
         run=subprocess.run(cmd,capture_output=True,text=True);result["commands"].append({"command":cmd,"exit_code":run.returncode,"stderr":run.stderr})
         if not run.returncode:
-            cmd=[str(exe),str(out/"vectors.bin"),a.case];run=subprocess.run(cmd,capture_output=True,text=True)
+            cmd=[str(exe),str(out/"vectors.bin")]+a.case.split(":");run=subprocess.run(cmd,capture_output=True,text=True)
             result.update(executable_sha256=digest(exe),run_command=cmd,stdout=run.stdout,stderr=run.stderr)
     for name in ["checks/aic8800-runtime.c","checks/aic8800-sdio-transport.c","checks/sdio-controller.c","checks/aic8800-supplicant.py"]:
         result["source_sha256"][name]=digest(ROOT/name)
