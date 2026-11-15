@@ -444,9 +444,11 @@ def lifecycle(root,variant,restore=False,dirty=None,grant='absent',resident=Fals
             if variant=='journal-error':
                 self.journal_error=OSError('journal full after return')
             return {'valid':True,'payload':b'complete','report':{'state':4}}
-    if variant in ('decoder-failure', 'decoder-invalid'):
+    if variant in ('decoder-failure', 'decoder-invalid', 'decoder-bytes'):
         args.decoder=root/'application-decoder.py'
         args.decoder.write_text('def decode(payload):\n    return {"failed": True}\ndef failures(decoded):\n    return ["native job failed"]\n' if variant=='decoder-failure' else
+                                # An answer that JSON cannot hold: the decoded pixels as bytes.
+                                'def decode(payload):\n    return {"pixels": payload}\ndef failures(decoded):\n    return []\n' if variant=='decoder-bytes' else
                                 'def decode(payload):\n    raise ValueError("malformed payload")\n')
     info={'entry_guard':not recovery,'descriptor':{},'watchdog':{'mode':0xb1,'session_seconds':1}}
     if recovery:info['card_fel_recovery']=True
@@ -1180,14 +1182,19 @@ def transport_cases(out):
     for variant,expected in (
             ('watchdog-before-entry','watchdog-reset'),('missing-return','host-error'),
             ('wrong-return-session','host-error'),('fel-after-return','host-error'),
-            ('decoder-failure','returned'),('decoder-invalid','host-error'),
+            ('decoder-failure','returned'),('decoder-invalid','host-error'),('decoder-bytes','returned'),
             ('restore-failure','host-error'),('restore-clock','host-error'),
             ('normal','returned'),('watchdog','watchdog-reset')):
         result,model,owner=lifecycle(out/('restore-'+variant),variant,restore=True)
         assert result['outcome']==expected,(variant,result)
         assert bool(model.quarantined)==(variant in ('fel-after-return','missing-return','wrong-return-session')),(variant,model.quarantined)
-        assert bool(result.get('rails_restored'))==(variant in ('normal','decoder-failure','decoder-invalid'))
-        assert owner.rail_phases==(['rails','restore-rails'] if variant in ('normal','decoder-failure','decoder-invalid','restore-failure') else ['rails'])
+        assert bool(result.get('rails_restored'))==(variant in ('normal','decoder-failure','decoder-invalid','decoder-bytes'))
+        assert owner.rail_phases==(['rails','restore-rails'] if variant in ('normal','decoder-failure','decoder-invalid','decoder-bytes','restore-failure') else ['rails'])
+        if variant=='decoder-bytes':
+            # result.json was saved (lifecycle reads it back) with the error in place of the answer, and the run does not pass.
+            saved=json.loads(Path(result['result_path']).read_text())
+            assert 'decoded' not in saved and saved['decoder_failures']==[] and 'bytes' in saved['decode_error']['decoded'],saved
+            assert not board.result_passed(saved) and any(l.startswith('decode error: ') for l in board.result_summary(saved))
         if variant=='watchdog-before-entry':
             assert result['dram_lost'] and not result['breadcrumbs']['session']
         if variant in ('missing-return','wrong-return-session','watchdog-before-entry'):

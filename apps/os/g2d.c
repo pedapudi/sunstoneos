@@ -13,6 +13,8 @@
 #include "../board/application.h"
 #include "a733_clock_reference.h"
 #include "a733_g2d.h"
+#include "a733_g2d_irq.h"
+#include "a733_g2d_rotate.h"
 #include "app_large.h"
 #include "gicv3_spi.h"
 #include "iommu.h"
@@ -99,9 +101,11 @@ static struct {
      * blit, its source), each with the access its role needs. region is the index + 1, 0 for an unused entry. */
     struct {uint32_t region;struct a733_iommu_span span;} maps[2];
     unsigned attached;
-    /* Written by the interrupt handler, read by the owner after the wake. */
-    atomic_uint armed,irq_seen,irq_count,stray;
-    uint32_t irq_status,irq_reset;
+    /* Written by the interrupt handler, read by the owner after the wake. armed is the kind of the operation in
+     * flight (A733_G2D_IRQ_MIXER or A733_G2D_IRQ_ROTATE), 0 for none. stray_finishes counts finishes of the other
+     * block during it, and stray_word keeps the first one's status word. */
+    atomic_uint armed,irq_seen,irq_count,stray,stray_finishes;
+    uint32_t irq_status,irq_reset,stray_word;
     uint64_t irq_ticks;
 } g2d={.dev={.site=0x931,.owner=&owner}};
 static StaticTask_t owner_tcb;
@@ -482,6 +486,97 @@ static void surface_lines(const struct large_slot *l,const struct ss_g2d_surface
     *at=first&~(uintptr_t)63;
     *bytes=((first+(size_t)f->stride*f->height+63)&~(uintptr_t)63)-*at;
 }
+/* The wait for the armed operation's finish, bounded by the vendor's 100 ms: the handler's seen (1 the armed kind
+ * finished, 2 it did not), or -1 after a timeout, which fails the operation with the block's status word (status_off,
+ * 0x24 for the mixer, ROT_INT for the rotator). */
+static int await_finish(struct ss_g2d_done *d,unsigned status_off)
+{
+    const uint64_t until=now_us()+G2D_JOB_US;
+    while(!atomic_load_explicit(&g2d.irq_seen,memory_order_acquire)){
+        if(now_us()>=until){
+            /* Disarmed first: a handler that already took the interrupt sets irq_seen, which is read once more. */
+            if(atomic_exchange(&g2d.armed,0)&&!atomic_load(&g2d.irq_seen)){
+                uint32_t status=0;(void)g2d_rd(status_off,&status);
+                d->stray_finishes=atomic_load(&g2d.stray_finishes);d->stray_word=g2d.stray_word;
+                return fail(G2D_STEP_RUN_TIMEOUT,status);
+            }
+            while(!atomic_load_explicit(&g2d.irq_seen,memory_order_acquire))pause_us(1);
+            break;
+        }
+        (void)sunstone_deadline_wait_until(until);
+    }
+    const unsigned seen=atomic_exchange(&g2d.irq_seen,0);
+    d->irq_ticks=g2d.irq_ticks;d->irq_count=atomic_load(&g2d.irq_count);d->stray_interrupts=atomic_load(&g2d.stray);
+    d->stray_finishes=atomic_load(&g2d.stray_finishes);d->stray_word=g2d.stray_word;
+    return (int)seen;
+}
+/* After either block's finish: master 10's fault scan, then the output's lines dropped from the CPU caches. */
+static int finish(struct ss_g2d_done *d,uintptr_t at,size_t bytes)
+{
+    struct a733_iommu_owner_fault f;
+    d->iommu_scan=(uint32_t)os_iommu_scan(G2D_MASTER,&f);
+    _Static_assert(sizeof(f)==sizeof(d->iommu_fault),"the fault record fits the done record");
+    memcpy(d->iommu_fault,&f,sizeof(f));
+    d->iommu_fault_step=os_iommu_owner()->fault_step;d->iommu_fault_word=os_iommu_owner()->fault_word;
+    if(d->iommu_scan!=1)return fail(d->iommu_scan==0?G2D_STEP_RUN_IOMMU_FAULT:G2D_STEP_RUN_IOMMU,f.micro_status);
+    /* Lines the CPU may have fetched during the operation are dropped before the application reads the output. */
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,bytes))return run_refuse(G2D_STEP_RUN_CACHE,1);
+    d->done_ticks=ss_counter_ticks();
+    return 1;
+}
+/* A rotate (g2d_rotate_set_para): the regions mapped as for a blit, the source's dirty lines cleaned and the output's
+ * cleaned and invalidated, the finish status cleared with the interrupt off, the job's words written in the vendor's
+ * order, the control word read back, then the finish-interrupt enable and the start bit; the handler completes it.
+ * The vendor never reads the start bit back and sets it again for each job, so it is recorded, not required clear. */
+static int do_rotate(const struct ss_g2d_job *j,struct ss_g2d_done *d,const struct large_slot *l,
+                     const struct large_slot *src)
+{
+    const int swap=j->degrees==90||j->degrees==270;
+    const uint32_t ow=swap?j->h:j->w,oh=swap?j->w:j->h;
+    if(!a733_g2d_inside(j->sx,j->sy,j->w,j->h,j->source.width,j->source.height)||
+       !a733_g2d_inside(j->dx,j->dy,ow,oh,j->output.width,j->output.height))return run_refuse(G2D_STEP_RUN_GEOMETRY,2);
+    if(!g2d.rcq&&!(g2d.rcq=os_owner_memory(G2D_RCQ_BYTES,G2D_RCQ_BYTES,OS_MEMORY_DEVICE)))
+        return run_refuse(G2D_STEP_RUN_MEMORY,0);
+    const int same=j->source.region==j->output.region;
+    const struct need need[2]={{l,j->output.region,A733_IOMMU_READ|A733_IOMMU_WRITE},{src,j->source.region,A733_IOMMU_READ}};
+    if(map_regions(need,same?1:2)!=1)return -1;
+    const uint64_t output_iova=mapped_iova(j->output.region)+j->output.offset;
+    const uint64_t source_iova=mapped_iova(j->source.region)+j->source.offset;
+    d->output_iova=(uint32_t)output_iova;d->source_iova=(uint32_t)source_iova;
+    const struct a733_g2d_rotate r={source_iova,output_iova,j->source.stride,j->output.stride,j->sx,j->sy,j->dx,j->dy,
+                                    j->w,j->h,j->source.format,j->degrees,j->flip};
+    struct a733_g2d_rot_word words[A733_G2D_ROT_WORDS];
+    if(a733_g2d_rotate_words(&r,words)!=A733_G2D_ROT_WORDS)return run_refuse(G2D_STEP_RUN_GEOMETRY,3);
+    uintptr_t at,source_at;size_t bytes,source_bytes;
+    surface_lines(l,&j->output,&at,&bytes);
+    surface_lines(src,&j->source,&source_at,&source_bytes);
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,bytes))return run_refuse(G2D_STEP_RUN_CACHE,0);
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN,source_at,source_bytes))return run_refuse(G2D_STEP_RUN_CACHE,2);
+    __asm__ volatile("dsb sy":::"memory");
+    const unsigned rot_int=A733_G2D_ROT_BASE+A733_G2D_ROT_INT,rot_ctl=A733_G2D_ROT_BASE+A733_G2D_ROT_CTL;
+    uint32_t v=0;
+    /* Writing one clears the finish status and leaves the interrupt disabled. */
+    if(!g2d_wr(rot_int,A733_G2D_ROT_INT_DONE)||!g2d_rd(rot_int,&v)||(v&A733_G2D_ROT_INT_DONE))
+        return fail(G2D_STEP_RUN_LAUNCH,v);
+    for(unsigned i=0;i+2<A733_G2D_ROT_WORDS;++i)
+        if(!g2d_wr(words[i].offset,words[i].value))return fail(G2D_STEP_RUN_LAUNCH,1);
+    if(!g2d_rd(rot_ctl,&d->rot_ctl)||d->rot_ctl!=words[0].value)return fail(G2D_STEP_RUN_LAUNCH,4);
+    atomic_store_explicit(&g2d.armed,A733_G2D_IRQ_ROTATE,memory_order_release);
+    if(!g2d_wr(words[A733_G2D_ROT_WORDS-2].offset,words[A733_G2D_ROT_WORDS-2].value))return fail(G2D_STEP_RUN_LAUNCH,2);
+    d->launch_ticks=ss_counter_ticks();
+    if(!g2d_wr(words[A733_G2D_ROT_WORDS-1].offset,words[A733_G2D_ROT_WORDS-1].value))return fail(G2D_STEP_RUN_LAUNCH,3);
+    const int seen=await_finish(d,rot_int);
+    if(seen<0)return -1;
+    d->rot_int=g2d.irq_status;
+    if(seen!=1||!(g2d.irq_status&A733_G2D_ROT_INT_DONE))return fail(G2D_STEP_RUN_IRQ,g2d.irq_status);
+    /* The handler wrote the finish word back: the status reads clear. Recorded only: the control word, the timeout
+     * word and the mixer's 0x24. */
+    if(!g2d_rd(rot_int,&d->rot_int_after)||(d->rot_int_after&A733_G2D_ROT_INT_DONE))
+        return fail(G2D_STEP_RUN_FINISH,d->rot_int_after);
+    if(!g2d_rd(rot_ctl,&d->rot_ctl_after)||!g2d_rd(A733_G2D_ROT_BASE+A733_G2D_ROT_TIMEOUT,&d->rot_timeout)||
+       !g2d_rd(0x24,&d->status_after))return fail(G2D_STEP_RUN_FINISH,0x28000);
+    return finish(d,at,bytes);
+}
 /* g2d_mixer_apply: update and task-end interrupt off, the RCQ header address and length, the interrupt on, then the
  * update bit; the handler completes it. */
 static int do_run(void)
@@ -495,17 +590,23 @@ static int do_run(void)
     if(g2d.limit>session_deadline())g2d.limit=session_deadline();
     if(atomic_load(&g2d.irq_seen)||atomic_load(&g2d.stray))
         return run_refuse(G2D_STEP_RUN_IRQ,atomic_load(&g2d.irq_seen)|atomic_load(&g2d.stray)<<8);
+    atomic_store(&g2d.stray_finishes,0);g2d.stray_word=0;
     /* A fill writes an ARGB8888 output and reads no source. A blit reads a source of the output's geometry (the
-     * builder's one width, height and stride) and converts from its format to the output's. */
-    const int blit=j->op==SS_G2D_BLIT;
-    if((j->op!=SS_G2D_FILL&&!blit)||j->reserved[0]||j->reserved[1]||
-       (!blit&&(j->sx||j->sy||!zero(&j->source,sizeof(j->source))||j->output.format))||
+     * builder's one width, height and stride) and converts from its format to the output's. A rotate reads a source
+     * of its own geometry in the output's format, through the rotate module. */
+    const int blit=j->op==SS_G2D_BLIT,rotate=j->op==SS_G2D_ROTATE,reads=blit||rotate;
+    if((j->op!=SS_G2D_FILL&&!reads)||(!rotate&&(j->degrees||j->flip))||
+       (!reads&&(j->sx||j->sy||!zero(&j->source,sizeof(j->source))||j->output.format))||
        (blit&&(j->color||j->source.width!=j->output.width||j->source.height!=j->output.height||
-               j->source.stride!=j->output.stride)))return run_refuse(G2D_STEP_RUN,j->op);
+               j->source.stride!=j->output.stride))||
+       (rotate&&(j->color||j->source.format!=j->output.format||j->flip>(SS_G2D_FLIP_H|SS_G2D_FLIP_V)||
+                 (j->degrees!=0&&j->degrees!=90&&j->degrees!=180&&j->degrees!=270))))
+        return run_refuse(G2D_STEP_RUN,j->op);
     const struct large_slot *l=surface_slot(&j->output,1);
     if(!l)return run_refuse(G2D_STEP_RUN_SURFACE,j->output.region);
-    const struct large_slot *src=blit?surface_slot(&j->source,0):NULL;
-    if(blit&&!src)return run_refuse(G2D_STEP_RUN_SURFACE,j->source.region|0x100u);
+    const struct large_slot *src=reads?surface_slot(&j->source,0):NULL;
+    if(reads&&!src)return run_refuse(G2D_STEP_RUN_SURFACE,j->source.region|0x100u);
+    if(rotate)return do_rotate(j,d,l,src);
     struct a733_g2d_session *c=&g2d.commands;
     memset(c,0,sizeof(*c));
     c->width=j->output.width;c->height=j->output.height;c->stride=j->output.stride;
@@ -535,7 +636,7 @@ static int do_run(void)
     __asm__ volatile("dsb sy":::"memory");
     /* g2d_mixer_apply writes the update bit to 0 before each job and never relies on the engine clearing it; the
      * engine must then read idle: update off and the mixer not started. */
-    uint32_t v;
+    uint32_t v=0;
     if(!g2d_wr(0x28,0)||!g2d_rd(0x28,&v)||(v&1)||!rd(G2D+0x100,&v)||(v&0x80000000))return fail(G2D_STEP_RUN_BUSY,v);
     /* Only task end must read clear before the interrupt is enabled. cfg_finish (bit 2) stays set after a job and a
      * write of one does not clear it (board run 1794722460072814405-2b77c3eb); its interrupt enable (0x20 bit 6) is
@@ -544,42 +645,20 @@ static int do_run(void)
         return fail(G2D_STEP_RUN_LAUNCH,d->status_launch);
     if(!g2d_wr(0x2c,(uint32_t)g2d.rcq_iova)||!g2d_wr(0x30,0)||!g2d_wr(0x34,G2D_RCQ_HEADER_BYTES))
         return fail(G2D_STEP_RUN_LAUNCH,1);
-    atomic_store_explicit(&g2d.armed,1,memory_order_release);
+    atomic_store_explicit(&g2d.armed,A733_G2D_IRQ_MIXER,memory_order_release);
     if(!g2d_wr(0x20,0x10))return fail(G2D_STEP_RUN_LAUNCH,2);
     d->launch_ticks=ss_counter_ticks();
     if(!g2d_wr(0x28,1))return fail(G2D_STEP_RUN_LAUNCH,3);
-    const uint64_t until=now_us()+G2D_JOB_US;
-    while(!atomic_load_explicit(&g2d.irq_seen,memory_order_acquire)){
-        if(now_us()>=until){
-            /* Disarmed first: a handler that already took the interrupt sets irq_seen, which is read once more. */
-            if(atomic_exchange(&g2d.armed,0)&&!atomic_load(&g2d.irq_seen)){
-                uint32_t status=0;(void)g2d_rd(0x24,&status);
-                return fail(G2D_STEP_RUN_TIMEOUT,status);
-            }
-            while(!atomic_load_explicit(&g2d.irq_seen,memory_order_acquire))pause_us(1);
-            break;
-        }
-        (void)sunstone_deadline_wait_until(until);
-    }
-    const unsigned seen=atomic_exchange(&g2d.irq_seen,0);
-    d->rcq_status=g2d.irq_status;d->reset_word=g2d.irq_reset;d->irq_ticks=g2d.irq_ticks;
-    d->irq_count=atomic_load(&g2d.irq_count);d->stray_interrupts=atomic_load(&g2d.stray);
+    const int seen=await_finish(d,0x24);
+    if(seen<0)return -1;
+    d->rcq_status=g2d.irq_status;d->reset_word=g2d.irq_reset;
     if(seen!=1||!(g2d.irq_status&1))return fail(G2D_STEP_RUN_IRQ,g2d.irq_status);
     /* The handler acknowledged task end and pulsed the mixer reset: task end reads clear, the reset word reads back. */
     if(!g2d_rd(0x24,&d->status_after)||(d->status_after&1)||!g2d_rd(0x08,&v)||v!=(g2d.irq_reset|1u))
         return fail(G2D_STEP_RUN_FINISH,v);
     /* Recorded only: whether the engine clears the update bit, and the mixer control word. */
     if(!g2d_rd(0x28,&d->update_after)||!rd(G2D+0x100,&d->mixer_after))return fail(G2D_STEP_RUN_FINISH,0x100);
-    struct a733_iommu_owner_fault f;
-    d->iommu_scan=(uint32_t)os_iommu_scan(G2D_MASTER,&f);
-    _Static_assert(sizeof(f)==sizeof(d->iommu_fault),"the fault record fits the done record");
-    memcpy(d->iommu_fault,&f,sizeof(f));
-    d->iommu_fault_step=os_iommu_owner()->fault_step;d->iommu_fault_word=os_iommu_owner()->fault_word;
-    if(d->iommu_scan!=1)return fail(d->iommu_scan==0?G2D_STEP_RUN_IOMMU_FAULT:G2D_STEP_RUN_IOMMU,f.micro_status);
-    /* Lines the CPU may have fetched during the operation are dropped before the application reads the output. */
-    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,bytes))return run_refuse(G2D_STEP_RUN_CACHE,1);
-    d->done_ticks=ss_counter_ticks();
-    return 1;
+    return finish(d,at,bytes);
 }
 static void serve(void)
 {
@@ -609,30 +688,48 @@ static void os_g2d_task(void *unused)
     }
 }
 
-/* INTID 83 (g2d_handle_irq): with an operation armed, acknowledge task end (G2D 0x24 bit 0, write one to clear),
- * pulse the mixer AHB reset (G2D 0x08 bit 0) and wake the owner. Unarmed, or with task end clear, the line is masked
- * at the distributor and the owner fails the operation. Built with -mgeneral-regs-only, like every unit it calls. */
+/* INTID 83 (g2d_handle_irq), shared by the mixer and the rotate module. With nothing armed the line is masked at the
+ * distributor and counted, and no engine register is read. With an operation armed, a733_g2d_irq_dispatch decides
+ * from 0x20, 0x24 and ROT_INT: a finish of the other block is masked at that block and counted, and the operation
+ * stays armed; the armed block's finish is acknowledged (task end written one and the mixer AHB reset pulsed, or
+ * ROT_INT written back) and the owner woken; an interrupt with neither masks the line and fails the operation.
+ * Built with -mgeneral-regs-only, like every unit it calls. */
 void os_g2d_irq(void)
 {
     BaseType_t woken=pdFALSE;
     atomic_fetch_add_explicit(&g2d.irq_count,1,memory_order_relaxed);
-    if(!atomic_exchange_explicit(&g2d.armed,0,memory_order_acq_rel)){
-        /* No operation armed: counted apart, so that it cannot overwrite a completion the owner has not read yet. */
+    const unsigned kind=atomic_load_explicit(&g2d.armed,memory_order_acquire);
+    const uintptr_t rot_int=G2D+A733_G2D_ROT_BASE+A733_G2D_ROT_INT;
+    uint32_t ctl=0,rcq=0,rot=0;
+    struct a733_g2d_irq_action a={0,0,0,0,0,0};
+    if(kind){
+        ctl=a733_mmio_read32_dsb_sy_both(G2D+0x20);rcq=a733_mmio_read32_dsb_sy_both(G2D+0x24);
+        rot=a733_mmio_read32_dsb_sy_both(rot_int);
+        a=a733_g2d_irq_dispatch(kind,ctl,rcq,rot);
+        if(a.stray){
+            if(atomic_fetch_add_explicit(&g2d.stray_finishes,1,memory_order_relaxed)==0)g2d.stray_word=a.mask_mixer?rcq:rot;
+            if(a.mask_mixer)a733_mmio_write32_dsb_sy_both(G2D+0x20,ctl&~0x10u);
+            if(a.mask_rotate)a733_mmio_write32_dsb_sy_both(rot_int,a733_g2d_rot_int_masked(rot));
+        }
+        /* Only a stray: the operation stays armed and the owner is not woken. */
+        if(a.seen==3)return;
+    }
+    if(!kind||!atomic_exchange_explicit(&g2d.armed,0,memory_order_acq_rel)){
+        /* No operation armed, or the owner's timeout disarmed it first: counted apart, so that it cannot overwrite a
+         * completion the owner has not read yet. */
         (void)gicv3_spi_mask(&g2d.gic);
         atomic_fetch_add_explicit(&g2d.stray,1,memory_order_release);
     } else {
-        const uint32_t status=a733_mmio_read32_dsb_sy_both(G2D+0x24);
-        g2d.irq_status=status;g2d.irq_ticks=ss_counter_ticks();
-        unsigned seen=2;
-        if(status&1u){
+        g2d.irq_status=kind==A733_G2D_IRQ_ROTATE?rot:rcq;g2d.irq_ticks=ss_counter_ticks();
+        if(a.ack_mixer){
             a733_mmio_write32_dsb_sy_both(G2D+0x24,1u);
             const uint32_t reset=a733_mmio_read32_dsb_sy_both(G2D+0x08);
             g2d.irq_reset=reset;
             a733_mmio_write32_dsb_sy_both(G2D+0x08,reset&~1u);
             a733_mmio_write32_dsb_sy_both(G2D+0x08,reset|1u);
-            seen=1;
-        } else (void)gicv3_spi_mask(&g2d.gic);
-        atomic_store_explicit(&g2d.irq_seen,seen,memory_order_release);
+        } else if(a.ack_rotate)a733_mmio_write32_dsb_sy_both(rot_int,rot);
+        else (void)gicv3_spi_mask(&g2d.gic);
+        atomic_store_explicit(&g2d.irq_seen,a.seen==1?1u:2u,memory_order_release);
     }
     if(owner)vTaskNotifyGiveFromISR(owner,&woken);
     portYIELD_FROM_ISR(woken);
