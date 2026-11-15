@@ -60,7 +60,11 @@ READERS = {
     'apps/gpu-finite/return.c': ('5', 'confirms domain 5 OFF at the finite return'),
     'drivers/gpu/a733_gpu_resources_native.c': ('5', 'reads domain-5 status at the LOCAL lease release'),
     'apps/g2d/admission.c': ('1', 'records the domain-1 base in the admission profile'),
-    'apps/os/g2d.c': ('1', 'reads domain-1 policy, status and delay words into the G2D stage record'),
+    # The OS-image G2D service (docs/g2d-os.md) keeps the raw domain-1 policy, status and delay words in its open
+    # and close records, and samples the status at each row wake. The owner's only accessor,
+    # a733_power_domain_check, returns the status as 0 or 8 and not these words. Domain 1 is powered through the
+    # service's row; every access to the page in apps/os/g2d.c is a read.
+    'apps/os/g2d.c': ('1', 'reads the domain-1 policy, status and delay words for its open and close records'),
     # Bundle 8 (docs/designs/board-bundles-next.md) reads PPU_PWSR as a gate
     # before its NSI access, and its mapping check requires the page to be
     # mapped readable. checks/board-bundles-apps-model.c:105 asserts that the
