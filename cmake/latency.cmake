@@ -93,11 +93,6 @@ function(sunstone_latency_partitioned_model target metric)
       SUNSTONE_LATENCY_STREAM_MASK=${SUNSTONE_LATENCY_STREAM_MASK}u
       SUNSTONE_LATENCY_RELEASE_MASK=${SUNSTONE_LATENCY_RELEASE_MASK}u)
   endif()
-  if(SUNSTONE_LATENCY_AXI_CAP AND NOT metric)
-    # The stage 3a sub-phases and cap operations, against bridge words held in memory (apps/latency/axi-cap.c).
-    target_sources(${target} PRIVATE "${latency_root}/apps/latency/axi-cap.c")
-    target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_AXI_CAP=1)
-  endif()
   target_compile_options(${target} PRIVATE ${SUNSTONE_KERNEL_FLAGS}
     "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")
   target_link_options(${target} PRIVATE -nostdlib -static -Wl,--gc-sections

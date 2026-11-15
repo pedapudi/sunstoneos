@@ -201,16 +201,6 @@ elseif(SUNSTONE_APPLICATION MATCHES "^latency(-dma)?$")
   endif()
   include("${SUNSTONE_SOURCE_ROOT}/apps/latency/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime} APPLICATION ${SUNSTONE_APPLICATION})
-  if(SUNSTONE_LATENCY_AXI_CAP)
-    # The CPU0 task that accesses the AXI2HIF bridges runs at EL1, and every exit clears the cap's enable word on
-    # both bridges (apps/latency/axi-privilege.c, reachable from the EL1 vectors).
-    target_sources(sunstone-a733-os-${SUNSTONE_APPLICATION} PRIVATE "${SUNSTONE_SOURCE_ROOT}/apps/latency/axi-privilege.c"
-      "${SUNSTONE_SOURCE_ROOT}/apps/latency/axi-exit.S")
-    set_source_files_properties("${SUNSTONE_SOURCE_ROOT}/apps/latency/axi-privilege.c" PROPERTIES COMPILE_OPTIONS -mgeneral-regs-only)
-    target_include_directories(sunstone-a733-os-${SUNSTONE_APPLICATION} PRIVATE "${SUNSTONE_SOURCE_ROOT}/apps/latency")
-    target_link_options(sunstone-a733-os-${SUNSTONE_APPLICATION} PRIVATE -Wl,--wrap=os_application_task_privileged
-      -Wl,--wrap=a733_storage_maintenance_stop -Wl,--wrap=a733_qualification_terminal_privileged)
-  endif()
 elseif(SUNSTONE_APPLICATION MATCHES "^(cpu-capacity|cpu-split)$")
   if(NOT SUNSTONE_A733_CPU_TOPOLOGY)
     message(FATAL_ERROR "CPU capacity observations require SUNSTONE_A733_CPU_TOPOLOGY=ON")

@@ -38,18 +38,6 @@ BAND_BYTES = 1872
 BAND_PROBES = 2
 BAND_BINS = 8
 WAKE_MAGIC = 0x5353574b53454731
-AXI_MAGIC = 0x5353415849434131  # stage 3a AXI2HIF cap section (apps/latency/axi-cap.h)
-AXI_FOOTER_MAGIC = 0x5353415849434631
-AXI_HEADER = '<3Q4I14I4I'
-AXI_WINDOW = '<2Q8Q8Q'
-AXI_SWITCH = '<3Q2I3I1I14I'
-AXI_SWITCHES = 16
-AXI_SUBPHASES = 4
-AXI_BYTES = struct.calcsize(AXI_HEADER) + (2 + AXI_SUBPHASES) * struct.calcsize(AXI_WINDOW) + AXI_SWITCHES * struct.calcsize(AXI_SWITCH)
-AXI_OPS = {1: 'entry', 2: 'set_nonbinding', 3: 'set_b', 4: 'clear', 5: 'restore'}
-AXI_STATUS = ('ok', 'gate_closed', 'readback', 'entry_set', 'bad_op')
-AXI_WORDS = (0x30, 0x48, 0x4c, 0x50, 0x54, 0x58, 0x5c)
-AXI_SWEEP_BYTES = 2 * 1048576  # each sweep reads and rewrites 1 MiB, as the traffic words count it
 WAKE_FOOTER_MAGIC = 0x5353574b53454631
 WAKE_POINTS = ('irq_entry', 'wrapper_return', 'exit_start', 'work_start', 'work_done', 'mask_restored',
                'switch_begin', 'switch_end', 'running')
@@ -1070,114 +1058,15 @@ def service_quantile(bins, count, fraction):
     raise ValueError('service cycle bins hold fewer spans than the count')
 
 
-def peel_wake_segments(payload, result_size=None):
-    """Split the wake segment section, which comes last unless the cap section follows it, from the result. Its footer
-    records the whole result's size."""
+def peel_wake_segments(payload):
+    """Split the wake segment section, which comes last, from the result."""
     if len(payload) < 64 or struct.unpack_from('<Q', payload, len(payload) - 64)[0] != WAKE_FOOTER_MAGIC:
         return payload, b''
     _, version, size, at, length, *rest = struct.unpack_from('<8Q', payload, len(payload) - 64)
-    if (version != 1 or size != (len(payload) if result_size is None else result_size) or
-            length not in WAKE_BYTES_BY_VERSION.values() or at % 64 or
+    if (version != 1 or size != len(payload) or length not in WAKE_BYTES_BY_VERSION.values() or at % 64 or
             at + length > len(payload) - 64 or any(rest) or any(payload[at + length:-64])):
         raise ValueError('wake segment footer offsets, padding or report size are invalid')
     return payload[:at], payload[at:at + length]
-
-
-def peel_axi_cap(payload):
-    """Split the stage 3a cap section, which comes last, from the result."""
-    if len(payload) < 64 or struct.unpack_from('<Q', payload, len(payload) - 64)[0] != AXI_FOOTER_MAGIC:
-        return payload, b''
-    _, version, size, at, length, *rest = struct.unpack_from('<8Q', payload, len(payload) - 64)
-    if (version != 1 or size != len(payload) or length != AXI_BYTES or at % 64 or
-            at + length > len(payload) - 64 or any(rest) or any(payload[at + length:-64])):
-        raise ValueError('cap footer offsets, padding or report size are invalid')
-    return payload[:at], payload[at:at + length]
-
-
-def decode_axi_cap(payload, frequency, stream_mask):
-    """The AXI2HIF cap of stage 3a: the entry words, the warm-up windows, each busy sub-phase's stream rate and every
-    bridge operation with its cost and read-back (docs/designs/concurrent-accel.md)."""
-    words = struct.unpack_from(AXI_HEADER, payload)
-    magic, version, size, bw_b, sat_b, bw_nb, sat_nb = words[:7]
-    entry = [list(words[7 + 7 * b:14 + 7 * b]) for b in range(2)]
-    subphase_wakes, capped_mask, switch_count, complete = words[21:25]
-    if (magic, version, size) != (AXI_MAGIC, 1, AXI_BYTES) or switch_count > AXI_SWITCHES:
-        raise ValueError('cap section header is invalid')
-    if subphase_wakes * AXI_SUBPHASES != 128 or capped_mask != 0x6 or (bw_b, sat_b, bw_nb, sat_nb) != (753, 483, 4095, 1023):
-        raise ValueError('cap section names other sub-phases or words than stage 3a')
-    at = struct.calcsize(AXI_HEADER)
-
-    def window():
-        nonlocal at
-        values = struct.unpack_from(AXI_WINDOW, payload, at)
-        at += struct.calcsize(AXI_WINDOW)
-        start, end, before, after = values[0], values[1], values[2:10], values[10:18]
-        if not start or end <= start or any(b > a for b, a in zip(before, after)):
-            raise ValueError('cap window stamps or sweep counts are out of order')
-        seconds = (end - start) / frequency
-        sweeps = [a - b for b, a in zip(before, after)]
-        if any(sweeps[c] for c in range(8) if not stream_mask >> c & 1):
-            raise ValueError('a core outside the streaming mask swept in a cap window')
-        return {'start': start, 'end': end, 'seconds': seconds, 'sweeps': sweeps,
-                'gb_per_second': sum(sweeps) * AXI_SWEEP_BYTES / seconds / 1e9}
-    warm = [window() for _ in range(2)]
-    sub = [window() for _ in range(AXI_SUBPHASES)]
-    switches = []
-    for index in range(AXI_SWITCHES):
-        values = struct.unpack_from(AXI_SWITCH, payload, at)
-        at += struct.calcsize(AXI_SWITCH)
-        if index >= switch_count:
-            if any(values):
-                raise ValueError('cap switch record beyond the count is not empty')
-            continue
-        begin, end, access, op, status, g0, g1, g2, accesses = values[:9]
-        readback = [list(values[9 + 7 * b:16 + 7 * b]) for b in range(2)]
-        if op not in AXI_OPS or status >= len(AXI_STATUS) or end < begin or access > end - begin:
-            raise ValueError('cap switch record is invalid')
-        switches.append({'op': AXI_OPS[op], 'status': AXI_STATUS[status], 'us': (end - begin) * 1e6 / frequency,
-                         'access_us': access * 1e6 / frequency, 'accesses': accesses, 'begin': begin, 'end': end,
-                         'gates': ['0x%08x' % g for g in (g0, g1, g2)],
-                         'readback': [{'0x%02x' % w: '0x%x' % v for w, v in zip(AXI_WORDS, row)} for row in readback]})
-    ops = [s['op'] for s in switches]
-    expected = ['entry', 'set_nonbinding', 'clear', 'set_b', 'clear', 'set_b', 'clear', 'restore']
-    if complete != 1 or ops != expected or any(s['status'] != 'ok' for s in switches) or any(any(row) for row in entry):
-        raise ValueError('cap run is incomplete, failed an operation or found a word set at entry: %s' %
-                         [(s['op'], s['status']) for s in switches])
-    if not all(sub[k]['start'] >= warm[1]['end'] for k in range(AXI_SUBPHASES)) or \
-            any(sub[k]['start'] < sub[k - 1]['end'] for k in range(1, AXI_SUBPHASES)):
-        raise ValueError('cap sub-phases overlap the warm-up or each other')
-    for k, set_index, clear_index in ((1, 3, 4), (2, 5, 6)):
-        if not switches[set_index]['end'] <= sub[k]['start'] < sub[k]['end'] <= switches[clear_index]['begin']:
-            raise ValueError('a capped sub-phase is not enclosed by its set and clear')
-    for k in (0, 3):
-        if any(s['begin'] < sub[k]['end'] and s['end'] > sub[k]['start'] for s in switches if s['op'] != 'entry'):
-            raise ValueError('a bridge operation overlaps an uncapped sub-phase')
-    return {'bw_word': bw_b, 'sat_word': sat_b, 'subphase_wakes': subphase_wakes, 'capped': [bool(capped_mask >> k & 1)
-            for k in range(AXI_SUBPHASES)], 'entry': entry, 'warm': warm,
-            'warm_ratio': (warm[1]['gb_per_second'] / warm[0]['gb_per_second']) if warm[0]['gb_per_second'] else 0.0,
-            'subphases': sub, 'switches': switches}
-
-
-def axi_subphase_wakes(cores, axi, frequency):
-    """Each core's busy wakes by sub-phase. The quota steps put busy wakes 32k to 32k + 31 in sub-phase k, each opened
-    by its own wake 0. A wake whose ready stamp precedes the operation that opened its sub-phase is counted as early:
-    its interval began before the cap state of the sub-phase was in place."""
-    opened = [None, axi['switches'][3]['end'], axi['switches'][5]['end'], axi['switches'][6]['end']]
-    out = []
-    for core in cores:
-        busy = [w for w in core['raw_wakes'] if w['metric'] == 'wake_busy']
-        if len(busy) != axi['subphase_wakes'] * AXI_SUBPHASES:
-            raise ValueError('core %d busy wakes do not fill the cap sub-phases' % core['core'])
-        rows = []
-        for k in range(AXI_SUBPHASES):
-            part = busy[k * axi['subphase_wakes']:(k + 1) * axi['subphase_wakes']]
-            us = [(w['running'] - w['ready']) * 1e6 / frequency for w in part]
-            rows.append({'capped': axi['capped'][k], 'wake0_us': us[0], 'max_us': max(us), 'max_after_wake0_us': max(us[1:]),
-                         'mean_us': sum(us) / len(us), 'mean_after_wake0_us': sum(us[1:]) / (len(us) - 1),
-                         'early': sum(1 for w in part if opened[k] is not None and w['ready'] < opened[k]),
-                         'us': us, 'ready': [w['ready'] for w in part]})
-        out.append(rows)
-    return out
 
 
 def decode_wake_segments(payload, frequency):
@@ -1469,8 +1358,7 @@ def decode(payload, dma=False):
     if len(payload) < RESULT_BYTES:
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
     result_size = len(payload)
-    payload, axi_tail = peel_axi_cap(payload)
-    payload, wake_tail = peel_wake_segments(payload, result_size)
+    payload, wake_tail = peel_wake_segments(payload)
     payload, band_tail = peel_bands(payload, result_size)
     payload, service_tail = peel_service_cycles(payload, result_size)
     payload, cause_tail, ping_tail, stream_mask = peel_latency_cause(payload, result_size)
@@ -1700,7 +1588,4 @@ def decode(payload, dma=False):
         if not cause_tail:
             raise ValueError('wake segment report requires the cause profile')
         result['wake_segments'] = decode_wake_segments(wake_tail, frequency)
-    if axi_tail:
-        result['axi_cap'] = decode_axi_cap(axi_tail, frequency, stream_mask)
-        result['axi_cap']['wakes'] = axi_subphase_wakes(result['cores'], result['axi_cap'], frequency)
     return result

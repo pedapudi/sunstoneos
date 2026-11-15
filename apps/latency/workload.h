@@ -13,12 +13,6 @@
 #ifdef SUNSTONE_SCHED_PMU
 #include "latency_pmu.h"
 #endif
-#ifdef SUNSTONE_LATENCY_AXI_CAP
-#include "axi-cap.h"
-#define LATENCY_AXI_LIMIT 4096U
-#else
-#define LATENCY_AXI_LIMIT 0U
-#endif
 #ifdef SUNSTONE_LATENCY_CAUSE
 #include "latency_cause.h"
 #include "cause-ping.h"
@@ -46,9 +40,9 @@
 #else
 #define LATENCY_WAKE_LIMIT 0U
 #endif
-#define LATENCY_RESULT_LIMIT (147456U + LATENCY_SERVICE_LIMIT + LATENCY_BAND_LIMIT + LATENCY_WAKE_LIMIT + LATENCY_AXI_LIMIT)
+#define LATENCY_RESULT_LIMIT (147456U + LATENCY_SERVICE_LIMIT + LATENCY_BAND_LIMIT + LATENCY_WAKE_LIMIT)
 #else
-#define LATENCY_RESULT_LIMIT (131072U + LATENCY_AXI_LIMIT)
+#define LATENCY_RESULT_LIMIT 131072U
 #endif
 #define LATENCY_IDLE_SAMPLES 64U
 #define LATENCY_BUSY_SAMPLES 128U
@@ -157,11 +151,6 @@ struct latency_result {
     struct ss_wake_seg_report wake_segments __attribute__((aligned(64)));
     uint64_t wake_footer[8] __attribute__((aligned(64)));
 #endif
-#ifdef SUNSTONE_LATENCY_AXI_CAP
-    /* The stage 3a cap section, after every other, with its own footer. */
-    struct latency_axi_report axi_cap __attribute__((aligned(64)));
-    uint64_t axi_footer[8] __attribute__((aligned(64)));
-#endif
 };
 _Static_assert(offsetof(struct latency_result, core) == 320 &&
     offsetof(struct latency_result, phases) == 5440 &&
@@ -222,13 +211,7 @@ _Static_assert(offsetof(struct latency_result, wake_segments) == LATENCY_BAND_EN
 #else
 #define LATENCY_WAKE_END LATENCY_BAND_END
 #endif
-#ifdef SUNSTONE_LATENCY_AXI_CAP
-_Static_assert(offsetof(struct latency_result, axi_cap) == LATENCY_WAKE_END, "cap section follows the footer before it");
-#define LATENCY_AXI_END (offsetof(struct latency_result, axi_footer) + 64)
-#else
-#define LATENCY_AXI_END LATENCY_WAKE_END
-#endif
-_Static_assert(LATENCY_AXI_END == sizeof(struct latency_result) && sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT,
+_Static_assert(LATENCY_WAKE_END == sizeof(struct latency_result) && sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT,
     "the cause sections end the result and fit the declared result region");
 #endif
 
