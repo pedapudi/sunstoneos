@@ -332,10 +332,18 @@ gpu-application and cached-devices identities pass the text of their compile opt
 different depth and name, configures both, and requires the same eleven `build-id.txt` files with the same ids; on bringup before the change
 eight of the eleven differed. A copy with one source byte changed must change the OS image id.
 
-The board record's `git_revision` is the revision of the source the image ran from: the `--host-tree` it was prepared from when one is
-given, the board-queue checkout otherwise (`git_revision_source` says which, `git_revision_dirty` whether tracked files had changes). The
-daemon's own revision is a separate field, `daemon_git_revision`. The stage-1 decoder record said `4f4d44e73`, the daemon's HEAD, for an
-image built from `6fef74d18`. `checks/board-runner.py` covers both fields with and without a host tree.
+The board record's `git_revision` is the revision of the source the image was built from, read from the image. Every image carries the
+48-byte object `a733_source_revision`: `SRV1`, the 40 hex digits of HEAD, a flag that the revision was known and a flag for uncommitted
+changes to tracked files. `cmake/source-revision-write.cmake` writes it at every build (a custom target, not at configure, so a commit between
+configure and build cannot leave a stale one), `cmake/sunstone-source-revision.cmake` adds it to every executable that carries a build-id
+object (deferred until the tree is configured, and listed in `source-revision-targets.txt` of the build directory), and the revision is not
+part of the build id. The runner reads it with `board_images.embedded_source_revision`. A worker can commit after building or build from a
+dirty tree, so the record names the host tree's HEAD at run time separately, as `host_tree_git_revision`, and
+`git_revision_host_tree_mismatch` is true when it differs from the image's revision (null without a host tree or an embedded revision).
+`git_revision_source` is `image`, or `host-tree` / `daemon-checkout` for an image built before images carried the object or outside a git
+checkout, and `git_revision_dirty` is the image's flag. The daemon's own revision is `daemon_git_revision`. The stage-1 decoder record said
+`4f4d44e73`, the daemon's HEAD, for an image built from `6fef74d18`. `checks/image-source-revision.py` builds the object as the images do,
+commits to the tree afterwards and checks the record; `checks/board-runner.py` covers the fallback fields.
 
 ### A run the host stops
 

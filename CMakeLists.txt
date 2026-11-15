@@ -324,3 +324,8 @@ include(cmake/latency.cmake)
 include(cmake/a733-os.cmake)
 
 include(cmake/dma-authority-control.cmake)
+
+# Every image carries the revision of the source it was built from (cmake/sunstone-source-revision.cmake). The images are known once
+# the whole tree is configured.
+include(cmake/sunstone-source-revision.cmake)
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL sunstone_embed_source_revisions)
