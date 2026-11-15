@@ -2,7 +2,8 @@
  * fixed start list and the tasks the supervisor watches. Everything else is derived from these rows:
  * - in C, the grant bits, whether the image links a service, the service ids and the supervision table (apps/os/os.h),
  *   the session decode of the records (apps/os/session.c), their wire size (apps/os/grants.c), the progress the
- *   supervisor requires (apps/os/services.c) and the start list (written by tools/sunstone-manifest.py from the macros);
+ *   supervisor requires (apps/os/services.c), the start list (written by tools/sunstone-manifest.py from the macros) and
+ *   the image's deadline-owner slots (OS_DEADLINE_OWNERS);
  * - in Python, the record sizes, magics and versions of the host session builder (apps/os/host.py) and the grants and
  *   records that checks/os-session-grants.py covers, which read the rows of this file.
  * The numbers of the application ABI, the device bits and the session extent types, stay in include/sunstone_app.h and
@@ -73,22 +74,28 @@
     X(CPU_CLOCK, SS_EXTENT_CPU_GRANT, cpu_clock, OS_CPU_CLOCK_SESSION_BYTES, A733_CPU_CLOCK_GRANT_MAGIC, A733_CPU_CLOCK_GRANT_VERSION, 0) \
     X(DMA, SS_EXTENT_DMA, dma, OS_DMA_SESSION_BYTES, OS_DMA_SESSION_MAGIC, OS_DMA_SESSION_VERSION, OS_RECORD_LINKED)
 
-/* X(name, prefix, start, with): an entry of the fixed start list, in list order, before the application's own
- * (apps/os/start.c). The entry's functions are prefix_task_privileged, prefix_pins and start. */
+/* X(name, prefix, start, with, owners): an entry of the fixed start list, in list order, before the application's own
+ * (apps/os/start.c). The entry's functions are prefix_task_privileged, prefix_pins and start. owners is the number of
+ * tasks the entry can create whose entry function registers a deadline owner (sunstone_deadline_register): the tasks its
+ * start function creates, and the tasks those tasks create. The count assumes that each creation call creates one task.
+ * checks/deadline-owners.py derives the same number from the linked code of each image and refuses a column that
+ * differs. The audio and dma rows both count the DMA0 pool's two tasks (OS_DMA_POOL_OWNERS). The large row counts
+ * none: its loader registers only through the SD0 binding (OS_LARGE_SD_DEADLINES), and the SD0 owner has its own term
+ * (OS_SD_OWNER_DEADLINES). */
 #define OS_START_ROWS(X) \
-    X("thermal", os_thermal, os_thermal_start, OS_ALWAYS) \
-    X("large", os_large, os_large_start, OS_ALWAYS) \
-    X("tlbi", os_tlbi, os_tlbi_start, OS_WITH_TLBI) \
-    X("npu", os_npu, os_npu_start, OS_ALWAYS) \
-    X("audio", os_audio, os_capture_start, OS_ALWAYS) \
-    X("dma", os_dma, os_dma_start, OS_WITH_DMA) \
-    X("radio", os_radio, os_radio_start, OS_ALWAYS) \
-    X("headset", os_headset, os_headset_start, OS_WITH_HEADSET) \
-    X("i2c", os_i2c, os_i2c_start, OS_ALWAYS) \
-    X("rtc", os_rtc, os_rtc_start, OS_ALWAYS) \
-    X("g2d", os_g2d, os_g2d_start, OS_ALWAYS) \
-    X("video-decode", os_video_decode, os_video_decode_start, OS_WITH_VIDEO_DECODE) \
-    X("gpu-queue", os_gpu_queue, os_gpu_queue_start_entry, OS_WITH_GPU)
+    X("thermal", os_thermal, os_thermal_start, OS_ALWAYS, 1) \
+    X("large", os_large, os_large_start, OS_ALWAYS, 0) \
+    X("tlbi", os_tlbi, os_tlbi_start, OS_WITH_TLBI, 1) \
+    X("npu", os_npu, os_npu_start, OS_ALWAYS, 3) \
+    X("audio", os_audio, os_capture_start, OS_ALWAYS, 3) \
+    X("dma", os_dma, os_dma_start, OS_WITH_DMA, 2) \
+    X("radio", os_radio, os_radio_start, OS_ALWAYS, 0) \
+    X("headset", os_headset, os_headset_start, OS_WITH_HEADSET, 2) \
+    X("i2c", os_i2c, os_i2c_start, OS_ALWAYS, 1) \
+    X("rtc", os_rtc, os_rtc_start, OS_ALWAYS, 1) \
+    X("g2d", os_g2d, os_g2d_start, OS_ALWAYS, 1) \
+    X("video-decode", os_video_decode, os_video_decode_start, OS_WITH_VIDEO_DECODE, 1) \
+    X("gpu-queue", os_gpu_queue, os_gpu_queue_start_entry, OS_WITH_GPU, 1)
 
 /* X(NAME, name, window_us, grant, with): a task the supervisor watches, after the board's five and the application
  * (OS_SERVICE_NAME, in this order). It must report within window_us, and only when the session grants every service in
@@ -109,15 +116,32 @@ enum { OS_GRANT_ROWS(OS_GRANT_BIT_) };
 enum { OS_GRANT_ROWS(OS_GRANT_LINKED_) };
 #define OS_SERVICE_ID_(NAME, name, window_us, grant, with) with(OS_SERVICE_##NAME,)
 enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICES };
-/* Deadline storage for supervised tasks, the SD owner, the NPU bootstrap,
- * service worker and optional queue power worker, GPU service/peer, and DMA
- * service/bootstrap workers, I2C, RTC, G2D and video decoder owners, and the
- * optional periodic invalidation task. The bus and device owners and the
- * supervisor have no supervised rows. */
-#ifdef SUNSTONE_A733_OS_SD_WRITE
-#define OS_SD_LOADER_DEADLINES 1u
+/* The deadline owners of the image, one slot each (runtime/deadline.c): every task that can register one. The image's
+ * own tables size the slots from this sum (tools/sunstone-manifest.py), since only they see the services that the image
+ * links per application (the headset and the video decoder). The terms:
+ * - each linked start entry's owners column, with the DMA0 pool's two tasks (dma-boot and dma-service) counted once in
+ *   an image that links both the audio and the dma rows: platform/a733/dma_pool_session.c creates them for one pool
+ *   session per boot (its instance, which a second initialization refuses);
+ * - the board's four registering tasks (apps/board/main.c): board-usb2, board-radio, board-net and board-watchdog, the
+ *   supervisor. board-pmic, board-usb0, board-typec and board-power register none;
+ * - the application's main task, and its GPU peer task in an image with the GPU queue (apps/os/application.c);
+ * - the large-region loader task in an image that links the loader's SD0 binding (apps/os/large_sd.c,
+ *   SUNSTONE_A733_OS_LARGE_SD, set by cmake/sunstone-image.cmake for the image's tables);
+ * - the SD0 owner task of a write-capable image (apps/os/sd_owner.c), which the large-region loader or the application
+ *   starts;
+ * - the background load's tasks (runtime/bg_load.c), a measurement option. */
+#define OS_DMA_POOL_OWNERS 2u
+#define OS_BOARD_DEADLINE_OWNERS 4u
+#define OS_APPLICATION_DEADLINE_OWNERS (1u + OS_WITH_GPU(1u +) 0u)
+#ifdef SUNSTONE_A733_OS_LARGE_SD
+#define OS_LARGE_SD_DEADLINES 1u
 #else
-#define OS_SD_LOADER_DEADLINES 0u
+#define OS_LARGE_SD_DEADLINES 0u
+#endif
+#ifdef SUNSTONE_A733_OS_SD_WRITE
+#define OS_SD_OWNER_DEADLINES 1u
+#else
+#define OS_SD_OWNER_DEADLINES 0u
 #endif
 #ifdef SUNSTONE_BG_LOAD
 #include "sunstone_bg_count.h"
@@ -125,16 +149,19 @@ enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICE
 #else
 #define OS_BG_DEADLINES 0u
 #endif
-#define OS_DEADLINE_OWNERS (OS_SERVICES + 9u + OS_WITH_GPU(2u +) OS_WITH_DMA(2u +) OS_WITH_TLBI(1u +) OS_SD_LOADER_DEADLINES + OS_BG_DEADLINES)
+#define OS_START_OWNERS_(name, prefix, start, with, owners) with((owners) +)
+#define OS_DEADLINE_OWNERS (OS_START_ROWS(OS_START_OWNERS_) 0u - OS_WITH_DMA(OS_DMA_POOL_OWNERS +) 0u + \
+    OS_BOARD_DEADLINE_OWNERS + OS_APPLICATION_DEADLINE_OWNERS + OS_LARGE_SD_DEADLINES + OS_SD_OWNER_DEADLINES + \
+    OS_BG_DEADLINES)
 /* The supervision table's rows after the application's, and the grant each one needs, indexed by service id. */
 #define OS_SERVICE_ENTRY_(NAME, name, window_us, grant, with) with({name, window_us},)
 #define OS_SERVICE_TABLE OS_SUPERVISED_ROWS(OS_SERVICE_ENTRY_)
 #define OS_SERVICE_GRANT_(NAME, name, window_us, grant, with) with([OS_SERVICE_##NAME] = (grant),)
 #define OS_SERVICE_GRANTS {[1] = OS_GRANT_USB0, OS_SUPERVISED_ROWS(OS_SERVICE_GRANT_)}
 /* The start list's entries and their prototypes (struct os_application, apps/os/application.h). */
-#define OS_START_PROTOTYPE_(name, prefix, start, with) \
+#define OS_START_PROTOTYPE_(name, prefix, start, with, owners) \
     int prefix##_task_privileged(void (*)(void *), void *); int prefix##_pins(struct a733_pin_handoff *); int start(void);
 #define OS_START_PROTOTYPES OS_START_ROWS(OS_START_PROTOTYPE_)
-#define OS_START_ENTRY_(name, prefix, start, with) with({name, prefix##_task_privileged, prefix##_pins, start},)
+#define OS_START_ENTRY_(name, prefix, start, with, owners) with({name, prefix##_task_privileged, prefix##_pins, start},)
 #define OS_START_TABLE OS_START_ROWS(OS_START_ENTRY_)
 #endif

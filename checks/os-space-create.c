@@ -1,5 +1,7 @@
 /* Host case for the task-creation hook of include/os_space.h: the space of a new task comes from its creator's tag or from the
- * explicit creation call, never from a global tag. A direct creation in the init hook, where nothing creates, is refused. */
+ * explicit creation call, never from a global tag. A direct creation in the init hook, where nothing creates, is refused. A task
+ * created without an affinity runs on the service core when it is an OS task and on the A55 cluster when it is an
+ * application's (os_space_default_affinity). */
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -51,6 +53,20 @@ int main(void)
     core = 3; os_space_explicit[1] = 1;
     os_space_inherit((struct tcb *)0, &made);
     assert(refusals == 2);
+    os_space_explicit[1] = 0;
+    /* The default affinity follows the same space: an OS task (no creator, an untagged creator, or a call that names the
+     * kernel's table) runs on the service core only; an application's task (a tagged creator, or a call that names the
+     * application's space) on the A55 cluster. */
+    assert(os_space_default_affinity((struct tcb *)0) == 1u << A733_SMP_SERVICE_CORE);
+    assert(os_space_default_affinity(&kernel_creator) == 1u << A733_SMP_SERVICE_CORE);
+    assert(os_space_default_affinity(&creator) == A733_SMP_A55_MASK);
+    os_space_explicit[core] = 1; os_space_explicit_space[core] = 0;
+    assert(os_space_default_affinity(&creator) == 1u << A733_SMP_SERVICE_CORE);
+    os_space_explicit_space[core] = &app_ttbr;
+    assert(os_space_default_affinity(&kernel_creator) == A733_SMP_A55_MASK);
+    assert(os_space_default_affinity((struct tcb *)0) == A733_SMP_A55_MASK);
+    os_space_explicit[core] = 0; os_space_explicit_space[core] = 0;
+    assert(A733_SMP_SERVICE_CORE == 0u);
     /* The switch hook reads the tag as an address, with no mark bit. */
     puts("os-space-create host case passed");
     return 0;

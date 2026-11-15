@@ -22,11 +22,6 @@
 #define configSS_IRQ_SAVES_FP 1
 #endif
 #include "../../include/a733_smp_placement.h"
-#ifdef SUNSTONE_A733_OS
-/* The integrated OS image keeps every task created without an affinity on
- * the A55 cluster; only explicit placements reach the Cortex-A76 cores. */
-#define configTASK_DEFAULT_CORE_AFFINITY A733_SMP_A55_MASK
-#endif
 /* The task-switch hook of the per-application address spaces (include/os_space.h). The tag of a task is a
  * pointer to the TTBR0 value of its space. */
 #ifdef SUNSTONE_A733_OS
@@ -39,6 +34,9 @@
  * application's space and can use its heap and regions. OS services create their tasks from boot code or from
  * their own untagged tasks, so they stay in the kernel's table. */
 #define traceTASK_CREATE(pxNewTask) os_space_inherit(portCURRENT_TCB(portGET_CORE_ID()), (pxNewTask))
+/* A task created without an affinity: an OS service runs on the service core, an application's task on the A55 cluster.
+ * Only explicit placements reach the Cortex-A76 cores. */
+#define configTASK_DEFAULT_CORE_AFFINITY os_space_default_affinity(portCURRENT_TCB(portGET_CORE_ID()))
 #endif
 #endif
 /* Cores 0-5 are Cortex-A55 and cores 6-7 Cortex-A76. A woken task's tie

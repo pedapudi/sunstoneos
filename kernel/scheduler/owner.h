@@ -37,7 +37,7 @@ struct ss_owner_task {
     uint8_t affinity;
 };
 struct ss_owner_fifo { struct ss_owner_task *head, *tail; };
-#define SS_CACHE_LINE 64u
+#include "../../include/sunstone_cache_line.h" /* SS_CACHE_LINE */
 #define SS_OWNER_SOURCES 8u /* publishing CPUs */
 #define SS_OWNER_RING 32u   /* hints per (source, owner) outbox */
 /* What an owner reads on every entry, on one line that only other parties

@@ -78,8 +78,8 @@ def test_layout():
     assert len(names) == len(set(names)), 'a fact name repeats'
 
 
-def synthetic():
-    """A table as the board writes it: every slot read, a few values chosen."""
+def synthetic(skip=()):
+    """A table as the board writes it: every slot read except `skip`, a few values chosen."""
     values = {}
     for core in range(hw.CORES):
         values[('core', core, (0x0002, 0))] = 0x414fd0b1 if core >= 6 else 0x412fd050
@@ -97,7 +97,7 @@ def synthetic():
     values[('shared', 0, (hw.ID_MEMPATH_WORD, 0x02002020))] = 0xb8005400
     values[('shared', 0, (hw.ID_MEMPATH_WORD, 0x0a030004))] = 0x20220410
     skipped = {('shared', 0, (0x0130, 0x07064000)), ('shared', 0, (0x0130, 0x07064008)),
-               ('shared', 0, (hw.ID_MEMPATH_WORD, 0x0a040030))}
+               ('shared', 0, (hw.ID_MEMPATH_WORD, 0x0a040030))} | set(skip)
     return hw.encode(values=values, skipped=skipped)
 
 
@@ -227,7 +227,8 @@ def test_document():
     assert facts.entry('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 3)['queue_entry'] == run
     assert facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 3) == 0xf0
     assert facts.value('gic.cpuif.icc_ctlr_el1.pribits', 0) == 4
-    assert facts.value('gic.redist.intid27.priority_after_write', 0) == 0xd0
+    intid27 = facts.entry('gic.redist.intid27.priority_after_write', 0)
+    assert intid27['value'] == hw.ns_view(hw.stored_from_ns(intid27['written'])), 'PPI 27 reads back its own write under the write rule'
     assert facts.value('gic.dist.spi97.priority', 0) == hw.ns_view(facts.value('config.spi97.stored_priority'))
     assert facts.value('cpu.cntfrq_el0', 5) == 24000000
     assert facts.entry('gic.cpuif.icc_igrpen0_el1.read_traps_to_el3', 4)['queue_entry'] == '1793590176547518274-e819ce89'
@@ -238,6 +239,55 @@ def test_document():
     except hw.MissingFact:
         pass
     assert facts.assume('gic.dist.nonexistent', 7, 'test') == 7 and 'gic.dist.nonexistent' in facts.assumed
+
+
+def test_merge_keeps_entries():
+    """Merging a table, then the same table again, loses no entry.
+
+    The table skips the group words of the SPIs that annotate() resolves from source, as a run that does not read
+    them would. A skipped slot leaves the committed entry in place, and annotate() replaces only its own source facts,
+    so every committed entry that is not unmeasured survives both merges unchanged, and the second merge changes
+    nothing."""
+    def entries(document):
+        return {(e['name'], e['core']): e for e in document['facts']}
+    committed = hw.load_document()
+    skip = {('shared', 0, (0x0110, intid)) for intid in (71, 95, 97, 143)}
+    header, facts = hw.decode(synthetic(skip=skip))
+    once = hw.merge(copy.deepcopy(committed), header, facts, 'entry', '0' * 64)
+    twice = hw.merge(copy.deepcopy(once), header, facts, 'entry', '0' * 64)
+    read = {(f['name'], f['core']) for f in facts if f['status'] != 'unmeasured'} | {(f['name'], 'all') for f in facts if f['status'] != 'unmeasured'}
+    kept = {k: e for k, e in entries(committed).items() if e['status'] != 'unmeasured' and k not in read and (k[0], None) not in read}
+    after = entries(once)
+    lost = sorted(k for k, e in kept.items() if after.get(k) != e)
+    assert not lost, 'the first merge dropped or changed %s' % lost[:8]
+    again = entries(twice)
+    changed = sorted(k for k in after.keys() | again.keys() if after.get(k) != again.get(k))
+    assert not changed, 'the second merge dropped or changed %s' % changed[:8]
+    assert entries(hw.annotate(copy.deepcopy(committed))) == entries(committed), 'annotate() changed the committed entries'
+
+
+def test_image_state():
+    """Every image-dependent fact agrees with the source fact it follows, under its rule; a disagreement fails."""
+    document = hw.load_document()
+    assert not hw.image_state_errors(document), hw.image_state_errors(document)[:4]
+    marked = {e['name'] for e in document['facts'] if 'image_dependent' in e}
+    assert marked == set(hw.IMAGE_STATE), sorted(set(hw.IMAGE_STATE) ^ marked)
+    def broken(name, core, **change):
+        variant_document = copy.deepcopy(document)
+        item = next(e for e in variant_document['facts'] if e['name'] == name and e['core'] == core)
+        for key, value in change.items():
+            if value is None:
+                del item[key]
+            else:
+                item[key] = value
+        return hw.image_state_errors(variant_document)
+    assert broken('gic.redist.intid1.priority', 3, value=0), 'an SGI 1 priority at its reset value passed'
+    assert broken('gic.redist.intid0.priority', 0, value=0xe0), 'the pre-band SGI 0 priority passed'
+    assert broken('gic.redist.sgi_ppi.isenabler0', 5, value=1), 'SGI 0 alone enabled passed'
+    assert broken('gic.redist.intid27.priority_after_write', 0, value=0xd0, written=0xd8), 'the pre-band PPI 27 write passed'
+    assert broken('mmio.0x020025e0', 0, value=0xf1005803), 'a clear NPU MBUS gate passed'
+    assert broken('gic.redist.intid2.priority', 6, image_dependent=None), 'an unmarked image-dependent fact passed'
+    assert not broken('mmio.0x020025c0', 0, value=0x110103ff), 'the GPU0 gate bit is run state, not a fixed fact'
 
 
 def variant(readback):
@@ -254,18 +304,18 @@ def test_models():
     gic = hw.GicModel()
     facts = hw.Facts()
     assert gic.mask == 0xf8 and gic.shifted and not facts.assumed.get('gic.cpuif.icc_pmr_el1.readback_after_write_ff')
-    # The model reproduces the measurements: an unmasked write reads back 0xf0, and the measured run's write of
-    # 0xd8 to the priority byte of PPI 27 reads back 0xd0.
+    # The model reproduces the measurements: an unmasked write reads back 0xf0, and the byte the measured run wrote
+    # to the priority of PPI 27 reads back under the write rule (0xd8 read 0xd0 in fc9d445f; 0xb0 reads 0xb0 since 1a1c6b061).
     assert gic.pmr_ns_read(gic.pmr_ns_write(0xf8, 0xff)) == facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_ff', 0)
     assert gic.pmr_ns_write(0x00, 0xff) == 0x00 and gic.pmr_ns_read(0x00) == 0
     intid27 = facts.entry('gic.redist.intid27.priority_after_write', 0)
-    assert gic.ns_read(gic.ns_write(intid27['written'])) == intid27['value'], 'INTID 27 written 0xd8 reads back 0xd0'
+    assert gic.ns_read(gic.ns_write(intid27['written'])) == intid27['value'], 'INTID 27 reads back its written byte under the write rule'
     # The priority-write path of checks/cpu-local-timer.py: the source's Non-secure write of the API mask reads back as
     # the API mask.
     assert gic.ns_read(gic.ns_write(facts.value('config.intid27.stored_priority_written_ns'))) == \
         facts.value('gic.cpuif.icc_pmr_el1.readback_after_write_api_mask', 0)
     intid30 = next(f for f in facts.document['facts'] if f['name'] == 'gic.redist.intid30.priority_after_write' and f['core'] == 0)
-    assert gic.ns_read(gic.ns_write(intid30['written'])) == intid30['value'], 'INTID 30 written 0xe0 reads back 0xe0'
+    assert gic.ns_read(gic.ns_write(intid30['written'])) == intid30['value'], 'INTID 30 reads back its written byte under the write rule'
     assert gic.ns_read(facts.value('config.spi97.stored_priority')) == facts.value('gic.dist.spi97.priority', 0), 'the stored route priority of INTID 97 as Non-secure EL1 reads it'
     # A table that reads 0xf8 selects the unshifted view; one that fits neither is a contradiction.
     plain = hw.GicModel(variant(0xf8))
@@ -411,6 +461,8 @@ def main():
     test_layout()
     blob = test_decoder()
     test_document()
+    test_merge_keeps_entries()
+    test_image_state()
     test_models()
     test_no_hardcoded_values()
     test_helper()
