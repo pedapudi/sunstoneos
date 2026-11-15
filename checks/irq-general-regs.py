@@ -88,7 +88,8 @@ CHECK_INPUTS = ('patches/freertos-smp-asm.patch', 'patches/freertos-mask-returns
                 # the application table whose init hook and main the walk excludes
                 'apps/os/application.h', 'tools/sunstone-manifest.py')
 VECTORS = 'a733_cached_el1_vectors'
-# Functions that reach FP code and whose addresses only task code, boot code or the secondary cores' EL3 entry uses:
+# Functions that reach FP code and whose addresses only task code, boot code or the secondary cores' EL3 entry uses
+# (the application's init hook and main are excluded through ss_application, rule 4, not here):
 # (name, the unit that defines it) -> (the units that may take its address, why).
 APP = 'apps/cpu-npu-concurrency/main.c'
 FP_TASK = 'the FP-context task entry of the diagnostic, which creates one per core; check_fp_context (checks/fp-context.S) ' \
@@ -100,12 +101,6 @@ TASK_ONLY = {
     ('a733_cpu_secondary_entry', 'platform/a733/cpu_entry.S'): (
         ('platform/a733/cpu_entry_native.c', 'boot.c', 'boot-supervised.c'), 'the reset entry of the secondary cores, '
         'which the boot code gives the power controller as each core\'s start address; it parks unless it runs at EL3'),
-    ('cpu_npu_load_init', APP): (('sunstone-tables.c',), 'the init hook of the CPU and NPU load application, which '
-                                 'os_application_prepare calls at boot before the scheduler starts'),
-    ('cpu_npu_load_main', APP): (('sunstone-tables.c',), 'the CPU and NPU load application main, which the OS starts '
-                                 'as the application task'),
-    ('latency_main', 'apps/latency/native.c'): (('sunstone-tables.c',), 'the latency application main, which the OS '
-                                                'starts as the application task'),
     ('loader', 'apps/os/large_load.c'): (('apps/os/large_load.c',), 'the large-region loader task entry; it hashes '
                                          'with the SHA2 instructions'),
     ('observe', APP): ((APP,), 'the NPU observer of the CPU and NPU load application, registered by its init hook; '
@@ -116,8 +111,6 @@ TASK_ONLY = {
         'before the scheduler starts; start.c takes its address only for the failure note'),
     ('sink_consume', 'apps/os/large_load.c'): (('apps/os/large_load.c',), 'the FAT32 sink of the loader task, which '
                                                'it calls from its own reads'),
-    ('table_walks_main', 'apps/table-walks/main.c'): (('sunstone-tables.c',), 'the table-walks application main, '
-                                                      'which the OS starts as the application task'),
     ('worker', APP): ((APP,), 'the cpu-gemm task entry of the CPU and NPU load application, which its init hook '
                       'creates'),
     ('worker', 'platform/a733-smp-cached/diagnostic.c'): (('platform/a733-smp-cached/diagnostic.c',), FP_TASK),
