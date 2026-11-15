@@ -45,7 +45,7 @@ The figures come from one instrumented run at CPU-L 1794 MHz and 1000 mV, CPU-B 
 Board results are records in `docs/evidence/latency.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-latency-20261101.md).
 
 <!-- evidence-table:begin -->
-5 records in `docs/evidence/latency.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+6 records in `docs/evidence/latency.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -54,4 +54,5 @@ Board results are records in `docs/evidence/latency.jsonl`; add one with `tools/
 | `1793920888961447818-41b92029` | 2026-11-05 | 3-1 | `76d8533f2fc6` | returned | passed | run_total 22.506 s, core0_irq_masked_max 31.2 µs, core1_irq_masked_max 51.9 µs, core1_lock1_wait_max 9.2 µs, core1_lock1_hold_max 25.8 µs, core6_lock1_wait_max 5.3 µs, irq_masked_max 79.1 µs, cpu_clock_transitions 4 |
 | `1793924840132757923-b56fe551` | 2026-11-06 | 3-1 | `7a05420668c5` | returned | passed | run_total 22.624 s, core0_irq_masked_max 31.9 µs, core1_irq_masked_max 41.6 µs, core1_lock1_wait_max 3.8 µs, core1_lock1_hold_max 21.1 µs, core6_lock1_wait_max 11.5 µs, irq_masked_max 74.4 µs, cpu_clock_transitions 4 |
 | `1793948978286084246-2f19b799` | 2026-11-06 | 3-1 | `b7c1f9f870a9` | returned | passed | run_total 23.575 s, run_total 23.57 s, core0_irq_masked_max 29.5 µs, core1_irq_masked_max 45 µs, core1_lock1_wait_max 12.9 µs, core1_lock1_hold_max 20.3 µs, core6_lock1_wait_max 12.6 µs, irq_masked_max 75.7 µs, cpu_clock_transitions 4 |
+| `1794707177945351013-cb244af9` | 2026-11-14 | 3-1 | `50a67af09253` | returned | failed | run_total 52.162 s, run_total 52.2 s, launch_with_upload 25.8 s, gpu_wake_alone_p50 2.042 us, gpu_wake_alone_p99 2.625 us, gpu_wake_alone_max 3.083 us, npu_wake_alone_p50 2.875 us, npu_wake_alone_p99 2.958 us, npu_wake_alone_max 5.917 us, gpu_wake_both_p50 2.375 us, gpu_wake_both_max 3.208 us, npu_wake_both_p50 2.875 us, npu_wake_both_max 7.292 us, gpu_wake_stream_p50 6.042 us, gpu_wake_stream_p99 10.542 us, gpu_wake_stream_max 17.042 us, npu_wake_stream_p50 3.625 us, npu_wake_stream_p99 5.792 us, npu_wake_stream_max 9.958 us, gpu_jobs_alone 9558 jobs/s, gpu_jobs_both 7344 jobs/s, gpu_jobs_stream 3512 jobs/s, npu_jobs_alone 177768 jobs/s, npu_jobs_both 175536 jobs/s, npu_jobs_stream 81744 jobs/s, npu_completions_gpu_in_flight 278635 completions, stream_rate 6.46 GB/s, pll_gpu0_writes 52 writes, pll_gpu0_writes_npu_in_flight 42 writes, pll_npu_completion_reads 31 reads, pll_npu_unlocked_reads 0 reads, gpu_close_max 3.009 ms, gpu_open_max 7.885 ms, output_mismatches 0 outputs |
 <!-- evidence-table:end -->
