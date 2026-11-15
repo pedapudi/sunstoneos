@@ -4,8 +4,8 @@
 Every task that calls sunstone_deadline_register takes one slot of a table that the image's own tables size by
 OS_DEADLINE_OWNERS (runtime/deadline.c, tools/sunstone-manifest.py). The bound is a sum of terms: the owners column of each
 linked start entry (OS_START_ROWS), less the DMA0 pool's two tasks when both the audio and the dma entries count them,
-plus the board's registering tasks, the application's, the large-region loader's, the SD0 owner's and the background
-load's. This check counts the registering tasks of each linked image and compares the count with the slot count that the
+plus the board's registering tasks, the application's, the large-region loader's, the SD0 owner's, the background
+load's and the latency diagnostic's precise-mode wake tasks. This check counts the registering tasks of each linked image and compares the count with the slot count that the
 image's tables store (sunstone_deadline_slot_count).
 
 From the disassembly and symbol table of each image the check builds:
@@ -19,9 +19,12 @@ From the disassembly and symbol table of each image the check builds:
 
 The tasks of a term are the creations reachable from its root functions, and the creations reachable from the entry
 functions of those tasks: each start entry's start function (os_applications, the image's start list), the
-application's preparation (os_application_prepare, which creates the main task and the GPU peer) and the board's start
-(a733_smp_diagnostic_start). Each creation is taken to create at most one task; every creation that can register in
-these images uses static task storage that only one call can hold.
+application's preparation (os_application_prepare, which creates the main task and the GPU peer), the board's start
+(a733_smp_diagnostic_start) and the latency diagnostic's task setup (latency_workload_init). Each creation is taken to
+create at most one task; every creation that can register in these images uses static task storage that only one call
+can hold. The exceptions are the creations of ARRAYS, each in a loop that passes one element of a static TCB array per
+task: such a creation counts as many tasks as the array has elements, the array's size over the size of the main
+task's TCB (ss_application.task), and must be the only creation of its entry, inside its declared function.
 
 A registration can also be reached through a function pointer, such as a retirement callback that a service worker
 calls. The check finds each function that calls sunstone_deadline_register and that no registering task reaches by
@@ -37,7 +40,9 @@ service is the sum of the same columns and terms.
 
 Two mutants are run before the result, both relinked from the compile and link commands of the sup build: the RTC start
 entry rebuilt with a second registering task, which the column comparison and the equality must refuse; and the image's
-tables rebuilt with the RTC column raised by one and no new task, which the equality must refuse.
+tables rebuilt with the RTC column raised by one and no new task, which the equality must refuse. A third lowers
+OS_LATENCY_PRECISE_OWNERS by one in the header the comparison reads, which the latency term's column must refuse in the
+precise latency image.
 """
 import argparse
 import bisect
@@ -54,7 +59,8 @@ from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--elf', '{elf:sup}', '--elf', '{elf:headset}', '--elf', '{elf:ret-gpu}', '--elf', '{elf:ret-vdec}',
-              '--elf', '{elf:ret-g2d}', '--elf', '{elf:os-deadline-owners}', '--mutant-build', '{build:sup}',
+              '--elf', '{elf:ret-g2d}', '--elf', '{elf:os-deadline-owners}', '--elf', '{elf:ret-latency-bar-precise}',
+              '--mutant-build', '{build:sup}',
               '--output', '{output}']]
 # The sources that create a task or register a deadline owner in the OS images, and the declaration and sizing of the
 # bound: a change to one selects this check. The OS and board applications are listed as directories; a new file
@@ -64,7 +70,8 @@ CHECK_INPUTS = ['apps/os', 'apps/board', 'runtime/deadline.c', 'include/sunstone
                 'cmake/sunstone-image.cmake', 'drivers/dma/dma_service.c', 'drivers/gpu/gpu_queue.c',
                 'drivers/gpu/pvr_gpu_service.c', 'drivers/net/a733_radio_events.c', 'drivers/net/sunstone_net.c',
                 'drivers/net/a733_radio_session.c', 'drivers/npu/npu_runtime_queue.c', 'drivers/npu/npu_service.c',
-                'drivers/npu/a733_npu_runtime.c', 'platform/a733/dma_pool_session.c', 'runtime/bg_load.c']
+                'drivers/npu/a733_npu_runtime.c', 'platform/a733/dma_pool_session.c', 'runtime/bg_load.c',
+                'apps/latency/workload.c', 'runtime/latency.c']
 OBJDUMP = '/usr/lib/llvm-21/bin/llvm-objdump'
 # The task creations: the function and the argument register that holds the new task's entry function.
 CREATE = {'xTaskCreateStatic': 0, 'xTaskCreateStaticAffinitySet': 0, 'os_task_create_static': 1,
@@ -77,6 +84,14 @@ BOARD_ROOT = 'a733_smp_diagnostic_start'
 # the application's own storage call starts (apps/os/sd_owner.c start), and the large-region loader, which registers only
 # through the SD0 binding (apps/os/large_sd.c, OS_LARGE_SD_DEADLINES).
 SHARED_ENTRIES = {'sd_owner.c:owner_main': 'sd', 'large_load.c:loader': 'large-sd'}
+# The latency diagnostic's precise mode (apps/latency/workload.c, OS_LATENCY_DEADLINES): its own term, whose limit is
+# OS_LATENCY_PRECISE_OWNERS. latency_workload_init is reached from the application's init hook through a pointer.
+LATENCY_ROOT = 'latency_workload_init'
+# Creations that make one task per element of a static TCB array: entry -> (creating function, TCB array, why).
+ARRAYS = {'workload.c:wake_worker': (LATENCY_ROOT, 'wake_state', 'the latency workload creates one wake task per core in '
+                                     'a loop, each with its own wake_state element')}
+# The application table (apps/os/application.h): manifest, init, main, stack, task; the task field sizes a TCB.
+APPLICATION_TASK_OFFSET = 32
 # Creations whose task can register but that the OS never creates, with the reason.
 EXCLUDED = {
     'sunstone_net.c:worker': 'the network service creates its own worker only in sunstone_net_init; the OS binds the '
@@ -234,6 +249,19 @@ class Image:
     def registers(self, entry):
         return bool(self.reach(entry) & self.register)
 
+    def object_at(self, address):
+        """The size of the object symbol that starts at address."""
+        sizes = {s['st_size'] for s in self.symbols.values() if s['st_info']['type'] == 'STT_OBJECT' and
+                 s['st_value'] == address and s['st_size']}
+        assert len(sizes) == 1, 'no single object at %#x' % address
+        return sizes.pop()
+
+    def tcb_size(self):
+        """sizeof(StaticTask_t): the size of the application main task's TCB, which ss_application names."""
+        table = self.symbols['ss_application']
+        task = struct.unpack('<Q', self.read(table['st_value'] + APPLICATION_TASK_OFFSET, 8))[0]
+        return self.object_at(task)
+
     def word(self, symbol, size=4):
         s = self.symbols[symbol]
         return int.from_bytes(self.read(s['st_value'], size), 'little')
@@ -281,7 +309,7 @@ def columns(text):
         name, _prefix, _start, _with, owners = [a.strip() for a in row.split(',')]
         rows[name.strip('"')] = int(owners.rstrip('u'))
     literal = lambda name: int(re.search(r'^#define %s (\d+)u\s*$' % name, text, re.M).group(1))
-    return rows, literal('OS_BOARD_DEADLINE_OWNERS')
+    return rows, literal('OS_BOARD_DEADLINE_OWNERS'), literal('OS_LATENCY_PRECISE_OWNERS')
 
 
 def analyse(image):
@@ -290,9 +318,13 @@ def analyse(image):
     starts = {name: start for name, start in rows if image.name(start) != 'os_application_start'}
     application_roots = [image.byname[APPLICATION_ROOT][0]] + [start for _, start in rows if image.name(start) == 'os_application_start']
     terms, unresolved = {}, []
-    boundary = frozenset(list(starts.values()) + application_roots)
-    for name, start in list(starts.items()) + [('application', None), ('board', None)]:
-        roots = [start] if start else application_roots if name == 'application' else image.byname[BOARD_ROOT][:1]
+    latency_roots = image.byname.get(LATENCY_ROOT, [])[:1]
+    boundary = frozenset(list(starts.values()) + application_roots + latency_roots)
+    named_terms = [('application', application_roots), ('board', image.byname[BOARD_ROOT][:1])]
+    if latency_roots:
+        named_terms.append(('latency', latency_roots))
+    for name, start in list(starts.items()) + [(n, None) for n, _ in named_terms]:
+        roots = [start] if start else dict(named_terms)[name]
         found, missing = image.tasks(roots, boundary)
         terms[name] = found
         unresolved += missing
@@ -316,15 +348,32 @@ def analyse(image):
     covered = set()
     for _, e in everything:
         covered |= image.reach(e)
+    # The tasks of each registering creation: one, or the elements of its TCB array.
+    counts, arrays = {}, []
+    for here, e in everything:
+        counts[(here, e)] = 1
+        key = image.name(e)
+        if key in ARRAYS:
+            function, array, _ = ARRAYS[key]
+            sites = [site for site in image.sites if e in ([site[2]] if site[2] else site[3])]
+            if len(sites) != 1 or image.name(sites[0][1]) != function:
+                arrays.append('%s is created at %d sites (%s), not once in %s' % (
+                    key, len(sites), ', '.join(image.name(site[1]) for site in sites), function))
+                continue
+            size, tcb = image.symbols[array]['st_size'], image.tcb_size()
+            if size % tcb:
+                arrays.append('%s is %d bytes, not a whole number of %d-byte TCBs' % (array, size, tcb))
+                continue
+            counts[(here, e)] = size // tcb
     return {'starts': starts, 'terms': terms, 'shared': shared, 'excluded': excluded,
-            'unresolved': unresolved, 'unattributed': unattributed,
-            'uncovered': sorted(image.name(f) for f in callers - covered),
-            'tasks': len(everything - excluded), 'slots': image.word('sunstone_deadline_slot_count')}
+            'unresolved': unresolved, 'unattributed': unattributed + arrays,
+            'uncovered': sorted(image.name(f) for f in callers - covered), 'counts': counts,
+            'tasks': sum(counts[t] for t in everything - excluded), 'slots': image.word('sunstone_deadline_slot_count')}
 
 
 def compare(results, text):
     """The refusals of the columns in text against the analysed images; an empty list proves them."""
-    rows, board = columns(text)
+    rows, board, latency = columns(text)
     refusals = []
     for path, r in results.items():
         image = Path(path).parent.name + '/' + Path(path).name
@@ -333,10 +382,12 @@ def compare(results, text):
                 refusals.append('%s: start entry "%s" has no row in OS_START_ROWS' % (image, name))
         limits = {name: rows.get(name, 0) for name in r['starts']}
         limits['board'] = board
+        limits['latency'] = latency
         for name, found in r['terms'].items():
-            if name in limits and len(found) > limits[name]:
+            count = sum(r['counts'][t] for t in found)
+            if name in limits and count > limits[name]:
                 refusals.append('%s: %s creates %d registering tasks (%s), its column is %d' % (
-                    image, name, len(found), ', '.join(sorted(r['names'][t] for t in found)), limits[name]))
+                    image, name, count, ', '.join(sorted(r['names'][t] for t in found)), limits[name]))
         if r['tasks'] != r['slots']:
             refusals.append('%s: %d registering tasks for %d slots' % (image, r['tasks'], r['slots']))
         for note in r['unresolved']:
@@ -457,17 +508,25 @@ def main():
                        lambda source: '#include "%s"\n' % header + source)
     caught_raised = [r for r in mutated(elf, raised) if r.startswith(first + ':') and 'registering tasks for' in r]
     assert caught_raised, 'the tables with a raised RTC column passed the comparison'
+    # Mutant 3: the latency diagnostic's column lowered by one, the precise image unchanged.
+    assert any(r['terms'].get('latency') for r in results.values()), 'no analysed image has the precise latency term'
+    lowered = re.sub(r'^(#define OS_LATENCY_PRECISE_OWNERS )(\d+)u$', lambda m: '%s%du' % (m.group(1), int(m.group(2)) - 1),
+                     text, flags=re.M)
+    assert lowered != text, 'apps/os/os-services.h no longer defines OS_LATENCY_PRECISE_OWNERS as the mutant expects'
+    caught_latency = [r for r in compare(results, lowered) if 'latency creates' in r]
+    assert caught_latency, 'the lowered latency column passed the comparison'
     report = {'images': {p: {'slots': r['slots'], 'tasks': r['tasks'], 'starts': sorted(r['starts']),
                              'terms': {n: sorted(r['names'][t] for t in found) for n, found in r['terms'].items()},
                              'shared': {n: sorted(r['names'][t] for t in found) for n, found in r['shared'].items()},
                              'uncovered_registrations': r['uncovered']} for p, r in results.items()},
-              'mutants': {'second-rtc-task': caught, 'raised-rtc-column': caught_raised},
+              'mutants': {'second-rtc-task': caught, 'raised-rtc-column': caught_raised,
+                          'lowered-latency-column': caught_latency},
               'refusals': refusals, 'passed': not refusals, 'physical_access': False}
     (args.output / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
     assert not refusals, 'the deadline-owner bound differs from the linked code:\n  ' + '\n  '.join(refusals)
     for path, r in results.items():
         print('  %-60s %2d registering tasks, %2d slots' % (Path(path).parent.name + '/' + Path(path).name, r['tasks'], r['slots']))
-    print('PASS deadline-owners: %d images; both mutants refused' % len(results))
+    print('PASS deadline-owners: %d images; the three mutants refused' % len(results))
 
 
 if __name__ == '__main__':

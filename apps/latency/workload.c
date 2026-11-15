@@ -408,7 +408,10 @@ static void wake_worker(void *argument)
 {
     unsigned c = (unsigned)(uintptr_t)argument;
 #ifdef SUNSTONE_LATENCY_PRECISE
-    if (!LATENCY_RELEASED(c)) configASSERT(ss_latency_deadline_register());
+    /* Every wake task registers, those of the released cores too, which wait one tick and never use the slot: the
+     * image's slot count is then the eight tasks of latency_workload_init (OS_LATENCY_PRECISE_OWNERS), which
+     * checks/deadline-owners.py counts from wake_state without reading the release mask. */
+    configASSERT(ss_latency_deadline_register());
 #endif
     atomic_fetch_or_explicit(&ready_mask, 1U << c, memory_order_release);
     for (;;) {
