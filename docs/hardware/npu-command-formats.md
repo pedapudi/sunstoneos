@@ -12,7 +12,7 @@ that user-space code builds and never interprets them, so the facts here come fr
 | --- | --- |
 | **Confirmed** | A mutation of the field in a copy of a graph, with the checksums repaired by `tools/npu-nbg-mutate.py` and the copy run in the SDK simulator, changed the output as the stated meaning predicts |
 | **Named** | The compiler's own patch table names the field as an address (destination offset, source region and index) |
-| **Inferred** | Differential compilation (one change per variant, `tools/npu-graph-variants.py`) changed the field consistently with the stated meaning; no mutation has confirmed it |
+| **Inferred** | Differential compilation (one change per variant, `tools/npu-graph-variants.py` or `tools/npu-descriptor-sweep.py`) changed the field consistently with the stated meaning; no mutation has confirmed it |
 | **Unknown** | Seen in graphs; meaning not established. The loader admits it without interpreting it; the page tables confine what it can reach |
 
 Variants are compiled by the pinned compiler offline, from model descriptions that this repository holds
@@ -65,15 +65,35 @@ All words are pairs of a register header and an operand.
 | 34 (byte 136) | 2, 6 | Named | Second input address |
 | 35 (byte 140) | 2, 6 | Named | End of the second input when it is in VIP SRAM; the low 26 bits are `0x03ffffff` (disabled) when it is not patched |
 | 27, bit 29 | 6 (add/subtract) | **Confirmed** | Set: the stream-processor operation subtracts the second input from the first. Clear: it adds. Setting the bit in an addition graph made the simulator output equal the subtraction graph's output to 0.003, as predicted; the zero-to-one change of the program bit alone did not change the output |
-| 1, 3 | all | Inferred | `(width / 4) << 8` ORed with a small code, where width is the number of elements in a row (0x2c for 176, 0x10 for 64) |
-| 16 | all | Inferred | `(row bytes times rows) << 16` ORed with the row bytes (`0x160` for 176 sixteen-bit elements) |
-| 17 | all | Inferred | Row bytes of a 32-bit row (`0x2c0` for 176 elements) |
-| 18 | all | Inferred | Low byte: the row width in elements (`0xb0` for 176, `0x40` for 64) |
+| 1, bits 6-18 and 19-31 | 7 | **Confirmed** | Input image x size (elements in a row) and y size (rows). Setting x to 88 in a 16 x 176 graph left output columns 88-175 at 0, and setting y to 8 left rows 8-15 at 0: the engine reads the border value 0 past the input image |
+| 3, bits 6-18 and 19-31 | 7 | **Confirmed** | Output image x size and y size. Setting x to 88 left output columns 88-175 unwritten; setting y to 8 left rows 8-15 unwritten |
+| 1, 3 | 2, 6, 8 | Inferred | The same layout: `(width / 4) << 8` is the x size at bit 6 (0x2c for 176, 0x10 for 64) |
+| 1, bits 2-5 | 7 | Inferred | Input and output element types (Mesa's `in_image_data_type`, `out_image_data_type`): 0 at 16 bits; 2 in an 8-bit dynamic fixed-point graph, which compiles to kind 6 |
+| 4, bits 0-13 | 7 | **Confirmed** | Output planes (Mesa's `out_image_z_size`). Setting 1 in a two-plane graph left the second output plane unwritten |
+| 4, bits 18-24 and 25-31 | 7 | Inferred | Output tile x and y size (Mesa's `out_image_tile_x_size`, `out_image_tile_y_size`). In 16-bit graphs the tile is min(width, 127) by min(rows, floor(320 / tile x)) at every compiled shape. Tiles of 64 x 1 and 32 x 4 left the simulator output unchanged, so the output does not show the field's meaning |
+| 8, bits 16-31; 26, bits 16-31 | 7 | **Confirmed** | Output plane stride in bytes, bits 0-15 and 16-31: row bytes times rows. Setting the low half to 0 in a two-plane graph wrote both planes at plane 0, so plane 0 held the second plane's values and plane 1 stayed unwritten; clearing the high half in a graph with a 90,112-byte plane wrote the second plane at byte 24,576 |
+| 15, bit 21 | 7 | **Confirmed** | Output element type, bit 2 (Mesa's `out_image_data_type_bit_2`), set at 16 bits. Clearing it made the engine write one byte per element, saturating at 255, in the first half of each row |
+| 15, bit 20 | 7 | Inferred | Input element type, bit 2; set at 16 bits, clear at 8 bits |
+| 19, bits 26-27 | 7 | Inferred | Unpatched, word 19 holds the sentinel `0x03ffffff` in its low 26 bits; bits 26-27 are set when the output's size in bytes is a multiple of 64 (32 of the 35 compiled shapes) and clear otherwise (1, 3 and 5 rows of 176 elements). Their meaning is not known |
+| 16, bits 0-15 | 7 | **Confirmed** | Input row stride in bytes. Setting 704 with 8 rows made output row y the relu of input row 2y |
+| 16, bits 16-31; 26, bits 0-15 | 7 | **Confirmed** | Input plane stride in bytes, bits 0-15 and 16-31. Setting the low half to 0 made both output planes the relu of input plane 0; clearing the high half in a graph with a 90,112-byte plane read the second plane from byte 24,576 |
+| 16 | 2, 6, 8 | Inferred | The same layout: `(row bytes times rows) << 16` ORed with the row bytes (`0x160` for 176 sixteen-bit elements) |
+| 17, bits 0-15 | 7 | **Confirmed** | Output row stride in bytes. Setting 704 with 8 rows wrote output row y at row 2y and left the odd rows unwritten |
+| 17 | 2, 6, 8 | Inferred | Row bytes of a 32-bit row (`0x2c0` for 176 elements) |
+| 18 | 2, 6, 8 | Inferred | Low byte: the row width in elements (`0xb0` for 176, `0x40` for 64) |
 | 29, 30 | 6, 7 | Inferred | Output range limits as IEEE binary32: the largest and smallest value of the 16-bit fixed-point output (`0x407ffe00` is 3.9998 at 13 fractional bits, `0x417ffe00` is 15.999 at 11) |
 | 2 (top nibble) | all | Inferred | Changes with the input fixed-point position (`0x9` to `0xa` when the input scale is multiplied by four) |
 | 15 | 7 | Inferred | Activation class: `0x30200000` for a sigmoid, `0x30000000` for a hyperbolic tangent, `0x30380000` for a rectifier and for the swish (these two share the header; the function is the table) |
-| 0, 4, 8, 13, 14, 20, 22, 23, 28, 31, 32, 33 and the rest of the nonzero words | all | Unknown | Constants or values that depend on shape and placement without a stated rule |
-| Remaining words | all | Unknown | Zero in every graph examined |
+| 0, 4, 8, 13, 14, 20, 22, 23, 28, 31, 32, 33 and the rest of the nonzero words | all | Unknown | Constants or values that depend on shape and placement without a stated rule; for kind 7, words 4 and 8 are decoded above |
+| Remaining words | all | Unknown | Zero in every graph examined. Word 26 is zero whenever a plane is smaller than 64 KiB |
+
+**How the activation descriptor was tested.** The field layout is that of Mesa's `struct etna_nn_params`
+(`src/gallium/drivers/etnaviv/etnaviv_ml_nn.c`, pinned tree). `tools/npu-descriptor-sweep.py sweep` compiles a 16-bit
+Relu at 35 shapes: 19 widths from 32 to 512 at 1,024 rows, 11 heights, and 1 to 8 planes. It requires that all 48
+descriptor words of each graph equal the decode's prediction from the shape, so no other word moves.
+`tools/npu-descriptor-sweep.py mutate` changes one field (or one field with the size it needs) in a simulated graph,
+runs the copy in the SDK simulator and compares the whole output with the predicted one. The Confirmed rows above are
+those mutations; the Inferred rows were seen only by compilation, or changed no output.
 
 ### Unpatched pointer words
 
@@ -100,7 +120,8 @@ job would fail, not read or write memory outside the job's buffers.
 | --- | ---: | ---: | ---: | ---: |
 | Load-state stream, kind 6 (six item types) | 0 | 1 | 3 | 2 plus the program contents |
 | Load-state stream, kind 7 (four item types) | 0 | 1 | 0 | 3 |
-| Descriptor, 48 words | 1 (a bit) | 7 | 9 | 14 nonzero, 17 always zero |
+| Descriptor, 48 words (kinds 2, 6 and 8) | 1 (a bit) | 7 | 9 | 14 nonzero, 17 always zero |
+| Activation descriptor (kind 7), shape and type fields | 10 fields in words 1, 3, 4, 8, 15, 16, 17 and 26 | 0 | 6 fields (two element types, tile x and y, input type bit 2, word 19 bits 26-27) | The other nonzero words, which do not change with shape |
 | Second input (words 32 to 35 and the `0x0e4c` bit) | 0 | 2 | 2 | 1 |
 | Shader state stream, outside the uniform bank (44 operand words) | 5 | 0 | 8 | 31 |
 | Shader tensor descriptor (8 words) | 4 | 0 | 1 | 3 |
