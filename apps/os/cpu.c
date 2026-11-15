@@ -269,10 +269,14 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
     /* The performance-mode service (a grant with perf) replaces the one-request-per-cluster
      * start: its boot switch moves the CPU domains to the boot mode, and it
      * then serves USB0 operation 8 (apps/os/perf.c). It sees every burst
-     * result, including a retained driver, before the session ends. */
-    if(owner.phase==FOLLOW) {
+     * result, including a retained driver, before the session ends. A grant
+     * without perf reaches FOLLOW after its own requests and has no service:
+     * USB0, the GPU and the NPU answer no performance command for it, so the
+     * service's readback would only add PMIC snapshots. Its refusal records
+     * the service's state word (os_perf_fault_word). */
+    if(owner.phase==FOLLOW&&owner.perf) {
         int ready=os_perf_step(c,policy,(int)r);
-        if(ready<0)return REFUSED(0);
+        if(ready<0)return REFUSED(os_perf_fault_word((int)r));
         if(ready)publish_ready();
     }
     if(r==A733_CPU_CLOCK_RETAINED||r==A733_CPU_CLOCK_INVALID)return REFUSED(r);
