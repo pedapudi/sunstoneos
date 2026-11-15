@@ -201,8 +201,9 @@ static void station_link(struct aic8800_wifi *w,enum aic8800_wifi_link link)
 static void station_hold(struct aic8800_wifi *w,const struct aic8800_sdio_response *r,
     struct aic8800_wifi_station_event *event)
 {
-    for(unsigned i=0;i<r->parameter_bytes;++i)w->station_payload[i]=r->parameters[i];
-    event->payload=w->station_payload;event->bytes=r->parameter_bytes;event->link=w->link;
+    size_t kept=r->parameter_bytes>sizeof(w->station_payload)?sizeof(w->station_payload):r->parameter_bytes;
+    for(unsigned i=0;i<kept;++i)w->station_payload[i]=r->parameters[i];
+    event->payload=w->station_payload;event->bytes=kept;event->link=w->link;
     w->station_event=*event;w->station_record=r->record;w->station_held=1;
 }
 static void station_finish(struct aic8800_wifi *w)
@@ -214,7 +215,7 @@ static enum aic8800_codec_result station_response(struct aic8800_wifi *w,
 {
     const uint8_t *p=r->parameters;
     if(r->message_id==0x1802) {
-        if(r->parameter_bytes!=852)goto malformed;
+        if(r->parameter_bytes<852)goto malformed; /* Read through ac_param, the last field. */
         if(p[9]!=w->vif)return AIC8800_CODEC_UNRELATED;
         if(p[8]){w->link=AIC8800_WIFI_LINK_UNRESOLVED;return AIC8800_CODEC_UNRELATED;}
         if(w->phase!=CONNECT||w->state!=AIC8800_WIFI_WAITING||w->station_indicated)
@@ -241,7 +242,7 @@ static enum aic8800_codec_result station_response(struct aic8800_wifi *w,
         return AIC8800_CODEC_UNRELATED;
     }
     if(r->message_id==0x1805) {
-        if(r->parameter_bytes!=6)goto malformed;
+        if(r->parameter_bytes<5)goto malformed; /* reason, vif, ft_over_ds, reassoc */
         if(p[2]!=w->vif||w->link==AIC8800_WIFI_LINK_DOWN||
             (w->link==AIC8800_WIFI_CONNECTING&&w->state!=AIC8800_WIFI_WAITING))return AIC8800_CODEC_UNRELATED;
         struct aic8800_wifi_station_event e={.kind=AIC8800_WIFI_DISCONNECTION,
@@ -257,7 +258,7 @@ static enum aic8800_codec_result station_response(struct aic8800_wifi *w,
     }
     if(w->state!=AIC8800_WIFI_WAITING||w->phase<CONNECT||r->message_id!=w->expected_cfm||w->station_accepted)
         return AIC8800_CODEC_UNRELATED;
-    if((w->phase==CONNECT&&r->parameter_bytes!=1)||r->parameter_bytes>sizeof(w->last_cfm))goto malformed;
+    if((w->phase==CONNECT&&r->parameter_bytes<1)||r->parameter_bytes>sizeof(w->last_cfm))goto malformed;
     completed(w);w->last_cfm_id=r->message_id;w->last_cfm_bytes=r->parameter_bytes;
     for(unsigned i=0;i<r->parameter_bytes;++i)w->last_cfm[i]=p[i];
     if(w->phase==CONNECT&&p[0]) {
@@ -289,17 +290,19 @@ enum aic8800_codec_result aic8800_wifi_response(struct aic8800_wifi *w,const voi
         return AIC8800_CODEC_UNRELATED;
     }
     if(w->phase==SCAN&&r->message_id==0x1001) {
-        if(r->parameter_bytes!=3){aic8800_wifi_stop(w,owner,AIC8800_WIFI_MESSAGE_ERROR);return AIC8800_CODEC_MALFORMED;}
+        if(r->parameter_bytes<3){aic8800_wifi_stop(w,owner,AIC8800_WIFI_MESSAGE_ERROR);return AIC8800_CODEC_MALFORMED;}
         if(r->parameters[0]!=w->vif||w->scan_done)return AIC8800_CODEC_UNRELATED;
         completed(w);w->summary.status=r->parameters[1];w->summary.reported_results=r->parameters[2];w->scan_done=1;
         if(w->summary.status)aic8800_wifi_stop(w,owner,AIC8800_WIFI_STATUS_ERROR);else finish_scan(w);
         return AIC8800_CODEC_OK;
     }
     if(r->message_id!=w->expected_cfm||(w->phase==SCAN&&w->summary.accepted))return AIC8800_CODEC_UNRELATED;
+    /* The bytes read below: a confirmation is longer only by fields or padding this driver does not use
+     * (rwnx_cmds.c copies param_len as sent). MM_VERSION_CFM is read through max_vif_nb, byte 26. */
     unsigned required=0;
     if(w->phase==CALIBRATE)required=16;else if(w->phase==MAC)required=6;
-    else if(w->phase==VERSION)required=28;else if(w->phase==ADD_IF)required=2;
-    if((required&&r->parameter_bytes!=required)||r->parameter_bytes>sizeof(w->last_cfm)) {
+    else if(w->phase==VERSION)required=27;else if(w->phase==ADD_IF)required=2;
+    if(r->parameter_bytes<required||r->parameter_bytes>sizeof(w->last_cfm)) {
         aic8800_wifi_stop(w,owner,AIC8800_WIFI_MESSAGE_ERROR);return AIC8800_CODEC_MALFORMED;
     }
     completed(w);w->last_cfm_id=r->message_id;w->last_cfm_bytes=r->parameter_bytes;
