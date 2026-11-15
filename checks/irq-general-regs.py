@@ -24,7 +24,11 @@ The check takes about 11 minutes on all walked builds. To cut that, walk only th
 
 The walk starts at every slot of the EL1 vector table a733_cached_el1_vectors (IRQ, SVC and fault entries) and follows
 every direct branch and call. An indirect call or tail call may reach every function whose address the image takes, in
-data or by ADR or ADRP and ADD, except the task-only functions of TASK_ONLY. It then requires:
+data or by ADR or ADRP and ADD, except the task-only functions of TASK_ONLY and the application's two entries in its
+table ss_application (apps/os/application.h): the init hook, which os_application_prepare calls at boot before the
+scheduler starts, and main, which runs as the application task. Application sources are built without
+-mgeneral-regs-only (cmake/sunstone-os-core.cmake), so those entries and the functions they call may use FP and SIMD.
+It then requires:
 
 1. no FP or SIMD instruction is reachable, except the task context transfers of portSAVE_CONTEXT and
    portRESTORE_CONTEXT: a CBZ on the core's FPU-context flag that skips exactly one complete save or restore of Q0-Q31,
@@ -34,13 +38,16 @@ data or by ADR or ADRP and ADD, except the task-only functions of TASK_ONLY. It 
 3. each function of TASK_ONLY whose address the image takes has that address taken only in the units its entry names.
    These functions reach FP code; their callers are tasks, which run with their own FP context, the boot code before
    the scheduler starts, or a secondary core's power-on entry at EL3. An entry names the unit that defines the
-   function, so a static name that several units define (observe, worker) excludes only that unit's function.
+   function, so a static name that several units define (observe, worker) excludes only that unit's function;
+4. the application's init hook and main have their addresses taken only in the image's application table
+   (sunstone-tables.c, which tools/sunstone-manifest.py writes).
 
 The walk includes the panic path (configASSERT calls platform_panic) and the fault entries, so printf, memchr and the
 other FP users of newlib are proven unreachable from them as well. Four mutations must each fail: an FP instruction
 planted in a function that only an indirect call reaches, the guard of an IRQ-path context save replaced by a NOP,
 -mgeneral-regs-only removed from a reachable unit, and the TASK_ONLY entry of a function whose direct calls reach FP
-removed. It writes only its result; the preprocessor runs write nothing.
+removed; in an image whose application entries reach FP or a unit built without the flag, a fifth, the exclusion of
+those entries dropped, must fail too. It writes only its result; the preprocessor runs write nothing.
 """
 import argparse
 import ast
@@ -77,7 +84,9 @@ CHECK_INPUTS = ('patches/freertos-smp-asm.patch', 'patches/freertos-mask-returns
                 # the configuration chain that sets configSS_IRQ_SAVES_FP, and the builds the check discovers it in
                 'include/FreeRTOSConfig.h', 'platform/a733-storage-maintenance/FreeRTOSConfig.h',
                 'apps/board/FreeRTOSConfig.h', 'apps/camera/FreeRTOSConfig.h', 'apps/hdmi/FreeRTOSConfig.h',
-                'CMakeLists.txt', 'cmake', 'tools/gate_images.py', 'tools/integration-gate.py', 'checks/fp-context.S')
+                'CMakeLists.txt', 'cmake', 'tools/gate_images.py', 'tools/integration-gate.py', 'checks/fp-context.S',
+                # the application table whose init hook and main the walk excludes
+                'apps/os/application.h', 'tools/sunstone-manifest.py')
 VECTORS = 'a733_cached_el1_vectors'
 # Functions that reach FP code and whose addresses only task code, boot code or the secondary cores' EL3 entry uses:
 # (name, the unit that defines it) -> (the units that may take its address, why).
@@ -121,6 +130,10 @@ TASK_ONLY = {
         'qualification, which its main creates on each worker core'),
 }
 FP_REGISTER = re.compile(r'^[qdshbv]\d+$')
+# The application table (apps/os/application.h): manifest, init, main, stack, task; the walk reads init and main.
+APPLICATION = 'ss_application'
+APPLICATION_ENTRIES = {8: 'init', 16: 'main'}
+APPLICATION_TABLE = 'sunstone-tables.c'
 
 
 class Image:
@@ -138,11 +151,14 @@ class Image:
         self.data = [(s['sh_addr'], s.data()) for s in elf.iter_sections()
                      if s['sh_type'] == 'SHT_PROGBITS' and s['sh_flags'] & 2 and not s['sh_flags'] & 4]
         self.names, self.sized, self.address, self.symbols = {}, {}, {}, collections.defaultdict(set)
+        self.objects = {}
         for section in elf.iter_sections():
             if section.header.sh_type != 'SHT_SYMTAB':
                 continue
             for symbol in section.iter_symbols():
                 kind, value = symbol['st_info']['type'], symbol['st_value']
+                if kind == 'STT_OBJECT' and symbol.name == APPLICATION:
+                    self.objects[symbol.name] = (value, symbol['st_size'])
                 if not symbol.name or symbol.name.startswith('$') or kind not in ('STT_FUNC', 'STT_NOTYPE') \
                         or not self.in_code(value):
                     continue
@@ -157,6 +173,26 @@ class Image:
         self.functions = set(self.sized)
         self.units = self.read_map(map_path)
         self.taken = self.address_taken()
+
+    def data_word(self, address):
+        for base, data in self.data:
+            if base <= address and address + 8 <= base + len(data):
+                return struct.unpack_from('<Q', data, address - base)[0]
+        raise AssertionError('no data word at %x' % address)
+
+    def application_entries(self):
+        """Function address -> field of the application's init hook and main, read from ss_application."""
+        if APPLICATION not in self.objects:
+            return {}
+        base, size = self.objects[APPLICATION]
+        assert size >= max(APPLICATION_ENTRIES) + 8, (APPLICATION, size)
+        entries = {}
+        for offset, field in APPLICATION_ENTRIES.items():
+            value = self.data_word(base + offset)
+            if value:
+                assert value in self.functions, '%s.%s is %x, not a function' % (APPLICATION, field, value)
+                entries[value] = field
+        return entries
 
     def in_code(self, address):
         return any(base <= address < base + len(data) for base, data in self.code)
@@ -357,9 +393,11 @@ def vector_entries(image):
     return roots
 
 
-def walk(image, task_only, cache):
+def walk(image, task_only, cache, applications=True):
     """Reachable function -> (the caller it was first reached from, how)."""
     excluded = {a for name, unit in task_only for a in image.defined(name, unit)}
+    if applications:
+        excluded |= set(image.application_entries())
     candidates = sorted(a for a in image.taken if a not in excluded)
     seen, stack, indirect_done = {}, [(root, None, 'vector') for root in sorted(vector_entries(image))], False
     while stack:
@@ -440,16 +478,26 @@ def task_only_problems(image, task_only, cache):
     return found
 
 
-def check(build, elf, map_path, task_only=TASK_ONLY, commands=None, mutate=None):
+def application_problems(image):
+    """The application's init hook and main have their addresses taken only in the application table."""
+    found = []
+    for address, field in sorted(image.application_entries().items()):
+        for unit in image.taken.get(address, ()):
+            if not unit or APPLICATION_TABLE not in unit:
+                found.append('%s, the application %s, has its address taken in %s' % (image.name(address), field, unit))
+    return found
+
+
+def check(build, elf, map_path, task_only=TASK_ONLY, commands=None, mutate=None, applications=True):
     image = Image(build, elf, map_path)
     if mutate:
         mutate(image)
     commands = commands if commands is not None else json.loads((build / 'compile_commands.json').read_text())
     cache = {}
-    seen = walk(image, task_only, cache)
+    seen = walk(image, task_only, cache, applications)
     found = fp_problems(image, seen, cache)
     units_found, units = unit_problems(image, seen, commands, build)
-    found += units_found + task_only_problems(image, task_only, cache)
+    found += units_found + task_only_problems(image, task_only, cache) + application_problems(image)
     return image, seen, units, found, cache
 
 
@@ -554,11 +602,20 @@ def prove(build, elf, map_path):
         _, _, _, bad, _ = check(build, elf, map_path, task_only=reduced, commands=commands)
         assert any('uses FP' in line for line in bad), (key, bad[:3])
         mutations.append('dropped the task-only entry of %s (%s)' % key)
+    # 5: the exclusion of the application's init hook and main dropped, where they reach FP or a unit without the flag.
+    # The unmutated image has no problem, so any line is the drop's.
+    if image.application_entries():
+        _, _, _, bad, _ = check(build, elf, map_path, commands=commands, applications=False)
+        if bad:
+            assert any('uses FP' in line or '-mgeneral-regs-only' in line for line in bad), bad[:3]
+            mutations.append('dropped the exclusion of the application entries (%s)' %
+                             ', '.join(sorted(image.name(a) for a in image.application_entries())))
     assert len(mutations) >= 3, mutations
     print('%s: %d functions reachable from the EL1 vectors, %d units built with -mgeneral-regs-only, no FP outside '
           'the guarded task context transfers; refused: %s' % (elf.name, len(seen), len(units), '; '.join(mutations)))
     return {'image': str(elf), 'functions': len(seen), 'units': len(units), 'context_transfers': transfers,
             'address_taken': len(image.taken), 'task_only_present': ['%s (%s)' % key for key in reaching],
+            'application_entries': sorted('%s (%s)' % (image.name(a), f) for a, f in image.application_entries().items()),
             'mutations_refused': mutations}
 
 
