@@ -5,6 +5,10 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import harness  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [['--build-dir', '{output}']]
@@ -21,7 +25,21 @@ def build_and_check(build, compiler='clang-21', objdump='llvm-objdump-21'):
     common = [compiler, '-std=c11', '-Wall', '-Wextra', '-Werror']
     sources = [str(ROOT / 'kernel/scheduler/owner.c'), str(ROOT / 'checks/scheduler-owner.c')]
     run(common + ['-DSS_OWNER_TEST_STATS', '-O1', '-g', '-pthread', '-fsanitize=address,undefined', *sources, '-o', str(binary)], env)
-    print(run([str(binary)], env), end='')
+    # The threaded race model stops with the inconclusive status when the host does not schedule its owner thread (checks/scheduler-owner.c);
+    # it is run once more, and a second stop is inconclusive (harness.KillInconclusive). Its claim is stated in the owner's own passes.
+    done = harness.until_booted(lambda: subprocess.run([str(binary)], text=True, capture_output=True, env=env,
+                                                       timeout=harness.host_kill_seconds('scheduler-owner')),
+                                lambda finished: finished.stdout + finished.stderr, lambda finished: finished.returncode)
+    assert done.returncode == 0, (done.returncode, done.stdout + done.stderr)
+    print(done.stdout, end='')
+    # A hint the owner loses (one slot in one round, which the owner never inspects) must fail the race model by the owner's own idle passes,
+    # in seconds, with its message; the host-time guard would end the run inconclusive (status 75) and is not the claim.
+    lost = build / 'scheduler-owner-lost-hint'
+    run(common + ['-DSS_OWNER_TEST_STATS', '-DSS_RACE_LOSE_ONE', '-O1', '-g', '-pthread', '-fsanitize=address,undefined', *sources, '-o', str(lost)], env)
+    broken = subprocess.run([str(lost)], text=True, capture_output=True, env=env, timeout=harness.host_kill_seconds('scheduler-owner'))
+    assert broken.returncode not in (0, harness.INCONCLUSIVE_EXIT) and 'slot 7 never inspected, with' in broken.stderr, \
+        ('the lost-hint model was not failed by the owner passes', broken.returncode, broken.stderr[-400:])
+    print('scheduler owner: a lost hint fails the race model by the owner\'s idle passes: ' + broken.stderr.strip().splitlines()[-1])
     obj = build / 'scheduler-owner-aarch64.o'
     run(common + ['--target=aarch64-none-elf', '-march=armv8.1-a+lse', '-ffreestanding',
                   '-O2', '-c', sources[0], '-o', str(obj)], env)

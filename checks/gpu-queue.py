@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import shutil
 import statistics
+import harness
 from harness import environment
 import subprocess
 
@@ -336,8 +337,8 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
 
     def run(name, command, timeout=None):
         commands.append(command)
-        r = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           timeout=timeout, env=env)
+        r = harness.until_booted(lambda: subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           timeout=timeout, env=env), lambda done: (done.stdout or '') + (done.stderr or ''))
         log=out/(name+'.log')
         if log.exists():
             attempt=1

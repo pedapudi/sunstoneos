@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+import harness  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 _LIMIT = json.loads((ROOT / 'tools/gate-slots.json').read_text())['latency_control']
@@ -73,12 +74,8 @@ def main():
                '-cpu', 'max', '-smp', '8', '-m', '128M', '-nographic', '-nic', 'none',
                '-monitor', 'none', '-semihosting-config', 'enable=on,target=native',
                '-kernel', str(image)]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=QEMU_KILL_SECONDS)
-        log, code = result.stdout + result.stderr, result.returncode
-    except subprocess.TimeoutExpired as error:
-        log = (error.stdout or b'').decode() + (error.stderr or b'').decode()
-        code = 124
+    result = harness.run_qemu(command, QEMU_KILL_SECONDS)       # a kill twice is inconclusive (harness.KillInconclusive)
+    log, code = result.stdout + result.stderr, result.returncode
     (args.output / 'qemu.log').write_text(log)
     counts_complete = 'PASS control qualification model:' in log
     error_shutdown = 'PASS control error shutdown model:' in log
