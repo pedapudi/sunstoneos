@@ -134,7 +134,9 @@ struct ss_g2d_done {
      * operation made no attach, all ones when the read was refused. */
     uint32_t iommu_prefetch[2];
     uint32_t source_iova;      /* device address of the source surface's first byte; 0 for a fill */
-    uint32_t reserved;
+    /* G2D 0x24 read by the owner before the launch, after it acknowledged task end. Bit 2 (cfg_finish) is sticky: it
+     * reads set after a job and a write of one does not clear it. */
+    uint32_t status_launch;
     uint64_t submit_ticks, launch_ticks, irq_ticks, done_ticks;
     uint64_t attach_us;            /* time the IOMMU attach took, 0 when no attach was made */
     uint64_t surface_physical, directory_physical;

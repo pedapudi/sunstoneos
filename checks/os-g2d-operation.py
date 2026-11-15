@@ -6,7 +6,10 @@ The owner task's serve and do_run code runs as linked in the image, with the RCQ
 the board's values).
 The IOMMU owner calls, the large-region slots, the clocks, the G2D registers and the engine are modeled: a launch
 (0x28 = 1) sets task end and cfg_finish in 0x24, and the owner's wait runs the image's own interrupt handler,
-os_g2d_irq.
+os_g2d_irq. Writing one to 0x24 clears task end (bit 0) only: cfg_finish (bit 2) stays set once a job has set it.
+Board run 1794722460072814405-2b77c3eb (port 3-1, stage 3) measured that: after the first copy 0x24 read 0x4 through
+the handler's acknowledgment, the mixer reset pulse and a write of 5, and the second copy's launch check read 0x4. On
+that run the update bit (0x28 bit 0) read 0 after the job.
 
 Cases:
 - surfaces: every surface byte size and start the stage 2, 3 and 4 plans draw. The plans' rows are a whole number of
@@ -26,7 +29,8 @@ Cases:
     pulse. The close returns 1, the service is CLOSED, and the fault record keeps step 62.
   - timeout-stuck-close: the engine still reads running after the reset pulse. The close fails, the service stays
     FAULT with step 62 kept, master 10 is not detached and the bus gate stays open.
-  - launch-fault-close: 0x24 bit 2 does not clear, so the launch fails at step 61 (RUN_LAUNCH); the close succeeds.
+  - launch-fault-close: 0x24 bit 0 (task end) does not clear, so the launch fails at step 61 (RUN_LAUNCH); the close
+    succeeds.
   - attach-fault-close: the first attach faults after the IOMMU owner recorded master 10 attached. The operation
     fails at step 57 (RUN_ATTACH) and the close detaches master 10, although the service never saw the attach
     complete.
@@ -36,9 +40,11 @@ Cases:
   read-only and the command page, in that order; the second operation maps nothing. Each operation writes 0x28 = 0
   before its idle check (the vendor order), its command page equals the image's own builder's page for the plan and
   the expected device addresses, the output's lines are cleaned and invalidated and the source's cleaned in whole
-  lines, and the record holds the prefetch words once and the after-operation 0x24, 0x28 and 0x100 words. The engine
-  model leaves the update bit set after a job in the first case and clears it in the second. The stage-2 image fails
-  both cases (it refuses a blit) and every surface case (it reads 0x28 before writing it).
+  lines, and the record holds the prefetch words once, the 0x24 word before each launch (0 for the first, 4 with
+  cfg_finish left set for the second) and the after-operation 0x24, 0x28 and 0x100 words. The engine model leaves the
+  update bit set after a job in the first case and clears it in the second, as the board did. The stage-2 image fails
+  both cases (it refuses a blit) and every surface case (it reads 0x28 before writing it). The first stage-3 image
+  (04f243dbf) fails both cases at the second copy's launch, step 61 with value 4, as on the board.
 - fills-update-sticks: two stage-2 fills in one session with an engine that leaves 0x28 bit 0 set after a job. Both
   must complete. The stage-2 image fails the second at step 60 (RUN_BUSY), because it reads 0x28 before writing it.
 
@@ -79,7 +85,7 @@ IOMMU_OWNER_FAULT, G2D_MASTER = 2, 10
 OPENED_CCU = {0xa40: 0x80000000, 0xa44: 0x00010001, 0xa74: 0x00010000}
 # g2d_mixer_apply: the update bit off first, then the interrupt enables, the RCQ header and the update bit on. The
 # owner reads 0x28 and 0x100 idle between the first two writes.
-LAUNCH = [(0x28, 0), (0x20, 0), (0x24, 5), (0x2c, None), (0x30, 0), (0x34, 128), (0x20, 0x10), (0x28, 1)]
+LAUNCH = [(0x28, 0), (0x20, 0), (0x24, 1), (0x2c, None), (0x30, 0), (0x34, 128), (0x20, 0x10), (0x28, 1)]
 # The stage-3 plan (apps/g2d-check/host.py, seed 0xbb67ae85): 395 by 257 at stride 1644, operation 1 a 282 by 114 copy
 # from (108, 13) to (8, 44) converting ARGB8888 to BGRA8888, operation 2 a 172 by 48 copy from (222, 206) to
 # (108, 131) unconverted.
@@ -118,8 +124,9 @@ class G2d:
     """The engine's registers as the operation path sees them, and the writes it made.
 
     An engine that does not complete keeps running after the launch: the mixer's start (0x100 bit 31) stays set until
-    the mixer AHB reset (0x08 bit 0) is asserted, or for good when the engine is stuck. A stuck 0x24 bit (launch_fault)
-    never clears."""
+    the mixer AHB reset (0x08 bit 0) is asserted, or for good when the engine is stuck. A write of one to 0x24 clears
+    task end (bit 0) and leaves cfg_finish (bit 2) set, as board run 1794722460072814405-2b77c3eb measured. A stuck
+    0x24 bit (launch_fault) never clears."""
     def __init__(self, completes, stuck=False, status_stuck=0, update_sticks=False):
         self.regs = {0x08: 3, 0x20: 0, 0x24: status_stuck, 0x28: 0, 0x100: 0}
         self.writes, self.completes, self.launched, self.interrupts = [], completes, False, 0
@@ -131,7 +138,8 @@ class G2d:
     def write(self, off, value):
         self.writes.append((off, value))
         if off == 0x24:
-            self.regs[0x24] = (self.regs[0x24] & ~value & 0xffffffff) | self.status_stuck    # write one to clear
+            # Task end is write-one-to-clear; cfg_finish stays set (board run 1794722460072814405-2b77c3eb).
+            self.regs[0x24] = (self.regs[0x24] & ~(value & 1) & 0xffffffff) | self.status_stuck
             return
         self.regs[off] = value
         if off == 0x28 and value & 1:
@@ -173,7 +181,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
     uc.mem_map(SURFACE, 2 * REGION_BYTES)
     uc.mem_map(RCQ, 0x300000)
     skip_crumbs(uc, image)
-    engine = G2d(completes, stuck, 4 if launch_fault else 0, update_sticks)
+    engine = G2d(completes, stuck, 1 if launch_fault else 0, update_sticks)
     ccu, pck = Registers(CCU, OPENED_CCU), Registers(PCK1, {0x8: 8})
     state = {'time': 1000, 'ticks': 24000, 'iova': IOVA_BASE, 'cache': [], 'stopped': False, 'irq_entered': 0,
              'unmapped': None, 'detach': [], 'events': [], 'attach': [], 'map': [], 'unmap': [], 'prefetch': 0}
@@ -395,7 +403,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
                   'page': bytes(uc.mem_read(RCQ, 4096)), 'writes': list(engine.writes)}
         for k in ('irq_count', 'status_after', 'rcq_status', 'iommu_attached', 'output_iova'):
             record[k] = get(done + dl[k])
-        for k in ('update_after', 'mixer_after', 'source_iova'):
+        for k in ('update_after', 'mixer_after', 'source_iova', 'status_launch'):
             record[k] = get(done + dl[k]) if k in dl else None
         record['iommu_prefetch'] = [get(done + dl['iommu_prefetch'] + 4 * b) for b in (0, 1)] if 'iommu_prefetch' in dl else None
         return record
@@ -507,6 +515,8 @@ def check_blits(record, state, engine, update_sticks):
     assert state['prefetch'] == 1 and ops[0]['iommu_prefetch'] == PREFETCH and ops[1]['iommu_prefetch'] == [0, 0], \
         (name, 'prefetch words recorded once, after the attach', [o['iommu_prefetch'] for o in ops])
     assert [o['iommu_attached'] for o in ops] == [1, 0] and [o['irq_count'] for o in ops] == [1, 2], (name, ops)
+    assert [o['status_launch'] for o in ops] == [0, 4], \
+        (name, '0x24 before each launch: clear, then cfg_finish left set by the first job', [o['status_launch'] for o in ops])
     for o in ops:
         assert o['output_iova'] == IOVA_BASE + record['offset'], (name, hex(o['output_iova']))
         assert o['source_iova'] == IOVA_BASE + REGION_BYTES + record['offset'], (name, hex(o['source_iova']))
@@ -590,8 +600,8 @@ def main():
               'launch-fault-close': ({'launch_fault': True}, STEP_RUN_LAUNCH, True),
               'attach-fault-close': ({'attach_fault': True}, STEP_RUN_ATTACH, True)}
     cases += [(n, stage2(), dict(o, close=True)) for n, (o, _, _) in closes.items()]
-    # Stage 3: both copies in one session, with the update bit left set by the engine (the predicted board behaviour)
-    # and cleared by it.
+    # Stage 3: both copies in one session, with the update bit left set by the engine and cleared by it (the board's
+    # behaviour on run 1794722460072814405-2b77c3eb).
     blits = {'blits-update-sticks': True, 'blits-update-clears': False}
     cases += [(n, STAGE3 + (0,), {'blits': STAGE3_OPS, 'update_sticks': v}) for n, v in blits.items()]
     cases += [('fills-update-sticks', stage2(), {'fills': 2, 'update_sticks': True})]

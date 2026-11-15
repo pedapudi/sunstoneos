@@ -560,7 +560,11 @@ static int do_run(void)
      * engine must then read idle: update off and the mixer not started. */
     uint32_t v;
     if(!g2d_wr(0x28,0)||!g2d_rd(0x28,&v)||(v&1)||!rd(G2D+0x100,&v)||(v&0x80000000))return fail(G2D_STEP_RUN_BUSY,v);
-    if(!g2d_wr(0x20,0)||!g2d_wr(0x24,5)||!g2d_rd(0x24,&v)||(v&5))return fail(G2D_STEP_RUN_LAUNCH,v);
+    /* Only task end must read clear before the interrupt is enabled. cfg_finish (bit 2) stays set after a job and a
+     * write of one does not clear it (board run 1794722460072814405-2b77c3eb); its interrupt enable (0x20 bit 6) is
+     * never set, and g2d_mixer_apply neither clears nor reads it. */
+    if(!g2d_wr(0x20,0)||!g2d_wr(0x24,1)||!g2d_rd(0x24,&d->status_launch)||(d->status_launch&1))
+        return fail(G2D_STEP_RUN_LAUNCH,d->status_launch);
     if(!g2d_wr(0x2c,(uint32_t)g2d.rcq_iova)||!g2d_wr(0x30,0)||!g2d_wr(0x34,G2D_RCQ_HEADER_BYTES))
         return fail(G2D_STEP_RUN_LAUNCH,1);
     atomic_store_explicit(&g2d.armed,1,memory_order_release);

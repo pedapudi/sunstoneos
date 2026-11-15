@@ -225,11 +225,11 @@ def done_record(payload, at):
     rcq_status, reset_word, status_after, irq_count, scan, output_iova, attached = d[2:9]
     bank, bypass, fault = d[9:17], d[17:19], d[19:29]
     fault_step, fault_word, fault_read, refused, stray = d[29:34]
-    update_after, mixer_after, prefetch0, prefetch1, source_iova, reserved = d[34:40]
+    update_after, mixer_after, prefetch0, prefetch1, source_iova, status_launch = d[34:40]
     submit, launch, irq, done, attach_us, surface, directory = d[40:47]
     return {
         'rcq_status': f'0x{rcq_status:08x}', 'frame_cnt': rcq_status >> 8 & 255, 'reset_word': f'0x{reset_word:08x}',
-        'status_after': f'0x{status_after:08x}', 'update_after': f'0x{update_after:08x}',
+        'status_after': f'0x{status_after:08x}', 'status_launch': f'0x{status_launch:08x}', 'update_after': f'0x{update_after:08x}',
         'mixer_after': f'0x{mixer_after:08x}', 'irq_count': irq_count, 'iommu_scan': scan,
         'output_iova': f'0x{output_iova:08x}', 'source_iova': f'0x{source_iova:08x}', 'iommu_attached': attached,
         'iommu_prefetch': {'bank0': f'0x{prefetch0:08x}', 'bank1': f'0x{prefetch1:08x}'},
