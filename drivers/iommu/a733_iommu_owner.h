@@ -57,6 +57,7 @@ struct a733_iommu_owner {
     enum a733_iommu_owner_state state;
     unsigned tables, entries;                  /* second-level tables allocated, leaf entries present */
     uint32_t fault_step, fault_word;           /* the first failure: step and the register offset or word */
+    uint32_t fault_read;                       /* for a readback mismatch, the value read */
     uint32_t refused_word;                     /* last attach refusal with no change: 1 clock lease, 2 entry state */
     struct a733_iommu_owner_entry entry;
     struct a733_iommu_owner_fault faults[A733_IOMMU_OWNER_MASTERS];

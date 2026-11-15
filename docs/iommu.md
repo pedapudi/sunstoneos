@@ -269,7 +269,9 @@ OS-image wiring serializes them.
   and walk words and one master's micro status, address and data words into
   that master's fault record. Any failed register access or table allocation
   leaves the owner in its fault state for the lifetime; later attaches are
-  refused, and detach still runs.
+  refused, and detach still runs. The owner keeps the first failure's step and
+  register offset, and for a register that does not read back its write, the
+  value read.
 
 Table memory comes from the caller through an allocation callback; the OS image
 supplies non-cacheable pages from the unified allocator. The owner never writes
@@ -284,7 +286,9 @@ own bank's directory base through table memory. The test checks the
 first-attach register sequence, that the second attach writes no directory base
 or enable, that every page of both devices' spans walks to its physical page
 with its permissions, refusals with no register access, fault recording, unmap,
-a map across a 4 MiB boundary, and the release of every table and the lease. A
+a map across a 4 MiB boundary, the release of every table and the lease, and a
+register that reads back a different value, which records the readback step,
+offset and value and still detaches cleanly. A
 mutant that installs a second directory for the decoder's attach fails the
 test, because G2D's pages no longer walk from bank 1. No board run has used the
 owner yet; the later-attach, map, unmap and partial-detach sequences follow the

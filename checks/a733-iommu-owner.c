@@ -13,7 +13,9 @@
  *  6 a fault word recorded by scan sets the master's fault record;
  *  7 unmap removes the walk; map across a 4 MiB boundary adds one table per window;
  *  8 detaching G2D keeps the banks enabled; detaching the decoder last disables both, releases every table and the
- *    clock lease.
+ *    clock lease;
+ *  9 a register that reads back a different value faults the owner with the readback step, the offset and the value
+ *    read; the detach then disables both banks and releases every table and the clock lease.
  * Built with -DMUTANT_SECOND_DIRECTORY (checks/a733-iommu-owner.py), the decoder's attach installs a second
  * directory; case 2 or 3 must fail. */
 #include "a733_iommu_owner.h"
@@ -31,6 +33,7 @@ static unsigned allocations, releases, directories;
 static uint32_t regs[REGS / 4];
 static uint64_t now;
 static int clock_held, clock_takes;
+static uint32_t stuck_offset = UINT32_MAX, stuck_value; /* case 9: this register keeps stuck_value */
 struct access { char op; uint32_t offset, value; };
 static struct access trace[4096];
 static unsigned traced;
@@ -51,7 +54,7 @@ static int wr(void *c, uint32_t off, uint32_t v)
 {
     (void)c;
     if(off >= REGS || (off & 3)) return -1;
-    regs[off / 4] = v;
+    regs[off / 4] = off == stuck_offset ? stuck_value : v;
     if(traced < 4096) trace[traced++] = (struct access){'W', off, v};
     return 1;
 }
@@ -266,6 +269,14 @@ int main(void)
     regs[0x14 / 4] = 0;
     CHECK(a733_iommu_owner_attach(&o, 1u << 10, g2d, 3) == 1 && walks(10, g2d, 3) && clock_takes == 3);
     CHECK(a733_iommu_owner_detach(&o, 1u << 10) == 1 && releases == allocations);
+
+    /* 9: bank 1's prefetch word reads back 0x7f instead of 0x3007f. Step 2 is the owner's readback step. */
+    stuck_offset = 0x1002c; stuck_value = 0x7f;
+    CHECK(a733_iommu_owner_attach(&o, 1u << 10, g2d, 3) == -1);
+    CHECK(o.state == A733_IOMMU_OWNER_FAULT && o.fault_step == 2 && o.fault_word == 0x1002c && o.fault_read == 0x7f);
+    stuck_offset = UINT32_MAX;
+    CHECK(a733_iommu_owner_detach(&o, 1u << 10) == 1);
+    CHECK(regs[0x14 / 4] == 0 && regs[0x10014 / 4] == 0 && !clock_held && releases == allocations);
 
     printf("%s: %u register accesses, %u table allocations, %u directories\n", failures ? "FAIL" : "PASS", traced,
            allocations, directories);

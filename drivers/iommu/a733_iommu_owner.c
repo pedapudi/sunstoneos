@@ -60,7 +60,9 @@ static int set(struct a733_iommu_owner *o, uint32_t off, uint32_t v)
 {
     uint32_t r;
     if(wr(o, off, v) != 1 || rd(o, off, &r) != 1) return -1;
-    return r == v ? 1 : fail(o, STEP_READBACK, off);
+    if(r == v) return 1;
+    if(!o->fault_step) o->fault_read = r;
+    return fail(o, STEP_READBACK, off);
 }
 static int both(struct a733_iommu_owner *o, uint32_t off, uint32_t v)
 {
