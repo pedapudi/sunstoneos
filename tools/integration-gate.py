@@ -907,7 +907,9 @@ def main(argv=None):
                         continue
                     parts = path.relative_to(build_root).parts
                     top = build_root / parts[0]
-                    if not parts[0].startswith('gate-') or top == output or not top.is_dir():
+                    # The gate's own output, or a label directory that holds it (a later gate of a label runs inside
+                    # the first one's directory), is never copied: the copy would land inside what it copies.
+                    if not parts[0].startswith('gate-') or top == output or top in output.parents or not top.is_dir():
                         continue
                     keep = top / parts[1] if len(parts) > 1 and parts[1].startswith('out-') and (top / parts[1]).is_dir() else top
                     if keep not in sources:

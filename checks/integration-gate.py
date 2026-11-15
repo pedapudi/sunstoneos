@@ -763,6 +763,19 @@ exec "$REAL" "$@"
         self.assertEqual((kept / 'product.elf').read_text(), 'first gate\n')
         self.assertFalse((self.sandbox / 'build/gate-second/evidence/kept-builds').exists())
 
+    def test_failing_gate_nested_in_its_label_directory_keeps_nothing_of_itself(self):
+        # A second gate of a label runs in a directory inside the first gate's. A failing step's output path lies under the
+        # label directory, which holds this gate's own output: copying it would copy the gate into itself without end.
+        first = self.run_gate('--reason', 'First gate', '--full', label='nested')
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.env['GATE_TEST_FAIL_ALL'] = 'checks/focused.py'
+        result = self.run_gate('--reason', 'Second gate fails', '--full', label='nested')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        runs = [p for p in (self.sandbox / 'build/gate-nested').iterdir() if (p / 'summary.txt').is_file()]
+        self.assertEqual(len(runs), 1, runs)
+        self.assertIn('FAIL indexed-focused', (runs[0] / 'summary.txt').read_text())
+        self.assertFalse((runs[0] / 'evidence/kept-builds').exists())
+
     def test_failed_build_skips_only_the_checks_that_need_it(self):
         self.full_catalogue()
         self.env['GATE_TEST_FAIL'] = 'kernel-check'
