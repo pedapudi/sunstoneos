@@ -19,7 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 RUN1_WINDOW = 'checks/data/scheduler-window-axi-cap-run1.json'
 CHECK_INPUTS = ['apps/latency/host.py', 'kernel/scheduler/latency_trace.h',
                 'kernel/scheduler/latency_trace.c', 'checks/scheduler-latency-history.c',
-                'tools/sunstone-image-link.py', 'include/sunstone_latency.h', RUN1_WINDOW]
+                'tools/sunstone-image-link.py', 'include/sunstone_latency.h',
+                'checks/data/scheduler-window-axi-cap-run1.json']
 FREQUENCY = 24_000_000
 MAGIC = 0x5353534348545231
 RECORDS = 32
