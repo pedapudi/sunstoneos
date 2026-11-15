@@ -11,6 +11,13 @@
 #include "a733_iommu.h"
 #include "a733_range.h"
 #include "dma_address_width.h"
+
+/* One IOMMU programmer per image: the OS image's owner (drivers/iommu/a733_iommu_owner.c) defines the same symbol,
+ * so an image that links both fails to link. The owner's host test links both for its master-table cross-check and
+ * builds this file with A733_IOMMU_CROSS_CHECK. */
+#ifndef A733_IOMMU_CROSS_CHECK
+const char a733_iommu_programmer[] = "a733_iommu";
+#endif
 /* Table geometry: the directory index is IOVA bits 33:22. */
 #define IOVA_SPACE (UINT64_C(1)<<34)
 _Static_assert(A733_IOMMU_IOVA_LIMIT<=IOVA_SPACE,"IOVA policy exceeds table geometry");

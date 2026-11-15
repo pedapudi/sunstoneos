@@ -10,6 +10,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'checks'))
+import harness  # noqa: E402
+
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -51,7 +54,7 @@ if previous.get("passed") and previous.get("identity") == identity:
 trials = []
 for index in range(args.trials):
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=300)  # a hang bound only; the guests assert no time
+        result = harness.run_qemu(command, 300)  # a hang bound only; the guests assert no time
         output, code = result.stdout + result.stderr, result.returncode
     except subprocess.TimeoutExpired as error:
         output = ((error.stdout or b"") + (error.stderr or b"")).decode(errors="replace")

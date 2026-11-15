@@ -6,14 +6,15 @@ import json
 from pathlib import Path
 import struct
 import subprocess
+import harness  # noqa: E402
 GATE_RUNS = [
     ['--output', '{output}', '--freertos', '{cache}/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2', '--tinyusb', '{cache}/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973', '--firmware', '{cache}/sources/gpu/rogue_36.56.104.183_v1.fw', '--lld', '{cache}/host/usr/lib/llvm-21/bin/ld.lld', '--qemu', '{cache}/host/usr/bin/qemu-system-aarch64'],
 ]
 
 
 def run(command, out, name, timeout=120):
-    p = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       text=True, timeout=timeout)
+    p = harness.until_booted(lambda: subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       text=True, timeout=timeout), lambda done: (done.stdout or '') + (done.stderr or ''))
     (out / (name + '.log')).write_text(p.stdout)
     if p.returncode:
         raise RuntimeError(name + ': ' + p.stdout[-6000:])

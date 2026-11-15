@@ -68,6 +68,23 @@ struct ss_npu_queue {
      * first operations operations only (0, or the graph's count or more: all of them). At the start of each job of that slot
      * EL1 writes the graph's operation count and the command bytes the job runs when it was cut (0 when it was not). */
     struct ss_npu_queue_cut { uint32_t slot_plus_one, operations, slot_operations, cut_bytes; } cut;
+    /* In an image built with SUNSTONE_NPU_WAKE_TIMING: the virtual counter (CNTVCT, 24 MHz) at the entry of the NPU interrupt
+     * handler whose completion last notified the waiting producer (irq, which EL1 writes), and at the return of the producer's
+     * blocking wait after a notification that completed its fence (resumed, which ss_npu_queue_wait writes; the wait zeroes it
+     * on entry, so it stays zero when the fence was complete without blocking). These are the GPU's definitions
+     * (gpu_queue_last_irq_counter and gpu_queue_last_wake_counter), on the same counter. */
+    struct ss_npu_queue_wake { uint64_t irq, resumed; } wake;
+    /* In an image built with SUNSTONE_ACCEL_PLL_WATCH: PLL_NPU's control word (CCU 0x2a0) read before and after every
+     * PLL_GPU0 write and at the first NPU completion after one. reference is the first word read with the ring open, diff
+     * the OR of every later word XOR reference, last the latest word, unlocked the reads with LOCK (bit 28) clear. writes
+     * counts PLL_GPU0 writes seen with the ring open, in_flight those made while a job was in flight, completions the reads
+     * at completion. first_site is 1 (before a write), 2 (after it) or 3 (at a completion) for the first read that differs
+     * from reference or is unlocked, with that word in first_word; 0 when none has. EL1 only writes these. */
+    struct ss_npu_queue_pll_watch {
+        uint32_t reference, diff, last, unlocked;
+        uint64_t writes, in_flight, completions;
+        uint32_t first_site, first_word;
+    } pll;
 };
 /* The bytes of the tables for handles handles holding tensors tensors in all (inputs and outputs), links requested edges and a
  * ring of depth entries. */

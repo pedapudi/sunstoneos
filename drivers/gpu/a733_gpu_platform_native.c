@@ -1,6 +1,9 @@
 #include "a733_gpu_platform_native.h"
 #include "a733_mmio.h"
 #include "boot.h"
+#ifdef SUNSTONE_ACCEL_PLL_WATCH
+#include "a733_gpu_pll_watch.h"
+#endif
 
 int a733_gpu_platform_native_now(void *context, uint64_t *out)
 { (void)context; *out = counter() / 24; return 1; }
@@ -55,7 +58,14 @@ static int update_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off
     if (!allowed || !enter(n, deadline)) return 0;
     uint32_t old = 0;
     if (clear != UINT32_MAX) (void)read_reg(n, bank, off, &old);
+#ifdef SUNSTONE_ACCEL_PLL_WATCH
+    const int pll = bank == A733_GPU_CCU && off == 0x0e0;
+    const uint32_t npu_before = pll ? a733_mmio_read32_dsb_sy_both(A733_PLL_NPU_ADDRESS) : 0;
+#endif
     a733_mmio_write32_dsb_sy_after(address(bank, off), (old & ~clear) | set);
+#ifdef SUNSTONE_ACCEL_PLL_WATCH
+    if (pll) a733_gpu_pll_watch(clear, set, npu_before, a733_mmio_read32_dsb_sy_both(A733_PLL_NPU_ADDRESS));
+#endif
     n->locks.register_leave(n->locks.context);
     return 1;
 }

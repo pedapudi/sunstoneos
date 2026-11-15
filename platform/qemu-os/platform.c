@@ -49,9 +49,14 @@ static void write32(uintptr_t address, uint32_t value) { *(volatile uint32_t *)a
 static uint64_t raw_counter(void) { uint64_t n; __asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(n) :: "memory"); return n; }
 static uint64_t frequency(void) { uint64_t n; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(n)); return n; }
 static unsigned core(void) { uint64_t n; __asm__ volatile("mrs %0, tpidr_el1" : "=r"(n)); return n; }
+/* The guest gives each boot wait one second of its own counter. Expiry before the application runs says nothing about the claim a
+ * check makes, so it prints a line that checks/harness.py reads as a boot-stage failure (run_qemu runs the guest again). */
+_Noreturn static void boot_timeout(const char *wait) {
+    qemu_os_puts("FAIL boot-timeout "); qemu_os_puts(wait); qemu_os_puts("\n"); platform_exit_privileged(1);
+}
 static void wait_clear(uintptr_t address, uint32_t mask) {
     uint64_t end = raw_counter() + frequency();
-    while (read32(address) & mask) configASSERT(raw_counter() < end);
+    while (read32(address) & mask) if (raw_counter() >= end) boot_timeout("register-clear");
 }
 
 /* QEMU's architectural counter runs at a fixed 62.5 MHz. The A733's runs at
@@ -227,14 +232,14 @@ void platform_init(void) {
     }
     uint64_t end = raw_counter() + frequency();
     while (__atomic_load_n(&cpu_online, __ATOMIC_ACQUIRE) != configNUMBER_OF_CORES - 1)
-        configASSERT(raw_counter() < end);
+        if (raw_counter() >= end) boot_timeout("secondary-cpus-online");
     configASSERT(a733_memory_local_prepare());
 }
 void platform_secondary(void) {
     local_init();
     __atomic_add_fetch(&cpu_online, 1, __ATOMIC_RELEASE);
     uint64_t end = raw_counter() + frequency();
-    while (!__atomic_load_n(&ucPrimaryCoreInitDoneFlag, __ATOMIC_ACQUIRE)) configASSERT(raw_counter() < end);
+    while (!__atomic_load_n(&ucPrimaryCoreInitDoneFlag, __ATOMIC_ACQUIRE)) if (raw_counter() >= end) boot_timeout("primary-init-flag");
     __atomic_store_n(&ucSecondaryCoresReadyFlags[core() - 1], 1, __ATOMIC_RELEASE);
     __asm__ volatile("dsb sy\n sev\n svc #106" ::: "memory");
     platform_panic("secondary scheduler returned", 0);

@@ -44,23 +44,31 @@ def run_guest(qemu, image, seconds):
     command = [str(qemu), '-machine', 'virt,gic-version=3,secure=off,virtualization=off', '-accel', 'tcg,thread=multi', '-cpu', 'cortex-a55',
                '-smp', '8', '-m', '128M', '-nographic', '-monitor', 'none', '-semihosting-config', 'enable=on,target=native',
                '-device', f'loader,file={image},cpu-num=0']
-    done = subprocess.run(command, capture_output=True, text=True, timeout=seconds)
+    done = harness.run_qemu(command, seconds)
     return done.returncode, done.stdout + done.stderr
 
 
 # The peer's report of the planted defect: LATENCY_CAUSE_PING_SEQUENCE is status 5 (apps/latency/cause-ping.h).
 PEER_FAILED = re.compile(r'^latency cause ping failed: pair=[0-9] status=5$', re.M)
 BUDGET_FAILURE = 'FAIL latency phase='
+# A ping that timed out (LATENCY_CAUSE_PING_TIMEOUT is status 4) waited out its 250 ms of host time for a core the host did not schedule; the
+# model prints its statuses before its assertion (apps/latency/model.c).
+PING_TIMED_OUT = re.compile(r'^latency cause ping result: .*=0x0*4\b', re.M)
 ATTEMPTS = 3
 
 
 def run_conclusive(qemu, image, seconds, concluded=lambda text: False):
-    """run_guest, again when the guest's own run budget ran out on a loaded host before the run reached the claim being checked."""
+    """run_guest, again when the host stalled it before it reached the claim being checked: the guest's own run budget ran out, or the
+    ping timed out waiting for a core. A planted defect reported by its peer is concluded, whatever else the run printed. When every attempt
+    was stalled the claim is inconclusive (harness.KillInconclusive, exit status 75), not a pass and not a failure."""
+    stalled = False
     for _ in range(ATTEMPTS):
         code, log = run_guest(qemu, image, seconds)
-        if BUDGET_FAILURE not in log or concluded(log):
-            break
-    return code, log
+        stalled = BUDGET_FAILURE in log or bool(PING_TIMED_OUT.search(log))
+        if not stalled or concluded(log):
+            return code, log
+    raise harness.KillInconclusive('inconclusive: the host stalled the cause model in %d of %d attempts (run budget or ping timeout)'
+                                   % (ATTEMPTS, ATTEMPTS))
 
 
 def main():

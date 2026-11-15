@@ -14,6 +14,9 @@
 /* The host reads this symbol after the return (tools/radio_result_channel.py). It lives in BSS, zero
  * until the record is published. */
 struct os_radio_result_descriptor os_radio_result_descriptor __attribute__((used,retain,aligned(8)));
+/* The record version this image writes. Admission reads it from the image file and refuses the run when the runner's
+ * decoder does not read that version (tools/board_images.py radio_record_admission). */
+const uint32_t os_radio_result_version __attribute__((used,retain)) = A733_RADIO_RESULT_VERSION;
 enum { RUNNING, SCANNED, DOWN, FAILED };
 static _Atomic unsigned state, stage_seen;
 static unsigned published;
@@ -77,15 +80,18 @@ void os_radio_scan_step(struct board_radio *r, int result)
         uint32_t value = r->platform.fail_line ? r->platform.fail_line << 16 | (r->platform.fail_stage & 0xffffu) :
             r->session.fail_line << 16 | 0x100u | (r->session.fail_stage & 0xfeffu);
         /* An association miss (a refusal, a timeout or a handshake that never completes) fails no platform or session
-         * site, and its return ends at the watchdog, which loses the record. The crumb then carries the association
-         * tail's codes instead: bits 31:16 the association status code, bit 15 set, 14:12 the link, 11:8 EAPOL frames
-         * sent and 7:4 received (each at most 15), 3:0 the association stage. No SSID, BSSID or key byte. */
+         * site. When its failure shutdown leaves the platform unclean, the return ends at the watchdog and the record
+         * is lost, so the crumb carries the association tail's codes instead: bits 31:16 the association status code,
+         * bit 15 set, 14:12 the link, 11:8 EAPOL frames sent and 7:4 received (each at most 15), 3:0 the association
+         * stage. No SSID, BSSID or key byte. */
         if (r->config.associate && !r->platform.fail_line && !r->session.fail_line) {
             const struct a733_radio_assoc *a = &r->assoc;
             value = (a->status & 0xffffu) << 16 | 0x8000u | (a->link & 7u) << 12 |
                 (a->eapol_tx < 15 ? a->eapol_tx : 15u) << 8 | (a->eapol_rx < 15 ? a->eapol_rx : 15u) << 4 | (a->stage & 15u);
         }
-        if(!os_radio_quiesce_fault(value,__builtin_return_address(0)))
+        /* A failure whose shutdown closed the station (os_radio_failure_closed) returns inside the record: it
+         * publishes no FAULT, so the return completes and the host reads the record from DRAM. */
+        if(!os_radio_failure_closed(r)&&!os_radio_quiesce_fault(value,__builtin_return_address(0)))
             board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(BOARD) | SUNSTONE_CRUMB_FAIL_RETURN,
                 value,__builtin_return_address(0));
         publish(r);

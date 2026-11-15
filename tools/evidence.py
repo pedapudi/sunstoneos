@@ -101,6 +101,7 @@ def validate_records(root, queue=None):
                 problems.append(f'{where}: duplicate id {record.get("id")} (also {seen[record["id"]]})')
             seen[record.get('id')] = where
             problems += extension_problems(root, where, record)
+            problems += address_problems(record, where)
             if record.get('entry_id'):
                 for need in ('port', 'image_sha256', 'git_revision'):
                     if not record.get(need):
@@ -111,6 +112,74 @@ def validate_records(root, queue=None):
 
 
 REFERENCE = re.compile(r'(docs/[^#\s]+\.(?:md|jsonl))(?:#(\S+))?')
+# Records are committed and published; scan and association results stay in the board queue on this machine. A record
+# therefore holds no device address (an access point's BSSID locates the network) and no frequency and RSSI of one access
+# point, which pick out the access point that the user's credential matched in the queue's scan list.
+MAC = re.compile(r'(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}'
+                 r'|[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4})(?![0-9A-Fa-f])')
+# Protocol constants that have the address format and name no device.
+PROTOCOL_ADDRESSES = {
+    '00:00:00:00:00:00': 'unset address',
+    'ff:ff:ff:ff:ff:ff': 'broadcast address',
+    '01:80:c2:00:00:03': 'IEEE 802.1X PAE group address, the EAPOL destination',
+    'aa:aa:03:00:00:00': 'LLC/SNAP header: DSAP, SSAP, control and a zero OUI',
+}
+# A range such as "2412 to 2462 MHz" or "between -95 and -20 dBm" counts both of its ends.
+RANGE = r'(?:\s*(?:to|and|-|\u2013)\s*({number}))?'
+DBM = re.compile(r'(?<![\d.])(-?\d+(?:\.\d+)?)' + RANGE.format(number=r'-?\d+(?:\.\d+)?') + r'\s*dBm\b')
+MHZ = re.compile(r'(?<![\d.])(\d{4})(?:\.0+)?' + RANGE.format(number=r'\d{4}') + r'\s*MHz\b')
+
+
+def figures(pattern, text):
+    return [value for match in pattern.findall(text) for value in match if value]
+
+
+def wifi_channel(mhz):
+    """Whether a frequency in MHz is a 2.4, 5 or 6 GHz Wi-Fi channel centre (IEEE 802.11 channel numbering)."""
+    if mhz != int(mhz):
+        return False
+    mhz = int(mhz)
+    return (2412 <= mhz <= 2472 and mhz % 5 == 2) or mhz == 2484 or \
+        (5160 <= mhz <= 5885 and mhz % 5 == 0) or (5935 <= mhz <= 7115 and mhz % 5 == 0)
+
+
+def strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings(item)
+
+
+def address_problems(record, where):
+    """A MAC-format value other than a protocol constant, a BSSID field, or one access point's frequency and RSSI."""
+    problems = []
+    for text in strings(record):
+        for match in MAC.finditer(text):
+            digits = re.sub(r'[^0-9a-f]', '', match.group(0).lower())
+            if ':'.join(digits[i:i + 2] for i in range(0, 12, 2)) not in PROTOCOL_ADDRESSES:
+                problems.append(f'{where}: holds a device address; records carry no BSSID or MAC address')
+        for sentence in re.split(r'(?<=[.;])\s+', text):
+            channels = [m for m in figures(MHZ, sentence) if wifi_channel(int(m))]
+            if len(channels) == 1 and len(figures(DBM, sentence)) == 1:
+                problems.append(f'{where}: pairs one channel frequency with one RSSI, which identifies an access point')
+    measures = record.get('measurements') or []
+    names = [str(item.get('name', '')).lower() for item in measures if isinstance(item, dict)]
+    if any('bssid' in name for name in names) or any('bssid' in str(key).lower() for key in record.get('conditions') or {}):
+        problems.append(f'{where}: a measurement or condition names a BSSID')
+    signal = any(isinstance(item, dict) and (item.get('unit') == 'dBm' or 'rssi' in str(item.get('name', '')).lower())
+                 for item in measures)
+    frequency = any(isinstance(item, dict) and item.get('unit') == 'MHz' and isinstance(item.get('value'), (int, float))
+                    and wifi_channel(item['value']) for item in measures)
+    frequency |= any(wifi_channel(int(m)) for value in (record.get('conditions') or {}).values()
+                     for m in figures(MHZ, str(value)))
+    if signal and frequency:
+        problems.append(f'{where}: measures an RSSI beside a channel frequency, which identifies an access point')
+    return sorted(set(problems))
 
 
 def heading_anchors(path):
@@ -223,6 +292,9 @@ def ordered(record):
 
 
 def append_record(root, record, replace=False):
+    refused = address_problems(record, f'record {record.get("id")}')
+    if refused:
+        raise SystemExit('\n'.join(refused))
     path = Path(root) / EVIDENCE / f'{record["subsystem"]}.jsonl'
     path.parent.mkdir(parents=True, exist_ok=True)
     records, _ = read_records(path) if path.exists() else ([], [])

@@ -79,6 +79,8 @@ int aic8800_supplicant_receive(struct aic8800_supplicant *,const struct aic8800_
 int aic8800_supplicant_rearm(struct aic8800_supplicant *,struct aic8800_security *,
     struct aic8800_sdio_transport *,const struct aic8800_supplicant_config *);
 int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *);
+/* wpa_parse_wpa_ie_rsn's result for an RSN element (0 accepted, negative refused), for the radio record. */
+int aic8800_supplicant_rsn_parse(const uint8_t *element,size_t bytes);
 /* SAE authentication before association, in an initialized NEW supplicant
  * configured for SAE. Start writes the first commit; receive consumes each
  * Authentication frame body from the BSSID. Groups 19, 20 and 21 are tried in

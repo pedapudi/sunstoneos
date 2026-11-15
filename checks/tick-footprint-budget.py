@@ -26,6 +26,7 @@ import sys
 import time
 
 from elftools.elf.elffile import ELFFile
+import harness  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / '.cache/sunstoneos'
@@ -145,24 +146,28 @@ def main():
     # The footprint needs only the traced busy ticks, so the guest is stopped once the plugin holds the last window: the model's later
     # phases (the cause ping among them) run to their own verdicts in checks/latency-cause-model.py, and ran here to a FAIL line that this
     # step ignored. The plugin writes the trace on exit, which QEMU's orderly shutdown on SIGTERM runs.
-    log = (out / 'qemu.log').open('w')
-    process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, text=True)
-    started = time.monotonic()
-    stopped = False
-    try:
-        while process.poll() is None:
-            if time.monotonic() - started > QEMU_KILL_SECONDS:
+    def launch():
+        trace.unlink(missing_ok=True)
+        log = (out / 'qemu.log').open('w')
+        process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, text=True)
+        started = time.monotonic()
+        stopped = False
+        try:
+            while process.poll() is None:
+                if time.monotonic() - started > QEMU_KILL_SECONDS:
+                    process.kill()
+                    raise subprocess.TimeoutExpired(command, QEMU_KILL_SECONDS)     # without holding the busy windows; see qemu.log
+                if not stopped and trace.is_file() and sum(1 for line in trace.read_text().splitlines() if line.startswith('W ') and len(line.split()) == 2) >= WINDOWS:
+                    process.terminate()
+                    stopped = True
+                time.sleep(0.2)
+        finally:
+            if process.poll() is None:
                 process.kill()
-                raise SystemExit(f'QEMU ran past {QEMU_KILL_SECONDS:.0f} s without holding {WINDOWS} busy windows; see qemu.log')
-            if not stopped and trace.is_file() and sum(1 for line in trace.read_text().splitlines() if line.startswith('W ') and len(line.split()) == 2) >= WINDOWS:
-                process.terminate()
-                stopped = True
-            time.sleep(0.2)
-    finally:
-        if process.poll() is None:
-            process.kill()
-        process.wait()
-        log.close()
+            process.wait()
+            log.close()
+    # A guest that fails in its boot stage is run again (checks/harness.py, until_booted).
+    harness.until_booted(launch, lambda _: (out / 'qemu.log').read_text())
     kept = [int(line.split()[2]) for line in trace.read_text().splitlines() if line.startswith('# kept ')]
     if not kept or kept[-1] < MINIMUM:
         raise SystemExit(f'the trace holds fewer than {MINIMUM} busy ticks; see qemu.log')

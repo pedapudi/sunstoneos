@@ -122,6 +122,9 @@ static void scan_application(void)
     }
     assert(!bootstrap_dispatch.faulted&&bootstrap_dispatch.event_count==4&&wifi.held&&transport.held);
     assert(!aic8800_transport_consume(&transport));
+    /* A held record reports no transport work at any time; only the consumer's drain can publish the pass that
+     * places it (apps/board/radio.c, board run 1794712987077481541-5b26ea3e). */
+    assert(!aic8800_transport_event_work(&transport,UINT64_MAX));
     if(mode==2){
         while(!bootstrap_dispatch.faulted)dispatcher_step();
         assert(transport.state==AIC8800_TRANSPORT_FAULT&&transport.held&&!wifi.summary.accepted);
@@ -143,6 +146,8 @@ static void scan_application(void)
     for(unsigned i=0;i<200&&wifi.state!=AIC8800_WIFI_SCAN_DONE;++i)dispatcher_step();
     assert(wifi.state==AIC8800_WIFI_SCAN_DONE&&wifi.summary.accepted&&wifi.summary.received==5);
     assert(bootstrap_dispatch.retired_records==5&&bootstrap_dispatch.discarded_diagnostics==1);
+    /* The result for another interface (vif 2) is the one scan result retired without an event. */
+    assert(bootstrap_dispatch.unclaimed_scan_results==1);
     assert(bootstrap_dispatch.record_count==4&&!bootstrap_dispatch.event_count);
     platform_puts("PASS dispatcher: foreign and stale events retire before actual scan completion; FIFO backpressure preserves results\n");
 }

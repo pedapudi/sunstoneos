@@ -22,6 +22,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+import harness  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / '.cache/sunstoneos'
@@ -59,8 +60,8 @@ def main():
     def run(name, command, timeout=600):
         command = [str(c) for c in command]
         commands.append(command)
-        r = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           timeout=timeout)
+        r = harness.until_booted(lambda: subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           timeout=timeout), lambda done: (done.stdout or '') + (done.stderr or ''))
         (out / (name + '.log')).write_text(r.stdout)
         if r.returncode:
             raise RuntimeError(f'{name} failed ({r.returncode}): {r.stdout[-4000:]}')
