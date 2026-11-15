@@ -1,0 +1,51 @@
+{
+  "schema": "sunstone-pco-profile-v3",
+  "profile": 3,
+  "mesa_revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+  "source_sha256": "ab9a11929dc8753a0c9952cda25d77c0af6c121fcada7cd3d775f764164eb3df",
+  "spirv_sha256": "5134199ea2c1f5e7952b8c5f26371ee8b1e1efa039a835d12be56a594aa33ee6",
+  "program_sha256": "05cbb228145a6c5074d5154213e94223c32c7493e913efd0d5088a3db1345b5e",
+  "compiler_sha256": "54d901dc9ed44a24071119e48fc8856dcc767f039693fe7ce3cf6ce413182c8c",
+  "reference_compiler_sha256": "4131e0382503d0d259d1e31bcf9c18123d6f7ee05b72b054bfb917605c7eb6b6",
+  "reference_adapter_source_sha256": "d037bd313be1c3b1a4735a3bac4f48e70e27dbdb2aed3a49201fe6978e2690ea",
+  "metadata_export_source_sha256": "164b1d84f23472274fc65f78563c78d3eea67c358b71083f9de470e4c29489b1",
+  "metadata": [
+    18,
+    5,
+    3,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    32,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "sysval_ranges": [
+    4,
+    1,
+    0,
+    3,
+    0,
+    0
+  ],
+  "explicit_vtxin_mask": 15,
+  "abi_vtxins": 5,
+  "compiler": {
+    "use": "Host-only OpenCL to PowerVR USC compiler; runtime instructions are in program.h.",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/tree/86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "license": "MIT",
+    "source_available": true,
+    "source_record": "../../../docs/gpu-compute-producer.md"
+  },
+  "source": "vector_add4.cl",
+  "descriptor": "program.h"
+}

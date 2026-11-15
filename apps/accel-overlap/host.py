@@ -10,6 +10,8 @@ BYTES = 1200
 SWEEP_VERSION = 2
 SWEEP_BYTES = 1488
 LARGE_VERSION = 3
+# The four-elements-per-lane GPU run (ACCEL_OVERLAP_WIDTH): the larger-job layout with only phase 0, the GPU alone.
+WIDTH_VERSION = 4
 LARGE_BYTES = 2944
 LARGE_PHASES = 9
 LARGE_NAMES = ('gpu-alone', 'npu-alone', 'none', 'core-2', 'core-7', 'cores-2-4', 'cores-2-5-7', 'core-2-x3', 'core-7-x3')
@@ -195,8 +197,9 @@ def sweep_decision(r):
 def decode_large(raw):
     """The larger-job sweep (struct accel_overlap_large_result)."""
     magic, version, size, phases, clock0, clock1 = struct.unpack_from('<4I2Q', raw, 0)
-    if (magic, version, size, phases) != (MAGIC, LARGE_VERSION, LARGE_BYTES, LARGE_PHASES):
+    if (magic, size, phases) != (MAGIC, LARGE_BYTES, LARGE_PHASES) or version not in (LARGE_VERSION, WIDTH_VERSION):
         raise ValueError('The result header differs (a failure record, or another image).')
+    width = version == WIDTH_VERSION
     initial_top, final_top, workers, worker_bytes = struct.unpack_from('<4I', raw, 32)
     (reference, diff, last, unlocked, writes, in_flight, completions, first_site, first_word, cycles, cycle_mismatches,
      close_ticks, open_ticks) = struct.unpack_from('<4I3Q4I2Q', raw, 48)
@@ -209,7 +212,7 @@ def decode_large(raw):
          'npu_tensor_bytes': npu_bytes,
          'pll': {'reference': '0x%08x' % reference, 'last': '0x%08x' % last, 'unlocked': unlocked, 'writes': writes,
                  'first_site': first_site, 'first_word': '0x%08x' % first_word}, 'phases': []}
-    for i in range(LARGE_PHASES):
+    for i in range(1 if width else LARGE_PHASES):
         at = 136 + 312 * i
         devices, throttled = struct.unpack_from('<2I', raw, at)
         overlap, ticks, sweeps, stream_ticks = struct.unpack_from('<4Q', raw, at + 184)
@@ -236,11 +239,40 @@ def decode_large(raw):
             phase['gpu_output_maintenance_us'] = round((synced_sum - plain_sum) / slot_jobs / TICKS_PER_US, 1)
             phase['gpu_output_maintenance_max_us'] = round((synced_max - plain_max) / TICKS_PER_US, 1)
         r['phases'].append(phase)
+    if width:
+        if any(raw[136 + 312:]):
+            raise ValueError('The width run wrote phases after the GPU-alone phase.')
+        r['checks'] = width_checks(r)
+        r['in_range'] = all(c['ok'] for c in r['checks'])
+        return r
     r['losses'] = large_losses(r['phases'])
     r['checks'] = large_checks(r)
     r['in_range'] = all(c['ok'] for c in r['checks'])
     r['decision'] = large_decision(r)
     return r
+
+
+def width_checks(r):
+    """The ranges of the GPU-width hypothesis (docs/designs/concurrent-accel.md, "The GPU add waits on memory")."""
+    out = []
+
+    def check(name, value, low=None, high=None):
+        ok = value is not None and (low is None or value >= low) and (high is None or value <= high)
+        out.append({'name': name, 'value': value, 'low': low, 'high': high, 'ok': ok})
+
+    p = r['phases'][0]
+    check('gpu alone jobs/s', p['gpu']['jobs_per_second'], 550, 850)
+    check('gpu serial slot job us', p.get('gpu_slot_job_us'), 1200, 1800)
+    check('gpu checked slot jobs', p['slot_jobs'], 4, 4)
+    check('gpu pipelined jobs', p['gpu']['pipelined_jobs'], 200)
+    check('mismatches', p['gpu']['mismatches'], 0, 0)
+    check('chase overflow', p['chase']['overflow'], 0, 0)
+    check('gpu elements per job', r['gpu_elements'], 262144, 262144)
+    check('pll_npu unlocked reads', r['pll']['unlocked'], 0, 0)
+    check('pll_npu first differing site', r['pll']['first_site'], 0, 0)
+    check('throttled', p['throttled'], 0, 0)
+    check('top point at start and end', r['initial_top'] + r['final_top'], 2, 2)
+    return out
 
 
 def large_losses(p):

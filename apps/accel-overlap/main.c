@@ -19,7 +19,13 @@
 #include "sunstone_npu_queue.h"
 #include "sunstone_npu_queue_service.h"
 #include "gpu_queue.h"
+#ifdef ACCEL_OVERLAP_WIDTH
+#include "add4/program.h"           /* four consecutive elements per lane (add4/vector_add4.cl) */
+#define GPU_LANE_ELEMENTS 4u
+#else
 #include "../queue-add/program.h"
+#define GPU_LANE_ELEMENTS 1u
+#endif
 #include "result.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -33,7 +39,8 @@
 #define GPU_ELEMENTS 65u
 #define GPU_SLOT_BYTES 320u
 #endif
-#define GPU_GROUPS ((GPU_ELEMENTS + 31u) / 32u)
+#define GPU_GROUPS ((GPU_ELEMENTS / GPU_LANE_ELEMENTS + 31u) / 32u)
+_Static_assert(GPU_ELEMENTS % GPU_LANE_ELEMENTS == 0, "each lane adds whole groups of elements");
 #define GPU_SERIAL_JOBS 2000u
 #define NPU_SERIAL_JOBS 4000u
 #define PIPELINE_TICKS 24000000u        /* one second */
@@ -732,7 +739,11 @@ void accel_overlap_main(const struct ss_grant *grant)
         if (now() - began > 240000000u) fail(0x078, 0);
         (void)ulTaskNotifyTake(pdTRUE, 10);
     }
+#ifdef ACCEL_OVERLAP_WIDTH
+    for (phase_index = 0; phase_index < 1u; ++phase_index) {   /* the GPU-alone phase only */
+#else
     for (phase_index = 0; phase_index < SWEEP_PHASES; ++phase_index) {
+#endif
 #ifdef ACCEL_OVERLAP_LARGE
         struct accel_overlap_large_phase *l = &large_result.phase[phase_index];
         struct accel_overlap_phase *p = &l->run;
@@ -815,7 +826,11 @@ void accel_overlap_main(const struct ss_grant *grant)
     result.phases = ACCEL_OVERLAP_PHASES;
 #ifdef ACCEL_OVERLAP_LARGE
     struct accel_overlap_large_result *r = &large_result;
+#ifdef ACCEL_OVERLAP_WIDTH
+    r->magic = ACCEL_OVERLAP_MAGIC; r->version = ACCEL_OVERLAP_WIDTH_VERSION; r->bytes = sizeof(*r);
+#else
     r->magic = ACCEL_OVERLAP_MAGIC; r->version = ACCEL_OVERLAP_LARGE_VERSION; r->bytes = sizeof(*r);
+#endif
     r->phases = ACCEL_OVERLAP_LARGE_PHASES;
     memcpy(r->clock, result.clock, sizeof(r->clock));
     r->initial_top = result.initial_top; r->final_top = result.final_top;

@@ -77,6 +77,9 @@ _Static_assert(sizeof(struct accel_overlap_sweep) == 56 && sizeof(struct accel_o
  * round trips is the output cache maintenance of a full slot. */
 #define ACCEL_OVERLAP_LARGE_VERSION 3u
 #define ACCEL_OVERLAP_LARGE_PHASES 9u
+/* The four-elements-per-lane GPU run (ACCEL_OVERLAP_WIDTH): the larger-job layout; only phase 0, the GPU alone, runs, and the
+ * other phases stay zero. */
+#define ACCEL_OVERLAP_WIDTH_VERSION 4u
 #define ACCEL_OVERLAP_INTERLEAVED 0x100u
 struct accel_overlap_large_phase {
     struct accel_overlap_phase run;
