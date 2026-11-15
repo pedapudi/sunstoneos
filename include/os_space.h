@@ -11,6 +11,7 @@
  *
  * Until a space is installed os_space_active is zero and the hook is one load and one branch. */
 #include <stdint.h>
+#include "a733_smp_placement.h"
 extern uint64_t os_space_kernel_ttbr;      /* the table every core installed at boot (ASID 0) */
 extern uint8_t os_space_active;
 /* The live kernel level-1 entries for slots 0 to 15. OS platforms read through
@@ -60,4 +61,13 @@ void os_space_refuse_create(void);
              if (!(created)->pxTaskTag) (created)->pxTaskTag = (creator)->pxTaskTag; \
          } else if (os_space_app_init_active) \
              os_space_refuse_create(); } while (0)
+/* The core affinity of a task created without one (configTASK_DEFAULT_CORE_AFFINITY in the OS platforms' FreeRTOSConfig.h).
+ * A task of the kernel's table is an OS service and runs only on the service core (include/a733_smp_placement.h), so no
+ * service lands on a core that an application's real-time work uses. A task of an application's space may run on any A55
+ * core. The space is the one traceTASK_CREATE gives the task (os_space_inherit): the creation call's explicit space when it
+ * names one, otherwise the creating task's tag. */
+#define os_space_default_affinity(creator) \
+    ((os_space_explicit[portGET_CORE_ID()] ? os_space_explicit_space[portGET_CORE_ID()] != 0 \
+                                           : ((creator) != 0 && (creator)->pxTaskTag != 0)) \
+         ? A733_SMP_A55_MASK : (1u << A733_SMP_SERVICE_CORE))
 #endif

@@ -70,6 +70,17 @@ Cases:
   - Refusals: degrees on a fill, a flip on a blit, a rotate that changes format, has a colour, a degree other than
     0, 90, 180 and 270 or a flip above 3, and a rotate whose rotated rectangle leaves the output. Each fails with its
     step and value and touches no register, mapping or cache line.
+  - convert-session: the camera-frame conversions of docs/g2d-os.md#camera-frame-conversion in one session, an NV16
+    640 by 480 frame converted unscaled with the BT.601 limited table, scaled to 224 by 224 with the BT.709 full
+    table, and a 320 by 240 window at (64, 37) scaled 2:1 into a BGRA output at (8, 4). Each completes on the mixer's
+    launch sequence, and each command page carries the vendor's words for the job at the device addresses the service
+    used (checks/g2d-convert-words.py, the transcription of g2d_bsp_bitblt's YUV path). One attach maps the output
+    read-write, the source read-only and the command page. Each convert cleans and invalidates the output's lines,
+    cleans the luma and the chroma plane's, and invalidates the output's again after the finish, in whole lines.
+  - Convert refusals: a table outside 1 to 4, an odd sx, an RGB source, a degree or a colour, scale fields on a blit,
+    chroma fields on an RGB surface, an NV16 output, a chroma plane outside its region or narrower than the frame, a
+    zero output width and an output rectangle that leaves the surface. Each fails with its step and value and touches
+    nothing.
 
 Usage: os-g2d-operation.py --image ELF --output DIR"""
 import argparse
@@ -139,12 +150,36 @@ FLIP_OPS = [dict(sx=12, sy=8, w=96, h=40, dx=0, dy=0, degrees=0, flip=1),
             dict(sx=12, sy=8, w=96, h=40, dx=48, dy=48, degrees=270, flip=1)]
 FILL_OP = dict(op='fill', dx=200, dy=100, w=40, h=40, color=0x83b0ce22)
 BLIT_OP = dict(op='blit', sx=0, sy=100, dx=150, dy=120, w=64, h=32)
+# The convert plan (apps/g2d-convert): an NV16 640 by 480 frame in region 1, its chroma plane at 0x50000, converted
+# into RGB outputs in region 0. SS_G2D_FORMAT_NV16 and the tables: include/sunstone_g2d.h.
+NV16 = 0x24
+NV16_FRAME = dict(region=1, format=NV16, width=640, height=480, stride=640, offset=0, chroma_offset=0x50000,
+                  chroma_stride=640)
+CONVERT_OPS = [dict(op='convert', source=NV16_FRAME, output=dict(region=0, format=0, width=640, height=480, stride=2624),
+                    sx=0, sy=0, w=640, h=480, dx=0, dy=0, ow=640, oh=480, csc=1),
+               dict(op='convert', source=NV16_FRAME,
+                    output=dict(region=0, format=0, width=224, height=224, stride=960, offset=0x140000),
+                    sx=0, sy=0, w=640, h=480, dx=0, dy=0, ow=224, oh=224, csc=4),
+               dict(op='convert', source=NV16_FRAME,
+                    output=dict(region=0, format=3, width=200, height=130, stride=800, offset=0x180000),
+                    sx=64, sy=37, w=320, h=240, dx=8, dy=4, ow=160, oh=120, csc=2)]
+RGB_FRAME = dict(region=1, format=0, width=256, height=160, stride=1024)
 
 
 def rotate_vendor():
     """vendor_words and vendor_inputs of checks/g2d-rotate-words.py, the transcription of g2d_rotate_set_para."""
     import importlib.util
     spec = importlib.util.spec_from_file_location('g2d_rotate_words', Path(__file__).with_name('g2d-rotate-words.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def convert_vendor():
+    """vendor_blocks, check_page and CSC of checks/g2d-convert-words.py, the transcription of g2d_bsp_bitblt's YUV
+    path."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('g2d_convert_words', Path(__file__).with_name('g2d-convert-words.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -270,7 +305,7 @@ class Registers:
 
 def run_case(image, parts, fields, name, width, height, stride, offset, refuse_cache=False, completes=True,
              stuck=False, launch_fault=False, attach_fault=False, close=False, blits=(), update_sticks=False,
-             fills=1, rotates=(), stray=None):
+             fills=1, rotates=(), stray=None, converts=()):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -303,6 +338,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
     put(field('dev.phase'), OPEN); put(field('op'), RUN_OP); put(field('request'), POSTED)
     job = field('job')
     jl, sl = image.layouts['ss_g2d_job'], image.layouts['ss_g2d_surface']
+    job_bytes = max(jl.values()) + 4                   # the job's last member is a 32-bit word
     w, h = 1 + width // 3, 1 + height // 5
     dx, dy = width - w, height - h
     put(job + jl['op'], 1); put(job + jl['color'], 0x83b0ce22)
@@ -313,7 +349,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
 
     def post_blit(op):
         # A blit from region 1 (the source) to region 0 (the output), both of the shape's geometry.
-        uc.mem_write(job, bytes(jl['flip'] + 4))
+        uc.mem_write(job, bytes(job_bytes))
         put(job + jl['op'], 2)
         for surface, region, fmt in ((job + jl['source'], 1, op['format']), (job + jl['output'], 0, op['output_format'])):
             put(surface + sl['region'], region); put(surface + sl['format'], fmt); put(surface + sl['offset'], offset, 8)
@@ -326,7 +362,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
 
     def post_rotate(op):
         # A job of the ROTATE plan (see ROTATE_SURFACE): op names its kind ('fill', 'blit' or 'rotate') and fields.
-        uc.mem_write(job, bytes(jl['flip'] + 4))
+        uc.mem_write(job, bytes(job_bytes))
         kind = op.get('op', 'rotate')
         put(job + jl['op'], {'fill': 1, 'blit': 2, 'rotate': 3}[kind])
         rw, rh, rs = ROTATE_SURFACE
@@ -341,6 +377,19 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         put(field('request'), 0); put(field('op'), RUN_OP); put(field('request'), POSTED)
     if rotates:
         post_rotate(rotates[0])
+
+    def post_convert(op):
+        # A job with its own surfaces (see CONVERT_OPS): op names its kind and fields; a surface field left out is 0.
+        uc.mem_write(job, bytes(job_bytes))
+        put(job + jl['op'], {'fill': 1, 'blit': 2, 'rotate': 3, 'convert': 4}[op['op']])
+        for key in ('output', 'source'):
+            for k, v in op.get(key, {}).items():
+                put(job + jl[key] + sl[k], v, 8 if k in ('offset', 'chroma_offset') else 4)
+        for k in ('sx', 'sy', 'dx', 'dy', 'w', 'h', 'degrees', 'flip', 'color', 'ow', 'oh', 'csc'):
+            put(job + jl[k], op.get(k, 0))
+        put(field('request'), 0); put(field('op'), RUN_OP); put(field('request'), POSTED)
+    if converts:
+        post_convert(converts[0])
 
     def ret(m, value=None):
         if value is not None:
@@ -562,6 +611,16 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
             post_rotate(op)
             serve('operation %d' % (len(ops) + 1))
             ops.append(op_record())
+    if converts:
+        ops.append(op_record())
+        for op in converts[1:]:
+            if ops[-1]['result'] != 1:
+                break
+            engine.writes.clear()
+            state['irq_entered'] = 0
+            post_convert(op)
+            serve('operation %d' % (len(ops) + 1))
+            ops.append(op_record())
     run = {'result': struct.unpack('<i', uc.mem_read(field('result'), 4))[0], 'phase': get(field('dev.phase')),
            'fault_step': get(field('dev.fault_step'))}
     if close:
@@ -736,6 +795,61 @@ def check_rotates(record, state, ops, vendor, stray=None):
             assert at == base and n % LINE == 0 and size <= n < size + LINE, (name, 'maintenance range', hex(at), n)
 
 
+def check_converts(record, state, ops, words):
+    """Every convert completes on the mixer's launch sequence with the vendor's command page for the job at the device
+    addresses the service used; one attach of the output read-write, the source read-only and the command page; each
+    convert maintains the output, luma and chroma lines, then the output's again after the finish."""
+    name, records = record['case'], record['ops']
+    assert len(records) == len(ops) and record['phase'] == OPEN, \
+        (name, [(o['result'], o['fault_step'], hex(o['fault_value'])) for o in records])
+    spans = state['attach']
+    assert len(spans) == 1 and len(spans[0]) == 3, (name, 'one attach of three spans', spans)
+    out, src, rcq = spans[0]
+    assert (out['iova'], out['physical'], out['bytes'], out['access']) == \
+        (IOVA_BASE, SURFACE, REGION_BYTES, IOMMU_READ | IOMMU_WRITE), (name, 'output span', out)
+    assert (src['iova'], src['physical'], src['bytes'], src['access']) == \
+        (IOVA_BASE + REGION_BYTES, SOURCE, REGION_BYTES, IOMMU_READ), (name, 'the source must be mapped read-only', src)
+    rcq_iova = IOVA_BASE + 2 * REGION_BYTES
+    assert (rcq['iova'], rcq['physical'], rcq['bytes'], rcq['access']) == (rcq_iova, RCQ, 4096, IOMMU_READ), \
+        (name, 'command page span', rcq)
+    assert not state['map'] and not state['unmap'], (name, 'later converts must reuse the mappings', state)
+    lan2 = words.lan2_bank(Path(__file__).resolve().parents[1] / 'drivers/g2d/a733_g2d.c')
+    for n, (op, o) in enumerate(zip(ops, records)):
+        s, d = op['source'], op['output']
+        assert o['result'] == 1 and o['fault_step'] == 0 and o['entries'] == 1 and o['irq_count'] == n + 1, \
+            (name, n, o['result'], o['fault_step'], hex(o['fault_value']), o['entries'], o['irq_count'])
+        luma = IOVA_BASE + REGION_BYTES + s.get('offset', 0)
+        chroma = IOVA_BASE + REGION_BYTES + s['chroma_offset']
+        output = IOVA_BASE + d.get('offset', 0)
+        assert (o['output_iova'], o['source_iova']) == (output, luma), \
+            (name, n, hex(o['output_iova']), hex(o['source_iova']))
+        launch = [(a, v) for a, v in o['writes'] if a in (0x20, 0x24, 0x28, 0x2c, 0x30, 0x34)][:len(LAUNCH)]
+        assert [a for a, _ in launch] == [a for a, _ in LAUNCH] and \
+            all(want is None or v == want for (_, v), (_, want) in zip(launch, LAUNCH)), (name, n, 'launch order', launch)
+        assert launch[3][1] == rcq_iova, (name, n, 'RCQ header address', launch)
+        assert not any(a >= ROT_CTL for a, _ in o['writes']), (name, n, 'rotator writes in a convert', o['writes'])
+        # The vendor's images: the source pitch is its width (align 0) and the output's is four times its width.
+        src_image = words.image(s['format'], s['stride'], op['sx'], op['sy'], op['w'], op['h'], (luma, chroma, 0))
+        dst_image = words.image(d['format'], d['stride'] // 4, op['dx'], op['dy'], op['ow'], op['oh'], (output, 0, 0))
+        problems = words.check_page(f'{name} operation {n + 1}', o['page'],
+                                    words.vendor_blocks(src_image, dst_image, *words.CSC[op['csc']], lan2), rcq_iova)
+        assert not problems, (name, n, 'the command page differs from the vendor\'s words', problems[:6])
+    cache = state['cache']
+    assert [c for c, _, _ in cache] == [CACHE_CLEAN_INVALIDATE, CACHE_CLEAN, CACHE_CLEAN, CACHE_CLEAN_INVALIDATE] * \
+        len(ops), (name, cache)
+    for n, op in enumerate(ops):
+        s, d = op['source'], op['output']
+        planes = [(SURFACE + d.get('offset', 0), d['stride'] * d['height']),
+                  (SOURCE + s.get('offset', 0), s['stride'] * s['height']),
+                  (SOURCE + s['chroma_offset'], s['chroma_stride'] * s['height'])]
+        planes.append(planes[0])
+        for (_, at, size), (first, length) in zip(cache[4 * n:4 * n + 4], planes):
+            end = first + length
+            assert at % LINE == 0 and size % LINE == 0 and at <= first and at + size >= end and \
+                first - at < LINE and at + size - end < LINE, (name, n, 'maintenance must cover the plane in whole lines',
+                                                               hex(at), size, hex(first), length)
+
+
 def check_stray_in_mixer(record, vendor):
     """A rotator stray during an armed fill: masked at the rotate module (ROT_INT written with its enable and status
     off), counted with its word, and the fill completes on its own finish in a second handler entry."""
@@ -837,12 +951,34 @@ def main():
                 'refuse-rotate-flip': (dict(ROTATE_OPS[0], flip=4), 48, 3),
                 'refuse-rotate-fit': (dict(ROTATE_OPS[2], dy=100), 50, 2)}
     cases += [(n, rotate_shape, {'rotates': [o]}) for n, (o, _, _) in refusals.items()]
-    vendor = rotate_vendor()
+    # The camera-frame conversion (docs/g2d-os.md#camera-frame-conversion): the plan in one session, and refusals.
+    convert, frame = CONVERT_OPS[0], NV16_FRAME
+    rgb_output = dict(region=0, format=0, width=256, height=160, stride=1024)
+    refusals.update({
+        'refuse-convert-csc-0': (dict(convert, csc=0), 48, 4),
+        'refuse-convert-csc-5': (dict(convert, csc=5), 48, 4),
+        'refuse-convert-odd-sx': (dict(convert, sx=1, w=638), 48, 4),
+        'refuse-convert-rgb-source': (dict(convert, source=RGB_FRAME, w=256, h=160, ow=256, oh=160), 48, 4),
+        'refuse-convert-degrees': (dict(convert, degrees=90), 48, 4),
+        'refuse-convert-color': (dict(convert, color=1), 48, 4),
+        'refuse-blit-scale': (dict(op='blit', source=RGB_FRAME, output=rgb_output, w=64, h=32, ow=64), 48, 2),
+        'refuse-rgb-chroma': (dict(convert, output=dict(convert['output'], chroma_stride=2624)), 49, 0),
+        'refuse-nv16-output': (dict(convert, output=dict(frame, region=0)), 49, 0),
+        'refuse-chroma-outside': (dict(convert, source=dict(frame, chroma_offset=REGION_BYTES - 0x40000)), 49, 0x101),
+        'refuse-chroma-stride': (dict(convert, source=dict(frame, chroma_stride=636)), 49, 0x101),
+        'refuse-convert-ow-0': (dict(convert, ow=0), 50, 2),
+        'refuse-convert-fit': (dict(convert, dx=2), 50, 2)})
+    converts = {'convert-session': CONVERT_OPS}
+    cases += [(n, rotate_shape, {'converts': o}) for n, o in converts.items()]
+    cases += [(n, rotate_shape, {'converts': [o]}) for n, (o, _, _) in refusals.items() if 'source' in o]
+    vendor, words = rotate_vendor(), convert_vendor()
     for name, shape, options in cases:
         try:
             record, state, engine = run_case(image, parts, fields, name, *shape, **options)
             if name.startswith('surface'):
                 check_surface(record, state, engine)
+            elif name in converts:
+                check_converts(record, state, converts[name], words)
             elif name in rotations:
                 check_rotates(record, state, rotations[name][0], vendor, rotations[name][1])
             elif name == 'fill-rotator-stray':
@@ -886,7 +1022,8 @@ def main():
         'sources_sha256': {n: hashlib.sha256((Path(__file__).resolve().parents[1] / n).read_bytes()).hexdigest()
                            for n in ('apps/os/g2d.c', 'apps/os/iommu.c', 'drivers/g2d/a733_g2d.c',
                                      'drivers/g2d/a733_g2d_rotate.c', 'checks/os-g2d-operation.py',
-                                     'checks/g2d-rotate-words.py')}})
+                                     'checks/g2d-rotate-words.py', 'drivers/g2d/a733_g2d_convert.c',
+                                     'checks/g2d-convert-words.py')}})
     if failures:
         for row in rows:
             if not row['passed']:
@@ -897,7 +1034,8 @@ def main():
           f'service open, timeout faults, {len(closes)} closes after a fault, both stage-3 copies in one session, two '
           f'fills with the update bit left set, and every copy and fill page equal to the qualified image\'s; '
           f'{len(rotations)} rotate sessions with the vendor\'s words, a rotator stray masked during a fill, a rotate '
-          f'timeout and its close, and {len(refusals)} refusals that touch nothing')
+          f'timeout and its close; {len(converts["convert-session"])} camera-frame converts in one session with the '
+          f'vendor\'s command pages and plane maintenance; and {len(refusals)} refusals that touch nothing')
 
 
 if __name__ == '__main__':

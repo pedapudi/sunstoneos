@@ -2,7 +2,7 @@
 #define SUNSTONE_QEMU_OS_CONFIG_H
 /* Kernel configuration of the virtual eight-core OS board. It has the
  * A733 image's scheduler settings (platform/a733-smp-cached/FreeRTOSConfig.h):
- * eight cores, core affinity, default placement on the first six cores and an
+ * eight cores, core affinity, default placement (OS services on core 0, application tasks on the first six cores) and an
  * idle task that waits in WFI. The interrupt controller is the QEMU virt GICv3. */
 #include "../../include/FreeRTOSConfig.h"
 #define configNUMBER_OF_CORES 8
@@ -17,7 +17,6 @@
  * not walk them (docs/driver-validation.md, rule 7). */
 #define configSS_IRQ_SAVES_FP 1
 #include "../../include/a733_smp_placement.h"
-#define configTASK_DEFAULT_CORE_AFFINITY A733_SMP_A55_MASK
 /* The task-switch hook of the per-application address spaces (include/os_space.h). The tag of a task is a
  * pointer to the TTBR0 value of its space. */
 #define configUSE_APPLICATION_TASK_TAG 1
@@ -29,6 +28,8 @@
  * application's space and can use its heap and regions. OS services create their tasks from boot code or from
  * their own untagged tasks, so they stay in the kernel's table. */
 #define traceTASK_CREATE(pxNewTask) os_space_inherit(portCURRENT_TCB(portGET_CORE_ID()), (pxNewTask))
+/* A task created without an affinity: an OS service runs on the service core, an application's task on the A55 cluster. */
+#define configTASK_DEFAULT_CORE_AFFINITY os_space_default_affinity(portCURRENT_TCB(portGET_CORE_ID()))
 #endif
 #define configCORES_SHARE_TYPE(a, b) \
     ((((A733_SMP_A55_MASK >> (a)) ^ (A733_SMP_A55_MASK >> (b))) & 1u) == 0u)
