@@ -2,7 +2,11 @@
 /* Live NPU startup and GPU power composition over one actual PMIC provider,
  * rail ledger, clock registry, resource manager and power-domain owner.
  * Reuse the accepted register/clock/task model without rerunning its cases.
- * This is deterministic task interleaving, not a multicore or hardware test.
+ * Cases 0-7 interleave the tasks deterministically on one thread. Cases 8
+ * and 9, built with MODEL_THREADS, run the two retirements on real threads,
+ * one per core: the power service (core 0), the NPU bootstrap (core 1) and
+ * the GPU retirement (core 6); see the comment above threaded_case(). None
+ * of the cases is a hardware test.
  * Local stop assumes the caller already established controller quiescence;
  * neither firmware drain nor OS thermal policy is modeled here. */
 #define main npu_startup_existing_cases
@@ -18,9 +22,9 @@ static uint64_t gpu_token, gpu_deadline;
 static unsigned delegated, core_pending, both_pending;
 static uint32_t core[0xc14/4]; /* policy..PWCR and the delay row, by word */
 
-static int shared_read(void *v,uintptr_t a,uint32_t *out)
+MODEL_UNSANITIZED static int shared_read(void *v,uintptr_t a,uint32_t *out)
 {
-    uint32_t *w=level_word(a);
+    MODEL_GUARD();uint32_t *w=level_word(a);
     if(w){*out=*w;return 1;}
     if(a==A733_POWER_PCK_DOMAIN(5)+8)return owner_read(&d,a,out);
     if(a==0x07066000 || a==0x07066008){*out=core[(a-0x07066000)/4];return 1;}
@@ -37,9 +41,9 @@ static int delegate(void *v,struct a733_gpu_power_resources *out)
 {(void)v;assert(gpu_token && !delegated);delegated=1;*out=ready_gpu;return 1;}
 static int undelegate(void *v)
 {(void)v;assert(gpu_token && delegated && !gpu.row.counted);delegated=0;return 1;}
-static int power_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t *out)
+MODEL_UNSANITIZED static int power_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t *out)
 {
-    (void)v;assert(gpu_token && delegated);
+    (void)v;assert(gpu_token && delegated);MODEL_GUARD();
     if(bank==A733_GPU_CORE) {
         /* CORE6's PPU is always on; reads come before and after TOP5 ON. */
         assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0);
@@ -52,19 +56,42 @@ static int power_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_
     if(bank==A733_GPU_CCU && off==0xe0)*w=(*w&0xe0000000)==0xe0000000 ? *w|(1u<<28) : *w&~(1u<<28);
     *out=*w;return 1;
 }
-static int power_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t clear,uint32_t set)
+MODEL_UNSANITIZED static int power_write(enum a733_gpu_power_bank bank,uint32_t off,uint32_t clear,uint32_t set)
 {
-    (void)v;assert(gpu_token && delegated && !r.held);
+    MODEL_GUARD();
     if(bank==A733_GPU_CORE) {
-        assert(off==0x20 || (gpu.row.counted && a733_power_domain_state(&gpu.row)==A733_POWER_ROW_ON));
+        /* The row's answer is read first: it orders the service's write of
+         * counted before this read. */
+        assert(off==0x20 || (a733_power_domain_state(&gpu.row)==A733_POWER_ROW_ON && gpu.row.counted));
         assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set)));
         core[off/4]=set;if(!off)core_pending=1;return 1;
     }
+#ifdef MODEL_MUTANT_GPU_WRITES
+    /* Only the mutants of drivers/gpu/a733_gpu_power.c that
+     * checks/accelerator-shared-owner.py builds write these shared words. */
+    if((bank==A733_GPU_R_CCU && off==0x1ac) || (bank==A733_GPU_CCU && off==0x5c0)) {
+        uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);
+        *w=(*w&~clear)|set;return 1;
+    }
+#endif
     assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24 || off==0xe0));
     if(gpu.phase==A733_GPU_POWER_STOPPING)assert(!core[0] && !core[2]);
     uint32_t *w=level_word(CCU_BASE+off);*w=(*w&~clear)|set;
     if(off==0xb20)*w&=~(1u<<27);
     return 1;
+}
+/* Production makes these writes under the platform register lock; under
+ * MODEL_THREADS the update takes it, with the GPU operation's deadline. */
+static int power_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t clear,uint32_t set)
+{
+    (void)v;assert(gpu_token && delegated && !REGISTER_MINE);
+#ifdef MODEL_THREADS
+    if(!enter(&r,gpu_deadline))return 0;
+    const int written=power_write(bank,off,clear,set);
+    leave(&r);return written;
+#else
+    return power_write(bank,off,clear,set);
+#endif
 }
 static void composed_setup(unsigned mode)
 {
@@ -350,8 +377,231 @@ static int cpu_gpu_case(unsigned mode)
         mode,cpu_writes,m.writes,cpu_gpu_pending,mode==5?"false":"true");
     return 0;
 }
+#ifdef MODEL_THREADS
+#include <time.h>
+/* Cases 8 and 9 run the GPU retirement and the NPU retirement on real
+ * threads after the deterministic boot of case 0, one thread for each core
+ * of the image's placement. The host scheduler places the threads; the
+ * result counts the runs in which the three threads ran on three distinct
+ * host CPUs at their recorded events.
+ * - The power service (core 0) runs service_step() when notified or when its
+ *   ticks elapse, as the blocked task wakes; otherwise it advances model time
+ *   to the host's elapsed time since the threads started and yields, so that
+ *   model time passes at least as fast as host time, whatever the speed of
+ *   its loop.
+ * - The NPU bootstrap (core 1) has a job in flight from its start. Until the
+ *   job completes it checks the job's invariant continuously
+ *   (npu_invariant()); it then calls a733_npu_startup_stop, retrying BUSY.
+ * - The GPU retirement (core 6) starts once the job is in flight:
+ *   a733_gpu_power_off, polls until OK, then a733_gpu_resources_release of
+ *   client 9, retrying BUSY as production does.
+ * Case 8 retires the GPU while the job is in flight: the job completes a
+ * random delay after the GPU release. Case 9 stops the NPU while the GPU
+ * retirement runs: the job completes a random delay after the GPU
+ * retirement starts. The delays are model microseconds drawn from a recorded
+ * seed. Each run starts from a fresh setup and boot; after both retirements
+ * the main thread checks the end state that case 0 checks. One atomic
+ * counter orders the events of each run. A run overlaps when, in case 8, the
+ * whole GPU retirement lies inside the NPU job and, in case 9, the local
+ * stop call intersects the GPU retirement. The result also counts the
+ * invariant samples taken inside the GPU retirement and, in case 9, the runs
+ * whose local stop call lies inside the GPU retirement; the minimum applies
+ * to the sampled runs in case 8 and to those runs in case 9. A failed condition
+ * prints one JSON line with its "violation" text and aborts. */
+#define RUN_LIMIT_US 2000000u /* model-time bound of each run's threads */
+static atomic_ulong events;
+static atomic_int job_active,gpu_active,gpu_done,threads_finished;
+static unsigned threaded_mode,run_index;
+static uint64_t run_limit,gpu_delay_us,npu_delay_us;
+static uint32_t job_pll;
+static struct {
+    unsigned long job_begin,job_end,stop_begin,stop_end,gpu_begin,gpu_end;
+    uint64_t gpu_begin_us,gpu_end_us;
+    int service_cpu,npu_cpu,gpu_cpu; /* host CPUs at the start, the stop call and the GPU OFF call */
+    unsigned samples,samples_in_gpu,status_busy,release_busy,stop_busy,polls,service_steps;
+} rec;
+static unsigned long event(void){return atomic_fetch_add(&events,1)+1;}
+MODEL_UNSANITIZED static uint64_t model_now(void){MODEL_GUARD();return m.now;}
+static _Noreturn void violation(const char *what,unsigned long value)
+{
+    fprintf(stderr,"{\"case\":%u,\"run\":%u,\"violation\":\"%s\",\"value\":\"0x%lx\",\"model_us\":%llu,"
+        "\"run_limit_us\":%llu,\"gpu_delay_us\":%llu,\"npu_delay_us\":%llu}\n",
+        threaded_mode,run_index,what,value,(unsigned long long)model_now(),(unsigned long long)run_limit,
+        (unsigned long long)gpu_delay_us,(unsigned long long)npu_delay_us);
+    fflush(stderr);abort();
+}
+static void bounded(const char *what){if(model_now()>=run_limit)violation(what,0);}
+/* The NPU job's invariant: the PCK clock gate, the NPU AHB and MBUS master
+ * gates, PLL_NPU unchanged and locked, the domain-4 row ON and the NPU's PCK
+ * lease live. LOCK is read through the model's read path, which reports it. */
+static void npu_invariant(void)
+{
+    const int before=atomic_load(&gpu_active);
+    uint32_t pck,ahb,mbus,pll,ppu4,observed;
+    {MODEL_GUARD();pck=d.rccu_1ac;ahb=d.ccu_5c0;mbus=d.ccu_5e0;pll=r.ccu[0x2a0/4];ppu4=d.ppu[4][2];}
+    assert(reg_read(&r,CCU+0x2a0,&observed));
+    if(!(pck&1))violation("PCK clock gate R_CCU+0x1ac bit 0 clear while the NPU job is in flight",pck);
+    if(!(ahb&(1u<<6)))violation("NPU AHB gate CCU+0x5c0 bit 6 clear while the NPU job is in flight",ahb);
+    if(!(mbus&(1u<<18)))violation("NPU MBUS gate CCU+0x5e0 bit 18 clear while the NPU job is in flight",mbus);
+    if(pll!=job_pll)violation("PLL_NPU control word CCU+0x2a0 changed while the NPU job is in flight",pll);
+    if(!(observed&(1u<<28)))violation("PLL_NPU LOCK CCU+0x2a0 bit 28 clear while the NPU job is in flight",observed);
+    if(a733_power_domain_state(&s.row)!=A733_POWER_ROW_ON || (ppu4&15)!=8)
+        violation("domain-4 row not ON while the NPU job is in flight",ppu4);
+    enum a733_gpu_resource_result lease;
+    while((lease=a733_gpu_resources_status(&m.gpu,s.config.pck_client,&s.pck))==A733_GPU_RESOURCE_BUSY) {
+        ++rec.status_busy;bounded("deadline: the NPU PCK lease status stayed BUSY");sched_yield();
+    }
+    if(lease!=A733_GPU_RESOURCE_OK)violation("NPU PCK lease not live while the NPU job is in flight",lease);
+    ++rec.samples;
+    if(before && atomic_load(&gpu_active))++rec.samples_in_gpu;
+}
+static uint64_t host_us(void)
+{struct timespec t;assert(!clock_gettime(CLOCK_MONOTONIC,&t));return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u;}
+static void *service_thread(void *unused)
+{
+    (void)unused;rec.service_cpu=sched_getcpu();
+    const uint64_t host_start=host_us(),model_start=model_now();
+    while(!atomic_load(&threads_finished)) {
+        int due;
+        {MODEL_GUARD();due=d.notified || m.now>=d.wake_at;}
+        if(due){service_step();++rec.service_steps;continue;}
+        const uint64_t paced=model_start+(host_us()-host_start);
+        {MODEL_GUARD();if(paced>m.now)m.now=paced;}
+        sched_yield();
+    }
+    return 0;
+}
+static void *npu_thread(void *unused)
+{
+    (void)unused;bootstrap_running=1;
+    rec.job_begin=event();atomic_store(&job_active,1);
+    if(threaded_mode==8)
+        while(!atomic_load(&gpu_done)){npu_invariant();bounded("deadline: the GPU retirement did not complete during the NPU job");}
+    else
+        while(!atomic_load(&gpu_active)){npu_invariant();bounded("deadline: the GPU retirement did not start during the NPU job");}
+    const uint64_t end=model_now()+npu_delay_us;
+    do npu_invariant(); while(model_now()<end);
+    rec.job_end=event();
+    rec.npu_cpu=sched_getcpu();rec.stop_begin=event();
+    enum a733_npu_platform_result x;
+    while((x=a733_npu_startup_stop(&s))==A733_NPU_PLATFORM_BUSY) {
+        ++rec.stop_busy;bounded("deadline: the NPU local stop stayed BUSY");sched_yield();
+    }
+    rec.stop_end=event();
+    if(x!=A733_NPU_PLATFORM_READY)violation("the NPU local stop did not return READY",x);
+    bootstrap_running=0;return 0;
+}
+static void *gpu_thread(void *unused)
+{
+    (void)unused;
+    while(!atomic_load(&job_active)){bounded("deadline: the NPU job did not start");sched_yield();}
+    const uint64_t start=model_now()+gpu_delay_us;
+    while(model_now()<start)sched_yield();
+    rec.gpu_cpu=sched_getcpu();rec.gpu_begin=event();rec.gpu_begin_us=model_now();atomic_store(&gpu_active,1);
+    if(a733_pmic_consumer_health(&supply)!=1)violation("the GPU supply consumer is not healthy at retirement",0);
+    gpu_deadline=run_limit;
+    enum a733_gpu_power_result g=a733_gpu_power_off(&gpu,gpu_deadline);
+    if(g!=A733_GPU_POWER_AGAIN)violation("a733_gpu_power_off did not start the retirement",g);
+    while((g=a733_gpu_power_poll(&gpu))==A733_GPU_POWER_AGAIN) {
+        ++rec.polls;bounded("deadline: the GPU retirement did not complete");sched_yield();
+    }
+    if(g!=A733_GPU_POWER_OK)violation("the GPU retirement failed",gpu.error);
+    if(delegated)violation("the GPU controller kept its delegation after OFF",0);
+    enum a733_gpu_resource_result released;
+    while((released=a733_gpu_resources_release(&m.gpu,9,gpu_token,run_limit))==A733_GPU_RESOURCE_BUSY) {
+        ++rec.release_busy;bounded("deadline: the GPU release stayed BUSY");sched_yield();
+    }
+    if(released!=A733_GPU_RESOURCE_OK)violation("a733_gpu_resources_release of client 9 failed",released);
+    rec.gpu_end_us=model_now();rec.gpu_end=event();
+    atomic_store(&gpu_active,0);atomic_store(&gpu_done,1);
+    return 0;
+}
+static uint64_t random_state;
+static uint64_t next_random(void)
+{random_state^=random_state<<13;random_state^=random_state>>7;random_state^=random_state<<17;return random_state;}
+static void end_state(unsigned wire,uint32_t ahb,uint32_t mbus,uint32_t pck,uint64_t pck_token)
+{
+    if(d.ccu_5c0!=ahb || d.ccu_5e0!=mbus || d.rccu_1ac!=pck)
+        violation("a shared gate word changed across the retirements",(unsigned long)((d.ccu_5c0^ahb)|(d.ccu_5e0^mbus)|(d.rccu_1ac^pck)));
+    if(m.pmic[0x13]!=30 || m.pmic[0x15]!=0x2e)violation("a PMIC selector changed across the retirements",m.pmic[0x13]|(m.pmic[0x15]<<8));
+    if(m.writes!=wire)violation("PMIC bus writes during the retirements",m.writes-wire);
+    if(!tokens_held() || s.pck.token!=pck_token)violation("the NPU tokens are not held after both retirements",0);
+    if(s.stage!=A733_NPU_STARTUP_STOPPED || !s.row.counted || a733_power_domain_state(&s.row)!=A733_POWER_ROW_ON)
+        violation("the NPU domain-4 row is not ON and counted after its local stop",s.stage);
+    if(r.ccu[0x2a0/4]!=job_pll)violation("PLL_NPU changed across the retirements",r.ccu[0x2a0/4]);
+    if((r.ccu[0xb00/4]&(1u<<31)) || (r.ccu[0xb04/4]&0xf0001)!=(1u<<19))
+        violation("the NPU local stop left its gates or resets open",r.ccu[0xb04/4]);
+    if(a733_rail_release(&m.rails,&s.rail,m.now+10000)!=A733_RAIL_BUSY)violation("the NPU rail is not pinned by its row",0);
+    if(delegated || gpu.row.counted || gpu.phase!=A733_GPU_POWER_OFF)violation("the GPU row is still counted after its retirement",gpu.phase);
+    if(m.gpu.leases[9].mode!=A733_GPU_RESOURCE_FREE)violation("the GPU lease of client 9 is not released",m.gpu.leases[9].mode);
+    gpu_token=0;
+    if(a733_pmic_consumer_health(&supply)!=1)violation("the GPU supply consumer lost its parent token",0);
+    const unsigned faults=a733_power_authority_load(&m.rails.authority);
+    if((faults&(A733_POWER_PMIC_TRANSFER|A733_POWER_DOMAIN4_FAULT|A733_POWER_DOMAIN5_FAULT)) || d.owner.failed || m.gpu.failed)
+        violation("a provider fault after the retirements",faults);
+    shared_conflicts();
+}
+static int threaded_case(unsigned mode,unsigned runs,uint64_t seed,unsigned minimum)
+{
+    threaded_mode=mode;random_state=seed ? seed : 1;
+    const uint64_t gpu_span=mode==8 ? 200 : 50,npu_span=mode==8 ? 200 : 50;
+    unsigned overlapped=0,sampled=0,stop_inside=0,distinct=0,samples=0,in_gpu=0,status_busy=0,release_busy=0,stop_busy=0;
+    uint64_t gpu_min_us=UINT64_MAX,gpu_max_us=0;
+    register_waits=0;
+    for(run_index=0;run_index<runs;++run_index) {
+        gpu_delay_us=next_random()%gpu_span;npu_delay_us=next_random()%npu_span;
+        composed_setup(0);(void)boot_pair(0);
+        const unsigned wire=m.writes;const uint32_t ahb=d.ccu_5c0,mbus=d.ccu_5e0,pck=d.rccu_1ac;
+        const uint64_t pck_token=s.pck.token;
+        job_pll=r.ccu[0x2a0/4];memset(&rec,0,sizeof(rec));atomic_store(&events,0);
+        atomic_store(&job_active,0);atomic_store(&gpu_active,0);atomic_store(&gpu_done,0);atomic_store(&threads_finished,0);
+        run_limit=m.now+RUN_LIMIT_US;
+        pthread_t service,npu,gpu_task;
+        assert(!pthread_create(&service,0,service_thread,0));
+        assert(!pthread_create(&npu,0,npu_thread,0));
+        assert(!pthread_create(&gpu_task,0,gpu_thread,0));
+        assert(!pthread_join(npu,0) && !pthread_join(gpu_task,0));
+        atomic_store(&threads_finished,1);assert(!pthread_join(service,0));
+        end_state(wire,ahb,mbus,pck,pck_token);
+        if(mode==8 ? rec.job_begin<rec.gpu_begin && rec.gpu_end<rec.job_end :
+                     rec.stop_begin<rec.gpu_end && rec.gpu_begin<rec.stop_end)++overlapped;
+        if(rec.gpu_begin<rec.stop_begin && rec.stop_end<rec.gpu_end)++stop_inside;
+        if(rec.samples_in_gpu)++sampled;
+        if(rec.service_cpu!=rec.npu_cpu && rec.service_cpu!=rec.gpu_cpu && rec.npu_cpu!=rec.gpu_cpu)++distinct;
+        samples+=rec.samples;in_gpu+=rec.samples_in_gpu;
+        status_busy+=rec.status_busy;release_busy+=rec.release_busy;stop_busy+=rec.stop_busy;
+        const uint64_t span=rec.gpu_end_us-rec.gpu_begin_us;
+        if(span<gpu_min_us)gpu_min_us=span;
+        if(span>gpu_max_us)gpu_max_us=span;
+    }
+    printf("{\"case\":%u,\"ordering\":\"%s\",\"runs_on_distinct_cpus\":%u,"
+        "\"runs\":%u,\"seed\":%llu,\"gpu_delay_us\":[0,%llu],\"npu_delay_us\":[0,%llu],"
+        "\"overlap\":\"%s\",\"overlapping_runs\":%u,\"minimum\":%u,\"stop_inside_gpu_runs\":%u,"
+        "\"runs_sampled_inside_gpu\":%u,\"invariant_samples\":%u,\"samples_inside_gpu\":%u,"
+        "\"status_busy\":%u,\"release_busy\":%u,\"stop_busy\":%u,\"register_lock_waits\":%u,"
+        "\"gpu_retirement_us\":[%llu,%llu],\"pass\":%s}\n",
+        mode,mode==8 ? "gpu-retired-during-npu-job" : "npu-stopped-during-gpu-retirement",
+        distinct,runs,(unsigned long long)seed,
+        (unsigned long long)gpu_span-1,(unsigned long long)npu_span-1,
+        mode==8 ? "GPU retirement inside the NPU job" : "NPU local stop intersects the GPU retirement",
+        overlapped,minimum,stop_inside,sampled,samples,in_gpu,status_busy,release_busy,stop_busy,register_waits,
+        (unsigned long long)gpu_min_us,(unsigned long long)gpu_max_us,
+        (mode==8 ? overlapped==runs && sampled>=minimum : stop_inside>=minimum) ? "true" : "false");
+    if(mode==8 && overlapped!=runs)violation("a run without the GPU retirement inside the NPU job",overlapped);
+    if(mode==8 && sampled<minimum)violation("too few runs with an invariant sample inside the GPU retirement",sampled);
+    if(mode==9 && stop_inside<minimum)violation("too few runs with the NPU local stop inside the GPU retirement",stop_inside);
+    return 0;
+}
+#endif
 int main(int argc,char **argv)
 {
+#ifdef MODEL_THREADS
+    /* mode runs seed minimum */
+    if(argc==5) {
+        const unsigned mode=(unsigned)strtoul(argv[1],0,10);assert(mode==8 || mode==9);
+        return threaded_case(mode,(unsigned)strtoul(argv[2],0,10),strtoull(argv[3],0,10),(unsigned)strtoul(argv[4],0,10));
+    }
+#endif
     assert(argc==2);unsigned mode=(unsigned)strtoul(argv[1],0,10);assert(mode<8);
     if(mode>=5)return cpu_gpu_case(mode);
     if(mode==4)return dcdc2_first();
