@@ -103,6 +103,8 @@
 #define SUNSTONE_CRUMB_QUIESCE_USB0 0xcu
 #define SUNSTONE_CRUMB_QUIESCE_I2C 0xdu
 #define SUNSTONE_CRUMB_QUIESCE_RTC 0xeu
+#define SUNSTONE_CRUMB_QUIESCE_G2D 0xfu
+#define SUNSTONE_CRUMB_QUIESCE_VIDEO_DECODE 0x10u
 #define SUNSTONE_CRUMB_FAIL_USB0 0xbu       /* USB0 guard; layout in sunstone_usb0_stop.h */
 /* Frozen finite NPU images use group 8. The host distinguishes their defined
  * finite return producers from CPU retention using the launched image ELF. */
