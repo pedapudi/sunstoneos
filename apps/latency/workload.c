@@ -8,7 +8,7 @@
 #include "platform.h"
 #endif
 #ifdef SUNSTONE_LATENCY_PRECISE
-#include "sunstone_deadline.h"
+#include "sunstone_deadline.h"   /* the wait's results */
 #endif
 
 _Static_assert(configNUMBER_OF_CORES == LATENCY_CORES, "requires eight cores");
@@ -38,7 +38,8 @@ _Static_assert(SUNSTONE_LATENCY_RELEASE_MASK <= 0xff, "a core mask");
  * wake is measured from the counter value at which that microsecond begins,
  * and that value is also its release stamp. The SDK's ss_wait_until reaches
  * the same wait but serves the main application task only
- * (include/sunstone_app.h), so these tasks register and wait directly. */
+ * (include/sunstone_app.h), so these tasks register and wait through the
+ * diagnostic's own calls (include/sunstone_latency.h). */
 enum phase { QUIET, IDLE, BUSY, STOP };
 /* One line per core: only that core and CPU0's tick share it. The core
  * also publishes here the task it last switched to, so that CPU0's release
@@ -302,7 +303,7 @@ static void wait_own(unsigned c)
             const uint64_t until = tick / f * 1000000u + (tick % f * 1000000u + f - 1) / f;
             wake[c].deadline = until / 1000000u * f + (until % 1000000u * f + 999999u) / 1000000u;
             atomic_store_explicit(&wake[c].pending, 1, memory_order_release);
-            configASSERT(sunstone_deadline_wait_until(until) != SUNSTONE_DEADLINE_ERROR);
+            configASSERT(ss_latency_deadline_wait_until(until) != SUNSTONE_DEADLINE_ERROR);
 #else
             atomic_store_explicit(&wake[c].pending, 1, memory_order_release);
             vTaskDelay(1);
@@ -407,7 +408,7 @@ static void wake_worker(void *argument)
 {
     unsigned c = (unsigned)(uintptr_t)argument;
 #ifdef SUNSTONE_LATENCY_PRECISE
-    if (!LATENCY_RELEASED(c)) configASSERT(sunstone_deadline_register());
+    if (!LATENCY_RELEASED(c)) configASSERT(ss_latency_deadline_register());
 #endif
     atomic_fetch_or_explicit(&ready_mask, 1U << c, memory_order_release);
     for (;;) {
