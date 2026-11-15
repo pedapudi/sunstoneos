@@ -124,6 +124,11 @@ int a733_radio_session_start_security(struct a733_radio_session *,const struct a
  * Real entropy providers and completed data/security authorization are required.
  * Actual FreeRTOS+TCP and bounded socket queues stay on the same polling task. */
 int a733_radio_session_start_network(struct a733_radio_session *,const struct sunstone_net_config *);
+/* Owner task. Return a network that the IP task has acknowledged offline (sunstone_net_offline, then
+ * aic8800_network_offline_ready) to the management layer: the sockets stay attached but idle, and ordinary frames are
+ * counted and discarded again until the session stops. 1 when parked; 0 while the fence is outstanding or the session is
+ * in another state. */
+int a733_radio_session_park_network(struct a733_radio_session *);
 /* Copies are independent of the entire retained session/platform graph and blobs.
  * Event/diagnostic copies remain available after fault; their bytes grant no RF
  * or network authority. Scan completion requires a healthy runtime. */

@@ -103,7 +103,10 @@ void os_ce_entropy_begin(void){++entropy_begins;}
 void os_ce_entropy_step(void){++entropy_steps;}
 int os_ce_entropy_ready(void){return entropy_is_ready;}
 int os_ce_entropy_failed(void){return entropy_is_failed;}
-int os_ce_entropy_bytes(void *c,uint8_t *o,size_t n){(void)c;(void)o;(void)n;return 0;}
+/* The reservoir holds ce_bytes bytes; each draw takes from it, all or nothing, as apps/os/ce_probe.c does. */
+static size_t ce_bytes;static unsigned ce_draws;
+int os_ce_entropy_bytes(void *c,uint8_t *o,size_t n)
+{(void)c;if(n>ce_bytes)return 0;for(size_t i=0;i<n;++i)o[i]=(uint8_t)(0xa0+ce_draws*n+i);ce_bytes-=n;++ce_draws;return 1;}
 int ss_wifi_credential(const uint8_t **ssid,size_t *n,const uint8_t **pmk,const uint8_t **pw,size_t *pn)
 {
     *ssid=NULL;*n=0;*pmk=NULL;*pw=NULL;*pn=0;
@@ -143,8 +146,24 @@ int a733_radio_session_start_security(struct a733_radio_session *s,const struct 
  s->transport.security=&s->security;s->transport.supplicant=&s->supplicant;return 1;}
  assert(s==&app.session&&c->entropy==a733_radio_entropy_bytes&&c->entropy_context==&app.entropy&&d==2100);
  ++security_calls;return boundary;}
+/* The address stage's network: it starts once the session admits it, and the IP task's fence completes on request. */
+static unsigned network_admit=1,net_offline_calls,net_offline_ok=1,park_calls,park_ok=1,net_has_address=1,net_events;
+int sunstone_net_offline(struct sunstone_net *s)
+{assert(s==&app.session.sockets&&app.config.address);++net_offline_calls;if(!net_offline_ok)return 0;atomic_store(&s->offline,1);return 1;}
+int a733_radio_session_park_network(struct a733_radio_session *s)
+{assert(s==&app.session);++park_calls;return park_ok&&atomic_load(&s->sockets.offline);}
+int aic8800_network_address(const struct aic8800_network *n,uint8_t v[4])
+{assert(n==&app.session.sockets.network&&!v);return net_has_address;}
+void sunstone_net_event(void){++net_events;}
 int a733_radio_session_start_network(struct a733_radio_session *s,const struct sunstone_net_config *c)
-{assert(s==&app.session&&c->network.transport==&s->transport&&c->network.dispatcher==&s->dispatcher&&
+{if(app.config.address){
+ /* The address stage's network: DHCP, and random words from the owner's pre-drawn ring, not the qualified source. */
+ assert(s==&app.session&&c->network.transport==&s->transport&&c->network.dispatcher==&s->dispatcher&&c->network.dhcp==1&&
+    c->network.entropy_context==&app&&c->network.random32&&c->network.random32!=a733_radio_entropy_random32&&
+    c->network.sequence!=a733_radio_entropy_sequence&&c->bootstrap==task&&c->clients[0]==task);
+ if(!network_admit)return 0;
+ ++network_calls;s->sockets.initialized=1;return 1;}
+ assert(s==&app.session&&c->network.transport==&s->transport&&c->network.dispatcher==&s->dispatcher&&
  c->network.random32==a733_radio_entropy_random32&&c->network.sequence==a733_radio_entropy_sequence&&
  c->network.entropy_context==&app.entropy);++network_calls;return 1;}
 int aic8800_network_ready(const struct aic8800_network *n){assert(n==&app.session.sockets.network);return 1;}
@@ -296,10 +315,21 @@ void vPortFree(void *memory){arena_release(&allocations,memory);}
 int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_dispatch_record *d)
 {assert(s==&app.session&&d==&app.diagnostic);return 1;}
 int sunstone_net_submit(struct sunstone_net *s,const struct sunstone_net_request *r,uint64_t *ticket)
-{assert(s==&app.session.sockets&&r->timeout==3);++submitted;*ticket=42+submitted-1;
+{assert(s==&app.session.sockets&&(app.config.address?r->operation==SUNSTONE_NET_RESOLVE&&r->timeout==app.config.resolve_timeout&&
+    r->bytes==11&&!memcmp(r->payload,"example.com",11):r->timeout==3));++submitted;*ticket=42+submitted-1;
  copied_request=*r;copied_ticket=*ticket;return 1;}
+/* The address stage's resolve reply: none until address_reply is set; the answer is a fixed address that the record and
+ * the board object must not keep. */
+static const uint8_t answer[4]={0x5d,0xb8,0xd7,0x0e};
+static int address_reply=-1;
 int sunstone_net_receive(struct sunstone_net *s,struct sunstone_net_reply *r,TickType_t wait)
 {
+ if(app.config.address){
+    assert(s==&app.session.sockets&&!wait);if(address_reply<0)return 0;
+    ++received;memset(r,0,sizeof(*r));r->ticket=copied_ticket;r->result=(enum sunstone_net_result)address_reply;
+    if(address_reply==SUNSTONE_NET_OK)memcpy(r->address,answer,4);
+    return 1;
+ }
  assert(s==&app.session.sockets&&wait==(client_model?0:3));++received;memset(r,0,sizeof(*r));
  r->ticket=copied_ticket;r->result=client_model?SUNSTONE_NET_OK:SUNSTONE_NET_LINK_LOST;r->handle=5;
  if(client_model==2){
@@ -685,6 +715,102 @@ int main(void)
                     for(size_t k=0;k+8<=sizeof(cred_pmk);++k)if(!memcmp(m+i,cred_pmk+k,8)){fprintf(stderr,"path %u: PMK residue at %zu in %u\n",path,i,p);assert(!"credential residue");}
                 }
             }
+        }
+        /* The address stage: after authorization the network starts with DHCP once the transport admits it and the IP task
+         * has pre-drawn words, the client submits one resolve, and the owner takes a held lease offline through the fence
+         * and stops at SCANNED with the address section last in the record. */
+        {
+            struct board_radio_config addr=assoc;addr.address=1;addr.address_timeout_us=2000;addr.resolve_name="example.com";
+            addr.resolve_bytes=11;addr.resolve_timeout=40;addr.network.clients[0]=task;addr.network.bootstrap=task;
+            addr.network.network=(struct aic8800_network_config){.dhcp=1,.entropy_record=9,.tx_timeout=5,.queue_timeout=5,
+                .address_timeout=5,.lease_cap=10};
+            /* Refused: without association, without DHCP, without a name, with a name longer than the network takes. */
+            struct board_radio_config bad=addr;bad.associate=0;
+            a733_radio_report_release(&app.report);memset(&app,0,sizeof(app));report_used=0;scheduler=taskSCHEDULER_NOT_STARTED;
+            assert(!board_radio_init(&app,&bad));memset(&app,0,sizeof(app));
+            bad=addr;bad.network.network.dhcp=0;assert(!board_radio_init(&app,&bad));memset(&app,0,sizeof(app));
+            bad=addr;bad.resolve_bytes=0;assert(!board_radio_init(&app,&bad));memset(&app,0,sizeof(app));
+            bad=addr;bad.resolve_bytes=SUNSTONE_NET_NAME_BYTES;assert(!board_radio_init(&app,&bad));memset(&app,0,sizeof(app));
+            bad=addr;bad.address_timeout_us=0;assert(!board_radio_init(&app,&bad));memset(&app,0,sizeof(app));
+            bad=addr;bad.network.bootstrap=NULL;assert(!board_radio_init(&app,&bad));memset(&app,0,sizeof(app));
+            enum {FENCED,NO_LEASE,DEADLINE,CASES};
+            for(unsigned kind=0;kind<CASES;++kind){
+                a733_radio_report_release(&app.report);
+                memset(&app,0,sizeof(app));report_used=0;scheduler=taskSCHEDULER_NOT_STARTED;atomic_store(&recovery_state,1);
+                platform_steps=0;entropy_is_ready=0;entropy_is_failed=0;scan_events_left=0;scan_finished=0;abort_model=0;
+                ce_bytes=0;ce_draws=0;network_admit=0;address_reply=-1;net_has_address=1;net_offline_ok=1;park_ok=1;
+                unsigned nets=network_calls,subs=submitted,offline_calls=net_offline_calls,events=net_events;
+                assert(board_radio_init(&app,&addr));scheduler=taskSCHEDULER_RUNNING;time_us=100;app.session.dispatcher.initialized=1;
+                assert(board_radio_poll(&app)==BOARD_RADIO_PENDING);scan_events_left=3;
+                (void)board_radio_poll(&app);scan_finished=1;(void)board_radio_poll(&app);entropy_is_ready=1;
+                (void)board_radio_poll(&app);assert(app.stage==CONNECTING&&app.cand_found);
+                app.session.wifi.link=AIC8800_WIFI_SECURITY_PENDING;(void)board_radio_poll(&app);assert(app.stage==SECURING);
+                app.session.wifi.link=AIC8800_WIFI_SECURED;app.session.supplicant.state=AIC8800_SUPPLICANT_AUTHORIZED;
+                /* Authorized, but the reservoir is empty: no network yet, and the stage's bound has started. */
+                time_us=500;
+                assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SECURING&&app.assoc.stage==6&&
+                    app.address_started&&app.operation_deadline==2500&&network_calls==nets&&app.report.has_trace);
+                /* Words, but the transport is not yet idle: the next pass tries again. */
+                ce_bytes=64;
+                assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SECURING&&network_calls==nets&&
+                    atomic_load(&app.net_random_put)==16&&!ce_bytes);
+                network_admit=1;
+                assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==ONLINE&&network_calls==nets+1&&
+                    atomic_load(&app.network_started)&&app.operation_deadline==2500);
+                /* The IP task takes words in order; the owner tops the ring up from the reservoir. */
+                uint32_t word;struct aic8800_network_config *nc=&app.config.network.network;
+                assert(nc->random32(nc->entropy_context,&word)==1&&word==(0xa0u|0xa1u<<8|0xa2u<<16|0xa3u<<24));
+                assert(nc->sequence(nc->entropy_context,1,2,3,4,&word)==1&&atomic_load(&app.net_random_take)==2);
+                for(unsigned i=2;i<16;++i)assert(nc->random32(nc->entropy_context,&word)==1);
+                assert(!nc->random32(nc->entropy_context,&word)&&atomic_load(&app.net_random_short));
+                ce_bytes=8;session_result=A733_SESSION_NETWORK;
+                /* The client submits one resolve for the stage's name. */
+                assert(board_radio_client_poll(&app)==0&&submitted==subs+1&&copied_request.operation==SUNSTONE_NET_RESOLVE&&
+                    app.client_pending);
+                assert(board_radio_client_poll(&app)==0&&submitted==subs+1); /* no reply yet */
+                /* The DHCP and DNS observation the network made, as the record takes it. */
+                struct aic8800_address_record *seen=&app.session.sockets.network.address_trace.record;
+                *seen=(struct aic8800_address_record){.flags=AIC8800_ADDRESS_PRIVATE|AIC8800_ADDRESS_OFFER_MATCH,.discovers=1,
+                    .offers=1,.requests=1,.acks=1,.queries=1,.responses=1,.ms_discover=250,.ms_offer=260,.ms_request=261,
+                    .ms_ack=270,.ms_query=300,.ms_response=320,.lease_seconds=86400,.answers=1,.dns_servers=2};
+                if(kind==DEADLINE){
+                    time_us=2499;assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==ONLINE);
+                    time_us=2500;assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED);
+                    assert(app.report.has_address&&(app.report.address.flags&AIC8800_ADDRESS_DEADLINE)&&!app.report.address.result&&
+                        !(app.report.address.flags&AIC8800_ADDRESS_PUBLISHED)&&net_offline_calls==offline_calls);
+                    session_result=A733_SESSION_MANAGEMENT;continue;
+                }
+                assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==ONLINE&&atomic_load(&app.net_random_put)==18);
+                address_reply=kind==FENCED?SUNSTONE_NET_OK:SUNSTONE_NET_ADDRESS_LOST;
+                assert(board_radio_client_poll(&app)==0&&!app.client_pending&&net_events==events+1&&
+                    atomic_load(&app.address_result)==(unsigned)address_reply+1u&&atomic_load(&app.address_resolved)==(kind==FENCED));
+                assert(board_radio_client_poll(&app)==0&&submitted==subs+1); /* one resolve only */
+                if(kind==NO_LEASE){
+                    net_has_address=0;
+                    assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED&&net_offline_calls==offline_calls);
+                    assert(app.report.has_address&&app.report.address.result==SUNSTONE_NET_ADDRESS_LOST+1u&&
+                        !(app.report.address.flags&(AIC8800_ADDRESS_PUBLISHED|AIC8800_ADDRESS_FENCED|AIC8800_ADDRESS_RESOLVED)));
+                    session_result=A733_SESSION_MANAGEMENT;continue;
+                }
+                /* The fence: requested once, then awaited until the IP task has acknowledged it. */
+                park_ok=0;
+                assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==ONLINE&&net_offline_calls==offline_calls+1);
+                park_ok=1;session_result=A733_SESSION_MANAGEMENT;
+                assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED&&app.stage==SCANNED&&net_offline_calls==offline_calls+1);
+                assert(board_radio_poll(&app)==BOARD_RADIO_SCANNED);
+                const struct a733_radio_report *done=board_radio_report(&app);const struct aic8800_address_record *a=&done->address;
+                assert(done->has_address&&a->result==SUNSTONE_NET_OK+1u&&a->discovers==1&&a->acks==1&&a->ms_ack==270&&
+                    a->lease_seconds==86400&&a->dns_servers==2&&a->answers==1&&
+                    a->flags==(AIC8800_ADDRESS_PRIVATE|AIC8800_ADDRESS_OFFER_MATCH|AIC8800_ADDRESS_PUBLISHED|AIC8800_ADDRESS_FENCED|
+                        AIC8800_ADDRESS_RESOLVED|AIC8800_ADDRESS_ENTROPY_SHORT));
+                uint8_t encoded[1024];size_t n=a733_radio_report_encode(done,encoded,sizeof(encoded));
+                assert(n==a733_radio_report_bytes(done)&&(encoded[37]&64u)&&(encoded[37]&32u)&&!memcmp(encoded+n-56,a,56)&&
+                    !memcmp(encoded+n-84,&done->trace,28));
+                /* The answer's address is in neither the record nor the board object. */
+                for(size_t i=0;i+4<=n;++i)assert(memcmp(encoded+i,answer,4));
+                for(size_t i=0;i+4<=sizeof(app);++i)assert(memcmp((const uint8_t *)&app+i,answer,4));
+            }
+            session_result=A733_SESSION_MANAGEMENT;ce_bytes=0;address_reply=-1;
         }
         scheduler=taskSCHEDULER_NOT_STARTED;
     }

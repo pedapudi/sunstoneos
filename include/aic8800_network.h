@@ -6,6 +6,7 @@
 #include "FreeRTOS_Routing.h"
 #include "aic8800_sdio_transport.h"
 #include "aic8800_dispatch.h"
+#include "aic8800_address_trace.h"
 #include <stdatomic.h>
 #define AIC8800_NETWORK_TX_SLOTS 8u
 struct aic8800_network_config {
@@ -45,6 +46,7 @@ struct aic8800_network {
     atomic_uint_least32_t address_value,mask_value,gateway_value,dns_value;
     atomic_uint_fast64_t address_started,lease_started,lease_ticks;
     uint32_t leased_address; /* IP task: fixed within each online DHCP lifetime. */
+    struct aic8800_address_trace address_trace; /* Owner task: DHCP and DNS frames as they pass (aic8800_address_trace.h). */
     uint8_t initialized,owns_current,active,down_sent,stack_started;
 };
 /* One stack instance for its image lifetime. Fresh storage; sole radio task

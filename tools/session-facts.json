@@ -237,7 +237,7 @@
    "board_profile": "control",
    "comment": "The passive scan uses the existing runner producer at stage zero and its pinned firmware catalogue. The reference identifies the reviewed supply sequence; it grants no Bluetooth reset or association authority. The builder records the generated profile and each firmware upload by address, length and SHA-256. The board prefix, thermal record and CPU grant come from the control profile.",
    "sources": {
-    "tools/radio_scan_prepare.py": "9bae922ae5529a34e3587004e1dda2640222ce715d330f18292a1821c6755229",
+    "tools/radio_scan_prepare.py": "6b9762ba7a57587adc131330a3f661415721169f627674cd29af6b3cd63d51df",
     "docs/designs/radio-vendor-power-sequence.md": "fa2efdfe40fd4040c94562324b6cb4582c7d57e2f3ad649df6ba0679f98269da"
    }
   }

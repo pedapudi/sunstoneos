@@ -15,7 +15,8 @@ ASSOC_BYTES = 48
 SCAN_COUNTS_BYTES = 16   # struct a733_radio_scan_counts, present when head flags bit 10 is set
 RSN_BYTES = 16           # struct a733_radio_rsn, present when head flags bit 11 is set
 FAULT_BYTES = 16         # struct aic8800_fault_site, present when head flags bit 12 is set
-TRACE_BYTES = 28         # struct aic8800_transport_trace, present when head flags bit 13 is set; the last section
+TRACE_BYTES = 28         # struct aic8800_transport_trace, present when head flags bit 13 is set
+ADDRESS_BYTES = 56       # struct aic8800_address_record, present when head flags bit 14 is set; the last section
 # AIC8800_SITE file codes (include/aic8800_security.h).
 SITE_FILES = {0: 'other', 1: 'aic8800_supplicant.c', 2: 'aic8800_supplicant_os.c', 3: 'aic8800_sae.c',
               4: 'aic8800_sdio_transport.c', 5: 'aic8800_security.c'}
@@ -24,7 +25,7 @@ STOP_REASONS = ['external', 'deadline', 'completion', 'clock', 'link', 'generati
 TRANSPORT_ERRORS = ['none', 'host', 'timeout', 'setup', 'rx-bounds', 'unsupported-irq', 'message', 'firmware',
                     'runtime', 'wifi', 'data']
 # Record versions this decoder reads (A733_RADIO_RESULT_VERSION). Admission refuses an image that writes another.
-VERSIONS = (2, 3)
+VERSIONS = (2, 3, 4)
 RSN_CHECKS = ['passed', 'no-element', 'too-long', 'malformed', 'group-not-ccmp', 'pairwise-no-ccmp', 'mfp-required',
               'no-psk', 'other']
 # Suite types under OUI 00-0F-AC (IEEE 802.11-2020 Table 9-149 and Table 9-151).
@@ -63,7 +64,7 @@ def decode(data):
     ap_count = struct.unpack_from('<I', data, 216)[0]
     tail = (ASSOC_BYTES if flags_of(data) & 512 else 0) + (SCAN_COUNTS_BYTES if flags_of(data) & 1024 else 0) + \
         (RSN_BYTES if flags_of(data) & 2048 else 0) + (FAULT_BYTES if flags_of(data) & 4096 else 0) + \
-        (TRACE_BYTES if flags_of(data) & 8192 else 0)
+        (TRACE_BYTES if flags_of(data) & 8192 else 0) + (ADDRESS_BYTES if flags_of(data) & 16384 else 0)
     if total != HEAD_BYTES + ap_count * AP_BYTES + tail:
         raise ValueError('radio result length does not match its access point count')
     stage, failed, failure_stage, flags = struct.unpack_from('<4I', data, 24)
@@ -185,9 +186,12 @@ def decode(data):
     result['rsn'] = None
     fault_bytes = FAULT_BYTES if flags & 4096 else 0
     trace_bytes = TRACE_BYTES if flags & 8192 else 0
+    address_bytes = ADDRESS_BYTES if flags & 16384 else 0
+    # The sections after the association tail are read back from the end of the record; the address section is last.
+    sections_end = total - address_bytes
     if flags & 2048:
         check, group, rsn_flags, parse, version, capabilities, pairwise, akm = struct.unpack_from(
-            '<3BbHH2I', data, total - trace_bytes - fault_bytes - RSN_BYTES)
+            '<3BbHH2I', data, sections_end - trace_bytes - fault_bytes - RSN_BYTES)
         result['rsn'] = {
             'check': RSN_CHECKS[check] if check < len(RSN_CHECKS) else check,
             'element_found': bool(rsn_flags & 1), 'other_oui': bool(rsn_flags & 2), 'malformed': bool(rsn_flags & 4),
@@ -196,10 +200,43 @@ def decode(data):
             'pairwise': suites(pairwise, CIPHERS) if rsn_flags & 8 else 'absent (CCMP-128)',
             'akm': suites(akm, AKMS) if rsn_flags & 16 else 'absent (802.1X)',
             'capabilities': capabilities, 'mfp_capable': bool(capabilities & 0x80), 'mfp_required': bool(capabilities & 0x40)}
-    end = total - trace_bytes
+    end = sections_end - trace_bytes
     result['fault_site'] = decode_fault_site(data[end - FAULT_BYTES:end]) if fault_bytes else None
-    result['transport_trace'] = decode_transport_trace(data[end:total]) if trace_bytes else None
+    result['transport_trace'] = decode_transport_trace(data[end:sections_end]) if trace_bytes else None
+    result['address'] = decode_address(data[sections_end:total]) if address_bytes else None
     return result
+
+
+# enum sunstone_net_result (include/sunstone_net.h); the record stores it plus 1, and 0 for no reply.
+NET_RESULTS = ['ok', 'invalid', 'busy', 'timeout', 'io', 'link-lost', 'address-lost', 'canceled']
+DNS_RCODES = ['no-error', 'format-error', 'server-failure', 'name-error', 'not-implemented', 'refused']
+
+
+def decode_address(raw):
+    """The address section (include/aic8800_address_trace.h): DHCP and DNS counts, codes and times. It holds no address,
+    MAC or name."""
+    (flags, discovers, offers, requests, acks, naks, queries, responses, ignored, ms_discover, ms_offer, ms_request,
+     ms_ack, ms_query, ms_response, lease, answers, rcode, servers, reply) = struct.unpack('<I8H7IH3B3x', raw)
+    def at(count, ms): return ms if count else None
+    return {
+        'dhcp': {'discover': {'sent': discovers, 'first_ms': at(discovers, ms_discover)},
+                 'offer': {'received': offers, 'first_ms': at(offers, ms_offer)},
+                 'request': {'sent': requests, 'first_ms': at(requests, ms_request)},
+                 'ack': {'received': acks, 'naks': naks, 'first_ms': at(acks + naks, ms_ack)},
+                 'lease_seconds': lease if flags & 128 else None,
+                 'address_private': bool(flags & 2), 'router': bool(flags & 4), 'router_private': bool(flags & 8),
+                 'offer_ack_address_match': bool(flags & 16), 'offer_ack_server_match': bool(flags & 32),
+                 'hostname_sent': bool(flags & 64), 'dns_servers': servers, 'lease_published': bool(flags & 1)},
+        'dns': {'queries': queries, 'responses': responses, 'query_ms': at(queries, ms_query),
+                'response_ms': at(responses, ms_response),
+                'time_ms': ms_response - ms_query if queries and responses and ms_response >= ms_query else None,
+                'id_matched': bool(flags & 256),
+                'rcode': (DNS_RCODES[rcode] if rcode < len(DNS_RCODES) else rcode) if responses else None,
+                'answers': answers if responses else None},
+        'resolve': {'reply': (NET_RESULTS[reply - 1] if reply - 1 < len(NET_RESULTS) else reply - 1) if reply else None,
+                    'address_returned': bool(flags & 512)},
+        'ignored_frames': ignored, 'dhcp_stopped': bool(flags & 1024), 'deadline_passed': bool(flags & 2048),
+        'entropy_short': bool(flags & 4096)}
 
 
 def site(value):

@@ -10,6 +10,9 @@
 #include <strings.h>
 #include "a733_rtc_service.h"
 static unsigned offers,acks,queries,renewals,silent_dhcp,static_mode,drop_ack,omit_lease_mode,omit_lease;
+/* nak_mode: the server answers every request with a NAK. foreign_offers: offers sent for another transaction (the first
+ * discover's identifier with one bit changed), which neither the stack nor the address trace may take. */
+static unsigned nak_mode,naks_sent,foreign_offers;
 static const uint8_t answer_ip[4]={10,0,0,7};
 static void reply_udp(const uint8_t *request,unsigned bytes,const uint8_t *payload,unsigned length,int dhcp)
 {
@@ -63,6 +66,11 @@ static void service_peer(const uint8_t *p,unsigned n)
         unsigned type=0;
         for(unsigned at=240;at<length;){unsigned option=body[at++];if(option==255)break;if(!option)continue;assert(at<length);unsigned count=body[at++];assert(count<=length-at);if(option==53){assert(count==1);type=body[at];}at+=count;}
         assert(type==1||type==3);if(silent_dhcp)return;
+        if(type==3&&nak_mode){
+            uint8_t nak[300]={2,1,6};memcpy(nak+4,body+4,4);memcpy(nak+28,local_mac,6);store32(nak+236,0x63825363);
+            unsigned at=240;nak[at++]=53;nak[at++]=1;nak[at++]=6;nak[at++]=54;nak[at++]=4;memcpy(nak+at,peer_ip,4);at+=4;nak[at++]=255;
+            ++naks_sent;reply_udp(p,n,nak,at,1);return;
+        }
         if(type==1)++offers;else{++acks;if(acks>1)++renewals;if(drop_ack)return;}
         uint8_t out[300]={2,1,6};memcpy(out+4,body+4,4);memcpy(out+16,local_ip,4);memcpy(out+20,peer_ip,4);memcpy(out+28,local_mac,6);store32(out+236,0x63825363);
         unsigned at=240;
@@ -71,6 +79,7 @@ static void service_peer(const uint8_t *p,unsigned n)
         if(!(omit_lease&&type==3)){OPTION(51,4);store32(out+at,120);at+=4;}OPTION(1,4);memset(out+at,255,3);at+=4;
         OPTION(3,4);memcpy(out+at,peer_ip,4);at+=4;OPTION(6,4);memcpy(out+at,peer_ip,4);at+=4;out[at++]=255;
 #undef OPTION
+        if(type==1&&!foreign_offers){out[7]^=1;reply_udp(p,n,out,at,1);out[7]^=1;++foreign_offers;}
         reply_udp(p,n,out,at,1);return;
     }
     if(be16(udp+2)==53){
@@ -149,9 +158,22 @@ static void address_application(void *unused)
     (void)unused;assert(sunstone_net_activate(&net));
     struct sunstone_net_request status={.operation=SUNSTONE_NET_ADDRESS,.timeout=2500};struct sunstone_net_reply value=call(&status);
     if(sntp_mode){assert(value.result==SUNSTONE_NET_OK);sntp_application();}
+    const struct aic8800_address_record *trace=&net.network.address_trace.record;
     if(silent_dhcp){
         assert(value.result==SUNSTONE_NET_ADDRESS_LOST&&atomic_load(&net.network.address_failed)&&aic8800_network_ready(&net.network));
-        assert(!aic8800_network_address(&net.network,NULL));platform_puts("PASS DHCP acquisition deadline revokes address without inventing link loss\n");platform_exit(0);
+        assert(!aic8800_network_address(&net.network,NULL));
+        /* No reply: the trace holds the discovers and nothing else. */
+        assert(trace->discovers>=1&&!trace->offers&&!trace->requests&&!trace->acks&&!trace->naks&&!trace->ignored&&
+            !(trace->flags&AIC8800_ADDRESS_HOSTNAME_SENT));
+        platform_puts("PASS DHCP acquisition deadline revokes address without inventing link loss; the trace holds discovers only\n");platform_exit(0);
+    }
+    if(nak_mode){
+        assert(value.result==SUNSTONE_NET_ADDRESS_LOST&&atomic_load(&net.network.address_failed)&&!aic8800_network_address(&net.network,NULL));
+        /* Every request was refused: the trace counts the NAKs, the time of the first reply, and no ACK fields. */
+        assert(naks_sent&&trace->naks==naks_sent&&trace->offers>=1&&trace->requests>=1&&!trace->acks&&
+            trace->ms_ack>=trace->ms_request&&!(trace->flags&(AIC8800_ADDRESS_PRIVATE|AIC8800_ADDRESS_OFFER_MATCH|AIC8800_ADDRESS_LEASE_TIME))&&
+            !trace->lease_seconds&&!trace->dns_servers);
+        platform_puts("PASS DHCP NAK: no lease is published, the trace counts each NAK and holds no ACK fields\n");platform_exit(0);
     }
     assert(value.result==SUNSTONE_NET_OK&&value.bytes==16&&!memcmp(value.address,local_ip,4)&&!memcmp(value.payload+12,peer_ip,4));
     if(!static_mode){
@@ -167,6 +189,16 @@ static void address_application(void *unused)
         assert(atomic_load(&net.network.address_sequence)>sequence&&!(atomic_load(&net.network.address_sequence)&1)&&
             atomic_load(&net.network.lease_started)>start&&aic8800_network_address(&net.network,NULL));
         platform_puts("PASS actual stable DHCP lease acquisition and renewal publication\n");
+        /* The address trace of the offer and ACK: steps in order, the foreign offer ignored, the ACK's facts as flags and
+         * counts, and no host name option sent. */
+        platform_puts("address trace flags/discover/offer/request/ack/ignored/lease ");platform_hex(trace->flags);
+        platform_hex(trace->discovers);platform_hex(trace->offers);platform_hex(trace->requests);platform_hex(trace->acks);
+        platform_hex(trace->ignored);platform_hex(trace->lease_seconds);platform_puts("\n");
+        uint32_t want=AIC8800_ADDRESS_PRIVATE|AIC8800_ADDRESS_ROUTER|AIC8800_ADDRESS_ROUTER_PRIVATE|AIC8800_ADDRESS_OFFER_MATCH|
+            AIC8800_ADDRESS_SERVER_MATCH|AIC8800_ADDRESS_LEASE_TIME;
+        assert(foreign_offers==1&&trace->ignored==1&&trace->discovers>=1&&trace->offers==1&&trace->requests>=1&&trace->acks>=1&&trace->acks<=acks&&
+            !trace->naks&&(trace->flags&want)==want&&!(trace->flags&AIC8800_ADDRESS_HOSTNAME_SENT)&&trace->lease_seconds==120&&
+            trace->dns_servers==1&&trace->ms_discover<=trace->ms_offer&&trace->ms_offer<=trace->ms_request&&trace->ms_request<=trace->ms_ack);
     }
     /* Prime the real ARP path before DNS's intentionally single nonblocking send. */
     uint64_t udp=open_socket(0,7400);struct sunstone_net_request prime={.operation=SUNSTONE_NET_SEND,.handle=udp,.timeout=500,.bytes=5,.port=9000};
@@ -179,6 +211,13 @@ static void address_application(void *unused)
     }
     assert(arp_wait<500&&arp_endpoint==&net.network.endpoint&&!memcmp(arp_mac.ucBytes,peer_mac,6));close_socket(udp);
     value=resolve("answer.test",500);assert(value.result==SUNSTONE_NET_OK&&!memcmp(value.address,answer_ip,4)&&queries);
+    /* The first query and its response: one of each, the identifier matched, no error and one answer. */
+    {const struct aic8800_address_record *t=&net.network.address_trace.record;
+     assert(t->queries==queries&&t->responses==1&&(t->flags&AIC8800_ADDRESS_DNS_MATCH)&&!t->rcode&&t->answers==1&&
+        t->ms_response>=t->ms_query);
+     /* Every random word from the start through a lease, its renewal, one extra socket and the first lookup: the
+      * address stage's sixteen pre-drawn words hold a run with fewer steps without a refill. */
+     platform_puts("random words drawn ");platform_hex(random_calls);platform_puts("\n");assert(random_calls<=16);}
     value=resolve("wrong.test",40);assert(value.result==SUNSTONE_NET_TIMEOUT||value.result==SUNSTONE_NET_IO);
     for(unsigned i=0;i<1000&&atomic_load(&net.dns[0].state)!=SUNSTONE_DNS_CANCELED&&atomic_load(&net.dns[0].state)!=SUNSTONE_DNS_IDLE;++i)vTaskDelay(1);
     assert(atomic_load(&net.dns[0].state)==SUNSTONE_DNS_CANCELED||atomic_load(&net.dns[0].state)==SUNSTONE_DNS_IDLE);
@@ -212,7 +251,7 @@ void kernel_main(void)
     char command[128]={0};uint64_t block[2]={(uintptr_t)command,sizeof(command)};
     register uint64_t operation __asm__("x0")=0x15;register uint64_t *arg __asm__("x1")=block;
     __asm__ volatile("hlt #0xf000":"+r"(operation):"r"(arg):"memory");
-    if(!operation)for(unsigned i=0;i+11<sizeof(command);++i){if(!memcmp(command+i,"acquisition",11))silent_dhcp=1;if(!memcmp(command+i,"static",6))static_mode=1;if(!memcmp(command+i,"omitted",7))omit_lease_mode=1;if(!memcmp(command+i,"sntp",4))sntp_mode=static_mode=1;}
+    if(!operation)for(unsigned i=0;i+11<sizeof(command);++i){if(!memcmp(command+i,"acquisition",11))silent_dhcp=1;if(!memcmp(command+i,"static",6))static_mode=1;if(!memcmp(command+i,"omitted",7))omit_lease_mode=1;if(!memcmp(command+i,"sntp",4))sntp_mode=static_mode=1;if(!memcmp(command+i,"nak",3))nak_mode=1;}
     TaskHandle_t app=xTaskCreateStatic(address_application,"address-app",4096,NULL,5,app_stack,&app_task);assert(app);
     struct sunstone_net_config c={.network={.transport=&transport,.tx_timeout=5000,.queue_timeout=5000,
         .random32=random32,.sequence=sequence,.entropy_context=&m,.entropy_record=1,

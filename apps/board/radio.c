@@ -35,6 +35,38 @@ static int platform_id(void *context,uint8_t id[16])
 }
 /* The report's scan list comes from the FreeRTOS heap that the network stack already uses. */
 static void *report_allocate(void *context,size_t bytes){(void)context;return pvPortMalloc(bytes);}
+/* The address stage's network random numbers. The IP task calls these; the owner fills the words (address_refill), so
+ * the CE reservoir, whose calls are owner-only, is never touched from the IP task. A missing word is a temporary refusal
+ * (0): the stack fails that one use (a DHCP or DNS transaction identifier waits for its next attempt). The stage opens no
+ * TCP connection, so the sequence hook is never called; if it were, a missing word would close the network output. */
+static int address_random32(void *context,uint32_t *value)
+{
+    struct board_radio *r=context;
+    unsigned take=atomic_load_explicit(&r->net_random_take,memory_order_relaxed);
+    if(take==atomic_load_explicit(&r->net_random_put,memory_order_acquire)){
+        atomic_store_explicit(&r->net_random_short,1,memory_order_relaxed);return 0;}
+    volatile uint32_t *slot=&r->net_random[take%16u];
+    *value=*slot;*slot=0;
+    atomic_store_explicit(&r->net_random_take,take+1u,memory_order_release);return 1;
+}
+static int address_sequence(void *context,uint32_t source,uint16_t sport,uint32_t destination,uint16_t dport,uint32_t *value)
+{(void)source;(void)sport;(void)destination;(void)dport;return address_random32(context,value);}
+/* Words the IP task must have before the network starts: the DHCP transaction identifier, the DHCP socket's port, the
+ * DNS identifier and the DNS socket's port. */
+#define ADDRESS_START_WORDS 4u
+/* Owner task: top the words up from the CE reservoir, one 4-byte draw each, while there is room and the reservoir holds
+ * bytes. */
+static void address_refill(struct board_radio *r)
+{
+    unsigned put=atomic_load_explicit(&r->net_random_put,memory_order_relaxed);
+    while(put-atomic_load_explicit(&r->net_random_take,memory_order_acquire)<16u){
+        uint8_t bytes[4];
+        if(!os_ce_entropy_bytes||!os_ce_entropy_bytes(NULL,bytes,sizeof(bytes)))break;
+        uint32_t word;memcpy(&word,bytes,4);((volatile uint8_t *)bytes)[0]=0;((volatile uint8_t *)bytes)[1]=0;
+        ((volatile uint8_t *)bytes)[2]=0;((volatile uint8_t *)bytes)[3]=0;
+        r->net_random[put%16u]=word;++put;atomic_store_explicit(&r->net_random_put,put,memory_order_release);
+    }
+}
 static void report_release(void *context,void *memory){(void)context;vPortFree(memory);}
 int board_radio_init(struct board_radio *r,const struct board_radio_config *input)
 {
@@ -45,6 +77,13 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
     if(c->scan_only&&(!staged||!c->scan_timeout_us))return 0;
     if(c->associate&&(!c->scan_only||c->enumeration_only||!c->connect_timeout_us||!c->security_timeout_us||
         !c->security.command_timeout))return 0;
+    /* The address stage: DHCP with the network's own bounds, one name to resolve, and a client task. */
+    if(c->address&&(!c->associate||!staged||!c->address_timeout_us||!c->network.network.dhcp||
+        !c->network.network.entropy_record||!c->network.network.tx_timeout||!c->network.network.queue_timeout||
+        !c->network.network.address_timeout||!c->network.network.lease_cap||!c->network.clients[0]||
+        c->network.bootstrap!=c->session.owner_task||
+        !c->resolve_name||!c->resolve_bytes||c->resolve_bytes>=SUNSTONE_NET_NAME_BYTES||
+        !c->resolve_timeout||c->resolve_timeout>portMAX_DELAY/2))return 0;
     if(staged&&(!c->report_memory.release||!c->scan_timeout_us))return 0;
     if(!c->shared||!c->shared->used||!c->admit||!c->chip_id||!c->chip_id->secure_read_record||
         !c->recovery_state||!a733_ranges_disjoint(r,sizeof(*r),c->recovery_state,sizeof(*c->recovery_state))||
@@ -65,14 +104,16 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
     atomic_init(&r->completed_transfers,0);
     atomic_init(&r->watchdog_deadline,0);atomic_init(&r->snapshot_busy,0);
     atomic_init(&r->client_status,0);atomic_init(&r->verified_received,0);
+    atomic_init(&r->net_random_put,0);atomic_init(&r->net_random_take,0);atomic_init(&r->net_random_short,0);
+    atomic_init(&r->address_result,0);atomic_init(&r->address_resolved,0);
     struct board_radio_config *p=&r->config;
     p->session.runtime.read_platform_id=platform_id;
     p->session.runtime.context=(void *)p->chip_id;
     /* The association stage brings its own (unqualified) entropy callback in the configuration. */
     if(!p->associate){p->security.entropy=a733_radio_entropy_bytes;p->security.entropy_context=&r->entropy;}
-    p->network.network.random32=a733_radio_entropy_random32;
-    p->network.network.sequence=a733_radio_entropy_sequence;
-    p->network.network.entropy_context=&r->entropy;
+    p->network.network.random32=p->address?address_random32:a733_radio_entropy_random32;
+    p->network.network.sequence=p->address?address_sequence:a733_radio_entropy_sequence;
+    p->network.network.entropy_context=p->address?(void *)r:(void *)&r->entropy;
     p->network.network.transport=&r->session.transport;
     p->network.network.dispatcher=&r->session.dispatcher;
     if(staged&&!a733_radio_report_init(&r->report,&p->report_memory))return 0;
@@ -121,6 +162,8 @@ static int event_work(void *cookie)
     r->event_caller_due=0;until=event_min(until,r->event_caller_limit);
     if(p->stop_requested)until=event_min(until,p->stop_deadline);
     else if(!stopping&&r->stage!=ONLINE&&r->stage!=SCANNED&&r->stage!=DOWN)until=event_min(until,r->config.startup_deadline_us);
+    /* The address stage's bound wakes the owner itself; no DHCP retransmission has to come first. */
+    if(!stopping&&r->stage==ONLINE&&r->config.address)until=event_min(until,r->operation_deadline);
     if(stopping&&r->stage!=DOWN&&!a733_radio_platform_clean(p))until=event_min(until,p->deadline);
     /* The publisher always knows this immutable owner handle. Registering
      * before this acquire check preserves readiness published before sleep. */
@@ -188,6 +231,12 @@ int board_radio_client_wait(struct board_radio *r)
     if(!r||!r->constructed||xTaskGetCurrentTaskHandle()!=r->config.network.clients[0])return -1;
     if(!r->client_registered){if(!sunstone_deadline_register())return -1;r->client_registered=1;}
     uint64_t until=r->platform.config.lifetime_deadline_us;
+    if(r->config.scan_only&&r->config.address&&!atomic_load_explicit(&r->address_result,memory_order_acquire)&&
+       !atomic_load_explicit(&r->failed,memory_order_acquire)&&atomic_load_explicit(&r->network_started,memory_order_acquire)){
+        /* The resolve's reply is queued, or the resolve is still to be submitted. */
+        if(r->client_pending&&uxQueueMessagesWaiting(r->session.sockets.clients[0].reply_queue))return 1;
+        if(!r->client_pending&&!r->client_ticket&&!r->client_retry)return 1;
+    }
     if(!r->config.scan_only){
         if(!r->startup_profile)return -1;
         unsigned status=atomic_load_explicit(&r->client_status,memory_order_acquire);
@@ -398,6 +447,7 @@ static void wipe_secrets(struct board_radio *r)
     SCRUB(s->transport.setup_confirmation);SCRUB(s->transport.last_result);
     SCRUB(s->wifi);SCRUB(s->data);SCRUB(s->security);SCRUB(s->supplicant);SCRUB(s->dispatcher);
     SCRUB(s->reconnect_target);SCRUB(s->reconnect_security);
+    SCRUB(r->net_random); /* drawn from the same reservoir as the handshake's nonces */
     if(os_ce_entropy_wipe)os_ce_entropy_wipe();
 }
 static void wipe_pmk(struct board_radio *r)
@@ -507,6 +557,45 @@ enum board_radio_result board_radio_stop_result(struct board_radio *r,enum a733_
     if(result==A733_SESSION_DOWN){r->stage=DOWN;return BOARD_RADIO_DOWN;}
     atomic_store_explicit(&r->failed,1,memory_order_release);return BOARD_RADIO_RETAINED;
 }
+/* The address section of the record (aic8800_address_trace.h): the network's DHCP and DNS observation, the resolve's
+ * outcome and the owner's own facts. Counts, codes and times only. */
+static void address_record(struct board_radio *r,uint32_t flags)
+{
+    if(!r->config.report_memory.allocate)return;
+    struct aic8800_address_record a={0};
+    if(r->session.sockets.initialized)a=r->session.sockets.network.address_trace.record;
+    a.flags|=flags;
+    unsigned result=atomic_load_explicit(&r->address_result,memory_order_acquire);
+    a.result=(uint8_t)(result<256u?result:255u);
+    if(atomic_load_explicit(&r->address_resolved,memory_order_acquire))a.flags|=AIC8800_ADDRESS_RESOLVED;
+    if(atomic_load_explicit(&r->net_random_short,memory_order_relaxed))a.flags|=AIC8800_ADDRESS_ENTROPY_SHORT;
+    a733_radio_report_address(&r->report,&a);
+}
+/* The address stage once the network has started. The client's resolve waits in the network service for the lease and
+ * then queries the leased DNS server. When it has replied, a lease still held is taken offline through the IP task's
+ * fence: the IP task runs its down processing (DHCP's timer stops and its socket closes; no DHCPRELEASE is sent, so the
+ * lease expires on the server) and acknowledges; the session then returns to the management layer and the stage ends at
+ * SCANNED, after which the module shuts down in order. A reply without a lease, a lost link or the stage's bound is a
+ * failure: the network faults, which also stops DHCP, and the failure shutdown runs. */
+static enum board_radio_result address_poll(struct board_radio *r,enum a733_radio_session_result result,uint64_t now)
+{
+    address_refill(r);
+    struct aic8800_network *n=&r->session.sockets.network;
+    if(now>=r->operation_deadline){address_record(r,AIC8800_ADDRESS_DEADLINE|(r->address_offline?AIC8800_ADDRESS_PUBLISHED:0u));
+        return retain(r);}
+    if(result==A733_SESSION_LOST){address_record(r,0);return retain(r);}
+    if(!atomic_load_explicit(&r->address_result,memory_order_acquire))return publish(r,BOARD_RADIO_PENDING);
+    if(!r->address_offline){
+        if(!aic8800_network_address(n,NULL)){address_record(r,0);return retain(r);}
+        /* Refused while the network service still holds the resolve's storage or a frame is in flight; a later pass
+         * tries again. */
+        if(!sunstone_net_offline(&r->session.sockets))return publish(r,BOARD_RADIO_PENDING);
+        r->address_offline=1;
+    }
+    if(!a733_radio_session_park_network(&r->session))return publish(r,BOARD_RADIO_PENDING);
+    address_record(r,AIC8800_ADDRESS_PUBLISHED|AIC8800_ADDRESS_FENCED);
+    r->stage=SCANNED;report_progress(r);return publish(r,BOARD_RADIO_SCANNED);
+}
 enum board_radio_result board_radio_poll(struct board_radio *r)
 {
     if(!r||r->self!=r||!r->constructed||
@@ -604,6 +693,7 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
         if(a733_radio_session_take_record(&r->session,&r->diagnostic)&&
             r->diagnostic_records!=UINT64_MAX)++r->diagnostic_records;
     }
+    if(r->stage==ONLINE&&r->config.address)return address_poll(r,result,now);
     if(r->stage==ONLINE){
         if(result==A733_SESSION_LOST&&!recover(r,now))return retain(r);
         if(result==A733_SESSION_NETWORK)r->recovering=0;
@@ -656,15 +746,35 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
         }else if(r->session.wifi.link!=AIC8800_WIFI_CONNECTING)return retain(r);
         if(r->session.wifi.link==AIC8800_WIFI_SECURITY_PENDING&&r->assoc.stage<4)r->assoc.stage=4;
     }else if(r->stage==SECURING){
-        if(now>=r->operation_deadline||r->session.supplicant.state==AIC8800_SUPPLICANT_FAULT)
+        if(now>=r->operation_deadline||r->session.supplicant.state==AIC8800_SUPPLICANT_FAULT){
+            if(r->address_started)address_record(r,now>=r->operation_deadline?AIC8800_ADDRESS_DEADLINE:0u);
             return retain(r);
+        }
         if(r->config.associate){
             if(r->session.wifi.link==AIC8800_WIFI_SECURED&&r->session.supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED){
-                /* The stage's end: authorized, no address requested. The trace keeps the slowest confirmation. */
-                r->assoc.stage=6;r->assoc.ms_authorized=(uint32_t)(now/1000u)&0xffffu;
-                if(r->config.report_memory.allocate){struct aic8800_transport_trace trace;capture_trace(r,&trace);
-                    a733_radio_report_trace(&r->report,&trace);}
-                wipe_pmk(r);r->stage=SCANNED;report_progress(r);return publish(r,BOARD_RADIO_SCANNED);
+                /* Authorized. The trace keeps the slowest confirmation. Without the address stage this is the end. */
+                if(r->assoc.stage<6){
+                    r->assoc.stage=6;r->assoc.ms_authorized=(uint32_t)(now/1000u)&0xffffu;
+                    if(r->config.report_memory.allocate){struct aic8800_transport_trace trace;capture_trace(r,&trace);
+                        a733_radio_report_trace(&r->report,&trace);}
+                    wipe_pmk(r);
+                }
+                if(!r->config.address){r->stage=SCANNED;report_progress(r);return publish(r,BOARD_RADIO_SCANNED);}
+                /* The address stage's bound runs from here: the network's start, the lease, the resolve and the fence. */
+                if(!r->address_started){
+                    r->address_started=1;r->operation_deadline=bounded_deadline(r,now,r->config.address_timeout_us);
+                }
+                /* The network attaches once the transport is idle and the IP task has words for its first transaction
+                 * identifiers (the stack draws DHCP's first one once, at its start); until then each pass tries again. */
+                address_refill(r);
+                if(atomic_load_explicit(&r->net_random_put,memory_order_relaxed)-
+                   atomic_load_explicit(&r->net_random_take,memory_order_acquire)>=ADDRESS_START_WORDS&&
+                   a733_radio_session_start_network(&r->session,&r->config.network)){
+                    r->stage=ONLINE;atomic_store_explicit(&r->network_started,1,memory_order_release);
+#ifdef SUNSTONE_A733_RADIO_IRQ
+                    xTaskNotifyGive(r->config.network.clients[0]);
+#endif
+                }
             }
         }else if(r->session.wifi.link==AIC8800_WIFI_SECURED&&
             r->session.supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&
@@ -764,6 +874,11 @@ static int radio_authorize(void *cookie,const struct a733_radio_platform_config 
     return p->used&&f->platform_authority&&evidence(f->platform_evidence)&&
         token->owner==f->platform.owner&&memcmp(c,&f->platform,sizeof(*c))==0;
 }
+/* The address stage's one lookup (BOARD_RADIO_STAGE_ADDRESS): an A query for this name through the leased DNS server. */
+static const char address_name[]="example.com";
+/* The fence's bound after the resolve's: the IP task's down processing is one queued event and its acknowledgement
+ * another (aic8800_network_ip_event). */
+#define ADDRESS_FENCE_BOUND_US 1000000u
 /* A scan-only profile (version 7) needs no entropy qualification, crypto engine,
  * credential or TCP exchange, and association_timeout_us bounds its scan. Every
  * other field keeps its meaning. */
@@ -780,8 +895,13 @@ static int startup_profile_valid(const struct board_radio_profile *f,const uint8
      * identity from the secure reader, and the profile's own copy is unused. */
     if(!scan&&memcmp(f->chip_id,id->words,sizeof(f->chip_id)))return 0;
     if(scan){
-        if(board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_ASSOCIATE&&
+        if(board_radio_stage_associates(board_radio_profile_stage_limit(f))&&
             (!f->refill_timeout_us||!f->security_timeout_us||!f->command_timeout_us))return 0;
+        /* The address stage: the network's transmit and queue bounds and the resolve's bound (the lease bounds are
+         * checked with the network fields). The resolve and the fence end before the startup deadline. */
+        if(board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_ADDRESS&&
+            (!f->tx_timeout_us||!f->queue_timeout_ticks||f->queue_timeout_ticks>(uint32_t)(portMAX_DELAY/2)||
+             !f->client_timeout_ticks||f->client_timeout_ticks>(uint32_t)(portMAX_DELAY/2)))return 0;
         if(f->tcp_mode||!f->association_timeout_us||f->startup_deadline_us<f->bootstrap_deadline_us||
             f->startup_deadline_us>f->platform.lifetime_deadline_us)return 0;
     }else if(!f->ce_authority||!f->secure_ce_authority||
@@ -820,10 +940,14 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
             .network={.bootstrap=owner,.clients={client}},
             .admit=radio_authorize,.admission_context=p,.startup_deadline_us=f->startup_deadline_us,
             .scan_only=1,.first_run_guard=1,.scan_timeout_us=f->association_timeout_us,
-            .associate=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_ASSOCIATE,
+            .associate=board_radio_stage_associates(board_radio_profile_stage_limit(f)),
             .connect_timeout_us=f->refill_timeout_us,.security_timeout_us=f->security_timeout_us,
+            .address=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_ADDRESS,
+            .address_timeout_us=(uint64_t)f->client_timeout_ticks*(1000000u/configTICK_RATE_HZ)+ADDRESS_FENCE_BOUND_US,
+            .resolve_name=address_name,.resolve_bytes=sizeof(address_name)-1u,
+            .resolve_timeout=(TickType_t)f->client_timeout_ticks,
             .enumeration_only=board_radio_profile_stage_limit(f)!=BOARD_RADIO_STAGE_SCAN&&
-                board_radio_profile_stage_limit(f)!=BOARD_RADIO_STAGE_ASSOCIATE,
+                !board_radio_stage_associates(board_radio_profile_stage_limit(f)),
             .security={.entropy=os_ce_entropy_bytes,.entropy_record=f->platform_authority,.beacon_record=f->platform_authority,
                 .ticks_per_second=1000000,.command_timeout=f->command_timeout_us,.key_mgmt=AIC8800_SUPPLICANT_PSK},
             .entropy_only=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_ENTROPY,
@@ -835,10 +959,13 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
             .firmware={.identity=f->radio_identity,.profile=1},.runtime={.binding_timeout=f->binding_timeout_us},.wifi=f->wifi,
             .enumeration_only=sc.enumeration_only,
             .identity_only=board_radio_profile_stage_limit(f)>=BOARD_RADIO_STAGE_IDENTITY&&
-                board_radio_profile_stage_limit(f)!=BOARD_RADIO_STAGE_ASSOCIATE,
+                !board_radio_stage_associates(board_radio_profile_stage_limit(f)),
             .firmware_only=board_radio_profile_stage_limit(f)==BOARD_RADIO_STAGE_FIRMWARE};
         for(unsigned i=0;i<4;++i)sc.session.firmware.blobs[i]=(struct aic8800_firmware_blob){
             (const uint8_t *)(uintptr_t)f->firmware_address[i],(size_t)f->firmware_bytes[i]};
+        if(sc.address)sc.network.network=(struct aic8800_network_config){.entropy_record=f->platform_authority,
+            .tx_timeout=f->tx_timeout_us,.queue_timeout=(TickType_t)f->queue_timeout_ticks,.dhcp=f->network_dhcp,
+            .address_timeout=(TickType_t)f->address_timeout_ticks,.lease_cap=(TickType_t)f->lease_cap_ticks};
         if(!board_radio_init(r,&sc))return 0;
         r->startup_profile=f;return 1;
     }
@@ -962,11 +1089,43 @@ static int listener_poll(struct board_radio *r)
     if(submitted){r->client_ticket=ticket;r->client_pending=1;}
     return 0;
 }
+/* The address stage's client: one RESOLVE, submitted when the network starts; it waits in the network service for the
+ * lease, then for the DNS answer. The outcome goes to the owner, which ends the stage; the client never reports a
+ * failure itself, so a missed lease or lookup still ends with the record. The answer's address is not kept. */
+static int address_client(struct board_radio *r)
+{
+    if(xTaskGetCurrentTaskHandle()!=r->config.network.clients[0])return -1;
+    if(atomic_load_explicit(&r->address_result,memory_order_acquire)||atomic_load_explicit(&r->failed,memory_order_acquire)||
+       !atomic_load_explicit(&r->network_started,memory_order_acquire))return 0;
+    if(!r->client_pending){
+        if(r->client_ticket)return 0; /* one resolve only */
+        struct sunstone_net_request request={.operation=SUNSTONE_NET_RESOLVE,.timeout=r->config.resolve_timeout,
+            .bytes=(uint16_t)r->config.resolve_bytes};
+        memcpy(request.payload,r->config.resolve_name,r->config.resolve_bytes);
+        uint64_t ticket;int submitted=board_radio_submit(r,&request,&ticket);
+#ifdef SUNSTONE_A733_RADIO_IRQ
+        r->client_retry=!submitted;
+#endif
+        if(submitted){r->client_ticket=ticket;r->client_pending=1;}
+        return 0;
+    }
+    struct sunstone_net_reply reply;
+    if(!board_radio_receive(r,&reply,0))return 0;
+    r->client_pending=0;
+    unsigned resolved=reply.ticket==r->client_ticket&&reply.result==SUNSTONE_NET_OK&&
+        (reply.address[0]|reply.address[1]|reply.address[2]|reply.address[3]);
+    volatile uint8_t *answer=reply.address;for(unsigned i=0;i<4;++i)answer[i]=0;
+    atomic_store_explicit(&r->address_resolved,resolved,memory_order_release);
+    atomic_store_explicit(&r->address_result,reply.ticket==r->client_ticket?(unsigned)reply.result+1u:0xffu,
+        memory_order_release);
+    sunstone_net_event(); /* wakes the owner */
+    return 0;
+}
 int board_radio_client_poll(struct board_radio *r)
 {
-    /* A scan-only session has no network and no client exchange: the client task idles. Reporting failure
-     * here would revoke the owner's recovery state before its first poll. */
-    if(r&&r->self==r&&r->constructed&&r->config.scan_only)return 0;
+    /* A scan-only session has no network and no client exchange: the client task idles, except for the address stage's
+     * one resolve. Reporting failure here would revoke the owner's recovery state before its first poll. */
+    if(r&&r->self==r&&r->constructed&&r->config.scan_only)return r->config.address?address_client(r):0;
     if(!r||r->self!=r||!r->constructed||!r->startup_profile||
         xTaskGetCurrentTaskHandle()!=r->config.network.clients[0])return -1;
     if(atomic_load_explicit(&r->failed,memory_order_acquire)||
