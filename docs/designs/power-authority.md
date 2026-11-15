@@ -126,7 +126,7 @@ merge base with the implementation (record `power-authority-host-measurements`).
 | Figure | Value | Budget |
 | --- | --- | --- |
 | Rail status, one-rail token | 37 instructions, 3 lines (base 222 to 888) | at most 60, 3 lines |
-| Clock token status | 45 instructions (base 235 to 592) | at most 50 |
+| Clock token status | 51 instructions (base 235 to 592; 45 at the design measurement, 6 more for the retained-token test of `a6124e535`) | at most 51, itemized in `CLOCK_STATUS_BUDGET` of `checks/rail-leases-cost.py` |
 | Acquire, poll and release | 335 instructions (base 1,643 to 3,565) | at most 450 |
 | Authority check per PMIC transaction | 6 instructions, one acquire load | at most 6 |
 | Ledger storage | 1,600 B (base 20,096 B) | at most 1,632 B |

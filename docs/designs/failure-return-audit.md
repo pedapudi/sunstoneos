@@ -42,6 +42,10 @@ request before touching hardware and waits for concurrent mailbox publishers.
 | Bluetooth headset | Headset grant; device owners | Closes capture and protocol channels, completes HCI Reset, waits for the module owner to assert and verify PM2 reset, then drains and closes UART. | Host-tested DONE requires every protocol, peer-stop and UART proof. Profile version 4 supplies explicit PM2 authority; legacy profiles retain FAULT. Returning headset admission remains excluded pending physical qualification, including the reset route and an attached headset. |
 | SD storage | Card-backed large regions or the write-owner binding; device owners | Finishes the issued transfer, refuses further requests and uses its own transaction record to decide whether native close is safe. | DONE covers reads, untouched write sessions and completed consistent transactions. Unsafe phases immediately publish FAULT with the session ID and detail `0x921` through `0x92c`. Failure after a verified 512 MiB read is board-qualified; interrupted filesystem writes are not. |
 | DMA | DMA extent; device owners | Stops admission under the sender reservation and retires the idle worker queue, interrupt and controller through read-only final verification. | Host-tested DONE requires closed channels, no queued request or uncollected reply, and the admitted cold or adopted controller state. Closed streams are supported. Device memory and its platform reservation remain held through FEL. Active or abandoned work retains FAULT. |
+| G2D | `g2d` device grant; device owners | A FAULT service gets one vendor-order close from its owner task, touching engine registers only while the bus clock and reset read open. An engine that may be running is stopped with the vendor's AHB reset pulse and read idle before master 10 is detached ([docs/g2d-os.md](../g2d-os.md#operations)). | DONE when every close step reads back; the fault stays in the application's record. A failed close step publishes FAULT (site `0x931`). Host-tested by [os-g2d-fault-return.py](../../checks/os-g2d-fault-return.py). |
+| I2C | Declared I2C buses; device owners | Closes each open bus on its owner task: controller reset, pins and clock returned. | A bus that faulted in a transfer or a close publishes FAULT (`0x911`) at once, without the close the rule below requires. To convert. |
+| RTC | `rtc` declaration; device owners | Posts a close of an open service to its owner task. | A FAULT service publishes FAULT (`0x921`) at once, without the close the rule below requires. To convert. |
+| Video decode | `video-decode` device grant; device owners | On bringup the descriptor reports DONE and touches no hardware; the decoder service under development follows the rule below. | Its fault path (site `0x941`) must close before it reports. |
 | CPU clock | CPU clock grant; clock lowering | The thermal task finishes an active transition and lowers CPU-B through the boot-point return path. | DONE is published once. Subsequent passes perform no clock work; refusal publishes FAULT. |
 | Thermal | Every OS session; thermal stop | Continues readings until earlier owners drain. A separately published authorization permits bounded interrupt masking and converter stop. | DONE requires converter stop. An earlier device FAULT keeps sampling active and prevents thermal retirement. |
 | PMIC | Every returning OS session; PMIC stop | Its owner verifies idle slots, borrowed IDs and locks, publishes its result and parks. | DONE requires no held, retained or failed PMIC state. A refusal is recorded without closing board admission. |
@@ -59,6 +63,31 @@ Shared lock waiters recheck that deadline on each existing wait tick and after
 acquisition; shared pin callbacks refuse register access after expiry. A startup
 task that sees closing before the deadline is published yields without starting
 more hardware work. Normal transaction deadlines remain in force when earlier.
+
+## A faulted device service closes before it reports
+
+A device service that enters FAULT after its first register write does not publish FAULT to the registry until a
+close has failed. A FAULT owner blocks the terminal release (above) until the shared three-second bound, so a service
+that publishes FAULT at once ends every session in which it failed at the watchdog reset (site `0x742`), and the
+runner loses the session's DRAM and result record. The G2D stage-2 run and the decoder stage-1 run on port 3-1 both
+ended this way after a fault that left their hardware idle.
+
+The service behaves as follows:
+
+1. The fault is recorded in the service's own fault record (step and word), which the application reads and returns
+   in its result. The service keeps its leases and gates; it starts no new operation.
+2. When the application closes the service, or when its quiesce step is first requested, the owner task runs the
+   service's vendor-order close once, from the state the fault left. A step that needs a clock, a reset or a power
+   domain runs only while that resource reads open. A master that may still be running is stopped, and the stop is read
+   back, before any step that widens what it can reach: for example, a DMA master is reset or drained before its IOMMU
+   master returns to bypass or its tables are freed.
+3. When every close step reads back, the service is closed. Its quiesce step reports DONE without a fault note, so the
+   failure return or normal return completes, and the fault reaches the host inside the application's record.
+4. When a close step fails, the service stays FAULT with its resources retained, and its quiesce step publishes FAULT
+   with the first fault's site and value. The session then fails at the bound, as before.
+
+A service whose hardware cannot be stopped by its vendor close (an interrupted SD write transaction, active DMA work,
+an unproved crypto-engine retirement) retains FAULT under step 4; the table above names those cases.
 
 ## Physical qualification
 
