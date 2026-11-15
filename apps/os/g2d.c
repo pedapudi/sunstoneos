@@ -648,11 +648,7 @@ static int do_convert(const struct ss_g2d_job *j,struct ss_g2d_done *d,const str
     d->output_iova=(uint32_t)output_iova;d->source_iova=(uint32_t)luma_iova;
     const struct a733_g2d_convert c={(uint32_t)luma_iova,(uint32_t)chroma_iova,j->source.stride,j->source.chroma_stride,
         j->sx,j->sy,j->w,j->h,j->source.format,(uint32_t)output_iova,j->output.stride,j->dx,j->dy,j->ow,j->oh,
-        j->output.format,j->csc
-#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
-        ,j->reserved
-#endif
-    };
+        j->output.format,j->csc};
     if(!a733_g2d_convert_commands(g2d.rcq,G2D_RCQ_BYTES,&c,(uint32_t)g2d.rcq_iova))return run_refuse(G2D_STEP_RUN_GEOMETRY,3);
     uintptr_t at,luma_at,chroma_at;size_t bytes,luma_bytes,chroma_bytes;
     surface_lines(l,&j->output,&at,&bytes);
@@ -664,13 +660,6 @@ static int do_convert(const struct ss_g2d_job *j,struct ss_g2d_done *d,const str
     __asm__ volatile("dsb sy":::"memory");
     return mixer_run(d,at,bytes);
 }
-/* A convert's diagnostic variant (include/a733_g2d_convert.h) travels in the job's reserved word, accepted only in an
- * image built with SUNSTONE_G2D_CONVERT_VARIANTS. */
-#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
-#define VARIANT_BITS ((uint32_t)A733_G2D_CONVERT_VARIANT_BITS)
-#else
-#define VARIANT_BITS 0u
-#endif
 /* One operation: the job's checks, then a rotate, a convert, or a fill or blit through the native builder. */
 static int do_run(void)
 {
@@ -690,8 +679,7 @@ static int do_run(void)
      * own geometry and writes an RGB output. */
     const int blit=j->op==SS_G2D_BLIT,rotate=j->op==SS_G2D_ROTATE,convert=j->op==SS_G2D_CONVERT;
     const int reads=blit||rotate||convert;
-    if((j->op!=SS_G2D_FILL&&!reads)||(!rotate&&(j->degrees||j->flip))||(!convert&&(j->ow|j->oh|j->csc))||
-       (j->reserved&~(convert?VARIANT_BITS:0u))||
+    if((j->op!=SS_G2D_FILL&&!reads)||(!rotate&&(j->degrees||j->flip))||(!convert&&(j->ow|j->oh|j->csc))||j->reserved||
        (!reads&&(j->sx||j->sy||!zero(&j->source,sizeof(j->source))||j->output.format))||
        (reads&&!convert&&j->source.format>7)||
        (convert&&(j->color||j->source.format!=SS_G2D_FORMAT_NV16||(j->sx&1)||j->csc-1u>=4u))||

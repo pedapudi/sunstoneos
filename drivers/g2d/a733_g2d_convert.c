@@ -17,8 +17,9 @@
 /* Bounded FreeRTOS RCQ adaptation; source pins: apps/g2d/sources.json. */
 /* The RCQ command page of one YUV-to-RGB conversion with scaling (include/a733_g2d_convert.h states the job and its
  * refusals; docs/g2d-os.md#camera-frame-conversion). checks/g2d-convert-words.py compares every register word with a
- * transcription of the vendor functions. Integer only. */
+ * transcription of the vendor functions and the generated tables. Integer only. */
 #include "a733_g2d_convert.h"
+#include "a733_g2d_csc_tables.h"
 #include "g2d_mixer_type.h"
 #include <string.h>
 
@@ -163,22 +164,8 @@ static uint32_t fir_coef(uint32_t step)
     const uint32_t bank=whole==0?1:whole==1?1+part:whole==2?9+(part>>1):whole==3?13:whole==4?14:15;
     return bank*32;
 }
-/* g2d_bld.c Ycbcr2rgb_601 (37-50) and Ycbcr2rgb_709 (66-79), the blocks whose coefficients give full-range RGB. The
- * vendor's comments name the blocks by a source and destination range that their contents do not match: the block it
- * calls "full to limit" (offset 0) holds 1.164 (0x4a8) on Y and a constant of -222.9 for R, the limited-to-full
- * conversion, and the block it selects for a limited source and a full destination (offset 0x24, "limit to full")
- * holds 0.858 (0x36f), which compresses to limited RGB. The table is chosen here by its contents. */
-static const int32_t csc[4][12]={
-    [A733_G2D_CSC_BT601_LIMITED-1]={0x04a8,0x0,0x0662,(int32_t)0xFFFC8480,0x04a8,(int32_t)0xFFFFFE6F,
-        (int32_t)0xFFFFFCC0,0x21E00,0x04a8,0x0812,0x0,(int32_t)0xFFFBAC80},               /* 601, offset 0 */
-    [A733_G2D_CSC_BT601_FULL-1]={0x0400,0x0,0x059c,(int32_t)0xFFFD31FF,0x0400,(int32_t)0xFFFFFE9F,
-        (int32_t)0xFFFFFD24,0x21D80,0x0400,0x0717,0x0,(int32_t)0xFFFC747F},               /* 601, offset 0x18 */
-    [A733_G2D_CSC_BT709_LIMITED-1]={0x04a8,0x0,0x072c,(int32_t)0xFFFC1F80,0x04a8,(int32_t)0xFFFFFF26,
-        (int32_t)0xFFFFFDDE,0x13380,0x04a8,0x0873,0,(int32_t)0xFFFB7C00},                 /* 709, offset 0 */
-    [A733_G2D_CSC_BT709_FULL-1]={0x0400,0x0,0x64D,(int32_t)0xFFFC9980,0x0400,(int32_t)0xFFFFFF40,
-        (int32_t)0xFFFFFE21,0x10F80,0x0400,0x076C,0x0,(int32_t)0xFFFC0A00},               /* 709, offset 0x18 */
-};
-const int32_t *a733_g2d_csc_table(uint32_t c){return c-1u<4u?csc[c-1u]:NULL;}
+/* The tables come from tools/g2d-csc-tables.py, which derives them from the BT.601 and BT.709 matrices. */
+const int32_t *a733_g2d_csc_table(uint32_t c){return c-1u<4u?a733_g2d_csc_tables[c-1u]:NULL;}
 struct head { uint32_t low,len,dirty,offset; };
 _Static_assert(sizeof(struct head)==16,"RCQ descriptor");
 static void block(uint8_t *memory,uint32_t rcq,unsigned h,unsigned at,unsigned size,unsigned offset)
@@ -200,9 +187,6 @@ int a733_g2d_convert_commands(void *memory,size_t capacity,const struct a733_g2d
        oh-1u>=A733_G2D_CONVERT_MAX||(c->sx&1)||c->luma_stride<w||c->chroma_stride<((w+1)&~1u)||
        (uint64_t)c->output_stride<(uint64_t)ow*4||((c->luma|c->chroma|c->output|c->luma_stride|c->chroma_stride|
        c->output_stride)&3))return 0;
-#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
-    if(c->variant&~(uint32_t)A733_G2D_CONVERT_VARIANT_BITS)return 0;
-#endif
     /* g2d_vlayer_set (g2d_ovl_v.c 244-335): one luma byte and one chroma pair (2 bytes) for two pixels, so the chroma
      * plane's rectangle starts at pitch1 * y + 2 * (x / 2). */
     const uint64_t luma=origin(c->luma,c->luma_stride,c->sy,c->sx);
@@ -247,28 +231,20 @@ int a733_g2d_convert_commands(void *memory,size_t capacity,const struct a733_g2d
     memcpy(vs->vs_y_ch_hor_filter_coef,lan2coefftab32_full+fir_coef(hstep),32*4);
     memcpy(vs->vs_c_ch_hor_filter_coef,lan2coefftab32_full+fir_coef(hstep>>1),32*4);
     memcpy(vs->vs_y_ch_ver_filter_coef,lan2coefftab32_full+fir_coef(vstep),32*4);
-    /* g2d_bsp_bitblt (g2d_mixer.c 304-371): source-over, ROP 0xf0, pipe 0 with its fill colour over the output rectangle, the blender in
-     * YUV (bld_cs_set, g2d_bld.c 218-238), csc2 with the table and the fill colours black in YUV (bld_csc_reg_set,
-     * g2d_bld.c 246-354),
-     * and the output size (bld_out_setting, straight alpha). */
+    /* The blender: source-over, ROP 0xf0 and pipe 0 with its fill colour over the output rectangle, as g2d_bsp_bitblt
+     * sets them (g2d_mixer.c 332-339), and the output size (bld_out_setting, straight alpha). The colour conversion
+     * follows g2d_bsp_bld's order (g2d_mixer.c 216-220 and 287): csc0 converts at pipe 0's input
+     * (bld_csc_reg_set(0, ...), g2d_bld.c 261-264, at blender + 0x110) and the blender works in RGB (bld_cs_set with
+     * an RGB format: out_color 0). When the blender works in YUV and csc2 converts its output, as g2d_bsp_bitblt sets
+     * it, luma below 16 reaches csc2 as 16 (docs/g2d-os.md#second-conversion-stage). The fill colours are
+     * bld_csc_reg_set's (g2d_bld.c 257-258). */
     b->bld_en_ctrl.dwval=0x101;b->bld_fill_color[0]=b->bld_fill_color[1]=0x00108080;
     b->mem_size[0].dwval=size;b->out_size.dwval=size;
     b->bld_ctrl.dwval=0x03010301;b->rop_ctrl.dwval=0xf0;b->ch3_index0.dwval=0x41000;
-    b->out_color.dwval=2;b->cs_ctrl.dwval=4;
-    memcpy(&b->csc2_coeff0_reg0,table,12*4);
+    b->out_color.dwval=0;b->cs_ctrl.dwval=1;
+    memcpy(&b->csc0_coeff0_reg0,table,12*4);
     /* g2d_wb_set (g2d_wb.c 100-170): the output format, size, pitch and first pixel. */
     wb->wb_attr.dwval=c->out_format;wb->data_size.dwval=size;wb->pitch0=c->output_stride;wb->laddr0=(uint32_t)out;
-#ifdef SUNSTONE_G2D_CONVERT_VARIANTS
-    if(c->variant&A733_G2D_CONVERT_FILL_Y0)b->bld_fill_color[0]=b->bld_fill_color[1]=0x00008080;
-    if(c->variant&A733_G2D_CONVERT_NO_FILL)b->bld_en_ctrl.dwval=0x100;
-    if(c->variant&A733_G2D_CONVERT_CSC0){
-        /* bld_csc_reg_set(0, ...) sets cs0_en and loads csc0 (blender + 0x110); bld_cs_set(G2D_FORMAT_BGRA1010102)
-         * clears out_color's YUV bit. */
-        memset(&b->csc2_coeff0_reg0,0,12*4);memcpy(&b->csc0_coeff0_reg0,table,12*4);
-        b->cs_ctrl.dwval=1;b->out_color.dwval=0;
-    }
-    if(c->variant&A733_G2D_CONVERT_ROUND)wb->wb_attr.dwval|=UINT32_C(1)<<8;
-#endif
     block(p,rcq_iova,0,128,sizeof(*v),G2D_V0);
     block(p,rcq_iova,1,192,4,G2D_UI0);block(p,rcq_iova,2,224,4,G2D_UI1);block(p,rcq_iova,3,256,4,G2D_UI2);
     block(p,rcq_iova,4,1024,sizeof(*vs),G2D_VSU);

@@ -1,18 +1,18 @@
 /* A host SDK for apps/g2d-convert/main.c (checks/g2d-convert-host.py). The large regions are host buffers, the clock
- * is ready with the approved points, and ss_g2d_run performs each convert on the CPU with the engine's model from
- * stage 7: the scaler model (the job's steps and Lanczos banks, as drivers/g2d/a733_g2d_convert.c programs them, with
- * taps at positions -1 to +2, the edge samples repeated, each pass rounded to nearest and clamped; an unscaled row's
- * last pixel takes its own chroma pair), luma below 16 raised to 16, then the programmed table rounded down, with U
- * the first byte of each chroma pair. The variants model one outcome each, for the decoder to name: FILL_Y0 and CSC0
- * keep luma below 16, NO_FILL changes nothing, ROUND rounds to nearest. Mutants:
- * - -DNO_FLOOR keeps luma below 16 in every operation, -DNEAREST_CHROMA gives odd pixels the chroma of their own pair
- *   (no interpolation);
+ * is ready with the approved points, and ss_g2d_run performs each convert on the CPU with the engine's model: the
+ * scaler model (the job's steps and Lanczos banks, as drivers/g2d/a733_g2d_convert.c programs them, each position
+ * rounded to the nearest of 32 phases, taps at positions -1 to +2, the edge samples repeated, each pass rounded to
+ * nearest and clamped; an unscaled row's last pixel takes its own chroma pair), then the programmed table
+ * (tools/g2d-csc-tables.py) with luma kept, clamped to 0..255, with U the first byte of each chroma pair. Mutants:
+ * - -DFLOOR raises luma below 16 to 16 (the blender working in YUV);
+ * - -DNO_LOW_CLAMP and -DNO_HIGH_CLAMP drop one bound of the output clamp, keeping the low byte;
+ * - -DNEAREST_CHROMA gives odd pixels the chroma of their own pair (no interpolation);
+ * - -DTRUNC_PHASE truncates each scaler position to its phase instead of rounding it;
  * - -DMISS changes one pixel of the first conversion's exact region;
  * - -DFAIL_OP=n fails operation n (counted from 0) at step 62 (a timeout) with nothing written.
  * ss_finish writes the result to the file named by the first argument. */
 #include "g2d_convert-app.h"
 #include "sunstone_g2d.h"
-#define SUNSTONE_G2D_CONVERT_VARIANTS 1
 #include "a733_g2d_convert.c"
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,6 +59,15 @@ int ss_g2d_close(struct ss_g2d_closed *closed) { memset(closed, 0, sizeof(*close
 int ss_g2d_fault(uint32_t *step, uint32_t *value) { *step = fault_step; *value = fault_value; return 1; }
 
 static int32_t clip(int32_t v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+/* A position with 20 fraction bits as (integer part << 5) | phase, rounded to the nearest of 32 phases. */
+static uint64_t phase_of(uint64_t position)
+{
+#ifdef TRUNC_PHASE
+    return position >> 15;
+#else
+    return (position + (1u << 14)) >> 15;
+#endif
+}
 /* One sample through a 4-tap phase: positions i - 1 to i + 2 of n samples spaced by stride, the edges repeated. */
 static int32_t filter(const uint8_t *p, int32_t n, size_t stride, int32_t i, uint32_t word)
 {
@@ -78,15 +87,15 @@ static void scale_plane(const uint8_t *in, int32_t w, int32_t h, size_t spacing,
     uint8_t *rows = malloc((size_t)ow * (size_t)h);
     for (int32_t y = 0; y < h; ++y)
         for (uint32_t x = 0; x < ow; ++x) {
-            const uint64_t position = (uint64_t)x * hreg;
-            rows[(size_t)y * ow + x] = (uint8_t)filter(in + (size_t)y * stride, w, spacing, (int32_t)(position >> 20),
-                                                       lan2coefftab32_full[hbank + ((position >> 15) & 31)]);
+            const uint64_t q = phase_of((uint64_t)x * hreg);
+            rows[(size_t)y * ow + x] = (uint8_t)filter(in + (size_t)y * stride, w, spacing, (int32_t)(q >> 5),
+                                                       lan2coefftab32_full[hbank + (q & 31)]);
         }
     for (uint32_t y = 0; y < oh; ++y)
         for (uint32_t x = 0; x < ow; ++x) {
-            const uint64_t position = (uint64_t)y * vreg;
-            out[(size_t)y * ow + x] = (uint8_t)filter(rows + x, h, ow, (int32_t)(position >> 20),
-                                                      lan2coefftab32_full[vbank + ((position >> 15) & 31)]);
+            const uint64_t q = phase_of((uint64_t)y * vreg);
+            out[(size_t)y * ow + x] = (uint8_t)filter(rows + x, h, ow, (int32_t)(q >> 5),
+                                                      lan2coefftab32_full[vbank + (q & 31)]);
         }
     free(rows);
 }
@@ -103,7 +112,7 @@ int ss_g2d_run(const struct ss_g2d_job *j, struct ss_g2d_done *done)
     if (run == FAIL_OP) { fault_step = 62; fault_value = 0x4; return -1; }
 #endif
     const int32_t *t = a733_g2d_csc_table(j->csc);
-    const uint32_t w = j->w, h = j->h, ow = j->ow, oh = j->oh, variant = j->reserved;
+    const uint32_t w = j->w, h = j->h, ow = j->ow, oh = j->oh;
     const uint32_t hstep = (w << 19) / ow, vstep = (h << 19) / oh;
     uint8_t *y = malloc((size_t)ow * oh), *u = malloc((size_t)ow * oh), *v = malloc((size_t)ow * oh);
     const uint8_t *luma = source + j->source.offset, *chroma = source + j->source.chroma_offset;
@@ -128,20 +137,26 @@ int ss_g2d_run(const struct ss_g2d_job *j, struct ss_g2d_done *done)
             v[(size_t)r * ow + ow - 1] = chroma[(size_t)r * j->source.chroma_stride + 2 * ((w - 1) / 2) + 1 - first];
         }
 #endif
-    const int32_t round = variant & A733_G2D_CONVERT_ROUND ? 512 : 0;
-#ifdef NO_FLOOR
-    const int floor16 = 0;
+#ifdef FLOOR
+    const int floor16 = 1;
 #else
-    const int floor16 = !(variant & (A733_G2D_CONVERT_FILL_Y0 | A733_G2D_CONVERT_CSC0));
+    const int floor16 = 0;
 #endif
     for (uint32_t r = 0; r < oh; ++r)
         for (uint32_t x = 0; x < ow; ++x) {
             const size_t i = (size_t)r * ow + x;
             uint32_t word = UINT32_C(0xff) << 24;
             const int32_t luma_value = floor16 && y[i] < 16 ? 16 : y[i];
-            for (unsigned c = 0; c < 3; ++c)
-                word |= (uint32_t)clip((t[4 * c] * luma_value + t[4 * c + 1] * u[i] + t[4 * c + 2] * v[i] +
-                                        t[4 * c + 3] + round) >> 10) << (16 - 8 * c);
+            for (unsigned c = 0; c < 3; ++c) {
+                int32_t value = (t[4 * c] * luma_value + t[4 * c + 1] * u[i] + t[4 * c + 2] * v[i] + t[4 * c + 3]) >> 10;
+#ifndef NO_LOW_CLAMP
+                if (value < 0) value = 0;
+#endif
+#ifndef NO_HIGH_CLAMP
+                if (value > 255) value = 255;
+#endif
+                word |= ((uint32_t)value & 255u) << (16 - 8 * c);
+            }
 #ifdef MISS
             if (run == 0 && r == 7 && x == 9) word ^= 0x100;
 #endif

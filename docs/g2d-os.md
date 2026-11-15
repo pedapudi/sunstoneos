@@ -180,7 +180,7 @@ An NV16 surface (`SS_G2D_FORMAT_NV16`) has two planes in one large region:
 - the chroma plane at `chroma_offset`, one U and V pair for every two pixels of each row, `chroma_stride` bytes a row (at least `width` rounded up to even).
 
 Both planes start 4-byte aligned, and both strides are multiples of 4. An RGB surface leaves `chroma_offset` and `chroma_stride` 0. The convert reads the `w` by `h` rectangle at (`sx`, `sy`) and writes the `ow` by `oh` rectangle at (`dx`, `dy`); `sx` is even, so no chroma pair is split. Every size is 1 to 8192. The service refuses before any mapping:
-- at step 48: a table outside 1 to 4, an odd `sx`, a source other than NV16, a degree, flip or colour, `ow`, `oh` or `csc` set on any other operation, and a nonzero `reserved` word (an image built for the [second conversion stage](#second-conversion-stage) accepts a convert's variant bits there);
+- at step 48: a table outside 1 to 4, an odd `sx`, a source other than NV16, a degree, flip or colour, `ow`, `oh` or `csc` set on any other operation, and a nonzero `reserved` word;
 - at step 49: an NV16 output, chroma fields on an RGB surface, and a chroma plane outside its region or narrower than the frame;
 - at step 50: a rectangle that leaves its surface.
 
@@ -188,14 +188,14 @@ The vendor's format code 0x24, G2D_FORMAT_YUV422UVC_V1U1V0U0, names the bytes of
 
 The four tables (`SS_G2D_CSC_*`) name the source's colour space, and the RGB output is full range:
 
-| Table | Source | Y coefficient | Vendor block |
-| --- | --- | --- | --- |
-| `SS_G2D_CSC_BT601_LIMITED` | BT.601, Y 16 to 235 | 1.164 (0x4a8) | `Ycbcr2rgb_601`, words 0 to 11 |
-| `SS_G2D_CSC_BT601_FULL` | BT.601, Y 0 to 255 | 1.0 (0x400) | `Ycbcr2rgb_601`, words 24 to 35 |
-| `SS_G2D_CSC_BT709_LIMITED` | BT.709, Y 16 to 235 | 1.164 (0x4a8) | `Ycbcr2rgb_709`, words 0 to 11 |
-| `SS_G2D_CSC_BT709_FULL` | BT.709, Y 0 to 255 | 1.0 (0x400) | `Ycbcr2rgb_709`, words 24 to 35 |
+| Table | Source | Y coefficient |
+| --- | --- | --- |
+| `SS_G2D_CSC_BT601_LIMITED` | BT.601, Y 16 to 235, chroma 16 to 240 | 255/219, 1.164 (1192) |
+| `SS_G2D_CSC_BT601_FULL` | BT.601, Y and chroma 0 to 255 | 1.0 (1024) |
+| `SS_G2D_CSC_BT709_LIMITED` | BT.709, Y 16 to 235, chroma 16 to 240 | 255/219, 1.164 (1192) |
+| `SS_G2D_CSC_BT709_FULL` | BT.709, Y and chroma 0 to 255 | 1.0 (1024) |
 
-The vendor's arrays (g2d_bld.c 37-50 and 66-79) hold four 12-word blocks each. Each block gives, for R, G and B in turn, the Y, U and V coefficients with 10 fraction bits and then the constant times 1024. The builder selects the blocks by their contents, not by the vendor's labels ([Vendor sequence and the native diff](#vendor-conversion-path-and-the-native-diff)).
+The converter computes each channel as (cy Y + cu U + cv V + k) >> 10, clamped to 0 to 255, with signed 13-bit coefficients and a signed 20-bit constant. [g2d-csc-tables.py](../tools/g2d-csc-tables.py) derives the four tables from the BT.601 and BT.709 matrices (ITU-R BT.601-7 section 2.5, ITU-R BT.709-6 items 3.2, 3.3 and 4.6, and ITU-T H.273 for full range) into [a733_g2d_csc_tables.h](../include/a733_g2d_csc_tables.h). Each coefficient is the real one times 1024, rounded to nearest. Each constant cancels the luma offset and both chroma offsets, and adds 512 so that the converter's truncating shift rounds to nearest.
 
 ### Vendor conversion path and the native diff
 
@@ -203,12 +203,21 @@ The reference is `g2d_bsp_bitblt` with flag G2D_BLT_NONE (g2d_mixer.c 304-371 in
 - **Video layer V0** (`g2d_vlayer_set`, g2d_ovl_v.c 244-335): the format code, both plane addresses and pitches, and the rectangle.
 - **Coarse decimation** (`g2d_ovl_v_calc_coarse`): applied when `w` is at least 8 times `ow` or `h` at least 4 times `oh`, with the scaler's input width capped at 2048.
 - **Video scaler** (`g2d_vsu_para_set`, g2d_scal.c), enabled for every YUV source, also unscaled: control word 0x10101; luma steps at full rate; the chroma horizontal step half the luma's and the chroma vertical step the luma's. The filter banks come from `lan2coefftab32_full` through `fir_coef` (g2d_scal.c 248-268) for the luma horizontal, chroma horizontal and luma vertical steps, and every phase starts at 0.
-- **Blender**: source-over (0x03010301), ROP 0xf0, `ch3_index0` 0x41000, pipe 0 on (0x101). `bld_cs_set` with a YUV source sets `out_color` alpha mode 1, so the blender works in YUV. `bld_csc_reg_set` then loads the output converter csc2: control 4, fill colours 0x00108080, and the table's 12 words at blender + 0x170.
+- **Blender**: source-over (0x03010301), ROP 0xf0, `ch3_index0` 0x41000, pipe 0 on (0x101). The colour conversion follows the vendor's other path, `g2d_bsp_bld` (g2d_mixer.c 216-220 and 287): `bld_csc_reg_set(0, ...)` loads the pipe-0 input converter csc0 (control 1, fill colours 0x00108080, the table's 12 words at blender + 0x110), and `bld_cs_set` with an RGB format sets `out_color` 0, so the blender works in RGB. When the blender works in YUV and csc2 converts its output, as `g2d_bsp_bitblt` sets it, luma below 16 reaches the table as 16 ([second conversion stage](#second-conversion-stage)).
 - **Write-back** (`g2d_wb_set`): the output's format, address, pitch and size.
 
-The vendor has a second YUV-to-RGB path, csc0 in `g2d_bsp_bld`, which the builder does not use. g2d_mixer.c 202 reads `if (src->resize.w == 0 || src->resize.h)`, which refuses every job with a nonzero height, so the csc0 branch never runs for a real frame. The scaler words come from g2d_scal.c, which the vendor's bitblt path reaches, rather than from that branch.
+In the vendor driver the csc0 path never runs for a real frame: g2d_mixer.c 202 reads `if (src->resize.w == 0 || src->resize.h)`, which refuses every job with a nonzero height. The builder takes only its conversion order; the scaler words come from g2d_scal.c, which the vendor's bitblt path reaches.
 
-The vendor's YUV-to-RGB block labels do not match their contents either. The block labelled full to limited, words 0 to 11, holds the limited-to-full conversion: Y times 1.164 and a constant of -222.9 for R. Words 12 to 23 hold limited to limited, words 24 to 35 full to full, and words 36 to 47 full to limited, which multiplies Y by 0.858 (0x36f). A table chosen by its label would compress full-range RGB output into 16 to 235, so the builder selects each table by its coefficients.
+The vendor's YUV-to-RGB blocks (`Ycbcr2rgb_601` and `Ycbcr2rgb_709`, g2d_bld.c 37-50 and 66-79) differ from the derived tables, and their labels do not match their contents. [g2d-csc-tables.py](../checks/g2d-csc-tables.py) compares each derived table with the block that gives full-range RGB from the same source range, at neutral chroma (U = V = 128):
+
+| Table | Vendor block | Vendor's grey for Y 0, 16, 128, 235, 255 | Derived table's grey |
+| --- | --- | --- | --- |
+| BT.601 limited | `Ycbcr2rgb_601` words 0 to 11 | 0, 0, 130, 254, 255 | 0, 0, 130, 255, 255 |
+| BT.601 full | `Ycbcr2rgb_601` words 24 to 35 | 0, 15, 127, 234, 254 | 0, 16, 128, 235, 255 |
+| BT.709 limited | `Ycbcr2rgb_709` words 0 to 11 | 0, 0, 130, 254, 255 | 0, 0, 130, 255, 255 |
+| BT.709 full | `Ycbcr2rgb_709` words 24 to 35 | 0, 0, 112, 219, 239 | 0, 16, 128, 235, 255 |
+
+The vendor's BT.709 full block subtracts 16 from luma: its constants are 16 times 1024 lower than its chroma coefficients cancel, so full-range BT.709 frames lose luma 0 to 16 and every value above 239. Its other blocks have no rounding term, so the truncating shift lowers most outputs by up to 1; the BT.601 full block's constant is also 1 lower than its chroma coefficients cancel, so grey Y becomes Y - 1. The derived and vendor tables differ in the constants of all four tables and in the BT.601 full table's G coefficients (-352 and -731 against the vendor's -353 and -732).
 
 The builder writes nothing for a job that the vendor refuses or that the registers cannot hold:
 - a format other than 0x24 and 0x25, an output format above 7, or an unknown table;
@@ -216,7 +225,7 @@ The builder writes nothing for a job that the vendor refuses or that the registe
 - a stride narrower than its rectangle, or an address that is not 4-byte aligned;
 - a rectangle whose first byte is at or above 2^32.
 
-[g2d-convert-words.py](../checks/g2d-convert-words.py) compares the builder with a Python transcription of the vendor functions, word for word, over 46 jobs: the stage's geometries, both coarse-decimation boundaries, the 2048 limit, odd widths, offsets, both format codes, the eight output formats and the four tables. It also checks 22 refusals, that the bank equals a733_g2d.c's, and that every phase's four taps sum to 64. It builds the builder a second time with the second stage's variants and checks the same jobs, 28 variant jobs and 4 refused variant values.
+[g2d-convert-words.py](../checks/g2d-convert-words.py) compares the builder with a Python transcription of the vendor functions and the derived tables, word for word, over 46 jobs: the stage's geometries, both coarse-decimation boundaries, the 2048 limit, odd widths, offsets, both format codes, the eight output formats and the four tables. It also checks 22 refusals, that the bank equals a733_g2d.c's, and that every phase's four taps sum to 64.
 
 The service runs a convert as a blit. It maps the output read-write and the source read-only, builds the page at the planes' device addresses, cleans and invalidates the output's lines, and cleans the luma plane's and then the chroma plane's lines. It launches the mixer with the blit's sequence and, after the interrupt, cleans and invalidates the output's lines again. A builder refusal after the mapping fails at step 50 with value 3, and a plane at or above 4 GiB in device space at step 50 with value 4. [os-g2d-operation.py](../checks/os-g2d-operation.py) runs the image's convert path with three converts in one session (unscaled, 224 by 224, and an offset window scaled 2:1 into a BGRA output). Each command page must equal the transcription's words at the device addresses the service used, with the plane maintenance in that order. It also runs 15 refusals of jobs with their own surfaces, each of which must touch nothing, among them a convert and a blit with a nonzero `reserved` word.
 
@@ -260,14 +269,14 @@ The engine converted 640 by 480 pixels in 1050 µs, 292 Mpixel/s at a module clo
 
 ### Second conversion stage
 
-The second stage tests the engine model of the first stage on a new frame, measures which block raises luma below 16, and runs the two scales.
+The second stage tested the engine model of the first stage on a new frame, measured which block raises luma below 16, and ran the two scales. It programmed the vendor's tables.
 
-No register in the vendor's mixer layout (g2d_mixer_type.h) is named for a range, a clip or a clamp. These settings of the vendor's page can produce the floor or the rounding:
+No register in the vendor's mixer layout (g2d_mixer_type.h) is named for a range, a clip or a clamp. These settings of the vendor's page could produce the floor or the rounding:
 - **Fill colours.** `bld_csc_reg_set` writes both blender fill colours as 0x00108080, luma 16 with neutral chroma (g2d_bld.c 257-258), and `bld_in_set` turns pipe 0's fill colour on (`p0_fcen`, g2d_bld.c 97).
 - **Blending in YUV.** With a YUV source, `bld_cs_set` sets the blender's output colour to YUV (g2d_bld.c 227-230), so the blender works on luma before csc2 converts it. The vendor's other path, `g2d_bsp_bld`, converts at pipe 0's input with csc0 (g2d_mixer.c 216-220) and blends in RGB (line 287); line 202 makes it unreachable.
 - **Write-back rounding.** The write-back's format word has a `round_en` bit (bit 8, g2d_mixer_type.h 508), which the vendor never sets.
 
-An image built with `SUNSTONE_G2D_CONVERT_VARIANTS` accepts a convert's diagnostic variant in the job's `reserved` word ([a733_g2d_convert.h](../include/a733_g2d_convert.h)). Each bit changes one setting after the vendor's words:
+The stage's image, built at 59c11057a with the build option `SUNSTONE_G2D_CONVERT_VARIANTS`, accepted a convert's diagnostic variant in the job's `reserved` word. Each bit changed one setting after the vendor's words:
 
 | Variant | Bit | Change to the vendor's page | Expected rule if this setting causes the effect |
 | --- | --- | --- | --- |
@@ -276,9 +285,9 @@ An image built with `SUNSTONE_G2D_CONVERT_VARIANTS` accepts a convert's diagnost
 | D | 4 | csc0 at blender + 0x110 converts at pipe 0's input, `cs_ctrl` 1, `out_color` 0, csc2 zero | luma kept, rounded down |
 | E | 8 | write-back `round_en` | luma raised, rounded to nearest |
 
-Only the g2d-convert application builds with the option, and the g2d-convert application builds only with it (cmake/a733-os.cmake). Every other image, the shipped OS included, refuses a nonzero `reserved` word at step 48. The change that makes the measured setting the default removes the option and the variant code.
+The builder no longer has the option or the variants: the [third conversion stage](#third-conversion-stage) makes the csc0 order the only path, and every image refuses a nonzero `reserved` word at step 48.
 
-[g2d-convert](../apps/g2d-convert/main.c) runs seven operations into the "surface" region, each output filled with 0x5a bytes first:
+The stage's application ran seven operations into the "surface" region, each output filled with 0x5a bytes first:
 
 | Operation | Frame | Table | Variant | Output | Stride |
 | --- | --- | --- | --- | --- | --- |
@@ -287,9 +296,9 @@ Only the g2d-convert application builds with the option, and the g2d-convert app
 | scale 1 | first stage's B, 640 by 480 | BT.601 limited | none | 320 by 240 | 1344 |
 | scale 2 | first stage's B | BT.601 limited | none | 224 by 224 | 960 |
 
-The luma-sweep frame, from seed 0x6a09e667, has the first stage's frame A layout with random luma, except that every fourth row y steps through every luma value across the exact region, (x - 8 + y) mod 256 at pixel x. Every value from 0 to 255 therefore appears in the exact region, the values below 16 and above 234 included. The scales read the first stage's frame B, its flat colour and luma ramp. The application counts the exact region's mismatches against four candidate rules: luma below 16 raised to 16 or kept, each rounded down or to nearest.
+The luma-sweep frame, from seed 0x6a09e667, has the first stage's frame A layout with random luma, except that every fourth row y steps through every luma value across the exact region, (x - 8 + y) mod 256 at pixel x. Every value from 0 to 255 therefore appears in the exact region, the values below 16 and above 234 included. The scales read the first stage's frame B, its flat colour and luma ramp (the scale frame). The application counted the exact region's mismatches against four candidate rules: luma below 16 raised to 16 or kept, each rounded down or to nearest.
 
-The engine model predicts operation A: luma raised and rounded down, rectangle CRC-32 0x5551ee74 and exact-region CRC-32 0x0f05ef24. If A follows another rule or none, the stage stops before the variants and the scales. Variants B to E are measurements: each one's result is the candidate whose rectangle CRC-32 it equals, or none.
+The engine model predicted operation A: luma raised and rounded down, rectangle CRC-32 0x5551ee74 and exact-region CRC-32 0x0f05ef24. If A had followed another rule or none, the stage would have stopped before the variants and the scales. Variants B to E were measurements: each one's result is the candidate whose rectangle CRC-32 it equals, or none.
 
 | Rule | Rectangle CRC-32 | Exact-region CRC-32 |
 | --- | --- | --- |
@@ -298,9 +307,9 @@ The engine model predicts operation A: luma raised and rounded down, rectangle C
 | luma kept, rounded down | 0xb9c1df94 | 0xe1f6034c |
 | luma kept, rounded to nearest | 0x32db2f17 | 0xf7ff37dc |
 
-For each scale, the flat region must equal the flat colour converted under the model (0xffdf884f), every row must equal the middle row, the ramp must not decrease, and the middle row must lie within 2 of the decoder's scaler model in each channel.
+For each scale, the flat region had to equal the flat colour converted under the model (0xffdf884f), every row the middle row, the ramp could not decrease, and the middle row had to lie within 2 of the decoder's scaler model in each channel.
 
-After the engine is closed, one A76 core at 2002 MHz converts the luma-sweep frame with the BT.709 full table under the model's rule three times in scalar C, as in the first stage. [The decoder](../apps/g2d-convert/host.py) reports A's rule, each variant's rule and the scales' checks. [g2d-convert-host.py](../checks/g2d-convert-host.py) builds the application on the host with the engine model, whose variants B and D keep luma and E rounds to nearest. It checks the decoder against that model and four mutant engines: one without the floor, one with uninterpolated chroma, one that misses a conversion and one whose scale fails.
+After the engine was closed, one A76 core at 2002 MHz converted the luma-sweep frame with the BT.709 full table under the model's rule three times in scalar C, as in the first stage.
 
 Run `1794752244516494656-bd8feb22` (port 3-1, image 40ef88476734, built at 59c11057a) matched the prediction and ran every operation:
 
@@ -312,8 +321,36 @@ Run `1794752244516494656-bd8feb22` (port 3-1, image 40ef88476734, built at 59c11
 | D, csc0 at pipe 0's input, RGB blender | luma kept, rounded down | 0xb9c1df94 | 0xe1f6034c | 1049.2 µs |
 | E, write-back `round_en` | luma raised, rounded down | 0x5551ee74 | 0x0f05ef24 | 1048.9 µs |
 
-In A, raising luma to 16 and rounding down matched all 145,920 exact-region pixels, and keeping luma differed at 9,078. The fill colours and the write-back's `round_en` do not change the output. Converting at pipe 0's input and blending in RGB keeps luma 0 to 15, so the floor is applied when the blender works in YUV, before csc2. Both converters round down. Every rectangle word had alpha 0xff, the padding and the source were unchanged, and the two sampled rows of each conversion matched the half-phase chroma model.
+In A, raising luma to 16 and rounding down matched all 145,920 exact-region pixels, and keeping luma differed at 9,078. The fill colours and the write-back's `round_en` do not change the output. Converting at pipe 0's input and blending in RGB keeps luma 0 to 15, so the floor is applied when the blender works in YUV, before csc2. Both converters round down. The vendor's BT.709 full block, which the stage programmed, still maps luma 0 to 16 to black at neutral chroma (see the table comparison above). Every rectangle word had alpha 0xff, the padding and the source were unchanged, and the two sampled rows of each conversion matched the half-phase chroma model.
 
-Both scales passed. The flat region equalled 0xffdf884f, every row equalled the middle row, and no channel of the ramp decreased. The 320 by 240 middle row equals the decoder's scaler model, and the 224 by 224 ramp differs from it by up to 2. The engine took 1039.3 µs for 320 by 240 and 1038.4 µs for 224 by 224, close to a conversion's time, so the engine's time follows the input's 307,200 pixels (296 Mpixel/s).
+Both scales passed. The flat region equalled 0xffdf884f, every row equalled the middle row, and no channel of the ramp decreased. The 320 by 240 middle row equals the decoder's scaler model, and the 224 by 224 ramp differed from it by up to 2 at 5 pixels; the scaler rounds each position to the nearest phase, which the model then truncated ([third conversion stage](#third-conversion-stage)). The engine took 1039.3 µs for 320 by 240 and 1038.4 µs for 224 by 224, close to a conversion's time, so the engine's time follows the input's 307,200 pixels (296 Mpixel/s).
 
 One A76 core at 2002 MHz converted the frame in 2670.5 µs, then 2646.5 and 2648.2 µs (116 Mpixel/s), and its output equalled A's. That reference is scalar integer C without NEON, a lower bound on the CPU's rate: the engine is 2.5 times faster than scalar C. The open and the close returned 1, the close gated the engine, and the session returned normally in 24.1 s.
+
+### Third conversion stage
+
+The third stage tests the conversion path that the builder now programs for every table: csc0 at pipe 0's input with the blender in RGB, and the tables derived from the BT.601 and BT.709 matrices with round-to-nearest constants ([Source format and the job](#source-format-and-the-job)). It also tests the corrected scaler model on both scales.
+
+Over all 2^24 (Y, U, V) inputs, each derived table run through the converter's integer arithmetic is within 1 of the real matrix rounded to nearest, in every channel ([g2d-csc-tables.py](../checks/g2d-csc-tables.py)). Without the lower clamp or without the upper one, the error reaches at least 83, and the luma-sweep frame drives every table past both clamps, so the frame's CRC-32 tests both bounds.
+
+The path changes the output from the second stage's:
+- **Full range.** BT.709 full maps luma 0 to 16 and 240 to 255 to distinct values; BT.601 full maps grey Y to Y.
+- **Limited range.** Luma below 16 now reaches the table unchanged. With neutral chroma the result is still black, since the table maps Y 16 and below to 0. With other chroma, R, G and B include 1.164 (Y - 16), which differs from the raised value: in the luma-sweep frame, 19,273 of its 19,274 pixels with luma below 16 change under BT.601 limited and 19,255 under BT.709 limited. This is the matrix's own result for footroom luma.
+- **Rounding.** Every table rounds to nearest instead of down, so most outputs differ from the second stage's by up to 1.
+
+The scaler model of the second stage truncated each output pixel's position (x times the step, 20 fraction bits) to its phase, and the 224 by 224 row of run `1794752244516494656-bd8feb22` differed from it at 5 pixels. Rounding the position to the nearest of 32 phases, by adding half a phase (2^14) before taking the top 5 fraction bits and carrying into the integer part, reproduces both scaled rows of that run exactly. The 2:1 scale has a step of 2, so every position falls on phase 0 under either rule.
+
+[g2d-convert](../apps/g2d-convert/main.c) runs six operations into the "surface" region, each output filled with 0x5a bytes first, and predicts each one exactly:
+
+| Operation | Frame | Table | Output | Rectangle CRC-32 | Exact-region CRC-32 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | luma sweep | BT.709 full | 640 by 480 | 0x687fdce1 | 0xc78e6d00 |
+| 2 | luma sweep | BT.601 full | 640 by 480 | 0xa7108f8a | 0x0757b166 |
+| 3 | luma sweep | BT.709 limited | 640 by 480 | 0xd1891536 | 0xc53940bf |
+| 4 | luma sweep | BT.601 limited | 640 by 480 | 0x3d553270 | 0xf54a807c |
+| 5 | scale frame | BT.601 limited | 320 by 240 | middle row 0xfcf93c8e | flat 0xffdf894f |
+| 6 | scale frame | BT.601 limited | 224 by 224 | middle row 0xd8e3bcdb | flat 0xffdf894f |
+
+The application counts each conversion's exact-region mismatches against two rules, luma kept (the prediction) and luma raised to 16, and stops before the next operation when a conversion does not follow the first. For each scale the flat region must equal the flat colour, every row the middle row, the ramp must not decrease, and the middle row must equal the scaler model. After the engine is closed, one A76 core at 2002 MHz converts the luma-sweep frame with the BT.709 full table three times in scalar C, as in the earlier stages.
+
+[The decoder](../apps/g2d-convert/host.py) names each conversion's rule and the model its rectangle equals: the derived table or the vendor's block, with luma kept or raised. It reproduces the second stage's records: the vendor's BT.709 full block with luma raised gives 0x5551ee74, the vendor page's CRC-32, and with luma kept 0xb9c1df94, the csc0 variant's. [g2d-convert-host.py](../checks/g2d-convert-host.py) builds the application on the host with the engine model and checks the decoder against it and seven mutant engines: luma raised to 16, no lower clamp, no upper clamp, uninterpolated chroma, a truncated scaler phase, a missed conversion and a failed scale.

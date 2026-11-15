@@ -1,19 +1,18 @@
-/* g2d-convert: the second camera-frame conversion stage (docs/g2d-os.md#second-conversion-stage). It converts one
- * 640 by 480 NV16 frame to ARGB8888 five times with the BT.709 full-range table: A on the vendor's page, then four
- * diagnostic variants of it (include/a733_g2d_convert.h), B with both blender fill colours at luma 0, C with pipe 0's
- * fill colour off, D converting at pipe 0's input with csc0 and blending in RGB, and E with the write-back's rounding
- * on. Then it scales a second 640 by 480 NV16 frame to 320 by 240 and to 224 by 224 with the BT.601 limited-range
- * table. Last, one A76 core converts the first frame in C, three times, as the CPU reference.
+/* g2d-convert: the third camera-frame conversion stage (docs/g2d-os.md#third-conversion-stage). It converts one
+ * 640 by 480 NV16 frame, the luma-sweep frame, to ARGB8888 with each of the four tables: BT.709 full, BT.601 full,
+ * BT.709 limited and BT.601 limited. Then it scales a second 640 by 480 NV16 frame, the scale frame, to 320 by 240 and
+ * to 224 by 224 with the BT.601 limited table. Last, one A76 core converts the luma-sweep frame with the BT.709 full
+ * table in C, three times, as the CPU reference.
  *
- * The first frame's luma is the seed's sequence, except every fourth row, which steps through every value from 0 to
- * 255 across the exact region. Its chroma is constant along each row in the left half (pixels 0 to 319) and the
+ * The luma-sweep frame's luma is the seed's sequence, except every fourth row, which steps through every value from 0
+ * to 255 across the exact region. Its chroma is constant along each row in the left half (pixels 0 to 319) and the
  * seed's sequence pair by pair in the right half, so pixels 8 to 311 of every row (the exact region) take no
- * interpolated chroma. There the output is the table applied to each pixel's luma and its row's chroma under one of
- * four candidate rules: luma below 16 raised to 16 or kept, and the result rounded down or to nearest. The
- * application counts each candidate's mismatches there. A is predicted to follow the first (raised, down); when it
- * matches no candidate, or another one, the application stops before the variants and the scales. The second frame
- * is one flat colour in its left half and a luma ramp over neutral chroma in its right half, the same on every row.
- * Every output rectangle starts filled with 0x5a bytes, and each output row has 64 bytes of padding.
+ * interpolated chroma. There the output is the table (tools/g2d-csc-tables.py) applied to each pixel's luma and its
+ * row's chroma, with luma either kept (the prediction: csc0 converts at pipe 0's input) or raised to 16 (the blender
+ * working in YUV). The application counts both candidates' mismatches there, and stops before the next operation when
+ * a conversion does not follow the first. The scale frame is one flat colour in its left half and a luma ramp over
+ * neutral chroma in its right half, the same on every row. Every output rectangle starts filled with 0x5a bytes, and
+ * each output row has 64 bytes of padding.
  *
  * After each operation, also one that fails, the application records the CRC-32 of the output rectangle, of the
  * exact region and of the padding, the alpha bytes, two whole output rows of each conversion and the middle row of
@@ -24,9 +23,7 @@
 #include "sunstone_g2d.h"
 #include "sunstone_large.h"
 #include <string.h>
-/* The variant codes the service reads from the job's reserved word in this stage's image. */
-#define SUNSTONE_G2D_CONVERT_VARIANTS 1
-#include "a733_g2d_convert.h"
+#include "a733_g2d_csc_tables.h"
 
 #define G2D_CONVERT_MAGIC UINT32_C(0x56433247) /* "G2CV" */
 #define G2D_CONVERT_SEED UINT32_C(0x6a09e667)
@@ -42,30 +39,23 @@
 #define FLAT_Y 150u
 #define FLAT_U 90u
 #define FLAT_V 170u
-#define OPS 7u
-#define CONVERSIONS 5u
+#define OPS 6u
+#define CONVERSIONS 4u
 #define BACKGROUND 0x5au
 enum {DONE = 1, REFUSED = 2, CLOSE_FAILED = 3, RUN_FAILED = 4, NO_SURFACE = 5, MISSED = 6};
-/* The seven operations: the table, the variant, the output size and stride, the output's offset in the region
- * "surface", and the frame. The conversions share one output rectangle, refilled before each. */
-static const struct {uint32_t csc, variant, ow, oh, stride, offset, frame;} plan[OPS] = {
-    {SS_G2D_CSC_BT709_FULL, 0, FW, FH, CONV_STRIDE, 0, 0},
-    {SS_G2D_CSC_BT709_FULL, A733_G2D_CONVERT_FILL_Y0, FW, FH, CONV_STRIDE, 0, 0},
-    {SS_G2D_CSC_BT709_FULL, A733_G2D_CONVERT_NO_FILL, FW, FH, CONV_STRIDE, 0, 0},
-    {SS_G2D_CSC_BT709_FULL, A733_G2D_CONVERT_CSC0, FW, FH, CONV_STRIDE, 0, 0},
-    {SS_G2D_CSC_BT709_FULL, A733_G2D_CONVERT_ROUND, FW, FH, CONV_STRIDE, 0, 0},
-    {SS_G2D_CSC_BT601_LIMITED, 0, 320, 240, 320 * 4 + 64, 0x280000, 1},
-    {SS_G2D_CSC_BT601_LIMITED, 0, 224, 224, 224 * 4 + 64, 0x300000, 1}};
+/* The six operations: the table, the output size and stride, the output's offset in the region "surface", and the
+ * frame. The conversions share one output rectangle, refilled before each. */
+static const struct {uint32_t csc, ow, oh, stride, offset, frame;} plan[OPS] = {
+    {SS_G2D_CSC_BT709_FULL, FW, FH, CONV_STRIDE, 0, 0},
+    {SS_G2D_CSC_BT601_FULL, FW, FH, CONV_STRIDE, 0, 0},
+    {SS_G2D_CSC_BT709_LIMITED, FW, FH, CONV_STRIDE, 0, 0},
+    {SS_G2D_CSC_BT601_LIMITED, FW, FH, CONV_STRIDE, 0, 0},
+    {SS_G2D_CSC_BT601_LIMITED, 320, 240, 320 * 4 + 64, 0x280000, 1},
+    {SS_G2D_CSC_BT601_LIMITED, 224, 224, 224 * 4 + 64, 0x300000, 1}};
 static const uint32_t conv_rows[2] = {100, 333};
-/* g2d_bld.c's YUV-to-RGB blocks for the two tables the stage programs (drivers/g2d/a733_g2d_convert.c): per channel R,
- * G, B the Y, U and V coefficients with 10 fraction bits, then the constant scaled by 1024. */
-static const int32_t bt601_limited[12] = {0x04a8, 0x0, 0x0662, (int32_t)0xFFFC8480, 0x04a8, (int32_t)0xFFFFFE6F,
-    (int32_t)0xFFFFFCC0, 0x21E00, 0x04a8, 0x0812, 0x0, (int32_t)0xFFFBAC80};
-static const int32_t bt709_full[12] = {0x0400, 0x0, 0x64D, (int32_t)0xFFFC9980, 0x0400, (int32_t)0xFFFFFF40,
-    (int32_t)0xFFFFFE21, 0x10F80, 0x0400, 0x076C, 0x0, (int32_t)0xFFFC0A00};
 /* One operation's record. Conversions: mismatch[k] counts the exact region's pixels whose R, G and B bytes differ from
- * candidate rule k + 1 (1 luma raised to 16, rounded down; 2 raised, nearest; 3 kept, down; 4 kept, nearest), and rule
- * is the first candidate with none, 0 for none. Scales: flat_value is the flat colour under rule 1, flat_mismatch
+ * candidate rule k + 1 (1 luma kept, 2 luma below 16 raised to 16; mismatch[2] and [3] stay 0), and rule is the first
+ * candidate with none, 0 for none. Scales: flat_value is the flat colour under rule 1, flat_mismatch
  * counts the words of the flat region (x from 4 to ow / 2 - 8, rows 2 to oh - 3) that differ from it, rows_differ
  * counts rows 2 to oh - 3 that differ from the middle row (oh / 2), edge_rows has bit k set when row 0, 1, oh - 2 or
  * oh - 1 differs from it, and mono[c] counts the steps of the middle row's ramp (x from ow / 2 + 8 to ow - 5) where
@@ -74,7 +64,7 @@ static const int32_t bt709_full[12] = {0x0400, 0x0, 0x64D, (int32_t)0xFFFC9980, 
 struct g2d_convert_op {
     uint32_t result, csc, w, h, ow, oh, out_offset, out_stride;
     uint32_t rect_crc, exact_crc, padding_crc, alpha_ff, alpha_other;
-    uint32_t mismatch[4], rule, flat_value, flat_mismatch, rows_differ, edge_rows, mono[3], kind, variant, reserved;
+    uint32_t mismatch[4], rule, flat_value, flat_mismatch, rows_differ, edge_rows, mono[3], kind, reserved[2];
     struct ss_g2d_done done;
 };
 struct g2d_convert_result {
@@ -93,7 +83,7 @@ _Static_assert(sizeof(struct g2d_convert_op) == 360 && offsetof(struct g2d_conve
                "apps/g2d-convert/host.py decodes this layout");
 _Static_assert(offsetof(struct g2d_convert_result, clock_line) == 96 && offsetof(struct g2d_convert_result, info) == 224 &&
                offsetof(struct g2d_convert_result, closed) == 616 && offsetof(struct g2d_convert_result, op) == 648 &&
-               offsetof(struct g2d_convert_result, conv_row) == 3168 && sizeof(struct g2d_convert_result) == 30944,
+               offsetof(struct g2d_convert_result, conv_row) == 2808 && sizeof(struct g2d_convert_result) == 25464,
                "apps/g2d-convert/host.py decodes this layout");
 
 static uint32_t next(uint32_t *x)
@@ -124,20 +114,19 @@ static uint32_t rect_crc(const uint8_t *p, uint32_t stride, uint32_t x0, uint32_
     return c;
 }
 static int32_t clamp8(int32_t v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
-/* The table applied to one pixel under a candidate rule (1 to 4, struct g2d_convert_op): ARGB8888 with alpha 0xff. */
+/* The table applied to one pixel under a candidate rule (1 luma kept, 2 luma below 16 raised to 16): ARGB8888 with
+ * alpha 0xff. The table's constants round to nearest (tools/g2d-csc-tables.py). */
 static uint32_t csc(const int32_t *t, int32_t y, int32_t u, int32_t v, uint32_t rule)
 {
-    const int32_t round = rule == 2 || rule == 4 ? 512 : 0;
-    if (rule <= 2 && y < 16) y = 16;
+    if (rule == 2 && y < 16) y = 16;
     uint32_t word = UINT32_C(0xff) << 24;
     for (unsigned c = 0; c < 3; ++c)
-        word |= (uint32_t)clamp8((t[4 * c] * y + t[4 * c + 1] * u + t[4 * c + 2] * v + t[4 * c + 3] + round) >> 10)
+        word |= (uint32_t)clamp8((t[4 * c] * y + t[4 * c + 1] * u + t[4 * c + 2] * v + t[4 * c + 3]) >> 10)
                 << (16 - 8 * c);
     return word;
 }
-static const int32_t *table(uint32_t c) { return c == SS_G2D_CSC_BT709_FULL ? bt709_full : bt601_limited; }
-/* The CPU conversion of a frame under the engine's model from stage 7 (run 1794749218366895381-6f184f31): rule 1,
- * the chroma of an odd pixel interpolated from four pairs with the scaler's half-phase taps (-4, 36, 36, -4) / 64,
+static const int32_t *table(uint32_t c) { return a733_g2d_csc_tables[c - 1]; }
+/* The CPU conversion of a frame under the engine's model: rule 1, the chroma of an odd pixel interpolated from four pairs with the scaler's half-phase taps (-4, 36, 36, -4) / 64,
  * rounded to nearest, with the edge pairs repeated, and the row's last pixel taking its own pair. */
 static void cpu_convert(const uint8_t *luma, const uint8_t *chroma, uint8_t *out, const int32_t *t)
 {
@@ -178,9 +167,10 @@ static uint8_t *region(unsigned index, size_t bytes)
     return base && capacity >= bytes ? base : NULL;
 }
 static uint32_t word(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
-/* Frame A: luma from the seed, 4 bytes a word, then every fourth row replaced by (x - 8 + y) mod 256, so each such
- * row's exact region holds every value; then per row one chroma pair for the left half and one pair per two pixels
- * of the right half, each from one word (U the low byte, V the next). Frame B: flat left, ramp right. */
+/* The luma-sweep frame (FRAME_A): luma from the seed, 4 bytes a word, then every fourth row replaced by
+ * (x - 8 + y) mod 256, so each such row's exact region holds every value; then per row one chroma pair for the left
+ * half and one pair per two pixels of the right half, each from one word (U the low byte, V the next). The scale frame
+ * (FRAME_B): flat left, ramp right. */
 static void frames(uint8_t *source)
 {
     uint32_t x = G2D_CONVERT_SEED;
@@ -220,10 +210,10 @@ static void conversion_counts(struct g2d_convert_op *o, const uint8_t *out, cons
         const uint8_t *l = source + FRAME_A + (size_t)y * FW, *c = source + FRAME_A + CHROMA + (size_t)y * FW;
         for (uint32_t x = EXACT_X0; x < EXACT_X1; ++x) {
             const uint32_t got = word(out + (size_t)y * o->out_stride + x * 4) & 0xffffffu;
-            for (unsigned k = 0; k < 4; ++k) o->mismatch[k] += (csc(t, l[x], c[0], c[1], k + 1) & 0xffffffu) != got;
+            for (unsigned k = 0; k < 2; ++k) o->mismatch[k] += (csc(t, l[x], c[0], c[1], k + 1) & 0xffffffu) != got;
         }
     }
-    for (unsigned k = 0; k < 4 && !o->rule; ++k)
+    for (unsigned k = 0; k < 2 && !o->rule; ++k)
         if (!o->mismatch[k]) o->rule = k + 1;
 }
 static void scale_counts(struct g2d_convert_op *o, const uint8_t *out)
@@ -267,7 +257,7 @@ void g2d_convert_main(const struct ss_grant *grant)
 {
     static struct g2d_convert_result result;
     result.magic = G2D_CONVERT_MAGIC;
-    result.stage = 8;
+    result.stage = 9;
     result.seed = G2D_CONVERT_SEED;
     result.main_core = grant ? grant->main_core : UINT32_MAX;
     result.start_ticks = ss_counter_ticks();
@@ -304,14 +294,13 @@ void g2d_convert_main(const struct ss_grant *grant)
         const uint64_t frame = plan[k].frame ? FRAME_B : FRAME_A;
         memset(surface + plan[k].offset, BACKGROUND, (size_t)plan[k].stride * plan[k].oh);
         *o = (struct g2d_convert_op){.csc = plan[k].csc, .w = FW, .h = FH, .ow = plan[k].ow, .oh = plan[k].oh,
-                                     .out_offset = plan[k].offset, .out_stride = plan[k].stride, .kind = plan[k].frame,
-                                     .variant = plan[k].variant};
+                                     .out_offset = plan[k].offset, .out_stride = plan[k].stride, .kind = plan[k].frame};
         job = (struct ss_g2d_job){.op = SS_G2D_CONVERT,
             .source = {.region = G2D_CONVERT_LARGE_SOURCE, .format = SS_G2D_FORMAT_NV16, .offset = frame, .width = FW,
                        .height = FH, .stride = FW, .chroma_offset = frame + CHROMA, .chroma_stride = FW},
             .output = {.region = G2D_CONVERT_LARGE_SURFACE, .format = 0, .offset = plan[k].offset, .width = plan[k].ow,
                        .height = plan[k].oh, .stride = plan[k].stride},
-            .w = FW, .h = FH, .ow = plan[k].ow, .oh = plan[k].oh, .csc = plan[k].csc, .reserved = plan[k].variant};
+            .w = FW, .h = FH, .ow = plan[k].ow, .oh = plan[k].oh, .csc = plan[k].csc};
         o->result = (uint32_t)finish_call(run_call, &o->done);
         ++result.ops_run;
         /* Measured after a failed operation too: the output lines were invalidated before the launch. */
@@ -327,16 +316,16 @@ void g2d_convert_main(const struct ss_grant *grant)
             failed = 1;
             (void)ss_g2d_fault(&result.fault_step, &result.fault_value);
         }
-        /* A is the stage's prediction: rule 1 (luma raised to 16, rounded down). */
-        if (k == 0 && result.op[0].rule != 1) result.stopped = 1;
+        /* Every conversion is predicted to follow rule 1 (luma kept). */
+        if (!o->kind && o->rule != 1) result.stopped = 1;
     }
     result.close_result = (uint32_t)finish_call(close_call, &result.closed);
     if (!failed) (void)ss_g2d_fault(&result.fault_step, &result.fault_value);
-    /* The CPU reference after the engine's work: A's conversion, three times, on this core. */
+    /* The CPU reference after the engine's work: the first conversion, three times, on this core. */
     result.cpu_rule = 1;
     for (unsigned k = 0; k < 3; ++k) {
         const uint64_t t0 = ss_counter_ticks();
-        cpu_convert(source + FRAME_A, source + FRAME_A + CHROMA, reference, bt709_full);
+        cpu_convert(source + FRAME_A, source + FRAME_A + CHROMA, reference, table(SS_G2D_CSC_BT709_FULL));
         result.cpu_ticks[k] = (uint32_t)(ss_counter_ticks() - t0);
         ss_progress();
     }

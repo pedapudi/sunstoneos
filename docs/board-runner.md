@@ -117,16 +117,21 @@ no failure or the exact expected resident stop described below.
 
 Every hypothesis states a worked time budget: the stage durations summed and compared with the session's limits, so that an overrun fails cleanly. Take each term from the result's `durations` of a recent run of the same kind, and count every byte the run uploads. The runner uploads the image's segments and every `--input` file over USB FEL and reads each back to verify it (`upload_verify`, mode `readback`), all inside the `launch` stage, before the image starts.
 
-| Term | Development run on port 3-3, 2026-11-13 |
-| --- | --- |
-| `reset` | 4.8 s |
-| `dram` | 2.2 s |
-| `rails` | 3.3 s |
-| `launch`: start-up and the image's own segments | about 7 s for the 2 MB storage-write-test image |
-| `launch`: the uploaded inputs, written and read back | about 3.6 s per MB of input |
-| `launch`: the image's own work | what the hypothesis predicts |
-| `restore-rails` | 1.6 s |
-| `prepare`, `capture`, `identity` | about 0.8 s together |
+| Term | Development run on port 3-3, 2026-11-13 | Port 3-1, 86 cpu-return runs, 2026-11-13 to 2026-11-15: median, worst |
+| --- | --- | --- |
+| `reset` | 4.8 s | 5.99 s, 16.68 s (run `1794737603260902304-932612d9`) |
+| `rails` | 3.3 s | 4.47 s, 15.90 s (run `1794709523506388744-2c14e520`) |
+| `dram` | 2.2 s | 2.14 s, 17.43 s (run `1794709523506388744-2c14e520`) |
+| `prepare` | about 0.8 s with `capture` and `identity` | 0.71 s, 1.62 s (run `1794709282140895201-ecaca3d5`) |
+| `launch`: start-up and the image's own segments | about 7 s for the 2 MB storage-write-test image | about 5 s for a 1.2 MB OS image |
+| `launch`: the uploaded inputs, written and read back | about 3.6 s per MB of input | |
+| `launch`: the image's own work | what the hypothesis predicts | |
+| `capture` | in `prepare`'s 0.8 s | 0.56 s, 2.78 s (run `1794709360767028442-88474900`) |
+| `identity` | in `prepare`'s 0.8 s | 0.10 s, 1.36 s (run `1794709523506388744-2c14e520`) |
+| `restore-rails` | 1.6 s | 2.76 s, 12.98 s (run `1794709282140895201-ecaca3d5`) |
+| `restore-state` | not measured | 0.08 s, 0.38 s (run `1794741580763874290-fd0e72bd`) |
+
+A bound in a hypothesis takes the worst measured value of its term, not the last run's.
 
 The upload term is the one most often left out. On 2026-11-13 an 8.4 MB raw-extent input added 29.6 s to `launch` (run `1794597286400818219-efba4fcf`: 51.1 s in total against a predicted 23 s), and a 2.1 MB input added 7.6 s (run `1794597791506349833-a4fde388`). The image's own work runs inside the OS session limit (`lifetime_seconds` in the admission record, 63 s for a returning image), which starts when the image does; the upload comes before it. A preserving run adds its two DRAM transfers, as measured above.
 
