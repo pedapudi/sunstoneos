@@ -1,6 +1,6 @@
 #ifndef VDEC_CHECK_RECORD_H
 #define VDEC_CHECK_RECORD_H
-/* The stage-1 board record of the video decoder service (docs/video-decode-os.md, "Board stages"). Only an image built
+/* The board record of the video decoder service (docs/video-decode-os.md, "Board stages"). Only an image built
  * with SUNSTONE_VIDEO_DECODE_MEASURE (the vdec-check image) fills it; it is not part of the class interface
  * (include/sunstone_video_decode.h). apps/vdec-check/host.py decodes it. */
 #include <stdint.h>
@@ -32,6 +32,33 @@ enum {
     VDEC_CHECK_WORDS
 };
 #define VDEC_CHECK_INFO_MAGIC UINT32_C(0x49444556) /* "VEDI" */
+/* The decoder writes of one picture: the executor's 659 programming writes, the interrupt-enable disable and the
+ * completion acknowledgment. */
+#define VDEC_CHECK_LOG 661u
+/* The stage-2 decode (docs/video-decode-os.md, "The stage-2 record"). */
+struct vdec_check_decode {
+    /* The executor's state and index when the decode ended, its status word (0x11c, read at completion), the format
+     * word it read before programming (0xec), the status word the drain read, and the decoder writes made. */
+    uint32_t state, index, status, format_old, status_after, writes;
+    /* The parsed picture, its padded plane geometry, the input bytes and the active output bytes. */
+    uint32_t width, height, stride, rows, file_bytes, output_bytes;
+    /* Device address and mapped bytes of the input, luma and chroma buffers. */
+    uint32_t iova[3], mapped[3];
+    /* INTID 81: interrupts taken, those taken with no decode armed, whether the armed one was seen; the guard result
+     * (0 every poisoned byte intact, else the buffer and kind of the first change); os_iommu_scan of masters 6 and 7
+     * (1 none, 0 a fault) and their fault words (struct a733_iommu_owner_fault); the GIC enable, pending and active
+     * words of INTID 81 after the decode. */
+    uint32_t irq_count, stray, seen, guard, scan[2];
+    uint32_t iommu_fault[2][10];
+    uint32_t gic[3], reserved;
+    /* System counter ticks (24 MHz): the decode request, the line enabled, the trigger write, the interrupt, the drain
+     * done and the output written. */
+    uint64_t begin_ticks, armed_ticks, trigger_ticks, irq_ticks, finish_ticks, done_ticks;
+    /* SHA-256 of the active output bytes as written to the application's region. */
+    uint8_t output_sha256[32];
+    /* Each decoder write: offset | width << 24, then the value. */
+    uint32_t log[VDEC_CHECK_LOG][2];
+};
 struct vdec_check_record {
     uint32_t magic, bytes;
     uint32_t entry[VDEC_CHECK_WORDS], started[VDEC_CHECK_WORDS], closed[VDEC_CHECK_WORDS];
@@ -62,6 +89,7 @@ struct vdec_check_record {
     /* Domain 2's latest transition (struct a733_power_transition) as the power-domain owner published it with the
      * row's latest answer, on the owner's clock in microseconds; all zero while the row is pending. */
     struct a733_power_transition transition;
+    struct vdec_check_decode decode;
 };
 /* Copy the record of the latest open or close into out: 1 copied, 0 none yet, -1 not a measurement image. */
 int vdec_check_record(struct vdec_check_record *out);

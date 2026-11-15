@@ -941,6 +941,6 @@ not restore potentially invalid DRAM. These host paths do not qualify hardware.
 The development wrapper accepts a finite NPU session file through `--records`
 and an exact build record through `--manifest`. Both inputs reach the same
 runner preparation as `--template`; `--state` selects offline checking.
-A decoder's `decode` result is recorded as `decoded`, and the value of its optional `failures` function as `decoder_failures`; neither changes the outcome.
+A decoder's `decode` result is recorded as `decoded`, and the value of its optional `failures` function as `decoder_failures`; neither changes the outcome. A value that JSON cannot hold, such as bytes, is left out, and `decode_error` names the field and the serialization error instead; result.json is still saved, output.bin keeps the payload for a later decode, and `submit --wait` reports the run as not passed.
 Malformed or incomplete thermal captures yield `failure-return` while retaining
 the native return, application, GPU and thermal bytes.

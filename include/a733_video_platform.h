@@ -49,6 +49,7 @@ struct a733_video_platform_ops {
      * translations. Nonzero stable token BEFORE any admission; retain always.
      * Also validate rail/operating point, Device mappings and common mutex.
      * Return1 complete,0 pending,-1 uncertain. The fixed JPEG application supplies the supervised retained authority.
+     * a733_video_decoder_open calls it with no job; the OS decoder service admits from the session's grant.
      */
     int (*admit)(void *,const struct a733_video_platform_config *,
                  const struct a733_video_jpeg_job *,uint64_t,uint64_t *);
@@ -112,12 +113,10 @@ struct a733_video_platform {
     struct a733_video_platform_ops ops;
     void *cookie;
 };
-/* A decoder with no codec binding, for a service that only opens and closes it (apps/os/video_decode.c): the
- * configuration rules of a733_video_platform_init, the unit's operations, no job callbacks. 1 initialized. */
-int a733_video_decoder_init(struct a733_video_decoder *,const struct a733_video_platform_config *,
-    const struct a733_video_unit_ops *,void *cookie);
-/* Open such a decoder: the start (the cold start, or the inherited baseline), then the identity block read under one
- * hold, which sets version. d is the deadline of every call until the open ends. 1 open; 0 pending: the row has not
+/* Open a codec binding's decoder (a733_video_platform_init): its admit (with no job), the start (the cold start, or the
+ * inherited baseline), then the identity block read under one hold, which sets version. d is the deadline of every
+ * call until the open ends; an open that ends drops it, so that a codec run (a733_video_jpeg_begin on the binding)
+ * passes its own, and its acquire then finds the decoder admitted and started. 1 open; 0 pending: the row has not
  * answered or the register lock was busy, so call again after the row's wake or a short block;
  * A733_VIDEO_OPEN_REFUSED: refused with no register written and the register lock free, so the decoder is as it was
  * and needs no close; A733_VIDEO_OPEN_FAULT: failed after the first write, or keeping the register lock after a

@@ -708,6 +708,242 @@ predicts 278–502 jobs/s. The two ranges overlap. Separating the models would n
 per task of that program, which only a counter build measures.
 
 
+### Width 144: per-row writes, contiguous chunks or whole units for misaligned rows
+
+At 128, 192 and 256 values per row, the relu writes one request of 10 units per 64 values. Two forms fit those widths:
+
+- **A, per row:** each row writes ceil(width / 64) requests of 10 units.
+- **B, contiguous:** the output is written in 64-value chunks across row ends, 10 units each.
+
+Both forms miss the measured counts at 176 values per row, where each 8 rows took 21 write requests and 256 units: A gives
+24 and 240, B gives 22 and 220. A 176-value row holds 352 bytes, 32 bytes off a multiple of 64, and the aligned widths have
+no such offset. A third form takes its basis from the 176 measurement:
+
+- **C, whole units for misaligned rows:** a row whose length in bytes is not a multiple of 64 writes one 512-byte unit
+  (32 units). C predicts no request count.
+
+A 144-value row holds 288 bytes, also 32 bytes off a multiple of 64, so 144 separates the three forms.
+
+**The run.** The counter build runs width 144 in place of 192, as phase 5 of the eight, with the graph `relu-w144` of
+`tools/npu-fixtures.json` (1,024 rows of 16-bit values). The other phases repeat run `1794731628675614053-3bc9fbc0`
+and serve as controls.
+
+**The job-time fit.** That run's four widths give a relu job time of 14.3 µs plus 2.63 ns per write unit. Its residuals
+are within 2.5%:
+
+| Width | Write units | Fit (jobs/s) | Measured (jobs/s) |
+| --- | --- | --- | --- |
+| 128 | 20,480 | 14,671 | 14,654 |
+| 176 | 32,765 | 9,953 | 10,189 |
+| 192 | 30,718 | 10,517 | 10,257 |
+| 256 | 40,968 | 8,194 | 8,189 |
+
+**Predictions per job at 144 values per row.** Jobs/s comes from the fit, within 5%:
+
+| Form | Write requests | Write units | Jobs/s |
+| --- | --- | --- | --- |
+| A | 3,072 (24 per 8 rows) | 30,720 | 10,516 (9,990-11,042) |
+| B | 2,304 (18 per 8 rows) | 23,040 | 13,352 (12,684-14,020) |
+| C | not predicted | 32,768 | 9,952 (9,455-10,450) |
+
+The read requests are the same in every form, so they do not decide among them. The output tiles across a row (two at
+144 values, each 127 values wide) plus floor(width / 32) / 4 give 3 per row, plus 28 per job: 3,100 within 5%. This
+rule fits 128, 192 and 256 and missed 176 by 4%. No form predicts the read units; they are reported against the range
+from 128 to 176 values per row, 24,884 to 36,145.
+
+**Decision order.** [host.py](../../apps/accel-overlap/host.py) applies it, and
+[checks/accel-overlap-counters.py](../../checks/accel-overlap-counters.py) decodes a modeled record of each outcome:
+
+1. A control that misses voids the run. The controls are both GPU modes, which repeat their counts per job within 2%,
+   and the relu at 176, 128 and 256 values per row, which repeats its write requests and units within 1% and its rate
+   within 5%. Idle and the core-2 stream move under 10,000 units per period on each port.
+2. The write units at 144 values per row pick A, B or C within 1%. The forms lie at least 6.7% apart.
+3. The write requests confirm A or B within 1%. Counts that fit no form decide nothing.
+
+**What each outcome changes in the tile planner** ([npu-tiled-execution.md](npu-tiled-execution.md)):
+
+- **A:** a row costs ceil(width / 64) times 10 units, so the planner picks innermost dimensions in multiples of 64
+  values. A 144-value row then costs as much as a 192-value row.
+- **B:** the cost follows the bytes written (1.25 units per 16 bytes) with no rounding per row. The planner needs no
+  row-length rule.
+- **C:** a row that is not a multiple of 64 bytes costs 512 bytes. The planner sets the output row stride (descriptor
+  word 17, [npu-command-formats.md](../hardware/npu-command-formats.md)) to a multiple of 64 bytes, or picks widths
+  that are.
+- **No form:** the planner stays unchanged, and 144 becomes a fourth constraint for host analysis.
+
+The planner changes only after a second width, predicted before its run, also fits:
+
+- **After A or B:** 160 values per row. A predicts 24 requests and 240 units per 8 rows; B predicts 20 and 200.
+- **After C:** 240 values per row, a 480-byte row 32 bytes off a multiple of 64. C predicts 32,768 units per job, A
+  40,960 and B 38,400.
+
+**Results.** One returning run on port 3-1 (entry `1794739767299812242-b733706f`, image built from bc6179ca4, SHA-256
+`5331b464…8967`) decided no form. Every control held, so the run is not void:
+
+- Both GPU modes repeated their counts per job within 0.1% (mode 1: 102,757 read requests, 201,668 read units, 32,798
+  write requests, 131,096 write units; mode 0: 37,222, 136,126, 32,799, 131,103). The jobs/s ratio was 1.544.
+- The relu at 176, 128 and 256 values per row repeated its write requests and units within 0.02% and its rate within
+  0.03%.
+- Idle and the core-2 stream counted 0 on both ports. Every output matched its reference, PLL_NPU stayed locked, and
+  the top point held at the start and the end.
+
+At 144 values per row:
+
+| Quantity per job | Measured | A | B | C |
+| --- | --- | --- | --- | --- |
+| Write units | 26,623 | 30,720 | 23,040 | 32,768 |
+| Write requests | 2,304 | 3,072 | 2,304 | not predicted |
+| Jobs/s | 12,189 | 9,990-11,042 | 12,684-14,020 | 9,455-10,450 |
+
+- **Write units** fit no form within 1%: 208 per 8 rows, against 240 for A, 180 for B and 256 for C. The decision stops
+  here, so the outcome is "none".
+- **Write requests** equal B's count, 18 per 8 rows. Each request carried 11.56 units, against 10 at the aligned widths.
+- **Jobs/s** was 12,189. The job-time fit gives 11,860 at the measured 26,623 units, 2.8% below the measurement and
+  within the fit's residuals.
+- **Read requests** were 2,844 per job, 8.3% below the rule's 3,100, outside its 5% range.
+- **Read units** were 30,003 per job, inside the range from 128 to 176 values per row (24,884 to 36,145).
+
+The tile planner is unchanged. Width 144 adds a fourth constraint for host analysis. Both misaligned widths moved more
+units than their bytes predict at the aligned widths' 1.25 units per 16 bytes: 208 per 8 rows against 180 at 144, and
+256 against 220 at 176. At 144 the request count follows the contiguous chunks, but at 176 it does not (21 against 22).
+
+The admission before the run read a composed state file: the latest port 3-1 state capture (run
+`1794738427185556712-c450b701`) with the five NPU entry-gate and PCK4 words of run 3bc9fbc0's NPU-on proof. At the board
+the runner read those five words again, read-only over FEL under the port lock, found the NPU on, and used that read.
+The run took 32.9 s, with a 6.0 s reset, against the 39.8 s budget.
+
+### No model of the relu's write units fits the five widths
+
+Host analysis of the five measured widths, with no board run. The counts are per 8 rows of the 1,024-row relu, after
+the fixed 28 read requests and 306 read units of each job are removed. The descriptor fields are those of the graphs
+that ran, decoded with `tools/npu-descriptor-sweep.py`. Each descriptor matches that tool's prediction from the shape
+in all 48 words, so the five graphs differ only in their shape fields.
+
+| Width | Row bytes | Row bytes mod 64 | Write requests | Write units | Read requests | Read units | Tile x by y | Row stride (in, out) | Plane stride | Word 19 bits 26-27 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 128 | 256 | 0 | 16 | 160 | 24 | 192 | 127 x 2 | 256, 256 | 262,144 | set |
+| 144 | 288 | 32 | 18 | 208 | 22 | 232 | 127 x 2 | 288, 288 | 294,912 | set |
+| 176 | 352 | 32 | 21 | 256 | 25 | 280 | 127 x 2 | 352, 352 | 360,448 | set |
+| 192 | 384 | 0 | 24 | 240 | 28 | 288 | 127 x 2 | 384, 384 | 393,216 | set |
+| 256 | 512 | 0 | 32 | 320 | 40 | 352 | 127 x 2 | 512, 512 | 524,288 | set |
+
+- **Word 19 bits 26-27 do not separate the widths.** The bits are clear only when the output's size in bytes is not
+  a multiple of 64. A 1,024-row output of any width is a multiple of 64 bytes, so the bits are set in all five graphs.
+- **The excess write units** are counted against 1.25 units per 16 bytes, which fits the three aligned widths. They
+  are 28 per 8 rows at 144 (3.5 per row) and 36 at 176 (4.5 per row). The two widths share both the bytes past each
+  row's last 64-byte boundary (32) and the row-start offsets modulo 128 (0, 32, 64 and 96). The excess still differs,
+  so neither quantity alone sets it. In the tile layout, the second tile of a row holds 17 values (34 bytes) at 144
+  and 49 values (98 bytes) at 176. Both start 254 bytes into the row, which is not 16-byte aligned.
+- **Read requests** at 144 are 22 per 8 rows, fewer than the 24 at 128. A rule that grows with the row's tiles or
+  bytes cannot give that. The earlier rule (output tiles plus floor(width / 32) / 4 per row) gives 24.
+
+**Models tested.** Each family below was tested against all five points:
+
+- Writes split per row, per 127-value tile segment, or contiguous across rows.
+- Segments taken in row order or in tile order, with time-adjacent contiguous segments merged.
+- Requests split at 64-, 128-, 256- or 512-byte boundaries.
+- Units per request equal to a full burst, the 16-, 32- or 64-byte granules it touches, or its length, plus 0 to 4.
+- Linear fits of one or two terms in the bytes, the segments, the granules touched and the granules partly covered.
+
+No model fits the write units of all five widths within 1%. The best models fit three of them (128, 192 and 256). No model
+fits the read requests or the read units.
+
+One two-term expression reproduces the write requests at all five widths: half the 64-byte granules touched by the
+tile segments, minus a quarter of the 128-byte granules they cover partly. Its coefficients were fitted to these five
+points, and it says nothing about the units, so it is not a model. It would predict 18 requests per 8 rows at 160
+values per row.
+
+**No sixth width follows**, since no model predicts one. The SDK simulator computes outputs only and reports no
+memory traffic, so a descriptor mutation in the simulator cannot separate traffic models. One board measurement would
+separate the two remaining causes. The output row stride is a confirmed field. A 144-value relu whose output rows sit
+at a 320-byte stride keeps the tile layout and moves each row to a 64-byte boundary. If the excess follows the row
+alignment, it falls; if it follows the tile segments, it stays at 28 units per 8 rows. That run would execute a graph changed after
+compilation, so it needs its own approval. The tile planner stays unchanged.
+
+### Stride 320: row alignment or tile segments
+
+A run of the 144-value relu with each output row padded to 320 bytes separates the two remaining causes of the
+excess write units. [tools/npu-row-stride.py](../../tools/npu-row-stride.py) changes the compiled graph's output row
+stride (descriptor word 17, bits 0-15, a confirmed field) from 288 to 320 bytes. It also widens the output tensor
+record to 160 x 1,024 values, so the OS allocates 327,680 bytes of output rows. Every other descriptor word and the
+input keep their compiled values. Each row then starts on a 64-byte boundary, and the tile layout is unchanged.
+
+**Simulator check.** `tools/npu-row-stride.py simulate` runs the changed graph in the SDK simulator with its output
+prefilled with the byte `0xa5`, which as a 16-bit value is negative, so no relu output can produce it. The output was
+widened to the slot's 532,480-byte write window. The first 288 bytes of every row equal the compiled graph's output,
+the 32 padding bytes of every row keep the pattern, and none of the 204,800 bytes past 320 x 1,024 changed. The board
+graph, with the 327,680-byte output, passes the same checks and is byte-identical to the simulated one.
+
+**Containment.** The OS layout gives the changed graph a 331,776-byte output allocation: 81 pages, 327,680 bytes plus
+the runtime's 64, rounded up. Each graph holds its own slot, and a slot's write window is 532,480 bytes, the image's
+tensor bound of 528,384 bytes (set by the 256-value relu) plus 64, rounded up to pages. The window holds only this
+graph's output, since the graph has no memory pool. A write past the window faults in the NPU MMU. A stray write
+inside the window but past the allocation lands only in this slot's own unused pages, which no other graph or task
+maps. The simulator check covered the whole window.
+
+**Prefill and cache maintenance.** For a graph whose reference is longer than its input, the application fills the
+output tensor with `0xa5` once at registration and marks it dirty. The queue cleans and invalidates every dirty range
+to the point of coherency before the graph's first job ([npu_app_queue.c](../../runtime/npu_app_queue.c),
+`clean_dirty`, called from `ss_npu_queue_submit`; the cache operation is `CPU_CLEAN_INVALIDATE` in
+[npu-queue.c](../../apps/os/npu-queue.c)). Before the CPU reads an output, `ss_npu_queue_acquire_handle` cleans and
+invalidates it again, and the output check runs after that call. [checks/npu-app-queue.c](../../checks/npu-app-queue.c)
+covers both steps: the first submit cleans each output once, and an acquire cleans the outputs again. The reference
+holds the relu's 288 bytes and 32 bytes of `0xa5` in every row, so the check compares the valid bytes and the padding.
+
+**Predictions per 8 rows**, with 128 times these per job. The controls and the void rule are those of the width-144
+run, and the stride graph takes phase 5. The write units decide within 1%:
+
+| Outcome | Write units | Write requests | Jobs/s |
+| --- | --- | --- | --- |
+| Alignment, 1.25 units per 16 bytes | 180 (23,040 per job) | not predicted | 12,684-14,020 |
+| Alignment, 16-byte beats plus 2 per request, 3 requests per row | 192 (24,576) | 24, which confirms this form | 12,035-13,302 |
+| Tile segments | 208 (26,623), as the compiled 144 graph | reported | 11,580-12,798 |
+
+Both alignment forms give 160, 240 and 320 units at 128, 192 and 256 values per row. They differ when a row ends
+partway through a 128-byte request. The alignment rates come from the job-time fit; the tile rate is the compiled
+144 graph's measured 12,189 jobs/s, within 5%. The input is unchanged, so the reads are reported against the compiled
+graph's 22 requests and 232 units per 8 rows.
+
+**What each outcome changes in the tile planner:**
+
+- **Alignment:** the planner pads every output row stride to a multiple of 64 bytes. At 144 values per row that saves
+  13.5% (180) or 7.7% (192) of the write units, for 11% more output memory. The second width is 176 at a 384-byte
+  stride: 220 units per 8 rows (1.25 units per 16 bytes) or 240 (beats plus 2 per request), against 256 at the
+  compiled stride.
+- **Tile segments:** padding does not help, and the planner stays unchanged.
+- **No outcome:** the planner stays unchanged.
+
+**Results.** One returning run on port 3-1 (entry `1794741599502372637-a81ae704`, image built from 579f6163e, SHA-256
+`84157dd8…d87e`) matched no outcome. Every control held, so the run is not void:
+
+- Both GPU modes repeated their counts per job within 0.1%, and the jobs/s ratio was 1.543.
+- The relu at 176 and 128 values per row repeated its write requests, write units and rate within 0.03%. At 256 the
+  counts repeated within 0.01%, and the rate, 7,793 jobs/s, was 4.8% below run 3bc9fbc0's 8,189, inside its 5% range.
+  The run ran between two runs of the scheduler's latency series on the same board.
+- Idle and the core-2 stream counted 0 on both ports. Every output matched its reference, including the stride
+  graph's 32 bytes of padding in every row. PLL_NPU stayed locked, and the top point held.
+
+The stride graph, per 8 rows:
+
+| Quantity | Measured | Alignment, 1.25 per 16 bytes | Alignment, beats plus 2 | Tile segments |
+| --- | --- | --- | --- | --- |
+| Write units | 232 (29,693 per job) | 180 | 192 | 208 |
+| Write requests | 20 | not predicted | 24 | reported |
+| Jobs/s | 11,583 | 12,684-14,020 | 12,035-13,302 | 11,580-12,798 |
+
+- **Write units** fit no outcome within 1%, so the decision is "none". Padding the rows to 320 bytes raised the write
+  units by 11.5% over the compiled 144 graph, from 208 to 232 per 8 rows. It raised the write requests from 18 to 20.
+- **Jobs/s** was 11,583, 7.0% above the job-time fit at the measured units (10,823).
+- **Reads** repeated the compiled 144 graph: 22 requests and 232 units per 8 rows (2,844 and 30,001 per job).
+
+Rows that start on 64-byte boundaries do not remove the excess write units; they add to it. Padding output rows to 64
+bytes therefore costs write traffic at this width, and the tile planner stays unchanged.
+
+The admission before the run read the port 3-1 state capture of run `1794739767299812242-b733706f` with that run's
+five NPU entry-gate and PCK4 words. At the board the runner read those words again under the port lock, found the NPU
+on, and used that read. The run started at 2026-11-15T11:20:08Z and completed at 11:20:42Z (34.1 s, with a 6.0 s
+reset), against the 38.9 s budget.
+
 ## Stage 2: DMA completion timing
 
 DMA is a separate later stage. Its known work:
