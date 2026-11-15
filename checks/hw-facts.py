@@ -52,7 +52,19 @@ def test_layout():
     constants = dict(re.findall(r'#define (HWF_\w+) (?:UINT64_C\()?(0x[0-9a-fA-F]+|\d+)u?\)?', header))
     number = lambda name: int(constants[name], 0)
     assert number('HWF_MAGIC') == hw.MAGIC and number('HWF_VERSION') == hw.VERSION
-    assert (number('HWF_CORES'), number('HWF_CORE_SLOTS'), number('HWF_SHARED_SLOTS')) == (hw.CORES, hw.CORE_SLOTS, hw.SHARED_SLOTS)
+    assert number('HWF_CORES') == hw.CORES
+    # The C table counts the generated slot table; compile it and compare its counts and size with the catalogue's.
+    import subprocess, tempfile
+    work = Path(tempfile.mkdtemp(dir=variant.directory))
+    (work / 'layout.c').write_text('#include <stdio.h>\n#include "a733_hw_facts.h"\nint main(void){printf("%u %u %zu %zu\\n",'
+                                   '(unsigned)HWF_SHARED_SLOTS,(unsigned)HWF_CORE_SLOTS,sizeof(struct hwf_table),'
+                                   'offsetof(struct hwf_table, core));return 0;}\n')
+    subprocess.run(['cc', '-I', str(ROOT / 'include'), str(work / 'layout.c'), '-o', str(work / 'layout')], check=True)
+    shared, per_core, size, core_offset = map(int, subprocess.run([str(work / 'layout')], capture_output=True, text=True,
+                                                                  check=True).stdout.split())
+    assert (shared, per_core, size, core_offset) == (len(hw.SHARED_SPECS), len(hw.CORE_SPECS), hw.TABLE_BYTES, hw.CORE_OFFSET), \
+        (shared, per_core, size, core_offset)
+    assert (hw.SHARED_SLOTS, hw.CORE_SLOTS) == (len(hw.SHARED_SPECS), len(hw.CORE_SPECS))
     assert (number('HWF_PLATFORM_A733'), number('HWF_PLATFORM_QEMU_OS')) == (hw.PLATFORM_A733, hw.PLATFORM_QEMU_OS)
     assert (number('HWF_VALID'), number('HWF_SKIPPED'), number('HWF_ANOMALY')) == (hw.FLAG_VALID, hw.FLAG_SKIPPED, hw.FLAG_ANOMALY)
     assert hw.CORE_OFFSET == 64 + 16 * hw.SHARED_SLOTS and hw.TABLE_BYTES == hw.CORE_OFFSET + 16 * hw.CORES * hw.CORE_SLOTS
@@ -82,7 +94,10 @@ def synthetic():
     values[('shared', 0, (0x0111, 97))] = 2 << 8
     values[('shared', 0, (0x0112, 97))] = 1 << 16 | 0xd8
     values[('shared', 0, (0x0130, 0x070101ac))] = 1
-    skipped = {('shared', 0, (0x0130, 0x07064000)), ('shared', 0, (0x0130, 0x07064008))}
+    values[('shared', 0, (hw.ID_MEMPATH_WORD, 0x02002020))] = 0xb8005400
+    values[('shared', 0, (hw.ID_MEMPATH_WORD, 0x0a030004))] = 0x20220410
+    skipped = {('shared', 0, (0x0130, 0x07064000)), ('shared', 0, (0x0130, 0x07064008)),
+               ('shared', 0, (hw.ID_MEMPATH_WORD, 0x0a040030))}
     return hw.encode(values=values, skipped=skipped)
 
 
@@ -124,6 +139,16 @@ def test_decoder():
     assert 'VPIDR_EL2' in by[('cpu.midr_el1', 0)]['note']
     assert by[('gic.dist.spi97.route_requested', 0)]['value'] == 0x100d8
     assert by[('mmio.0x070101ac', 0)]['value'] == 1
+    # The memory path group: words in the declared order, the CCU and select before the bridges, a skipped bridge word unmeasured.
+    order = [a for i, a in hw.SHARED_SPECS if i == hw.ID_MEMPATH_WORD]
+    assert order == list(hw.MEMPATH_WORDS) and len(order) == 74
+    assert order.index(0x08000200) < min(order.index(b) for b in hw.AXI2HIF_BRIDGES)
+    assert all(order.index(0x0a030000 + o) < order.index(0x0a040000) for o in hw.AXI2HIF_WORDS)
+    assert max(order.index(b + o) for b in hw.AXI2HIF_BRIDGES for o in hw.AXI2HIF_WORDS) < \
+        min(order.index(b + o) for b in hw.AXI2HIF_BRIDGES for o in hw.AXI2HIF_COUNTERS)
+    assert by[('mmio.0x02002020', 0)]['value'] == 0xb8005400 and by[('mmio.0x0a030004', 0)]['value'] == 0x20220410
+    assert 'IAG_MODE' in by[('mmio.0x0a030030', 0)]['source'] and by[('mmio.0x0a030030', 0)]['value'] == 0
+    assert by[('mmio.0x0a040030', 0)]['status'] == 'unmeasured' and by[('mmio.0x0a040030', 0)]['value'] is None
     ppu = by[('mmio.0x07064000', 0)]
     assert ppu['status'] == 'unmeasured' and ppu['value'] is None
     assert by[('gic.cpuif.icc_ctlr_el1.pribits', 3)]['view'] == {'el': 1, 'security': 'non-secure', 'interface': 'gic-cpu-interface'}

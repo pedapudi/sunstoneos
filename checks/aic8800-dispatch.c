@@ -58,11 +58,14 @@ static int dispatch_write(void *ctx,uint32_t off,uint32_t value)
         else{
             at+=scan_result_packet(receive+at,0,2);
             const uint8_t foreign_done[]={2,0,5};at+=control(receive+at,0x1001,foreign_done,3);
-            uint8_t stale[852]={0};stale[9]=1;at+=control(receive+at,0x1802,stale,sizeof(stale));
-            const uint8_t loss[]={3,0,1,0,0,0};at+=control(receive+at,0x1805,loss,6);
+            /* Lengths as the reference reads them (rwnx_cmds.c, rwnx_msg_rx.c): an SM_CONNECT_IND longer than the
+             * 852 bytes read and an SM_DISCONNECT_IND of the 5 bytes read are judged by their fields, not claimed
+             * as malformed; the SCANU_START_CFM below carries a byte past the 3 read. */
+            uint8_t stale[900]={0};stale[9]=1;at+=control(receive+at,0x1802,stale,sizeof(stale));
+            const uint8_t loss[]={3,0,1,0,0};at+=control(receive+at,0x1805,loss,5);
             for(unsigned i=0;i<5;++i)at+=scan_result_packet(receive+at,i,1);
-            const uint8_t done[]={1,0,5};at+=control(receive+at,0x1001,done,3);
-            at+=control(receive+at,0x1001,done,3); /* Duplicate before pending CFM. */
+            const uint8_t done[]={1,0,5,0};at+=control(receive+at,0x1001,done,4);
+            at+=control(receive+at,0x1001,done,4); /* Duplicate before pending CFM. */
             at+=control(receive+at,0x1009,NULL,0);
         }
         m.card[1][4]=(uint8_t)(((at?at:16)+511)/512);
@@ -169,7 +172,7 @@ static void dispatch_application(void *context)
      * disconnect indication and retrieve its copied event after revocation. */
     for(unsigned i=0;i<1000&&(transport.pending||m.card[1][4]||transport.cursor!=transport.rx_bytes);++i)vTaskDelay(1);
     assert(!transport.pending&&!m.card[1][4]&&transport.cursor==transport.rx_bytes);
-    memset(receive,0,sizeof(receive));const uint8_t loss[]={3,0,1,0,0,0};control(receive,0x1805,loss,6);m.card[1][4]=1;
+    memset(receive,0,sizeof(receive));const uint8_t loss[]={3,0,1,0,0};control(receive,0x1805,loss,5);m.card[1][4]=1;
     r=(struct sunstone_net_request){.operation=SUNSTONE_NET_EVENT,.timeout=1000};struct sunstone_net_reply result=call(&r);
     assert(result.result==SUNSTONE_NET_OK&&result.event.kind==AIC8800_DISPATCH_STATION&&
         result.event.generation==1&&result.event.metadata.station.kind==AIC8800_WIFI_DISCONNECTION&&!result.event.metadata.station.payload);

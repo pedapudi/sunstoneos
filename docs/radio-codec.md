@@ -58,8 +58,9 @@ FIFO credit accounting, and transfer submission belong to the native transport.
 The decoder checks the complete aligned record before publishing output.
 Its consumed length is four bytes plus the outer payload length rounded up
 to four bytes. Message parameters must fit the declared payload and the
-reference's 1,024-byte parameter limit. A read confirmation requires exactly
-eight parameter bytes. Trailing payload bytes and alignment padding remain
+reference's 1,024-byte parameter limit. A read confirmation requires at least
+the eight parameter bytes it reads, address then value; the reference's command
+manager copies a longer confirmation as sent and reads the same fields. Trailing payload bytes and alignment padding remain
 uninterpreted because the source supplies no invariant for them.
 
 Receive byte 3, dummy routing fields, and the pattern word are also
@@ -77,8 +78,8 @@ the fixed value. The header uses the same CRC rule. Failure leaves output
 unchanged, and successful encoding leaves the destination tail untouched.
 
 `aic8800_sdio_decode_bootstrap_setup_response` shares the bounded control-record
-parser. It recognizes write confirmation ID `0x0403` only with exactly eight
-parameter bytes, as declared in the pinned message header. It retains those
+parser. It recognizes write confirmation ID `0x0403` with at least the eight
+parameter bytes declared in the pinned message header. It retains those
 bytes as address/data fields and marks the result as a write confirmation.
 The source sender discards the fields; their names do not establish echo
 semantics. The decoder therefore accepts non-echo values and does not claim
