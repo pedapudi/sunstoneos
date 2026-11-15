@@ -323,6 +323,23 @@ host load (in one full run of the check beside 24 busy processes, 11 of 71 QEMU 
 `scheduler-partitioned-qemu` takes 905 ticks in nearly every run, 1,600 in about one run in fifty under host load and 1,891 under the
 heaviest perturbation, against a bound of 7,600; each progress wait of `scheduler-objects-qemu` has 4,000 ticks, and how close a run
 comes to that is not recorded.
+The perturbed partitioned models passed at the gate's delays (300, 1,000 and 3,000 turns) and failed at others, on bringup as much as on
+the branch that reported it, and every run of one delay gave the same verdict (20 of 20 runs, one output hash). Three causes, each found
+from a trace of one failing delay, are fixed in the fixture and the storm platform, not in the kernel:
+the controller polls the progress of a lower-priority task (the shielded-event task, the movers) with `vTaskDelay(1)`. With 3,500 turns at
+`owner-drain` the stretch between the controller's block and the switch that follows it took 11 ticks of the shared virtual clock, the shield
+was selected on the same tick that the controller's one-tick delay expired, and it was preempted before it executed an instruction, for
+7,000 polls in a row. Every poll in `checks/scheduler-partitioned-qemu.c` now sleeps `limit(1)` ticks with a fixed count, so the window
+a lower-priority task gets grows with the injected delay and is one tick at none. The `published on SGI 3` assertion of the band phase read
+the SGI count at the moment the band task ran; at some `owner-publish` delays the owner's own tick takes the hint before the doorbell, so
+the count rises one tick later. The check now waits, within the scaled bound, for the count to rise; `band-publication-sgi0`, which drops
+the SGI, still fails it. The storm model's interrupt fires every 33,000 instructions and each interrupt exit runs owner work; once an exit
+costs as much as that period (about 2,800 turns at `owner-drain`) the core runs only exits and the model prints no verdict. The
+storm period (`platform/qemu-smp/platform.c`) grows with the injected turns, and the reply and notification timeouts of the workers
+scale with `limit()`, because a saturated core 0 can leave a worker ready for longer than 2,000 ticks (at 2,500 turns of `owner-drain` in
+the storm model worker 0 stayed ready for 2,000 ticks while core 0 spent most of its samples in the delay loop). The storm model still
+prints no verdict within 15 minutes at 5,000 turns of `owner-drain`, where it finishes in 7 s at 4,750; the sweep's kill limit reports that
+as a timeout.
 The perturbation sweep kills a QEMU run that exceeds eight times the slowest measured point,
 85.7 s, recorded in the same file; the slowest run took 192 s beside 24 busy processes. Other gates' work still runs beside them. A gate that wants the lock writes a ticket in `~/.cache/sunstoneos/gate-timing-queue/` and takes the lock only when its ticket is the first live one, landings before workers and then oldest first, as for the slots; a free lock is not taken past an earlier waiter, and the gate that holds it keeps it until its step ends. A landing therefore waits only for the step that runs, not for the workers queued before it (measured on 2026-11-13: landing gates waited up to 475 s for this lock). The list is `timing_checks` and `timing_steps` in the same file. A check's
 pass criteria do not change. `checks/gate-slots.py` runs two gates at once, the exclusive timing lock, a landing that goes ahead of an

@@ -211,8 +211,11 @@ response and reopening data access. Application EAPOL transmission is excluded
 while the supplicant owns authentication.
 
 Ordinary packet transfer completion and EAPOL acknowledgement remain distinct.
-The adapter requires the firmware's transmit-done and acknowledgement bits for its
-EAPOL actions, and rejects retry indications. A key-add confirmation has a defined
+An EAPOL action completes when the SDIO transfer finished and the firmware
+returned a nonzero confirmation status for its sequence. As in the reference SDIO
+path, which ignores that status for EAPOL frames, an unacknowledged or
+untransmitted frame does not fail the handshake: the access point retransmits its
+message and the supplicant answers it again. A key-add confirmation has a defined
 status and hardware index; nonzero status causes failure. Key-delete and
 controlled-port senders in the pinned driver request confirmations without a
 response structure. Those confirmations retain up to 64 opaque bytes. Their

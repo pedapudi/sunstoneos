@@ -227,6 +227,8 @@ int os_ce_entropy_ready(void);
 int os_ce_entropy_failed(void);
 int os_ce_entropy_bytes(void *,uint8_t *,size_t);
 void os_ce_entropy_wipe(void);
+/* The CE's retirement in the association stage's return: 1 retired, 0 pending, negative retained (apps/os/ce_probe.c). */
+int os_ce_retire_step(uint64_t deadline_us);
 #endif
 /* The headset service (apps/os/headset.c, with the Bluetooth stack and the
  * mSBC codec) is an object library that an image links only when its

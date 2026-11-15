@@ -40,6 +40,7 @@ static struct {
     unsigned denied;
     unsigned detail; /* The failing step's own detail for the record, set where the step fails. */
     unsigned quiet;  /* The bring-up runs for the association stage's entropy: no CE record is published. */
+    unsigned retired; /* os_ce_retire_step proved the CE down: nothing more reaches the engine. */
 } ce;
 /* The association stage's reservoir of CE bytes: UNQUALIFIED, for bring-up only (docs/radio-entropy.md). */
 static struct { uint8_t bytes[256]; unsigned count, requested, failed; } pool;
@@ -209,7 +210,7 @@ void os_ce_probe_start(void)
 }
 void os_ce_probe_step(void)
 {
-    if(!ce.started||ce.finished)return;
+    if(!ce.started||ce.finished||ce.retired)return;
     int r=a733_ce_probe_step(&ce.probe);
     if(r<0){
         /* The record names the failing stage; so does the crumb, like the radio's. */
@@ -229,7 +230,7 @@ int os_ce_probe_failed(void){return ce.finished&&ce.probe.record.failed;}
 void os_ce_entropy_begin(void){ce.quiet=1;os_ce_probe_start();}
 void os_ce_entropy_step(void)
 {
-    if(!ce.started||pool.failed)return;
+    if(!ce.started||pool.failed||ce.retired)return;
     if(!ce.finished){os_ce_probe_step();if(ce.finished&&ce.probe.record.failed)pool.failed=1;return;}
     if(ce.probe.record.failed)return;
     uint64_t t;
@@ -265,4 +266,58 @@ void os_ce_entropy_wipe(void)
     for(unsigned i=0;i<sizeof(pool.bytes);++i)b[i]=0;
     pool.count=0;pool.requested=0;pool.failed=1;
     clean(pool.bytes,sizeof(pool.bytes));
+}
+
+/* The CE's retirement in the registered return of the association stage, in the radio owner task like every other CE
+ * step, after the module is down and the reservoir wiped. A TRNG task still in flight (a reservoir refill, or the
+ * bring-up's own task) is polled to completion and its block zeroed; the controller must then be idle (a733_ce_idle).
+ * The CE is taken down by the reverse of its bring-up (a733_ce_clock_retire: reset held, gates and the MBUS gate
+ * closed, read back), its clock token released, and the descriptor page, which held the last random blocks, returned
+ * from the device, zeroed, cleaned and freed to the ledger. A bring-up refused before any write changed no register:
+ * only its token is released. 1: retired, or the CE never started. 0: a task is still in flight, or the register lock
+ * is busy, before the deadline. Negative: the CE stays retained, and the value names the unmet step for the 0x905
+ * fault (1 the clock, 2 the deadline, 3 the engine faulted or the task failed, 4 the engine not idle, 5 the clock
+ * refused after a write, 6 the token, 7 the page). */
+int os_ce_retire_step(uint64_t deadline_us)
+{
+    if(ce.retired||!ce.started){ce.retired=1;return 1;}
+    uint64_t t;
+    if(now(&ce,&t)!=1)return -1;
+    if(ce.engine.initialized&&!a733_ce_idle(&ce.engine)){
+        if(ce.engine.fault)return -3;
+        uint8_t block[A733_CE_PROBE_BYTES];
+        enum a733_ce_result r=a733_ce_poll(&ce.engine,block);
+        for(unsigned i=0;i<sizeof(block);++i)((volatile uint8_t *)block)[i]=0;
+        if(r==A733_CE_PENDING||r==A733_CE_BUSY)return t<deadline_us?0:-2;
+        if(r!=A733_CE_RANDOM)return -3;
+        pool.requested=0;
+        if(!a733_ce_idle(&ce.engine))return -4;
+    }
+    if(ce.clock.state==A733_CE_CLOCK_READY){
+        if(!a733_ce_clock_retire(&ce.clock)){
+            if(ce.clock.state!=A733_CE_CLOCK_READY)return -5;
+            return t<deadline_us?0:-2;
+        }
+    }else if(ce.clock.state==A733_CE_CLOCK_RETAINED&&(ce.clock.writes||ce.clock.held))return -5;
+    else if(ce.clock.state==A733_CE_CLOCK_ATTEMPTING)return -5;
+    if(ce.token.id){
+        enum a733_clock_result r=a733_clock_release(&providers.shared.clocks,&ce.token,deadline_us);
+        if(r==A733_CLOCK_BUSY)return t<deadline_us?0:-2;
+        if(r!=A733_CLOCK_OK)return -6;
+        memset(&ce.token,0,sizeof(ce.token));
+    }
+    if(ce.buffer.generation){
+        struct umem *ledger=os_large_umem();
+        if(!ledger)return -7;
+        if(ce.buffer_state){
+            if(umem_handoff(ledger,&ce.buffer,UMEM_DEVICE,UMEM_CPU,NULL,0)!=UMEM_OK)return -7;
+            ce.buffer_state=0;
+        }
+        volatile uint8_t *page=(volatile uint8_t *)(uintptr_t)ce.buffer.base;
+        for(unsigned i=0;i<4096;++i)page[i]=0;
+        clean((const void *)(uintptr_t)ce.buffer.base,4096);
+        if(umem_free(ledger,&ce.buffer)!=UMEM_OK)return -7;
+        memset(&ce.buffer,0,sizeof(ce.buffer));ce.memory=NULL;ce.physical=0;
+    }
+    ce.retired=1;return 1;
 }

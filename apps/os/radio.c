@@ -100,9 +100,20 @@ int os_radio_quiesce_poll(struct board_radio *r,int result)
             radio_quiesce_refuse(0x908u);radio_module_stopped(r);return 2;
         }
         radio_module_stopped(r);
-        /* Full station/association additionally owns CE entropy and DMA.
-         * WLAN shutdown supplies no global CE drain or memory-release proof. */
-        if(!r->config.scan_only||r->config.associate){radio_quiesce_refuse(0x905u);return 2;}
+        /* The full station also owns its own CE entropy source and DMA, and
+         * WLAN shutdown supplies no drain or memory-release proof for it. */
+        if(!r->config.scan_only){radio_quiesce_refuse(0x905u);return 2;}
+#ifdef SUNSTONE_A733_OS_RADIO_SCAN
+        /* The association stage's CE: drained, taken down, its token and page
+         * released (apps/os/ce_probe.c), before the return may complete. */
+        if(r->config.associate){
+            int ce=os_ce_retire_step(os_cpu_return_deadline_us());
+            if(!ce)return 1;
+            if(ce<0){radio_quiesce_refuse(0x905u|(uint32_t)-ce<<16);return 2;}
+        }
+#else
+        if(r->config.associate){radio_quiesce_refuse(0x905u);return 2;}
+#endif
         os_wifi_credential_poll();
         if(os_wifi_credential_wiped()){os_quiesce_complete(&radio_quiesce);return 2;}
     }

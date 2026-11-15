@@ -11,6 +11,7 @@ struct model {
     struct reg regs[40];unsigned count;
     uint64_t now;
     unsigned held,retained,left,writes;
+    uintptr_t stuck; /* A register whose writes are accepted but never take effect. */
     uint32_t log[32][2];
 };
 static uint32_t *reg(struct model *m,uintptr_t a)
@@ -42,7 +43,8 @@ static int write_reg(void *v,uintptr_t a,uint32_t value)
     }else return 0;
     if((old^value)&~mask)return 0;
     assert(m->writes<32);m->log[m->writes][0]=(uint32_t)(a-CCU);m->log[m->writes][1]=value;++m->writes;
-    *reg(m,a)=value;return 1;
+    if(a!=m->stuck)*reg(m,a)=value;
+    return 1;
 }
 static void setup(struct model *m,uint32_t clk,uint32_t bgr,uint32_t mbus)
 {
@@ -89,6 +91,31 @@ int main(void)
     setup(&m,0x01000000,0x30000,0);
     assert(!provision(&m,&clock)&&m.writes==0&&!m.held&&!m.retained&&m.left==1&&clock.fail_line);
     assert(a733_clock_token_status(&m.registry,&m.token)==A733_CLOCK_OK);
-    puts("PASS CE clock bring-up: the board's enabled entry state is cycled in the vendor order, neighbors preserved, held-in-reset brought up, other states refused without a write");
+    /* Retirement: a READY CE is taken down by the same reverse sequence, each step read back, and the lock left. */
+    setup(&m,0x81000000,0x30003,4);
+    assert(provision(&m,&clock)==1);
+    unsigned before=m.writes,left=m.left;
+    assert(a733_ce_clock_retire(&clock)==1&&clock.state==A733_CE_CLOCK_RETIRED&&!m.held&&!m.retained&&m.left==left+1);
+    assert(m.writes==before+6&&*reg(&m,CCU+0xac0)==0&&*reg(&m,CCU+0xac4)==0&&*reg(&m,CCU+0x5e4)==0);
+    for(unsigned i=0;i<6;++i)assert(m.log[before+i][0]==order[i][0]&&m.log[before+i][1]==order[i][1]);
+    /* Retired is final: neither a second retirement nor a bring-up follows. */
+    assert(!a733_ce_clock_retire(&clock)&&m.writes==before+6);
+    /* Neighbors stay as found through the retirement too. */
+    setup(&m,0,0,0x40302);
+    assert(provision(&m,&clock)==1&&a733_ce_clock_retire(&clock)==1&&*reg(&m,CCU+0x5e4)==0x40302);
+    /* A CE that is not in the state provision left (here its bus gate was closed behind the owner's back) is refused
+     * before any write: the lock left, the clock still READY and the token unretained. */
+    setup(&m,0,0,0);
+    assert(provision(&m,&clock)==1);
+    *reg(&m,CCU+0xac4)=0x30001;before=m.writes;left=m.left;
+    assert(!a733_ce_clock_retire(&clock)&&clock.state==A733_CE_CLOCK_READY&&m.writes==before&&!m.held&&m.left==left+1&&!m.retained);
+    assert(a733_clock_token_status(&m.registry,&m.token)==A733_CLOCK_OK);
+    /* A write that does not read back (the module gate stuck on) retains the lock and the token: never released. */
+    setup(&m,0,0,0);
+    assert(provision(&m,&clock)==1);
+    m.stuck=CCU+0xac0;before=m.writes;
+    assert(!a733_ce_clock_retire(&clock)&&clock.state==A733_CE_CLOCK_RETAINED&&m.held&&m.retained==1);
+    assert(a733_clock_token_status(&m.registry,&m.token)!=A733_CLOCK_OK);
+    puts("PASS CE clock bring-up and retirement: the board's enabled entry state is cycled in the vendor order, neighbors preserved, held-in-reset brought up, other states refused without a write; a ready CE retires by the reverse sequence, a moved state is refused without a write, a failed readback retains");
     return 0;
 }

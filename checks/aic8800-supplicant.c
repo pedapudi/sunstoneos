@@ -16,6 +16,8 @@ static struct aic8800_supplicant supplicant;
 static uint8_t vectors[15][256];static unsigned sizes[15];
 static unsigned entropy_calls, key_adds, deletes, ports, eapol_tx, trace[64],trace_n;
 static int entropy_return=1, reject_key, drop_reply, uncertain_tx;
+/* The firmware confirms the next EAPOL frame as processed but unacknowledged (tx_done and retry_required, no ack bit). */
+static int unacked_once;
 static unsigned hold_response,expected_eapol;
 static uint8_t delayed[512];
 static int entropy(void *ctx,uint8_t *out,size_t bytes)
@@ -44,7 +46,7 @@ static int security_write(void *ctx,uint32_t off,uint32_t value)
                 assert(0);
             }
             ++eapol_tx;trace[trace_n++]=0x10000|index;
-            memset(receive,0,sizeof(receive));receive[0]=8;receive[2]=0x92;put32(receive+4,9);put32(receive+8,get32(p+8));m.card[1][4]=1;
+            memset(receive,0,sizeof(receive));receive[0]=8;receive[2]=0x92;put32(receive+4,unacked_once?3:9);unacked_once=0;put32(receive+8,get32(p+8));m.card[1][4]=1;
         } else {
             assert(p[2]==0x11);unsigned id=p[8]|(unsigned)p[9]<<8;trace[trace_n++]=id;
             if(id==36) {
@@ -104,7 +106,7 @@ static void checkpoint(void)
     assert(!aic8800_supplicant_claim(&sae,&transport,&security,m.now,m.now+50000)&&!sae.owner&&!security.owner);
 #endif
     assert(aic8800_transport_start_security(&transport,&security,&supplicant,m.now+50000));
-    entropy_calls=key_adds=deletes=ports=eapol_tx=trace_n=0;entropy_return=1;reject_key=drop_reply=uncertain_tx=0;hold_response=0;expected_eapol=6;
+    entropy_calls=key_adds=deletes=ports=eapol_tx=trace_n=0;entropy_return=1;reject_key=drop_reply=uncertain_tx=unacked_once=0;hold_response=0;expected_eapol=6;
 }
 static unsigned rx_frame(uint8_t *p,const uint8_t *eapol,unsigned n,int encrypted,uint64_t pn,unsigned keyid,int group)
 {
@@ -188,6 +190,12 @@ int main(int argc,char **argv)
         n+=rx_frame(receive+n,vectors[7],sizes[7],0,0,0,0);memcpy(receive+n,delayed,12);m.card[1][4]=(uint8_t)((n+12+511)/512);
         settled();assert(supplicant.dropped_eapol==1&&eapol_tx==2&&key_adds==2&&aic8800_security_open(&security));
         puts("RSN burst: first deferred EAPOL retained, excess retransmission dropped, CFM progresses and keys authorize in order");return 0;
+    }
+    if(!strcmp(argv[2],"unacked")) {
+        /* As in the reference SDIO path, an unacknowledged message 2 is not a fault: message 3 still completes the
+         * handshake (the access point received it although the acknowledgement was lost). */
+        unacked_once=1;authorized();assert(supplicant.eapol_tx==2);
+        puts("RSN unacknowledged EAPOL: a processed but unacknowledged message 2 does not stop the handshake");return 0;
     }
     if(!strcmp(argv[2],"bad-mic")) {
         inject(5);settled();vectors[7][81]^=1;inject(7);settled();

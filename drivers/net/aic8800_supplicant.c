@@ -185,8 +185,10 @@ void aic8800_supplicant_step(struct aic8800_supplicant *s,uint64_t now)
         }
         if(a->kind==AIC8800_SUPPLICANT_EAPOL&&s->data->state==AIC8800_DATA_DONE){
             const struct aic8800_data_result *r=&s->data->result;
-            if(!r->bus_transferred||!r->firmware_status_valid||!r->tx_done||!r->acknowledged||r->retry_required||r->software_retry_required)
-                {aic8800_supplicant_stop(s);return;}
+            /* The firmware must have processed the frame. As in the reference SDIO path (rwnx_txdatacfm, which
+             * ignores the status for EAPOL), an unacknowledged or untransmitted frame is not a fault: the access
+             * point retransmits its message and the handshake answers it again. */
+            if(!r->bus_transferred||!r->firmware_status_valid){aic8800_supplicant_stop(s);return;}
             if(s->eapol_tx!=UINT32_MAX)++s->eapol_tx;
             s->data->state=AIC8800_DATA_IDLE;pop(s);
         }else if(a->kind==AIC8800_SUPPLICANT_KEY&&s->security->state==AIC8800_SECURITY_DONE){s->security->state=AIC8800_SECURITY_IDLE;pop(s);}
