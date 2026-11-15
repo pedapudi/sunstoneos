@@ -52,7 +52,9 @@ WAKE_TICK_WORDS = 4 + 2 * len(CAUSE_EVENTS) + 8 + 8 * len(CAUSE_EVENTS)
 def wake_layout(version):
     """Words per sample, cell and core, and the report's bytes. Version 3 adds each
     sample's deadline, each cell's release ticks and per-span ranks, and keeps the
-    three largest wakes per setting where versions 1 and 2 kept one."""
+    three largest wakes per setting where versions 1 and 2 kept one. Version 4 has the
+    layout of version 3 and counts in first_state the wakes whose chain an interrupt tore
+    in every copy."""
     v3 = version >= 3
     sample = (5 if v3 else 4) + WAKE_SPANS * WAKE_VALUES
     cell = (4 if v3 else 3) + WAKE_SPANS * WAKE_VALUES + (WAKE_SPANS * (WAKE_WORST + 1) if v3 else 0)
@@ -61,7 +63,7 @@ def wake_layout(version):
 
 
 WAKE_SAMPLE_WORDS, WAKE_CELL_WORDS, WAKE_CORE_WORDS, WAKE_BYTES = wake_layout(3)
-WAKE_BYTES_BY_VERSION = {version: wake_layout(version)[3] for version in (1, 2, 3)}
+WAKE_BYTES_BY_VERSION = {version: wake_layout(version)[3] for version in (1, 2, 3, 4)}
 BAND_CELL_FIELDS = ('windows', 'cycles', 'foreign', 'foreign_irq', 'foreign_max', 'foreign_sum', 'own', 'own_max')
 SERVICE_CELL = 464
 SERVICE_BINS = 105
@@ -479,6 +481,13 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
                 'dispatch_ticks': end - begin, 'owner_begin': owner_begin, 'owner_end': owner_end,
                 'owner_ticks': owner_end - owner_begin,
                 'overlaps_wake': end > ready or owner_end > ready})
+        # The IRQ rows are the latest dispatches, and the selection rows the latest selections. When CPU0 selects
+        # rarely, as in the cap image's warm-up, the selection rows reach back past the IRQ rows, and the dispatch a
+        # selection cites has been overwritten. The image's IRQ_PREFIX_LOST covers only the wake's ready stamp
+        # (kernel/scheduler/latency_trace.c:431), so it does not flag this. With the ring full, a cited owner-exit
+        # sequence below the oldest kept row's sequence was overwritten; a missing one inside the kept range is refused.
+        kept = [row['sequence'] for row in irq_rows if row['sequence']]
+        overwritten_below = min(kept) if irq_count == capacity and kept else 0
         for index in range(capacity):
             begin, end, irq_sequence, slot = struct.unpack_from('<4Q', payload, window_offset)
             window_offset += 32
@@ -489,15 +498,18 @@ def decode_scheduler_trace(payload, frequency, *, restore_spans=None):
             if (not 0 < begin <= end <= running or slot >= 128 or
                     switch_rows and begin < switch_rows[-1]['end']):
                 raise ValueError('scheduler CPU0 selection timing or task is invalid')
+            kind = 'irq' if irq_sequence else 'svc'
             if irq_sequence:
                 origin = next((row for row in irq_rows if row['sequence'] == irq_sequence), None)
                 if origin:
                     if origin['owner_end'] > begin:
                         raise ValueError('scheduler CPU0 selection precedes its owner exit')
+                elif irq_sequence < overwritten_below:
+                    kind = 'irq_overwritten'
                 elif not window_flags & 13:
                     raise ValueError('scheduler CPU0 selection origin is missing without history loss')
             switch_rows.append({'begin': begin, 'end': end, 'irq_sequence': irq_sequence,
-                'selected_slot': slot, 'origin': 'irq' if irq_sequence else 'svc',
+                'selected_slot': slot, 'origin': kind,
                 'ticks': end - begin, 'overlaps_wake': end > ready})
         if not ready and (irq_count or switch_count or window_flags):
             raise ValueError('scheduler empty CPU0 wake contains an event window')
@@ -1128,14 +1140,18 @@ def decode_wake_segments(payload, frequency):
               'switch_shift': shift, 'cores': [], 'ticks': {},
               'scope': ('a chain starts at the outermost interrupt entry and is kept only when every point '
                         'follows in order and it carried the release (CPU0: release inside the chain); a chain '
-                        'completed before a later interrupt links with that interrupt in its last segment; busy samples after '
+                        'completed before a later interrupt links with that interrupt in its last segment; a wake whose '
+                        'chain an interrupt on its core tore in every copy is counted torn and files nothing; busy samples after '
                         'the first are filed by the band setting at the wake; events are refills and backend stalls; '
                         + ('wakes run from the deadline, the compare value of the timer interrupt that released them'
                            if v3 else 'wakes run from the release stamp'))}
     for core in range(8):
         linked, unlinked, nested, interrupted, first_state, arms, arm_cycles, arm_max = take(8)
+        # Version 4: bit 10 marks a torn first wake and bits 32-63 count the torn wakes, which file nothing.
+        torn = first_state >> 32
         if (nested > linked or interrupted > linked or (version == 1 and (arms or arm_cycles or arm_max)) or
-                arm_max > arm_cycles or (not arms and arm_cycles)):
+                arm_max > arm_cycles or (not arms and arm_cycles) or
+                (version < 4 and (torn or first_state >> 10 & 1)) or (first_state >> 10 & 1 and not torn)):
             raise ValueError('wake segment core counts or reserved words are invalid')
         cells = {}
         for setting in ('off', 'on'):
@@ -1181,14 +1197,17 @@ def decode_wake_segments(payload, frequency):
             worst = {setting: [row] if row else [] for setting, row in maxima.items()}
         if sum(cell['count'] for cell in cells.values()) + (first is not None) > linked:
             raise ValueError('wake segment cells exceed the linked count')
+        if first_state >> 10 & 1 and first is not None:
+            raise ValueError('wake segment first wake is torn but holds a sample')
         result['cores'].append({'core': core, 'linked': linked, 'unlinked': unlinked, 'nested': nested,
-                                'interrupted': interrupted,
+                                'interrupted': interrupted, 'torn': torn,
                                 'timer_arms': {'count': arms, 'mean_cycles': arm_cycles / arms if arms else None,
                                                'max_cycles': arm_max,
                                                'scope': 'local timer register writes at EL1 while measuring, '
                                                         'net of an empty bracket; the arm call itself is outside'},
                                 'first_state': {'seen': bool(first_state >> 16 & 1), 'linked': bool(first_state >> 8 & 1),
                                                 'through_held_chain': bool(first_state >> 9 & 1),
+                                                'torn': bool(first_state >> 10 & 1),
                                                 'current_chain_stage': first_state & 0xff},
                                 **cells, 'first': first, 'maximum': maxima, 'worst': worst})
 

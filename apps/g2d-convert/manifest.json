@@ -6,5 +6,5 @@
                     {"name": "source", "bytes": 2097152, "access": ["read", "write"]},
                     {"name": "reference", "bytes": 2097152, "access": ["read", "write"]}],
   "deadlines": {"run_us": 5000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
-  "output_limit": 16384
+  "output_limit": 32768
 }

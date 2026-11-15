@@ -1,6 +1,6 @@
 --- link.ld
 +++ link-os.ld
-@@ -2,36 +2,55 @@
+@@ -2,36 +2,58 @@
  PROVIDE(_freertos_vector_table = a733_cached_el1_vectors);
  MEMORY {
      CODE (rx) : ORIGIN = 0x41000000, LENGTH = 2M
@@ -48,7 +48,10 @@
 +    } > RODATA
 +    /* The sealed session (apps/os/sealed.c), last in RODATA: the 2 MiB block
 +     * that EL1 and EL0 map read-only and execute-never. NOLOAD, so no loader
-+     * writes or zeroes it; EL3 zeroes it before the copy. */
++     * writes or zeroes it; EL3 zeroes it before the copy. The one-byte gap
++     * keeps the sealed page apart from the bounds of the empty sections above
++     * when read-only data ends on a page boundary. */
++    .sealed_gap (NOLOAD) : { . += 1; } > RODATA
 +    .sealed (NOLOAD) : ALIGN(4096) {
 +        __os_sealed_start = .;
 +        *(.bss.os_sealed)

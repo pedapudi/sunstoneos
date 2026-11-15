@@ -108,8 +108,10 @@ static void controller(void *argument)
         platform_puts("\n");
         /* A wake whose interrupt chain a later interrupt replaced before the woken task finished its bookkeeping (a stall of
          * that core, long on a loaded host) is counted unlinked, by design; every busy wake is one or the other, and a chain
-         * that is not recorded at all links none. The first wake may be among the unlinked. */
-        configASSERT(filed && (w->first_state >> 16 & 1u) && w->linked + w->unlinked == LATENCY_BUSY_SAMPLES && 2 * w->linked > LATENCY_BUSY_SAMPLES);
+         * that is not recorded at all links none. A wake whose chain an interrupt tore in every copy is counted torn
+         * (first_state bits 32-63). The first wake may be among the unlinked or the torn. */
+        configASSERT(filed && (w->first_state >> 16 & 1u) &&
+                     w->linked + w->unlinked + (w->first_state >> 32) == LATENCY_BUSY_SAMPLES && 2 * w->linked > LATENCY_BUSY_SAMPLES);
         /* Each setting's worst wakes, largest first from the deadline; a released core's deadline is CPU0's. */
         for (unsigned setting = 0; setting < 2; ++setting)
             for (unsigned i = 0; i < SS_WAKE_WORST; ++i) {

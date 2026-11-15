@@ -14,6 +14,10 @@ it completes in about 2 s of host time. So this check runs the image multi-threa
   breaks   the image rebuilt with its peer reporting a sequence error after the fourth exchange (the source of apps/latency/cause-ping.c
            changed in a copy, compiled with the image's own flags and linked with its own link command) must exit non-zero with the failed
            assertion of the ping status (the line of "configASSERT(result.ping.status == LATENCY_CAUSE_PING_OK)" in model.c).
+Each image runs once. The check holds the timing lock (timing_checks, tools/gate-slots.json), and the image's own bounds cover the
+host it gets there: 193 runs of the cause model made four at once under the timing lock on 2026-11-15, at load averages 11 to 75,
+all passed, with the ping at most 84.9 ms of its 250 ms deadline and the run at most 2.2 s of its 12 s budget. A run that misses
+either bound fails the check.
 Usage: latency-cause-model.py --build DIR --output DIR
 """
 import argparse
@@ -51,25 +55,6 @@ def run_guest(qemu, image, seconds):
 
 # The peer's report of the planted defect: LATENCY_CAUSE_PING_SEQUENCE is status 5 (apps/latency/cause-ping.h).
 PEER_FAILED = re.compile(r'^latency cause ping failed: pair=[0-9] status=5$', re.M)
-BUDGET_FAILURE = 'FAIL latency phase='
-# A ping that timed out (LATENCY_CAUSE_PING_TIMEOUT is status 4) waited out its 250 ms of host time for a core the host did not schedule; the
-# model prints its statuses before its assertion (apps/latency/model.c).
-PING_TIMED_OUT = re.compile(r'^latency cause ping result: .*=0x0*4\b', re.M)
-ATTEMPTS = 3
-
-
-def run_conclusive(qemu, image, seconds, concluded=lambda text: False):
-    """run_guest, again when the host stalled it before it reached the claim being checked: the guest's own run budget ran out, or the
-    ping timed out waiting for a core. A planted defect reported by its peer is concluded, whatever else the run printed. When every attempt
-    was stalled the claim is inconclusive (harness.KillInconclusive, exit status 75), not a pass and not a failure."""
-    stalled = False
-    for _ in range(ATTEMPTS):
-        code, log = run_guest(qemu, image, seconds)
-        stalled = BUDGET_FAILURE in log or bool(PING_TIMED_OUT.search(log))
-        if not stalled or concluded(log):
-            return code, log
-    raise harness.KillInconclusive('inconclusive: the host stalled the cause model in %d of %d attempts (run budget or ping timeout)'
-                                   % (ATTEMPTS, ATTEMPTS))
 
 
 def main():
@@ -82,7 +67,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     seconds = harness.qemu_kill_seconds('latency-cause-model')
     image = build / (TARGET + '.elf')
-    code, log = run_conclusive(args.qemu, image, seconds)
+    code, log = run_guest(args.qemu, image, seconds)
     (out / 'qemu-pass.log').write_text(log)
     assert code == 0 and 'PASS latency cause model' in log and 'FAIL' not in log, ('the cause model did not pass', out / 'qemu-pass.log')
     print('PASS cause ping completes: the model printed its PASS line on the multi-threaded guest')
@@ -112,10 +97,8 @@ def main():
     done = subprocess.run(command, cwd=build, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr[-2000:]
     # The planted defect is detected when the model exits non-zero without its PASS line and either the ping assertion fails or the
-    # peer that met the planted sequence error reports it (apps/latency/workload.c, ss_latency_cause_ping_failed). Which FAIL line
-    # comes first is not part of the claim: a host so loaded that the guest's run budget runs out reaches workload.c's budget
-    # failure first, and that run is retried.
-    code, log = run_conclusive(args.qemu, broken, seconds, lambda text: expected in text or PEER_FAILED.search(text))
+    # peer that met the planted sequence error reports it (apps/latency/workload.c, ss_latency_cause_ping_failed).
+    code, log = run_guest(args.qemu, broken, seconds)
     (out / 'qemu-broken.log').write_text(log)
     detected = expected in log or PEER_FAILED.search(log)
     assert code != 0 and detected and 'PASS latency cause model' not in log, ('the broken ping did not fail the model', expected, out / 'qemu-broken.log')

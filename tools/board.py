@@ -75,7 +75,7 @@ def check_wifi_stage(args):
     image is copied or any device is touched, when none is named. A name with no stored credential is refused by load_wifi."""
     prepare = images.load('radio_scan_prepare', ROOT/'tools/radio_scan_prepare.py')
     require(getattr(args, 'radio_stage_limit', 0) < prepare.ASSOCIATE_STAGE or getattr(args, 'wifi', None),
-            '--radio-stage-limit %d joins the stored network: name it with --wifi NAME (tools/wifi-credential.py add NAME).' % prepare.ASSOCIATE_STAGE)
+            '--radio-stage-limit %d joins the stored network: name it with --wifi NAME (tools/wifi-credential.py add NAME).' % getattr(args, 'radio_stage_limit', 0))
 
 
 def save(path, value, durable=True):
@@ -2558,7 +2558,7 @@ def run_options(parser, submit=False):
     parser.add_argument('--npu-pool', default='0:0', metavar='BASE:BYTES',
                         help='Ask for the NPU reservation at this base and size (default 0:0: the allocator chooses). The ledger refuses an extent that is not free DRAM above the image or that crosses a 4 GiB window.')
     parser.add_argument('--radio-stage-limit', type=radio_stage_limit, default=0, metavar='N',
-                        help='How far the radio scan image runs: 0 a full run (default), 1 enumeration, 2 plus the chip-ID words, 3 through the firmware upload, 4 the CE entropy stage alone, 5 association with the --wifi network and the four-way handshake (entropy unqualified, bring-up only). Frozen in the queue entry and written into the prepared radio profile.')
+                        help='How far the radio scan image runs: 0 a full run (default), 1 enumeration, 2 plus the chip-ID words, 3 through the firmware upload, 4 the CE entropy stage alone, 5 association with the --wifi network and the four-way handshake (entropy unqualified, bring-up only), 6 association, then DHCP and one DNS lookup. Frozen in the queue entry and written into the prepared radio profile.')
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--reference', help='PATH#ANCHOR of the tracked docs heading that derives the subsystem vendor sequence and the diff against it; '
                         '"none" needs --approved-by coordinator and --reference-reason.')
