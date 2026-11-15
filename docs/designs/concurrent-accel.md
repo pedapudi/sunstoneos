@@ -348,6 +348,29 @@ gives 1,048,576 requests per job, 4.2 ns each. A wider program cannot separate t
 same gain. The request count of the GPU's NSI port can, if those counters count live on the board, which is not yet
 shown. No vendor figure for this GPU's buffer bandwidth exists in the datasheet, the manual or the pinned GPU sources.
 
+### Four elements per lane triple the GPU add
+
+The width build of accel-overlap (`SUNSTONE_ACCEL_OVERLAP_WIDTH`) runs the GPU-alone phase with
+[add4/vector_add4.cl](../../apps/accel-overlap/add4/vector_add4.cl). Each lane loads four consecutive words of each
+vector with one access and stores the four sums with two 2-word stores, so a job runs 2,048 workgroups. The compiled
+program has 18 temps and five serial memory waits per task.
+
+One returning run on port 3-1 (entry `1794714617637336813-d6d9ac0d`) gave:
+
+| Measurement | One element per lane (stage 1c) | Four elements per lane | Predicted |
+|---|---|---|---|
+| Pipelined rate | 225 jobs/s (0.70 GB/s) | 676 jobs/s (2.13 GB/s) | 550-850 jobs/s |
+| Serial slot job | 4,484 µs | 1,495 µs | 1.2-1.8 ms |
+| 1 MiB output maintenance | 20 µs | 104 µs | |
+
+Every compared output matched its reference, the run returned with no GPU fault, PLL_NPU kept its word and lock, and
+the top point held. The gain of 3.0 times matches five waits carrying four times the bytes of four waits, at unchanged
+residency. Few resident tasks and a per-request limit both predicted this gain, so the run does not separate them;
+the request count per job of the GPU's NSI port can.
+
+Mapping the leases without SLC bypass, so that GPU misses can use the system-level cache, is a separate candidate. It
+needs its own hypothesis after the NSI counters are shown to count.
+
 ## Stage 2: DMA completion timing
 
 DMA is a separate later stage. Its known work:
