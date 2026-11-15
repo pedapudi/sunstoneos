@@ -322,13 +322,17 @@ def cmd_add(args):
             record[field] = getattr(args, field)
     if args.date:
         record['date'] = args.date
-    record['measurements'] += [parse_measure(item) for item in args.measure]
+    for measurement in (parse_measure(item) for item in args.measure):
+        if any(item['name'] == measurement['name'] for item in record['measurements']):
+            raise SystemExit(f'Measurement {measurement["name"]} is already in the record: add fills run_total from '
+                             'result.json, and each name appears once.')
+        record['measurements'].append(measurement)
     for item in args.condition:
         name, separator, value = item.partition('=')
         if not separator:
             raise SystemExit(f'Condition {item!r} must read name=value.')
         record['conditions'][name] = value
-    record['evidence'] += args.evidence
+    record['evidence'] += [path for path in dict.fromkeys(args.evidence) if path not in record['evidence']]
     problems = []
     check_value(record, load_schema(), 'record', problems)
     if problems:
