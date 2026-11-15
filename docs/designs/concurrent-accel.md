@@ -807,6 +807,36 @@ graph's 22 requests and 232 units per 8 rows.
 - **Tile segments:** padding does not help, and the planner stays unchanged.
 - **No outcome:** the planner stays unchanged.
 
+**Results.** One returning run on port 3-1 (entry `1794741599502372637-a81ae704`, image built from 579f6163e, SHA-256
+`84157dd8…d87e`) matched no outcome. Every control held, so the run is not void:
+
+- Both GPU modes repeated their counts per job within 0.1%, and the jobs/s ratio was 1.543.
+- The relu at 176 and 128 values per row repeated its write requests, write units and rate within 0.03%. At 256 the
+  counts repeated within 0.01%, and the rate, 7,793 jobs/s, was 4.8% below the earlier 8,189, inside its 5% range.
+- Idle and the core-2 stream counted 0 on both ports. Every output matched its reference, including the stride
+  graph's 32 bytes of padding in every row. PLL_NPU stayed locked, and the top point held.
+
+The stride graph, per 8 rows:
+
+| Quantity | Measured | Alignment, 1.25 per 16 bytes | Alignment, beats plus 2 | Tile segments |
+| --- | --- | --- | --- | --- |
+| Write units | 232 (29,693 per job) | 180 | 192 | 208 |
+| Write requests | 20 | not predicted | 24 | reported |
+| Jobs/s | 11,583 | 12,684-14,020 | 12,035-13,302 | 11,580-12,798 |
+
+- **Write units** fit no outcome within 1%, so the decision is "none". Padding the rows to 320 bytes raised the write
+  units by 11.5% over the compiled 144 graph, from 208 to 232 per 8 rows. It raised the write requests from 18 to 20.
+- **Jobs/s** was 11,583, 7.0% above the job-time fit at the measured units (10,823).
+- **Reads** repeated the compiled 144 graph: 22 requests and 232 units per 8 rows (2,844 and 30,001 per job).
+
+Rows that start on 64-byte boundaries do not remove the excess write units; they add to it. Padding output rows to 64
+bytes therefore costs write traffic at this width, and the tile planner stays unchanged.
+
+The admission before the run read the port 3-1 state capture of run `1794739767299812242-b733706f` with that run's
+five NPU entry-gate and PCK4 words. At the board the runner read those words again under the port lock, found the NPU
+on, and used that read. The run started at 2026-11-15T11:20:08Z and completed at 11:20:42Z (34.1 s, with a 6.0 s
+reset), against the 38.9 s budget.
+
 ## Stage 2: DMA completion timing
 
 DMA is a separate later stage. Its known work:
