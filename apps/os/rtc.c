@@ -10,6 +10,7 @@
 #include "a733_platform_locks.h"
 #include "a733_mmio.h"
 #include "gicv3_spi.h"
+#include "device-fault.h"
 #include "quiesce.h"
 #include "sunstone_deadline.h"
 #include "sunstone_rtc.h"
@@ -22,31 +23,26 @@ _Static_assert(sizeof(struct ss_rtc_switch)==sizeof(struct a733_rtc_switch),"swi
 _Static_assert(sizeof(struct ss_rtc_time)==sizeof(struct a733_rtc_time),"time layouts");
 #define RTC UINT32_C(0x07090000)
 #define GICD UINT32_C(0x03400000)
-enum phase {CLOSED,OPENING,OPEN,CLOSING,FAULT};
 enum op {NONE,OPEN_OP,SET_OP,READ_OP,ARM_OP,CLOSE_OP,SELECT_OP,MEASURE_OP};
 enum {POSTED=1,DONE=2};
+static TaskHandle_t owner;
 static struct {
     struct a733_rtc rtc;
     struct a733_clock_token clock;
     struct gicv3_spi gic;
-    atomic_uint phase,request,live,irq_flag,irq_count,alarm_state,quiesce_wanted,quiesced;
-    /* 1 once a close has started since the last open: a FAULT service gets one close attempt. Only the owner task
-     * reads it. */
-    atomic_uint close_started;
-    /* 1 once the fault must be reported: a close step failed, or the fault is one the close cannot settle. The owner
-     * task stores it after the fault fields; quiesce_step loads it and nothing else, see there. A reported service stays
-     * FAULT, so it is never cleared. */
-    atomic_uint reported;
+    /* The phase and the fault report (apps/os/device-fault.h). The fault must be reported once a close step failed,
+     * or when the fault is one the close cannot settle. fault_step is the first fault's step since the open; the
+     * RTC's faults carry no value. */
+    struct os_device_fault dev;
+    atomic_uint request,live,irq_flag,irq_count,alarm_state;
     unsigned op;int result;
     uint32_t a,b;
     struct ss_rtc_info info;struct ss_rtc_time time;uint64_t time_ticks;
     struct ss_rtc_alarm alarm;
     struct ss_rtc_switch sw;struct ss_rtc_rate rate;atomic_uint switching;
     uint64_t irq_ticks,alarm_deadline_us;
-    uint32_t fault;
     TaskHandle_t waiter;
-} rtc;
-static TaskHandle_t owner;
+} rtc={.dev={.site=0x921,.owner=&owner}};
 static StaticTask_t owner_tcb;
 static StackType_t owner_stack[2048];
 
@@ -76,13 +72,14 @@ static int pause(void *c,uint64_t until)
     if(n<until){uint64_t t=now_us()+(until-n);while(now_us()<t)(void)sunstone_deadline_wait_until(t);}
     return 1;
 }
-static int fault_closable(void);
-/* Only the owner task enters FAULT; the driver state fault_closable reads is settled at every call site. */
+static int settles(unsigned step);
+/* Only the owner task enters FAULT; the driver state settles() reads is settled at every call site. The fault the
+ * close must settle is the first one since the open. */
 static void fail(unsigned step)
 {
-    if(!rtc.fault)rtc.fault=step;
-    atomic_store(&rtc.live,0);atomic_store(&rtc.phase,FAULT);
-    if(atomic_load(&rtc.close_started)||!fault_closable())atomic_store_explicit(&rtc.reported,1,memory_order_release);
+    const unsigned first=rtc.dev.fault_step?rtc.dev.fault_step:step;
+    atomic_store(&rtc.live,0);
+    (void)os_device_fail(&rtc.dev,step,0,!settles(first));
 }
 /* Whether the close can return a FAULT service to CLOSED (docs/designs/failure-return-audit.md, "A faulted device
  * service closes before it reports"). The RTC has no bus master; what the close must settle is the alarm. A driver
@@ -91,13 +88,12 @@ static void fail(unsigned step)
  * when the operation that retained it wrote nothing and no alarm was owned: the open (step 2) and the calendar
  * reads (steps 4 and 5) only read. A RETAINED driver after a write (the calendar, the alarm, the acknowledgment or the
  * crystal selection) keeps the service FAULT. */
-static int fault_closable(void)
+static int settles(unsigned step)
 {
     if(rtc.rtc.state!=A733_RTC_RETAINED)return 1;
-    return !atomic_load(&rtc.rtc.owned)&&(rtc.fault==2||rtc.fault==4||rtc.fault==5);
+    return !atomic_load(&rtc.rtc.owned)&&(step==2||step==4||step==5);
 }
-static int closable(unsigned phase)
-{return phase==OPEN||(phase==FAULT&&!atomic_load(&rtc.close_started)&&fault_closable());}
+static int closable(void){return os_device_closable(&rtc.dev,settles(rtc.dev.fault_step));}
 
 /* --- interrupt ------------------------------------------------------------------------------------------------------ */
 void os_rtc_irq(void)
@@ -194,15 +190,14 @@ static int measure(unsigned n)
 }
 static int do_open(void)
 {
-    atomic_store(&rtc.phase,OPENING);
-    atomic_store(&rtc.close_started,0);
+    os_device_open_begin(&rtc.dev);
     const uint64_t limit=lease_now()+40000000;
     enum a733_clock_result c=A733_CLOCK_BUSY;
     while(c==A733_CLOCK_BUSY&&lease_now()<limit-39900000){
         c=a733_clock_acquire(&providers.shared.clocks,UINT64_C(0x5254430000000001),0,A733_CLOCK_RTC32K,limit,&rtc.clock);
         if(c==A733_CLOCK_BUSY)(void)sunstone_deadline_wait_until(now_us()+50);
     }
-    if(c!=A733_CLOCK_OK){atomic_store(&rtc.phase,CLOSED);return -1;}
+    if(c!=A733_CLOCK_OK){atomic_store(&rtc.dev.phase,OS_DEVICE_CLOSED);return -1;}
     /* The alarm line stays masked and inactive until an alarm is armed. */
     if(!gic_masked()||(gic_state()&6)){fail(1);return -1;}
     struct a733_rtc_ops ops={ops_now,ops_read,ops_write};
@@ -212,7 +207,7 @@ static int do_open(void)
     rtc.info.prescaler=rtc.rtc.prescaler;rtc.info.calibration=rtc.rtc.calibration;rtc.info.oscillator=rtc.rtc.oscillator;
     rtc.info.source=rtc.rtc.read_source;rtc.info.opened_ticks=ss_counter_ticks();
     memset(&rtc.sw,0,sizeof(rtc.sw));
-    atomic_store(&rtc.phase,OPEN);
+    atomic_store(&rtc.dev.phase,OS_DEVICE_OPEN);
     if(!(rtc.a&SS_RTC_KEEP_RC)&&rtc.rtc.read_source==A733_RTC_READ_RC_NORMAL&&do_select()<0)return -1;
     memcpy(&rtc.info.crystal,&rtc.sw,sizeof(rtc.sw));
     return 1;
@@ -220,30 +215,30 @@ static int do_open(void)
 static void serve(void)
 {
     if(atomic_load_explicit(&rtc.request,memory_order_acquire)!=POSTED)return;
-    const unsigned phase=atomic_load(&rtc.phase);
+    const unsigned phase=atomic_load(&rtc.dev.phase);
     int r=-1;
     switch(rtc.op){
-    case OPEN_OP:if(phase==CLOSED)r=do_open();else if(phase==OPEN)r=1;break;
+    case OPEN_OP:if(phase==OS_DEVICE_CLOSED)r=do_open();else if(phase==OS_DEVICE_OPEN)r=1;break;
     case SELECT_OP:
-        if(phase==OPEN&&rtc.rtc.state==A733_RTC_READY&&rtc.rtc.read_source==A733_RTC_READ_RC_NORMAL)r=do_select();
+        if(phase==OS_DEVICE_OPEN&&rtc.rtc.state==A733_RTC_READY&&rtc.rtc.read_source==A733_RTC_READ_RC_NORMAL)r=do_select();
         break;
     case MEASURE_OP:
-        if(phase==OPEN&&rtc.rtc.state==A733_RTC_READY&&rtc.a>=1&&rtc.a<=20)r=measure(rtc.a);
+        if(phase==OS_DEVICE_OPEN&&rtc.rtc.state==A733_RTC_READY&&rtc.a>=1&&rtc.a<=20)r=measure(rtc.a);
         break;
     case SET_OP:
         /* The driver refuses an invalid day or time before any access and stays READY: a refusal, not a fault. */
-        if(phase==OPEN&&rtc.rtc.state==A733_RTC_READY)
+        if(phase==OS_DEVICE_OPEN&&rtc.rtc.state==A733_RTC_READY)
             r=a733_rtc_set_time(&rtc.rtc,rtc.a,rtc.b,pause)?1:rtc.rtc.state==A733_RTC_READY?-1:(fail(3),-1);
         break;
     case READ_OP:
-        if(phase==OPEN&&(rtc.rtc.state==A733_RTC_READY||rtc.rtc.state==A733_RTC_ARMED||
+        if(phase==OS_DEVICE_OPEN&&(rtc.rtc.state==A733_RTC_READY||rtc.rtc.state==A733_RTC_ARMED||
                          rtc.rtc.state==A733_RTC_FIRED||rtc.rtc.state==A733_RTC_CANCELLED)){
             struct a733_rtc_time t;
             if(a733_rtc_read(&rtc.rtc,&t)){memcpy(&rtc.time,&t,sizeof(t));rtc.time_ticks=ss_counter_ticks();r=1;}else fail(4);
         }
         break;
     case ARM_OP:
-        if(phase==OPEN&&rtc.rtc.state==A733_RTC_READY&&atomic_load(&rtc.alarm_state)==0){
+        if(phase==OS_DEVICE_OPEN&&rtc.rtc.state==A733_RTC_READY&&atomic_load(&rtc.alarm_state)==0){
             struct a733_rtc_time t;
             memset(&rtc.alarm,0,sizeof(rtc.alarm));atomic_store(&rtc.irq_flag,0);
             rtc.alarm.seconds=rtc.a;
@@ -267,18 +262,17 @@ static void serve(void)
         }
         break;
     case CLOSE_OP:
-        if(closable(phase)){
-            atomic_store(&rtc.close_started,1);
-            atomic_store(&rtc.phase,CLOSING);
-            if(rtc.rtc.state==A733_RTC_ARMED){end_alarm(1);if(atomic_load(&rtc.phase)==FAULT){r=-1;break;}}
+        if(closable()){
+            (void)os_device_close_begin(&rtc.dev);
+            if(rtc.rtc.state==A733_RTC_ARMED){end_alarm(1);if(atomic_load(&rtc.dev.phase)==OS_DEVICE_FAULT){r=-1;break;}}
             atomic_store(&rtc.live,0);
             if(!gic_masked()){fail(8);r=-1;break;}
             if(a733_clock_release(&providers.shared.clocks,&rtc.clock,lease_now()+50000)!=A733_CLOCK_OK){fail(9);r=-1;break;}
             rtc.clock=(struct a733_clock_token){0};
             memset(&rtc.rtc,0,sizeof(rtc.rtc));
             atomic_store(&rtc.alarm_state,0);
-            atomic_store(&rtc.phase,CLOSED);r=1;
-        }else if(phase==CLOSED)r=1;
+            atomic_store(&rtc.dev.phase,OS_DEVICE_CLOSED);r=1;
+        }else if(phase==OS_DEVICE_CLOSED)r=1;
         break;
     default:break;
     }
@@ -299,35 +293,19 @@ void os_rtc_task(void *unused)
             if(now_us()>=rtc.alarm_deadline_us)end_alarm(1);
             else if(rtc.alarm_deadline_us<next)next=rtc.alarm_deadline_us;
         }
-        if(atomic_load(&rtc.quiesce_wanted)&&atomic_load(&rtc.request)!=POSTED){
-            if(closable(atomic_load(&rtc.phase))){rtc.op=CLOSE_OP;atomic_store(&rtc.request,POSTED);continue;}
-            if(atomic_load(&rtc.phase)==CLOSED)atomic_store(&rtc.quiesced,1);
+        if(atomic_load(&rtc.dev.quiesce_wanted)&&atomic_load(&rtc.request)!=POSTED){
+            if(closable()){rtc.op=CLOSE_OP;atomic_store(&rtc.request,POSTED);continue;}
+            if(atomic_load(&rtc.dev.phase)==OS_DEVICE_CLOSED)atomic_store(&rtc.dev.quiesced,1);
         }
         if(now_us()<next)(void)sunstone_deadline_wait_until(next);
     }
 }
 int os_rtc_task_privileged(void (*entry)(void *),void *context){return !context&&entry==os_rtc_task;}
 int os_rtc_pins(struct a733_pin_handoff *pins){return pins!=NULL;}
-/* A FAULT service that its close can settle first gets that close: DONE when every close step read back, FAULT when
- * one failed or when the close cannot settle the driver.
- *
- * This step runs on the supervisor's core while the owner task closes, so it decides from the one word the owner
- * publishes. Deciding from phase and close_started together is racy in either load order: with the close storing
- * close_started and then CLOSING, a load of close_started can see 1 while the next load of phase still sees the
- * fault's FAULT; with the stores swapped, a load of phase can see FAULT before CLOSING lands and the next load of
- * close_started sees 1. Either way the step reports 0x921 while a close that will succeed is running, and the sticky
- * report ends the session at 0x742. Reading the driver state from here would also race the close's memset. */
-static enum os_quiesce_result quiesce_step(struct os_quiesce *q)
-{
-    if(atomic_load_explicit(&rtc.reported,memory_order_acquire)){
-        (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x921,rtc.fault,SUNSTONE_CRUMB_HERE());
-        return OS_QUIESCE_FAULT;
-    }
-    if(atomic_load(&rtc.quiesced))return OS_QUIESCE_DONE;
-    atomic_store(&rtc.quiesce_wanted,1);
-    if(owner)xTaskNotifyGive(owner);
-    return OS_QUIESCE_PENDING;
-}
+/* A FAULT service that its close can settle first gets that close: DONE when every close step read back, FAULT (site
+ * 0x921) when one failed or when the close cannot settle the driver (apps/os/device-fault.h). The report value is the
+ * fault step << 24. */
+static enum os_quiesce_result quiesce_step(struct os_quiesce *q){return os_device_quiesce_step(&rtc.dev,q);}
 static struct os_quiesce rtc_quiesce={.owner=OS_QUIESCE_RTC,.order=OS_QUIESCE_DEVICES,.step=quiesce_step};
 int os_rtc_start(void)
 {
@@ -341,7 +319,7 @@ int os_rtc_start(void)
 /* --- application calls ---------------------------------------------------------------------------------------------- */
 static int call(unsigned op,uint32_t a,uint32_t b)
 {
-    if(!ss_rtc_declared||!ss_grant()||atomic_load(&rtc.quiesce_wanted))return -1;
+    if(!ss_rtc_declared||!ss_grant()||atomic_load(&rtc.dev.quiesce_wanted))return -1;
     const unsigned state=atomic_load_explicit(&rtc.request,memory_order_acquire);
     if(state==DONE){
         if(rtc.op!=op)return -1;
@@ -372,10 +350,10 @@ int ss_rtc_alarm(struct ss_rtc_alarm *a)
     if(!ss_rtc_declared||!ss_grant()||!a)return -1;
     const unsigned s=atomic_load_explicit(&rtc.alarm_state,memory_order_acquire);
     if(s==DONE){*a=rtc.alarm;return 1;}
-    return atomic_load(&rtc.phase)==FAULT?-1:0;
+    return atomic_load(&rtc.dev.phase)==OS_DEVICE_FAULT?-1:0;
 }
 static int any_ready(void)
-{return atomic_load(&rtc.request)==DONE||atomic_load(&rtc.alarm_state)==DONE||atomic_load(&rtc.phase)==FAULT;}
+{return atomic_load(&rtc.request)==DONE||atomic_load(&rtc.alarm_state)==DONE||atomic_load(&rtc.dev.phase)==OS_DEVICE_FAULT;}
 void ss_rtc_wait(uint32_t wait_us)
 {
     const uint64_t until=now_us()+(wait_us?wait_us:1);
@@ -385,6 +363,6 @@ int ss_rtc_close(void){return call(CLOSE_OP,0,0);}
 int ss_rtc_fault(uint32_t *step)
 {
     if(!ss_rtc_declared||!ss_grant())return -1;
-    if(step)*step=rtc.fault;
-    return rtc.fault?1:0;
+    if(step)*step=rtc.dev.fault_step;
+    return rtc.dev.fault_step?1:0;
 }

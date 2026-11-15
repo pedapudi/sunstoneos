@@ -51,9 +51,21 @@ enum {
     SS_G2D_MIXER_IRQ,          /* G2D 0x104 */
     SS_G2D_LOCAL_WORDS
 };
-#define SS_G2D_INFO_MAGIC UINT32_C(0x49443247) /* "G2DI" */
-/* Domain-1 status samples the record keeps; status_reads counts every read, including those past the last kept one. */
-#define SS_G2D_STATUS_SAMPLES 8u
+/* "G2DT": the record with the owner's transition record. Records from earlier images carry "G2DI" (0x49443247) and
+ * the domain-1 status samples in place of the transition. */
+#define SS_G2D_INFO_MAGIC UINT32_C(0x54443247)
+/* The power-domain owner's record of the domain-1 transition that answered the open's row, copied from the row with
+ * the answer (struct a733_power_transition in include/a733_power_domain_row.h; apps/os/g2d.c asserts the layout).
+ * The PCK600 policy and status words before the request, the policy word written, the first, last pending and target
+ * status words with the AND and OR of every status read, the read, spin-read and command counts, and the owner-clock
+ * times (microseconds) of the command, the first read, the last pending read and the target read. commands is 0 when
+ * the owner adopted an ON domain with no write. All zero when the row was never answered. */
+struct ss_g2d_transition {
+    uint32_t policy_before, status_before;
+    uint32_t policy_written, first_word, pending_word, reached_word, all_and, all_or;
+    uint32_t reads, spin_reads, commands;
+    uint64_t command_at, first_at, pending_at, reached_at;
+};
 struct ss_g2d_info {
     uint32_t magic, bytes;
     uint32_t domain_entry;     /* PCK600 domain 1 at entry: 0 OFF, 8 ON (adopted with no write) */
@@ -63,23 +75,22 @@ struct ss_g2d_info {
     uint64_t requested_ticks;  /* system counter when the owner took the open request */
     uint64_t domain_on_ticks;  /* when the power-domain owner answered the row ON */
     uint64_t opened_ticks;     /* when the open finished */
-    /* The power owner's clock (microseconds): the row request, the owner's PCK command (0 when it adopted the
-     * domain with no command) and the row's ON answer. */
-    uint64_t row_request_us, pck_command_us, row_on_us;
+    /* The power owner's clock (microseconds): the row request and the row's ON answer. */
+    uint64_t row_request_us, row_on_us;
     /* Bit 8 of the domain-1 policy (bit 0 here) and status (bit 1) words at entry and after the open (bits 8 and 9).
      * Recorded only; nothing refuses on it. */
     uint32_t pck_bit8;
-    /* Domain-1 status read by the G2D owner at the request and at each row wake until the ON answer, with the
-     * system-counter ticks since the request. */
-    uint32_t status_reads;
-    uint32_t status_word[SS_G2D_STATUS_SAMPLES], status_ticks[SS_G2D_STATUS_SAMPLES];
+    /* 1 when os_g2d_start marked the supply settled. */
+    uint32_t settled_supply;
     /* The power owner's supply verification (its clock, microseconds): the time verification may start (the provider
-     * start plus A733_POWER_SUPPLY_SETTLE_US, or the provider start when the settle is skipped); the first wake of the
-     * first time the open found DCDC2 verified, an upper bound on the verification time because the power owner keeps
-     * no time of its own; and 1 when os_g2d_start marked the supply settled. */
+     * start plus A733_POWER_SUPPLY_SETTLE_US, or the provider start when the settle is skipped), and the first wake of
+     * the first time the open found DCDC2 verified, an upper bound on the verification time because the power owner
+     * keeps no time of its own. */
     uint64_t verify_at_us, verified_seen_us;
-    uint32_t settled_supply, reserved;
+    struct ss_g2d_transition transition;
 };
+_Static_assert(sizeof(struct ss_g2d_info) == 392 && offsetof(struct ss_g2d_info, transition) == 312,
+               "apps/g2d-check/host.py decodes this layout");
 /* After close: the module clock, bus gate and reset, DE_SYS reset and domain words, read back after the sequence. */
 struct ss_g2d_closed {
     uint32_t g2d_clk, g2d_bgr, de_sys_bgr, pck1_status;

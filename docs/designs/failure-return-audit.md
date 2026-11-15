@@ -93,6 +93,13 @@ on either side of the close's stores in either load order, and the step then rep
 succeed is still running. That report is sticky and ends the session at 0x742. The G2D, RTC and video decoder
 checks place the quiesce step at every point among the close's stores to the words it reads.
 
+The G2D, RTC and video decoder services share this protocol through `struct os_device_fault` in
+[apps/os/device-fault.h](../../apps/os/device-fault.h). The owner task writes the fault step and value, stores FAULT,
+then stores the word `reported` with release order; the quiesce step loads `reported` with acquire order. The fault
+note's value is `step << 24 | value` for all three services. [os-device-fault.py](../../checks/os-device-fault.py)
+runs the helper on two threads, with the quiesce step's loads at every point among the owner's stores, and refuses
+mutants in which the step reads the phase, `reported` is stored before the fault fields, or either order is dropped.
+
 A service whose hardware cannot be stopped by its vendor close (an interrupted SD write transaction, active DMA work,
 an unproved crypto-engine retirement) retains FAULT under step 4; the table above names those cases.
 
