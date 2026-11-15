@@ -26,7 +26,7 @@ def main():
         try:operation()
         except BaseException as ex:errors.append(label+': '+str(ex))
     assert not errors,'; '.join(errors)
-    sources=['checks/radio-network-dhcp-dns.c','checks/radio-network-dhcp-dns.py','checks/radio-network.c','checks/radio-network.py','checks/aic8800-runtime.c','checks/aic8800-sdio-transport.c','checks/sdio-controller.c','drivers/net/aic8800_network.c','drivers/net/sunstone_net.c','drivers/net/sunstone_sntp.c','include/aic8800_network.h','include/sunstone_net.h','include/a733_rtc_service.h','network/include/FreeRTOSIPConfig.h','network/include/FreeRTOSConfig.h','runtime/memory.c','cmake/radio-network.cmake','cmake/a733-board.cmake','cmake/radio-dispatch.cmake','CMakeLists.txt']
+    sources=['checks/radio-network-dhcp-dns.c','checks/radio-network-dhcp-dns.py','checks/radio-network.c','checks/radio-network.py','checks/aic8800-runtime.c','checks/aic8800-sdio-transport.c','checks/sdio-controller.c','drivers/net/aic8800_network.c','drivers/net/sunstone_net.c','drivers/net/sunstone_sntp.c','include/aic8800_network.h','include/aic8800_address_trace.h','include/sunstone_net.h','include/a733_rtc_service.h','network/include/FreeRTOSIPConfig.h','network/include/FreeRTOSConfig.h','runtime/memory.c','cmake/radio-network.cmake','cmake/a733-board.cmake','cmake/radio-dispatch.cmake','CMakeLists.txt']
     inputs={str(ROOT/x):pins.digest(ROOT/x) for x in sources};inputs.update({str(x):pins.digest(x) for x in (a.clang,a.linker,a.qemu)})
     path=out/'results.json';record=json.loads(path.read_text()) if path.exists() else {'physical_access':False,'inputs':inputs,'commands':[],'cases':{}}
     if record['inputs']!=inputs:
@@ -86,7 +86,7 @@ include("{ROOT}/cmake/aarch64-clang.cmake")
     required={'kernel_main','sunstone_net_cancel','sunstone_sntp_poll','sunstone_sntp_rtc_request','sunstone_net_ip_step','sunstone_net_dns_bind','sunstone_net_dns_close','FreeRTOS_gethostbyname_a','vApplicationIPNetworkEventHook_Multi'}
     assert required<=names,'Missing linked network entry points: '+str(required-names)
     record['required_symbols']=sorted(required);save()
-    for case in ('dhcp','acquisition','static','omitted','sntp'):
+    for case in ('dhcp','acquisition','nak','static','omitted','sntp'):
         if record['cases'].get(case,{}).get('exit_code')==0:continue
         cmd=[str(a.qemu),'-M','virt,gic-version=3,secure=off,virtualization=off',*harness.QEMU_DETERMINISTIC,'-cpu','cortex-a53','-m','128M','-nographic','-nic','none','-monitor','none','-semihosting-config','enable=on,target=native,arg='+case,'-kernel',str(out/'build/radio-network-dhcp-dns-model.elf')]
         r=harness.run_qemu(cmd,harness.qemu_kill_seconds('radio-network-dhcp-dns'));record['cases'][case]={'command':cmd,'exit_code':r.returncode,'stdout':r.stdout,'stderr':r.stderr};save()
