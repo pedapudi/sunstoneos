@@ -71,6 +71,7 @@ MUTANTS = [
      'if(!d->settled_supply)d->verified_at=now;', 'verified_at written with DCDC2 unverified'),
     ('if(!d->settled_supply && (d->supply_verified&A733_POWER_DCDC2_VERIFIED))d->verified_at=now;', '',
      'boot verification leaves verified_at unwritten'),
+    ('    if(k>=0)r->transition=r->domains->transition[k];\n', '', 'row answered without its transition record'),
     ('d->running=1;d->started_at=now;', 'd->running=1;', 'first step not stamped'),
 ]
 

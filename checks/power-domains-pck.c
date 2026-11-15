@@ -462,7 +462,18 @@ static void d2_setup(uint32_t policy,uint32_t status,unsigned measure)
     if(measure)assert(a733_power_domains_measure_transitions(&d.owner));
     domains_boot();d2_token=domains_rail(80,A733_RAIL_DCDC2);
 }
-static const struct a733_power_transition *d2_record(void){return &d.owner.transition[3];}
+/* The record a consumer reads is the row's copy, which the owner publishes with each answer: it must equal the
+ * owner's own record of domain 2, field by field. */
+static const struct a733_power_transition *d2_record(void)
+{
+    const struct a733_power_transition *r=&d2_row.transition,*o=&d.owner.transition[3];
+    assert(r->policy_before==o->policy_before && r->status_before==o->status_before &&
+           r->policy_written==o->policy_written && r->first_word==o->first_word && r->pending_word==o->pending_word &&
+           r->reached_word==o->reached_word && r->all_and==o->all_and && r->all_or==o->all_or && r->reads==o->reads &&
+           r->spin_reads==o->spin_reads && r->commands==o->commands && r->command_at==o->command_at &&
+           r->first_at==o->first_at && r->pending_at==o->pending_at && r->reached_at==o->reached_at);
+    return r;
+}
 static void domain2_cases(void)
 {
     /* OFF to ON with every VE gate closed and bit 8 set in policy and status:

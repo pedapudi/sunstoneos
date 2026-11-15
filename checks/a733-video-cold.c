@@ -400,8 +400,18 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
         }
     }
     assert(polls<20000);
+    /* The image reads domain 2's transition from its row, which the owner copies with each answer: it equals the
+     * owner's own record. */
+    if(a733_power_domain_state(&c->row)!=A733_POWER_ROW_PENDING) {
+        const struct a733_power_transition *r=&c->row.transition,*w=&d.owner.transition[3];
+        assert(r->policy_before==w->policy_before&&r->status_before==w->status_before&&
+            r->policy_written==w->policy_written&&r->first_word==w->first_word&&r->pending_word==w->pending_word&&
+            r->reached_word==w->reached_word&&r->all_and==w->all_and&&r->all_or==w->all_or&&r->reads==w->reads&&
+            r->spin_reads==w->spin_reads&&r->commands==w->commands&&r->command_at==w->command_at&&
+            r->first_at==w->first_at&&r->pending_at==w->pending_at&&r->reached_at==w->reached_at);
+    }
     struct outcome o={.result=result,.writes=m->writes,.owner_ppu_writes=d.ppu_writes-ppu_writes,
-        .owner_commands=d.owner.transition[3].commands,.decoder_pck_reads=c->pck_reads,
+        .owner_commands=c->row.transition.commands,.decoder_pck_reads=c->pck_reads,
         .polls_after_on=checked_poll&&on_poll?checked_poll-on_poll:0,.row=a733_power_domain_state(&c->row),
         .rec=dec->cold};
     /* The decoder's row is answered ON before its first write. Adopted ON,

@@ -113,6 +113,8 @@ MUTANTS = [
      '            p->cold.lock_reads=u->pll_reads;p->cold.locked_at=n;',
      '            p->cold.lock_reads=u->pll_reads;p->cold.locked_at=u->last_now;', 'lock wait stamped before the settle'),
     ('drivers/video/a733_video_platform.c', '    p->cold.closed_at=u->last_now;\n', '', 'close hold end not stamped'),
+    ('drivers/power/a733_power_domains.c', '    if(k>=0)r->transition=r->domains->transition[k];\n', '',
+     'row answered without its transition record'),
     ('drivers/video/a733_video_platform.c', '    for(unsigned i=0;i<3;++i)if(rd(u,CCU+gate[i],&p->cold.entry_gates[i])!=1)return 0;\n',
      '    for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)\n'
      '        if(!check(u,rom_identity[i].address,UINT32_MAX,rom_identity[i].word))return 0;\n'
