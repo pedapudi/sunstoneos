@@ -333,7 +333,7 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
     /* Another PLL_VE0 consumer cannot share the PLL being programmed. */
     struct a733_clock_token conflict={0};
     if(vendor)assert(a733_clock_acquire(&clocks,101,A733_CLOCK_PLL_VE0,A733_CLOCK_NPU,100000,&conflict)==A733_CLOCK_BUSY);
-    struct a733_video_platform_ops ops={cold_now,admit,memory,drain,cold_enter,cold_leave,cold_read,cold_codec_write};
+    struct a733_video_platform_ops ops={cold_now,admit,memory,drain,cold_enter,cold_leave,cold_read,cold_codec_write,cold_now};
     /* A cold start needs a domain-2 row. */
     {
         struct a733_video_platform_config bad=config;struct a733_video_platform q={0};

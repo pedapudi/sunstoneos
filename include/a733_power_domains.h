@@ -66,26 +66,6 @@ struct a733_power_service_config {
 /* Domain states, service task only. */
 enum { A733_POWER_DOMAIN_UNKNOWN, A733_POWER_DOMAIN_OFF, A733_POWER_DOMAIN_ON_WAIT,
        A733_POWER_DOMAIN_ON, A733_POWER_DOMAIN_OFF_WAIT, A733_POWER_DOMAIN_FAILED };
-/* The latest admission and PCK600 transition of one domain, service task
- * only; it adds no register access. It exists to size A733_POWER_PCK_SPIN_US
- * from board data and is deleted once that is done, at the latest on
- * 2026-12-14. The samples are domain-2 OFF-to-ON transitions, at most one per
- * board power cycle, since domain 2 stays ON across the decoder's close and is
- * adopted afterwards; domain 5 is not a stand-in. The 50 us spin stays as it
- * is until three such samples have accumulated over later power lifetimes.
- *
- * The owner fails a transition at any status read whose bits 3:0 are neither
- * the starting value nor the target, so a successful one reads the starting
- * value reads - 1 times and then the target once; all_and and all_or show
- * whether any other bit (bit 8, dynamic enable in Arm's PPU layout, among
- * them) changed in any read. Times are the service clock just before each
- * read; command_at is taken after the policy write completed. */
-struct a733_power_transition {
-    uint32_t policy_before, status_before; /* full words at the latest admission or release */
-    uint32_t policy_written, first_word, pending_word, reached_word, all_and, all_or;
-    uint32_t reads, spin_reads, commands;
-    uint64_t command_at, first_at, pending_at, reached_at;
-};
 struct a733_power_domain {
     unsigned id, state, count;
     unsigned delays_ready; /* all five delay words written and read back */

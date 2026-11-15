@@ -102,7 +102,7 @@ int a733_encode_platform_init(struct a733_encode_platform *p,const struct a733_e
     const struct a733_encode_platform_ops *o,void *cookie)
 {
     if(!p||!o||!o->admit||!o->memory||!o->copied)return 0;
-    const struct a733_video_unit_ops unit={o->now_us,o->enter,o->leave,o->read,o->write};
+    const struct a733_video_unit_ops unit={o->now_us,o->enter,o->leave,o->read,o->write,0};
     const struct a733_encode_platform_ops ops=*o;
     if(!encoder_init(&p->encoder,c,&unit,cookie,jpeg_admit,jpeg_memory,p))return 0;
     p->ops=ops;p->cookie=cookie;
@@ -194,7 +194,7 @@ int a733_h264_encode_platform_init(struct a733_h264_encode_platform *p,const str
  const struct a733_h264_encode_platform_ops *o,void *cookie)
 {
  if(!p||!o||!o->admit||!o->memory||!o->prime||!o->copied)return 0;
- const struct a733_video_unit_ops unit={o->now_us,o->enter,o->leave,o->read,o->write};
+ const struct a733_video_unit_ops unit={o->now_us,o->enter,o->leave,o->read,o->write,0};
  const struct a733_h264_encode_platform_ops ops=*o;
  if(!encoder_init(&p->encoder,c,&unit,cookie,h264_admit,h264_memory,p))return 0;
  p->ops=ops;p->cookie=cookie;return 1;

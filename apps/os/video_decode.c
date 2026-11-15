@@ -18,6 +18,13 @@
 #include "sunstone_video_decode.h"
 #include <stdatomic.h>
 #include <string.h>
+#ifdef SUNSTONE_VIDEO_DECODE_MEASURE
+/* The stage-1 board record (apps/vdec-check/record.h): only the vdec-check image fills and returns it. */
+#include "../vdec-check/record.h"
+#define RECORD(...) __VA_ARGS__
+#else
+#define RECORD(...)
+#endif
 
 #define CCU UINT32_C(0x02002000)
 #define R_CCU UINT32_C(0x07010000)
@@ -34,6 +41,7 @@
  * start), the domain transition (10,000 us), the PLL lock wait (about 420 us) and the register sequence, with margin.
  * The binding's deadline is fixed for the whole cold start. */
 #define VD_CALL_US 500000u
+#define VD_BUSY_US 500u /* the block after the binding gives up on a busy registry or register lock */
 enum phase {CLOSED,OPENING,OPEN,CLOSING,FAULT};
 enum op {NONE,OPEN_OP,CLOSE_OP};
 enum {POSTED=1,DONE=2};
@@ -51,7 +59,7 @@ static struct {
     struct a733_video_platform platform;
     uint64_t pck_token,token;
     unsigned pck_client,initialized,closed; /* closed: the decoder is closed for this power lifetime */
-    struct ss_video_decode_info info;
+    RECORD(struct vdec_check_record info;)
     atomic_uint phase,request,quiesce_wanted,quiesced;
     unsigned op;int result;
     uint32_t fault_step,fault_value;
@@ -79,16 +87,18 @@ static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner
 
 /* --- the binding's native callbacks ----------------------------------------------------------------------------- */
 static int op_now(void *cookie,uint64_t *out){(void)cookie;*out=lease_now();return *out?1:-1;}
-/* The cold start's authority: this task holds the DCDC2 token, the owner has verified DCDC2 at 800 mV, and the
- * session granted the device. The decoder masters touch no memory in stage 1, so no memory authority is given. */
+/* The PLL lock-wait gaps: this core's counter, read without the shared clock's compare-and-swap. The task is pinned
+ * to one core, so the reads are monotonic. */
+static int op_spin_now(void *cookie,uint64_t *out){(void)cookie;*out=now_us();return 1;}
+/* The cold start's authority: the session granted the device to this owner. The supply is the power-domain owner's:
+ * it answers the domain-2 row ON only with DCDC2 verified at 800 mV and this task's rail token pinned. The decoder
+ * masters touch no memory in this stage, so no memory authority is given. */
 static int op_admit(void *cookie,const struct a733_video_platform_config *c,const struct a733_video_jpeg_job *j,
     uint64_t d,uint64_t *token)
 {
     (void)cookie;(void)j;(void)d;
     *token=VD_TOKEN;
-    return c==&vd.platform.decoder.config&&c->owner==VD_OWNER&&
-        a733_rail_status(&providers.shared.rails,&vd.rail)==A733_RAIL_READY&&
-        (a733_power_authority_load(&providers.shared.rails.authority)&A733_POWER_DCDC2_VERIFIED)?1:-1;
+    return c==&vd.platform.decoder.config&&c->owner==VD_OWNER?1:-1;
 }
 static int op_memory(void *cookie,uint64_t t,const struct a733_video_jpeg_job *j,const struct a733_video_jpeg *p,
     uint32_t stride,uint32_t rows,uint64_t d)
@@ -98,25 +108,27 @@ static int op_enter(void *cookie,uint64_t d)
 {(void)cookie;return a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,d)==1?1:0;}
 static int op_leave(void *cookie){(void)cookie;a733_platform_lock_leave(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);return 1;}
 
-static const uintptr_t words[SS_VIDEO_DECODE_WORDS]={
-    [SS_VIDEO_DECODE_CCU_PLL_REF]=CCU,[SS_VIDEO_DECODE_RTC_OSC]=RTC+0x160,[SS_VIDEO_DECODE_CCU_AHB]=CCU+0x500,
-    [SS_VIDEO_DECODE_CCU_NSI]=CCU+0x580,[SS_VIDEO_DECODE_CCU_MBUS]=CCU+0x588,[SS_VIDEO_DECODE_CCU_PLL_VE0]=CCU+0x220,
-    [SS_VIDEO_DECODE_CCU_PLL_VE0_P0]=CCU+0x228,[SS_VIDEO_DECODE_CCU_PLL_VE0_P1]=CCU+0x22c,
-    [SS_VIDEO_DECODE_CCU_GATES]=CCU+0x1918,[SS_VIDEO_DECODE_CCU_STATUS]=CCU+0x1998,[SS_VIDEO_DECODE_CCU_AUTO]=CCU+0x1b10,
-    [SS_VIDEO_DECODE_CCU_MODULE]=CCU+0xa88,[SS_VIDEO_DECODE_CCU_BGR]=CCU+0xa8c,[SS_VIDEO_DECODE_CCU_AHB_GATES]=CCU+0x5c0,
-    [SS_VIDEO_DECODE_CCU_MBUS_GATES]=CCU+0x5e0,[SS_VIDEO_DECODE_CCU_MCLK_GATES]=CCU+0x5e4,
-    [SS_VIDEO_DECODE_RCCU_PCK]=R_CCU+0x1ac,[SS_VIDEO_DECODE_GICD_ENABLE]=GICD+0x100+4*(VD_INTID/32),
-    [SS_VIDEO_DECODE_GICD_PENDING]=GICD+0x200+4*(VD_INTID/32),[SS_VIDEO_DECODE_GICD_ACTIVE]=GICD+0x300+4*(VD_INTID/32)};
+#ifdef SUNSTONE_VIDEO_DECODE_MEASURE
+static const uintptr_t words[VDEC_CHECK_WORDS]={
+    [VDEC_CHECK_CCU_PLL_REF]=CCU,[VDEC_CHECK_RTC_OSC]=RTC+0x160,[VDEC_CHECK_CCU_AHB]=CCU+0x500,
+    [VDEC_CHECK_CCU_NSI]=CCU+0x580,[VDEC_CHECK_CCU_MBUS]=CCU+0x588,[VDEC_CHECK_CCU_PLL_VE0]=CCU+0x220,
+    [VDEC_CHECK_CCU_PLL_VE0_P0]=CCU+0x228,[VDEC_CHECK_CCU_PLL_VE0_P1]=CCU+0x22c,
+    [VDEC_CHECK_CCU_GATES]=CCU+0x1918,[VDEC_CHECK_CCU_STATUS]=CCU+0x1998,[VDEC_CHECK_CCU_AUTO]=CCU+0x1b10,
+    [VDEC_CHECK_CCU_MODULE]=CCU+0xa88,[VDEC_CHECK_CCU_BGR]=CCU+0xa8c,[VDEC_CHECK_CCU_AHB_GATES]=CCU+0x5c0,
+    [VDEC_CHECK_CCU_MBUS_GATES]=CCU+0x5e0,[VDEC_CHECK_CCU_MCLK_GATES]=CCU+0x5e4,
+    [VDEC_CHECK_RCCU_PCK]=R_CCU+0x1ac,[VDEC_CHECK_GICD_ENABLE]=GICD+0x100+4*(VD_INTID/32),
+    [VDEC_CHECK_GICD_PENDING]=GICD+0x200+4*(VD_INTID/32),[VDEC_CHECK_GICD_ACTIVE]=GICD+0x300+4*(VD_INTID/32)};
 /* The recorded words, read under the register lock through the binding's read allowlist; read only. */
 static int read_words(uint32_t *out)
 {
     if(!timely()||op_enter(NULL,vd.limit)!=1)return 0;
     unsigned ok=1;
-    for(unsigned i=0;i<SS_VIDEO_DECODE_WORDS&&ok;++i)ok=a733_video_platform_native_read(NULL,words[i],&out[i])==1;
+    for(unsigned i=0;i<VDEC_CHECK_WORDS&&ok;++i)ok=a733_video_platform_native_read(NULL,words[i],&out[i])==1;
     (void)op_leave(NULL);
     return ok;
 }
 
+#endif
 /* The PCK600 provider client: one the session's board, NPU and GPU clients do not use. G2D takes the highest such
  * client, so the decoder takes the lowest. */
 #define VD_GPU_CLIENT 7u
@@ -140,15 +152,6 @@ static int tokens(void)
         if(r==A733_RAIL_READY)break;
         if((r!=A733_RAIL_BUSY&&r!=A733_RAIL_PENDING)||!timely())return refuse(VD_STEP_RAIL,r);
         pause_us(50);
-    }
-    /* The power-domain owner verifies DCDC2 enabled at 800 mV once per boot and wakes every registered row when it
-     * publishes the result. The service reads only the verified bit and writes no PMIC register. */
-    const uint64_t until=now_us()+VD_CALL_US;
-    for(;;){
-        const unsigned w=a733_power_authority_load(&providers.shared.rails.authority);
-        if(w&A733_POWER_DCDC2_VERIFIED)break;
-        if((w&A733_POWER_SUPPLY_DONE)||now_us()>=until||!timely())return refuse(VD_STEP_SUPPLY,w);
-        (void)sunstone_deadline_wait_until(until);
     }
     const struct os_session *s=os_session_admitted();
     if(!s)return refuse(VD_STEP_CONFIG,0);
@@ -182,17 +185,20 @@ static int tokens(void)
         A733_GPU_RESOURCE_STABLE};
     if(!vd.initialized){
         static const struct a733_video_platform_ops ops={op_now,op_admit,op_memory,op_drain,op_enter,op_leave,
-            a733_video_platform_native_read,a733_video_platform_native_write};
+            a733_video_platform_native_read,a733_video_platform_native_write,op_spin_now};
         if(!a733_video_platform_init(&vd.platform,c,&ops,NULL))return refuse(VD_STEP_CONFIG,2);
         vd.initialized=1;
     }
     return 1;
 }
+/* The stage-1 record: the binding's cold record and identity, and domain 2's transition as the power-domain owner
+ * published it with the row's latest answer (struct a733_power_domain_row, transition). */
 static void copy_record(void)
 {
+#ifdef SUNSTONE_VIDEO_DECODE_MEASURE
     const struct a733_video_decoder *p=&vd.platform.decoder;
     const struct a733_video_cold_record *r=&p->cold;
-    struct ss_video_decode_info *i=&vd.info;
+    struct vdec_check_record *i=&vd.info;
     for(unsigned k=0;k<3;++k){i->gates_entry[k]=r->entry_gates[k];i->gates_a1[k]=r->gates[k];}
     i->mclk_written=r->mclk_written;i->mclk_readback=r->mclk_readback;i->lock_reads=r->lock_reads;
     i->entry_at=r->entry_at;i->entered_at=r->entered_at;i->on_at=r->on_at;i->hold_a_at=r->hold_a_at;
@@ -200,37 +206,37 @@ static void copy_record(void)
     i->version_high=(uint32_t)(p->version>>32);i->version_low=(uint32_t)p->version;
     i->cold_phase=p->cold_step;i->failed=p->unit.failed|p->unit.locked<<1;
     i->measured=providers.domains.measure_transitions;
-    for(unsigned k=0;k<SS_VIDEO_DECODE_DOMAINS&&k<A733_POWER_DOMAINS;++k){
-        const struct a733_power_transition *t=&providers.domains.transition[k];
-        i->transition[k]=(struct ss_video_decode_transition){providers.domains.domain[k].id,t->policy_before,
-            t->status_before,t->policy_written,t->first_word,t->pending_word,t->reached_word,t->all_and,t->all_or,
-            t->reads,t->spin_reads,t->commands,t->command_at,t->first_at,t->pending_at,t->reached_at};
+    if(a733_power_domain_state(&vd.row)!=A733_POWER_ROW_PENDING){
+        const struct a733_power_transition *t=&vd.row.transition;
+        i->transition=(struct vdec_check_transition){2,t->policy_before,t->status_before,t->policy_written,
+            t->first_word,t->pending_word,t->reached_word,t->all_and,t->all_or,t->reads,t->spin_reads,t->commands,
+            t->command_at,t->first_at,t->pending_at,t->reached_at};
     }
+#endif
 }
 static int do_open(void)
 {
     atomic_store(&vd.phase,OPENING);
-    memset(&vd.info,0,sizeof(vd.info));
-    vd.info.magic=SS_VIDEO_DECODE_INFO_MAGIC;vd.info.bytes=sizeof(vd.info);
-    vd.info.requested_ticks=ss_counter_ticks();
+    RECORD(memset(&vd.info,0,sizeof(vd.info));vd.info.magic=VDEC_CHECK_INFO_MAGIC;vd.info.bytes=sizeof(vd.info);
+        vd.info.requested_ticks=ss_counter_ticks();)
     vd.fault_step=0;vd.fault_value=0;
     vd.limit=lease_now()+VD_CALL_US;
     if(vd.limit>session_deadline())vd.limit=session_deadline();
     if(tokens()<0)goto refused;
-    if(!read_words(vd.info.entry)){refuse(VD_STEP_ENTRY_WORDS,0);goto refused;}
+    RECORD(if(!read_words(vd.info.entry)){refuse(VD_STEP_ENTRY_WORDS,0);goto refused;})
     /* The binding's entry hold, its row request, then hold A, the lock wait and hold B in one call after the ON
      * answer. The owner answers on the row's wake, which notifies this task; the wait blocks until that or the bound. */
     const struct a733_video_jpeg_ops *ops=a733_video_platform_jpeg_ops();
-    vd.info.row_request_us=owner_us();
+    RECORD(vd.info.row_request_us=owner_us();)
     uint64_t row_limit=0;
     for(;;){
         const int r=ops->acquire(&vd.platform,&no_job,vd.limit,&vd.token);
         const struct a733_video_decoder *p=&vd.platform.decoder;
         const enum a733_power_row_state s=a733_power_domain_state(&vd.row);
-        if(p->requested&&s!=A733_POWER_ROW_PENDING&&!vd.info.row_state){
+        RECORD(if(p->requested&&s!=A733_POWER_ROW_PENDING&&!vd.info.row_state){
             vd.info.row_state=s;vd.info.row_on_us=owner_us();
             vd.info.authority=a733_power_authority_load(&providers.shared.rails.authority);
-        }
+        })
         if(r==1)break;
         if(r<0){
             copy_record();
@@ -243,14 +249,18 @@ static int do_open(void)
             if(!row_limit)row_limit=now_us()+A733_POWER_PCK_BOUND_US+4000;
             if(now_us()>=row_limit){copy_record();return fail(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);}
             (void)sunstone_deadline_wait_until(row_limit);
+        }else{
+            /* A busy registry or register lock after the binding's own bounded retry: block, then call again. */
+            pause_us(VD_BUSY_US);
         }
     }
-    vd.info.started_ticks=ss_counter_ticks();
-    if(!read_words(vd.info.started)){copy_record();return fail(VD_STEP_STARTED_WORDS,0);}
+    RECORD(vd.info.started_ticks=ss_counter_ticks();
+        if(!read_words(vd.info.started)){copy_record();return fail(VD_STEP_STARTED_WORDS,0);})
     /* The identity words through the binding's read call, then its identity admission (prepare's first call). */
-    if(ops->read(&vd.platform,vd.token,0xf0,&vd.info.feature,vd.limit)!=1||
-       ops->read(&vd.platform,vd.token,0xe0,&vd.info.identity_high,vd.limit)!=1||
-       ops->read(&vd.platform,vd.token,0xe4,&vd.info.identity_low,vd.limit)!=1){copy_record();return fail(VD_STEP_IDENTITY,1);}
+    uint32_t id[3];
+    if(ops->read(&vd.platform,vd.token,0xf0,&id[0],vd.limit)!=1||ops->read(&vd.platform,vd.token,0xe0,&id[1],vd.limit)!=1||
+       ops->read(&vd.platform,vd.token,0xe4,&id[2],vd.limit)!=1){copy_record();return fail(VD_STEP_IDENTITY,1);}
+    RECORD(vd.info.feature=id[0];vd.info.identity_high=id[1];vd.info.identity_low=id[2];)
     if(ops->prepare(&vd.platform,vd.token,&no_job,NULL,0,0,vd.limit)!=0||!vd.platform.decoder.version){
         copy_record();return fail(VD_STEP_IDENTITY,2);
     }
@@ -271,8 +281,8 @@ static int do_close(void)
         if(r==1)break;
         if(r<0||!timely()){copy_record();return fail(VD_STEP_CLOSE,(uint32_t)r);}
     }
-    if(!read_words(vd.info.closed)){copy_record();return fail(VD_STEP_CLOSED_WORDS,0);}
-    vd.info.closed_ticks=ss_counter_ticks();
+    RECORD(if(!read_words(vd.info.closed)){copy_record();return fail(VD_STEP_CLOSED_WORDS,0);}
+        vd.info.closed_ticks=ss_counter_ticks();)
     copy_record();
     vd.closed=1;
     atomic_store(&vd.phase,CLOSED);
@@ -358,13 +368,16 @@ static int call(unsigned op)
     xTaskNotifyGive(owner);
     return 0;
 }
-static int with_info(int r,struct ss_video_decode_info *info)
+int ss_video_decode_open(void){return call(OPEN_OP);}
+int ss_video_decode_close(void){return call(CLOSE_OP);}
+#ifdef SUNSTONE_VIDEO_DECODE_MEASURE
+int vdec_check_record(struct vdec_check_record *out)
 {
-    if(r!=0&&info&&vd.info.magic==SS_VIDEO_DECODE_INFO_MAGIC)*info=vd.info;
-    return r;
+    if(!granted()||!out)return -1;
+    if(atomic_load(&vd.request)==POSTED||vd.info.magic!=VDEC_CHECK_INFO_MAGIC)return 0;
+    *out=vd.info;return 1;
 }
-int ss_video_decode_open(struct ss_video_decode_info *info){return with_info(call(OPEN_OP),info);}
-int ss_video_decode_close(struct ss_video_decode_info *info){return with_info(call(CLOSE_OP),info);}
+#endif
 int ss_video_decode_fault(uint32_t *step,uint32_t *value)
 {
     if(!granted())return -1;

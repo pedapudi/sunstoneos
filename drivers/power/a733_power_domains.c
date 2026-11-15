@@ -54,6 +54,8 @@ static int bits(const struct a733_power_domains *d,uintptr_t a,uint32_t mask,uin
 {uint32_t v;return rd(d,a,&v) && (v&mask)==expected;}
 static void publish(struct a733_power_domain_row *r,unsigned generation,enum a733_power_row_state s)
 {
+    const int k=slot(r->domain);
+    if(k>=0)r->transition=r->domains->transition[k];
     atomic_store_explicit(&r->state,generation<<3|s,memory_order_release);
     if(r->wake)r->wake(r->wake_context);
 }

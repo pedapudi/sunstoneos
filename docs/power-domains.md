@@ -174,7 +174,7 @@ first read, the last read that still showed the starting state and the read
 that showed the target, each with its time and word, and the AND and OR of
 every status word read. The owner fails a transition on any status other
 than the starting or the target value, so these fields describe every read;
-the AND and OR words show whether any other bit changed. The record makes no
+the AND and OR words show whether any other bit changed. The owner copies a domain's record into each of that domain's rows before it publishes an answer, so a consumer reads it from its row after the answer, never from the service's array. The record makes no
 register access, and the access traces of domains 1, 4 and 5 are unchanged.
 
 `a733_power_domains_measure_transitions()`, called before the service runs

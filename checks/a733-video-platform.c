@@ -136,7 +136,7 @@ int main(int argc,char**argv)
         }
         a733_clock_mask_t scopes;assert(a733_video_platform_scopes(&c,&scopes));
         assert(a733_clock_acquire(&clocks,99,scopes,A733_CLOCK_VE_DEC,100000,&c.clock)==A733_CLOCK_OK);
-        struct a733_video_platform_ops ops={now,admit,memory,drain,enter,leave,read_reg,write_reg};
+        struct a733_video_platform_ops ops={now,admit,memory,drain,enter,leave,read_reg,write_reg,0};
         struct a733_video_platform p={0};assert(a733_video_platform_init(&p,&c,&ops,&m));
         m.clocks=&clocks;m.power=&power;
         if(test==18){m.busy_write=100;m.busy_drain=1;}

@@ -76,6 +76,8 @@ struct a733_video_platform_ops {
      */
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,unsigned,uint32_t);
+    /* Optional plain per-core clock for the PLL lock-wait gaps (struct a733_video_unit_ops). */
+    int (*spin_now_us)(void *,uint64_t *);
 };
 /* Codec-neutral decoder sequencing on the shared VE resource core: admission,
  * inherited or cold start, identity, memory and reset/default preparation.

@@ -1,8 +1,8 @@
 # Video decoder in the OS image
 
-The VE decoder at `0x01c0e000` (JPEG, H.264 and HEVC) is an OS-image service. An application declares the `video-decode` device in its manifest, the session grants it as `SS_DEVICE_VIDEO_DECODE`, and the application calls the class interface in include/sunstone_video_decode.h. One owner task (apps/os/video_decode.c, priority 3, pinned to CPU 4) makes every decoder, CCU and GIC access through the decoder platform binding (drivers/video/a733_video_platform.c). The service writes no PCK600 or PMIC register: the shared power-domain owner (drivers/power/a733_power_domains.c) powers domain 2 for it.
+The VE decoder at `0x01c0e000` (JPEG, H.264 and HEVC) is an OS-image service. An application declares the `video-decode` device in its manifest, the session grants it as `SS_DEVICE_VIDEO_DECODE`, and the application calls the class interface in include/sunstone_video_decode.h. One owner task (apps/os/video_decode.c, priority 3, pinned to CPU 4) makes every decoder, CCU and GIC access through the decoder platform binding (drivers/video/a733_video_platform.c). The service and the binding are an object library that an image links only when its application declares `video-decode` (cmake/sunstone-image.cmake), so other images keep their code placement. EL3 admission refuses a grant that the manifest does not declare, so a granted device always has its service. The service writes no PCK600 or PMIC register: the shared power-domain owner (drivers/power/a733_power_domains.c) powers domain 2 for it.
 
-Status: open and close are implemented and host-tested by the cold-start model (`checks/video-cold.py`). No board run has qualified them. No decode runs through the service yet; INTID 81 stays disabled and its handler is empty.
+Status: open and close are implemented and host-tested by the cold-start model (`checks/video-cold.py`). No board run has qualified them. After a close the decoder stays closed for the rest of the board's power lifetime; a second open is refused. No decode runs through the service yet; INTID 81 stays disabled and its handler is empty.
 
 ## Vendor sequence and the native diff
 
@@ -22,24 +22,24 @@ The reference is the vendor VE driver `cedar_ve.c` and the clock framework (`ccu
 
 The open adds checks that the vendor driver does not make, each read before the first write: reset asserted and bus and module gates closed, `0x1b10 & 0x30001 == 0x20000` (CM_VE_DEC_CFG with its module mode disabled and its status field at POWER_ON), the fabric and parent clocks, the 15 boot ROM words, and INTID 81 neither enabled, pending nor active. A refusal at any of these writes nothing. A failure after the first write marks the service FAULT, keeps every token and gate as it is, and makes the session quiesce report fault site `0x941` with the failing step in bits 31:24 and its value in bits 23:0.
 
-## The open record
+## The stage-1 record
 
-`ss_video_decode_open` and `ss_video_decode_close` return a `struct ss_video_decode_info` (736 bytes):
+The class interface carries no register dump. An image built with `SUNSTONE_VIDEO_DECODE_MEASURE` (the vdec-check image) also keeps the stage-1 record, `struct vdec_check_record` in apps/vdec-check/record.h, which the application copies with `vdec_check_record` after each call (496 bytes):
 
 - 20 platform words read under the register lock at open before any write, after the cold start, and after the close: the PLL reference, the RTC oscillator word, the AHB, NSI and MBUS clocks, PLL_VE0 and its pattern words, the PLL gate configuration and status, `0x1b10`, the module word, the reset and bus gate word, the three critical gates, the PCK600 bus clock (R_CCU `0x1ac`) and the GIC enable, pending and active words for INTID 81;
 - the cold start's own record: the critical gates at entry and before the reset release, the `0x5e4` word written and read back, and the number of PLL lock reads;
 - the identity words and the admitted compound version;
 - the domain-2 row's answer, the power authority word at that answer, and whether the owner measured transitions back to back;
 - the binding's phase times, the owner's row request and answer times, and the system counter at the open request, the started decoder and the close;
-- the power-domain owner's latest transition record for each of its four domain slots (1, 4, 5 and 2).
+- domain 2's transition record as the power-domain owner published it with the row's latest answer (`transition` in `struct a733_power_domain_row`).
 
-apps/vdec-check/host.py decodes the 768-byte result of the vdec-check application, which is the record behind a 32-byte header, and lists every departure from the stage-1 prediction.
+apps/vdec-check/host.py decodes the 528-byte result of the vdec-check application, which is the record behind a 32-byte header, and lists every departure from the stage-1 prediction.
 
 ## Board stages
 
 Each stage is one run on port 3-1 of the image `sunstone-a733-os-vdec-check` (`-DSUNSTONE_APPLICATION=vdec-check`).
 
-1. **Power, PLL and identity.** Open, then close; no decode. The image calls `a733_power_domains_measure_transitions()`, so the power-domain owner reads status back to back from each PCK600 command to its target or the 10,000 µs bound. That spin runs in the PMIC service task, priority 3 on core 0. For up to 10 ms it holds off band-1 tasks on core 0, core 0's WFI, other PMIC requests and other domains' row answers; higher-priority tasks and interrupts still preempt it. Each command overwrites its domain's record, and the record is copied at the close, after the only command this image makes. A run therefore yields at most one sample: one when domain 2 reads OFF at entry, none when it is adopted ON.
+1. **Power, PLL and identity.** Open, then close; no decode. The image calls `a733_power_domains_measure_transitions()`, so the power-domain owner reads status back to back from each PCK600 command to its target or the 10,000 µs bound. That spin runs in the PMIC service task, priority 3 on core 0. For up to 10 ms it holds off band-1 tasks on core 0, core 0's WFI, other PMIC requests and other domains' row answers; higher-priority tasks and interrupts still preempt it. Each command overwrites its domain's record, and the owner publishes the record with each answer to the domain-2 row. A run therefore yields at most one sample: one when domain 2 reads OFF at entry, none when it is adopted ON. Domain 2 stays ON across the close, so at most one sample comes per board power cycle; domain 5 is not a stand-in.
 2. **JPEG.** One baseline JPEG decode compared with the pinned vendor-library reference; INTID 81 masked again at the close.
 3. **H.264.** One frame compared with the same reference.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Host side of vdec-check: decode the 768-byte result record and list departures from the stage-1 prediction.
 
-The record is the 32-byte header and struct ss_video_decode_info (include/sunstone_video_decode.h) that
+The record is the 32-byte header and struct vdec_check_record (apps/vdec-check/record.h) that
 apps/vdec-check/main.c returns. decode() returns the fields. failures() names every departure from the stage-1
 prediction in docs/video-decode-os.md: the open and close succeed, the entry words match the port 3-3 FEL dump where
 the binding depends on them, the 0x5e4 open reads back 0x40306, PLL_VE0 reads 0xf9204d00 once started and 0x01204d00
@@ -21,8 +21,7 @@ TRANSITION = struct.Struct('<12I4Q')
 TRANSITION_FIELDS = ('domain', 'policy_before', 'status_before', 'policy_written', 'first_word', 'pending_word',
                      'reached_word', 'all_and', 'all_or', 'reads', 'spin_reads', 'commands', 'command_at', 'first_at',
                      'pending_at', 'reached_at')
-DOMAINS = 4
-SIZE = HEADER.size + INFO.size + DOMAINS * TRANSITION.size
+SIZE = HEADER.size + INFO.size + TRANSITION.size
 CHECK_MAGIC = 0x4b434456
 INFO_MAGIC = 0x49444556
 STATUS = {1: 'opened-and-closed', 2: 'open-refused', 3: 'close-failed'}
@@ -61,8 +60,7 @@ def decode(payload):
     times = dict(zip(('entry_at', 'entered_at', 'on_at', 'hold_a_at', 'locked_at', 'hold_b_at', 'row_request_us',
                       'row_on_us', 'requested_ticks', 'started_ticks', 'closed_ticks'), v[i:i + 11]))
     out['times'] = times
-    out['transitions'] = [dict(zip(TRANSITION_FIELDS, TRANSITION.unpack_from(
-        payload, HEADER.size + INFO.size + k * TRANSITION.size))) for k in range(DOMAINS)]
+    out['transition'] = dict(zip(TRANSITION_FIELDS, TRANSITION.unpack_from(payload, HEADER.size + INFO.size)))
     # Derived durations in microseconds; zero where a phase was not reached.
     span = lambda a, b: times[b] - times[a] if times[a] and times[b] >= times[a] else None
     out['durations_us'] = {
@@ -73,9 +71,9 @@ def decode(payload):
         'close': (times['closed_ticks'] - times['started_ticks']) / TICKS_PER_US if times['closed_ticks'] else None}
     # Reported, not judged: no reading shows 0x1b10 move, so the close is predicted to leave it at 0x20000.
     out['auto_closed_as_entry'] = out['closed']['auto'] & 0x30001 == 0x20000
-    domain2 = [t for t in out['transitions'] if t['domain'] == 2]
-    if domain2 and domain2[0]['commands'] and domain2[0]['reached_at'] >= domain2[0]['command_at']:
-        out['durations_us']['domain2_to_on'] = domain2[0]['reached_at'] - domain2[0]['command_at']
+    t = out['transition']
+    if t['commands'] and t['reached_at'] >= t['command_at']:
+        out['durations_us']['domain2_to_on'] = t['reached_at'] - t['command_at']
     return out
 
 
@@ -121,11 +119,10 @@ def failures(d):
         want(c['mclk_gates'] == s['mclk_gates'] and c['ahb_gates'] == e['ahb_gates'] and
              c['mbus_gates'] == e['mbus_gates'], 'critical gates changed by the close')
     want(d['row_state'] == 'on' and d['measured'] == 1, f"row {d['row_state']}, measured {d['measured']}")
-    t = [x for x in d['transitions'] if x['domain'] == 2]
-    if not t:
-        out.append('no domain-2 transition slot')
+    t = d['transition']
+    if t['domain'] != 2:
+        out.append('no domain-2 transition record')
     else:
-        t = t[0]
         # The owner judges the low nibble only; bit 8 and the other status bits are reported, not judged.
         adopted = t['commands'] == 0 and t['policy_before'] & 0xf == 8 and t['status_before'] & 0xf == 8
         measured = (t['commands'] == 1 and t['policy_before'] & 0xf == 0 and t['status_before'] & 0xf == 0 and

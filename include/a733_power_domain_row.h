@@ -25,6 +25,26 @@ enum a733_power_row_state {
  * consumer writes request, the service writes state and the service-only
  * fields. request is (generation << 1) | on; state is
  * (answered generation << 3) | enum a733_power_row_state. */
+/* The latest admission and PCK600 transition of one domain, service task
+ * only; it adds no register access. It exists to size A733_POWER_PCK_SPIN_US
+ * from board data and is deleted once that is done, at the latest on
+ * 2026-12-14. The samples are domain-2 OFF-to-ON transitions, at most one per
+ * board power cycle, since domain 2 stays ON across the decoder's close and is
+ * adopted afterwards; domain 5 is not a stand-in. The 50 us spin stays as it
+ * is until three such samples have accumulated over later power lifetimes.
+ *
+ * The owner fails a transition at any status read whose bits 3:0 are neither
+ * the starting value nor the target, so a successful one reads the starting
+ * value reads - 1 times and then the target once; all_and and all_or show
+ * whether any other bit (bit 8, dynamic enable in Arm's PPU layout, among
+ * them) changed in any read. Times are the service clock just before each
+ * read; command_at is taken after the policy write completed. */
+struct a733_power_transition {
+    uint32_t policy_before, status_before; /* full words at the latest admission or release */
+    uint32_t policy_written, first_word, pending_word, reached_word, all_and, all_or;
+    uint32_t reads, spin_reads, commands;
+    uint64_t command_at, first_at, pending_at, reached_at;
+};
 struct a733_power_domain_row {
     struct a733_power_domains *domains;
     const struct a733_rail_token *rail;
@@ -41,6 +61,11 @@ struct a733_power_domain_row {
      * after publishing the supply-verification result. */
     void (*wake)(void *);
     void *wake_context;
+    /* The owner's transition record of this row's domain, copied by the
+     * service before each answer's release store. A consumer reads it after
+     * a733_power_domain_state() returns that answer (acquire order), until it
+     * makes its next request. */
+    struct a733_power_transition transition;
 };
 
 /* a733_power_domain_row_init() in a733_power_domains.h registers a row. */

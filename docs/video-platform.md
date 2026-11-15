@@ -248,6 +248,45 @@ malformed-input run described in [video codecs](video-codecs.md). Source,
 fixtures, binaries, reference input hashes and results remain outside Git with
 SHA256 manifests; see [the evidence file](evidence/video-platform.jsonl).
 
+## Register-lock holds bound band-2 waits
+
+The counts come from the composed model (`checks/video-cold.py`, its `holds`
+lines) at the vendor point from the FEL words. A native access adds a mapping
+check of its page and a `DSB SY` before and after. A write adds the native
+writer's read of the old word, and the write policy's reads: three for each
+PLL_VE0 write (the three consumer module words) and up to two for a `0xa88`
+write with bit 31 clear.
+
+| Phase | Model accesses (writes) | Native accesses | Lock |
+| --- | --- | --- | --- |
+| Entry | 37 (0) | 37 | held |
+| Row request and answer | 0 | 0 in the decoder; 6 PPU writes and their reads in the owner if the domain is OFF | none |
+| Hold A | 22 (7) | 40: 22, plus 7 old-word reads, 9 PLL policy reads and 2 `0xa88` policy reads | held |
+| PLL lock wait | 4 to 100 PLL reads | same | none |
+| Hold B | 36 (4) | 43: 36, plus 4 old-word reads and 3 PLL policy reads | held |
+| `prepare`, identity | 3 (0) | 3 | held |
+| `prepare`, each of 18 steps | at most 3 (1) | at most 4 | held, one step per call |
+| Quiesce | 18 (7) | 38: 18, plus 7 old-word reads, 12 PLL policy reads and 1 `0xa88` policy read | held |
+
+The longest register-lock hold is hold B, 43 native accesses. At the 1 µs
+per access that the design assumes, that is about 43 µs, which bounds how long
+a band-2 task that needs the register lock waits behind the decoder; the
+mutex's priority inheritance raises the decoder task while it waits. Stage 1
+on the board measures each hold.
+
+The OS image's decoder task repeats `acquire` and `prepare` calls while they
+advance, rather than one call per tick: `prepare`'s eighteen steps run back to
+back, each in its own hold, so no hold exceeds four accesses there. From the
+ON answer, a cold start therefore takes the entry, hold A, the lock wait and
+hold B, about 120 µs of accesses plus at most about 420 µs of waiting.
+
+Stage 1 on the board measures the entry hold (`entry_at` to `entered_at`),
+hold A (`on_at` to `hold_a_at`), the lock wait (`hold_a_at` to `locked_at`)
+and hold B (`locked_at` to `hold_b_at`) in the binding's cold record
+(`struct a733_video_cold_record`), in microseconds; apps/vdec-check/host.py
+reports them as `durations_us`. Those measurements replace the 1 µs per access
+assumption in this budget.
+
 ## Memory authority and physical qualification remain required
 
 Actual memory translations, full input/output burst extents, cache maintenance,

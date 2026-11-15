@@ -60,6 +60,9 @@ struct a733_video_unit_ops {
     int (*leave)(void *);
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,unsigned,uint32_t);
+    /* Optional: a plain per-core microsecond clock in now_us's timebase, which times the PLL lock-wait gaps without
+     * the shared monotonic clock's compare-and-swap. NULL uses now_us. */
+    int (*spin_now_us)(void *,uint64_t *);
 };
 struct a733_video_unit {
     const struct a733_video_unit_desc *desc;

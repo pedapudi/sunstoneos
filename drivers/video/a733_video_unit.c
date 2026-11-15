@@ -268,14 +268,20 @@ int a733_video_unit_pll_start(struct a733_video_unit *u)
 /* The lock wait reads without the register mutex: the exclusive PLL_VE0
  * token makes this unit its only writer, as the NPU startup's token does for
  * PLL_NPU. The deadline ends the wait. */
+/* One read of the control word in the lock wait: the deadline is checked once per read, on the shared clock. */
 static int unlocked_read(void *v,uint32_t *out)
 {
     struct a733_video_unit *u=v;
     ++u->pll_reads;
-    return !u->locked&&a733_video_unit_timely(u)&&u->ops.read(u->cookie,PLL,out)==1&&a733_video_unit_timely(u);
+    return !u->locked&&u->ops.read(u->cookie,PLL,out)==1&&a733_video_unit_timely(u);
 }
+/* The gap and settle clock: the plain per-core clock when given, which the lock wait reads in a spin. */
 static int unit_now(void *v,uint64_t *out)
-{struct a733_video_unit *u=v;return a733_video_unit_now(u,out)==1&&*out<u->deadline;}
+{
+    struct a733_video_unit *u=v;
+    if(u->ops.spin_now_us)return u->ops.spin_now_us(u->cookie,out)==1;
+    return a733_video_unit_now(u,out)==1&&*out<u->deadline;
+}
 int a733_video_unit_pll_wait(struct a733_video_unit *u)
 {
     if(!u->config.program_pll||u->pll_done)return 1;
