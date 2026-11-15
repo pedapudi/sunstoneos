@@ -27,6 +27,13 @@ Cases, each starting from a service that failed in hold B (phase FAULT, step VD_
   point among the close's stores to the words the step reads (phase, close_started, reported and quiesced), with a
   pause after each of its first three loads of them so that its loads can straddle one or more stores
   (harness.TwoCores). No placement may report 0x941; every one must reach DONE with the service CLOSED.
+One more case starts from a CLOSED service whose open the application has requested, with the CCU at the port 3-3 FEL
+words and the published nonsecure boot ROM mapped:
+- row-wait: the open runs its read-only entry hold and requests domain 2, which the owner never answers. Before
+  supply verification ends, the service waits on the supply budget (A733_POWER_SUPPLY_SETTLE_US +
+  A733_POWER_SUPPLY_BUDGET_US + one tick, anchored at the PMIC startup deadline or now); once DCDC2 is verified,
+  on the PCK600 bound plus two ticks. Past that bound the open is refused with step VD_STEP_ROW_TIMEOUT: the service
+  ends CLOSED with no register written and no close.
 The image of the hold-B run (c1a4e4fc...) fails the first two cases: its quiesce step reports FAULT on every pass
 until the bound. The image of the stage-1 rerun (7d63776e...) fails quiesce-among-close-stores: its quiesce step
 decides from phase and close_started.
@@ -44,6 +51,14 @@ GATE_RUNS = [['--image', '{elf:ret-vdec}', '--output', '{output}']]
 UNIT = '/apps/os/video_decode.c'
 CCU, RTC, R_CCU, GIC, PCK, VE = 0x02002000, 0x07090000, 0x07010000, 0x03400000, 0x07062000, 0x01c0e000
 STACKS, SENTINEL, NOTE, SCRATCH = 0x60000000, 0x60100000, 0x60100100, 0x60100200
+RET, PMIC_NOW, SESSION = 0x60100600, 0x60100700, 0x60100800
+ROM, ROM_BASE = Path.home() / '.cache/sunstoneos/sources/brom/ns-brom.bin', 0x17000
+ROM_SHA256 = '95be69c916846a8259578565f3193a6b9ab0625294d5374f3dc6c2f667fc6169'
+# The port 3-3 FEL words (checks/a733-video-cold.c): decoder in reset and gated, PLL_VE0 disabled.
+FEL = {0x220: 0x41305a00, 0x22c: 0x30000000, 0x580: 0x80000000, 0x588: 0x80000000, 0x5c0: 0x110103ff,
+       0x5e0: 0xf1055803, 0x5e4: 0x4, 0x1b10: 0x00020000, 0x1918: 0x00030003, 0x1998: 0x00030000}
+SETTLE_US, BUDGET_US, PCK_BOUND_US, TICK_US = 5160, 100000, 10000, 1000
+DCDC2_VERIFIED = 1 << 2
 BOUND_US, PASS_US = 3_000_000, 10_000
 QUIESCE = {'PENDING': 0, 'DONE': 1, 'FAULT': 2}
 SITE_DECODER = 0x941
@@ -56,7 +71,8 @@ HOLD_B = {0x220: 0xf9204d00, 0xa88: 0x81000000, 0xa8c: 0x00040004, 0x5e4: 0x0004
           0x5e0: 0xf1045803, 0x1b10: 0x00020000, 0x1918: 0x00030003, 0x1998: 0x00030000}
 LAYOUTS = {'board_application', 'a733_board_session', 'a733_video_decoder', 'a733_video_unit',
            'a733_video_platform_config', 'a733_clock_token', 'a733_gpu_resource_lease', 'a733_power_domain_row',
-           'vdec_check_record'}
+           'vdec_check_record', 'board_provider', 'a733_native_usb', 'a733_rail_leases', 'a733_power_domains',
+           'a733_pmic', 'a733_pmic_config', 'a733_rail_token'}
 
 
 class Registers:
@@ -91,7 +107,7 @@ def members(image):
     return layout, enums
 
 
-def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, application_close=False, schedule=None):
+def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, application_close=False, schedule=None, row_wait=False):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -102,14 +118,20 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     uc.mem_map(SENTINEL, 0x1000)
     uc.mem_write(NOTE, (0xd65f03c0).to_bytes(4, 'little'))             # ret
     skip_crumbs(uc, image)
-    ccu = Registers(CCU, 0x2000, HOLD_B, stuck)
+    ccu = Registers(CCU, 0x2000, FEL if row_wait else HOLD_B, stuck)
+    uc.mem_write(RET, (0xd65f03c0).to_bytes(4, 'little'))             # ret
+    if row_wait:
+        rom = ROM.read_bytes()
+        assert hashlib.sha256(rom).hexdigest() == ROM_SHA256, 'published nonsecure ROM differs'
+        uc.mem_map(ROM_BASE, len(rom))
+        uc.mem_write(ROM_BASE, rom)
     others = {'rtc': Registers(RTC, 0x1000, {0x160: 0x983fb0f7}), 'r_ccu': Registers(R_CCU, 0x1000, {0x1ac: 1}),
               'gic': Registers(GIC, 0x1000, {}), 'pck': Registers(PCK, 0x1000, {0: 8, 8: 8}),
               've': Registers(VE, 0x1000, {})}
     ccu.words[0] = 0xf8675f00
     for regs in (ccu, *others.values()):
         uc.mmio_map(regs.base, regs.size, regs.read, None, regs.write, None)
-    state = {'time': 1000, 'requested': 0, 'notes': [], 'slice_done': False}
+    state = {'time': 1000, 'requested': 0, 'notes': [], 'slice_done': False, 'waits': []}
     L = image.layouts
     vd = image.address('vd', UNIT)
 
@@ -149,6 +171,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         ret(m, 1)
 
     def wait(m):
+        state['waits'].append((m.reg_read(UC_ARM64_REG_X0), state['time']))
         state['slice_done'] = True
         m.emu_stop()
 
@@ -173,11 +196,14 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         'os_cpu_return_requested': lambda m: ret(m, state['requested']),
         'os_cpu_return_failing': lambda m: ret(m, 0),
         'os_application_wake_task': lambda m: ret(m),
+        'os_session_admitted': lambda m: ret(m, SESSION),
+        'a733_rail_poll': lambda m: ret(m, 0),                  # A733_RAIL_READY: the decoder's DCDC2 token
     }
     for symbol, callback in hooks.items():
         if symbol in image.symbols:
             hook_addresses(uc, {image.address(symbol)}, lambda m, a, s, u, c=callback: c(m))
     hook_addresses(uc, {NOTE}, lambda m, a, s, u: note(m))
+    hook_addresses(uc, {PMIC_NOW}, lambda m, a, s, u: pmic_now(m))   # the PMIC adapter's clock (a733_pmic_now)
     hook_addresses(uc, {SENTINEL}, lambda m, a, s, u: m.emu_stop())
 
     def enter(function, *args, stack=STACKS + 0x80000):
@@ -212,6 +238,9 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     put(lease + pck_layout['token'], 1, 8); put(lease + pck_layout['mask'], OSC_PCK); put(lease + pck_layout['mode'], STABLE)
     assert call(image.address('a733_video_decoder_init'), decoder, config, image.address('ops', UNIT), 0) == 1, \
         (name, 'the binding refused its configuration')
+    if row_wait:
+        return row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call=lambda: call(
+            image.address('os_video_decode_task', UNIT), 0, stack=STACKS + 0x40000), ccu=ccu, others=others, vd=vd)
     # The decoder as hold B's refusal left it.
     put(unit_field('failed'), 1)
     for field, value in (('pll_inherited', PLL_INHERITED), ('pll_state', 1), ('pll_started', 1), ('pll_locked', 1),
@@ -289,6 +318,60 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     }
 
 
+def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu, others, vd):
+    """The open of a CLOSED service whose row the owner never answers: the two bounds, then the refusal."""
+    L = image.layouts
+    put(vd + layout['initialized'], 1)
+    put(vd + layout['rail'] + L['a733_rail_token']['id'], 1, 8)
+    put(vd + layout['pck_token'], 1, 8)
+    row = vd + layout['row']
+    put(row + L['a733_power_domain_row']['domains'], SCRATCH, 8)
+    put(row + L['a733_power_domain_row']['notify'], RET, 8)
+    providers = image.address('providers')
+    shared = providers + L['board_provider']['shared']
+    pmic = shared + L['a733_native_usb']['pmic']
+    put(providers + L['board_provider']['domains'] + L['a733_power_domains']['pmic'], pmic, 8)
+    put(pmic + L['a733_pmic']['pmic_bus_ops'], PMIC_NOW, 8)  # its first member, now
+    put(pmic + L['a733_pmic']['config'] + L['a733_pmic_config']['startup_deadline'], 0, 8)  # the provider started
+    authority = shared + L['a733_native_usb']['rails'] + L['a733_rail_leases']['authority']
+    put(vd + layout['op'], enums['OPEN_OP']); put(vd + layout['request'], enums['POSTED'])
+    rows = []
+
+    def resume():
+        # Return from the wait the task stopped in, as a notification, and run on to its next wait.
+        state['slice_done'] = False
+        ret(uc, 0)
+        uc.emu_start(uc.reg_read(UC_ARM64_REG_PC), SENTINEL, count=5_000_000)
+        assert state['slice_done'], 'the owner task did not reach its next wait'
+        target, at = state['waits'][-1]
+        rows.append(target - at)
+
+    state['slice_done'] = False
+    task_call()
+    target, at = state['waits'][-1]
+    rows.append(target - at)                                   # before verification: the supply budget
+    put(authority, get(authority) | DCDC2_VERIFIED)
+    resume()                                                   # verified: the PCK600 bound
+    state['time'] += PCK_BOUND_US + 2 * TICK_US
+    resume()                                                   # past it: refused, then the idle block
+    supply, verified = SETTLE_US + BUDGET_US + TICK_US, PCK_BOUND_US + 2 * TICK_US
+    problems = []
+    if not supply - 100 <= rows[0] <= supply:
+        problems.append(f'before verification the wait must be the supply budget, {supply} us: {rows[0]} us')
+    if not verified - 100 <= rows[1] <= verified:
+        problems.append(f'after verification the wait must be the PCK600 bound plus two ticks, {verified} us: {rows[1]} us')
+    if get(vd + layout['request']) != enums['DONE'] or get(vd + layout['result']) != 0xffffffff:
+        problems.append('the open must be answered -1')
+    if get(vd + layout['phase']) != enums['CLOSED'] or get(vd + layout['fault_step']) != enums['VD_STEP_ROW_TIMEOUT']:
+        problems.append('the service must end CLOSED with step VD_STEP_ROW_TIMEOUT')
+    if ccu.writes or others['ve'].reads or others['ve'].writes:
+        problems.append('an unanswered row leaves nothing written and no close')
+    return {'case': 'row-wait', 'waits_us': rows, 'passes': len(state['waits']), 'elapsed_us': state['time'],
+            'phase': get(vd + layout['phase']), 'recorded_fault_step': get(vd + layout['fault_step']),
+            'ccu_writes': [(hex(a), hex(v)) for a, v in ccu.writes], 'problems': problems, 'passed': not problems,
+            'notes': [(hex(s), hex(v)) for s, v in state['notes']]}
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image', type=Path, required=True)
@@ -304,6 +387,10 @@ def main():
     cases = [('quiesce-closes', {}), ('application-closes', {'application_close': True}),
              ('close-step-fails', {'stuck': {0xa8c: 0x00040004}}), ('uncertain-access', {'uncertain': True})]
     rows, failures = [], []
+    row = run_case(image, parts, layout, enums, 'row-wait', row_wait=True)
+    rows.append(row)
+    if not row['passed']:
+        failures.append('row-wait')
     for name, options in cases:
         row = run_case(image, parts, layout, enums, name, **options)
         problems = []

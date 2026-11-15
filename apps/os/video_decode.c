@@ -90,6 +90,29 @@ static int fail(unsigned step,uint32_t value)
     return -1;
 }
 static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner);}
+/* The bound on the owner's answer to the row, in the PMIC clock (docs/designs/power-domains.md, "Transitions and
+ * polling", and the NPU startup's two waits). Until supply verification ends with DCDC2 verified or the done bit, the
+ * answer cannot come before verification does: verification may start A733_POWER_SUPPLY_SETTLE_US after the
+ * service's first step, ends within A733_POWER_SUPPLY_BUDGET_US once the provider is READY, and READY comes by the
+ * PMIC's startup deadline; the bound is anchored at that deadline or now, whichever is later, plus one tick for the
+ * service's wake. Once verification has ended, the owner admits the row at its next step and the transition ends
+ * within A733_POWER_PCK_BOUND_US of its command: the bound is that, plus two ticks, from the first time this task saw
+ * verification ended. The wait itself is capped by the open's deadline. */
+#define VD_TICK_US (1000000u/configTICK_RATE_HZ)
+static uint64_t row_bound(uint64_t *supply,uint64_t *verified)
+{
+    const uint64_t t=owner_us();
+    const unsigned w=a733_power_authority_load(&providers.shared.rails.authority);
+    if(w&(A733_POWER_SUPPLY_DONE|A733_POWER_DCDC2_VERIFIED)){
+        if(!*verified)*verified=t+A733_POWER_PCK_BOUND_US+2u*VD_TICK_US;
+        return *verified;
+    }
+    if(!*supply){
+        const uint64_t anchor=providers.domains.pmic->config.startup_deadline;
+        *supply=(anchor>t?anchor:t)+A733_POWER_SUPPLY_SETTLE_US+A733_POWER_SUPPLY_BUDGET_US+VD_TICK_US;
+    }
+    return *supply;
+}
 
 /* --- the binding's native callbacks ----------------------------------------------------------------------------- */
 static int op_now(void *cookie,uint64_t *out){(void)cookie;*out=lease_now();return *out?1:-1;}
@@ -238,7 +261,7 @@ static int do_open(void)
      * answer, then the identity. The owner answers on the row's wake, which notifies this task; the wait blocks until
      * that or the bound. At the binding's deadline, vd.limit, its next call fails the open. */
     RECORD(vd.info.row_request_us=owner_us();)
-    uint64_t row_limit=0;
+    uint64_t supply_bound=0,verified_bound=0;
     for(;;){
         const int r=a733_video_decoder_open(&vd.decoder,vd.limit);
         const struct a733_video_decoder *p=&vd.decoder;
@@ -254,11 +277,14 @@ static int do_open(void)
         }
         if(r<0)return fault(VD_STEP_COLD,p->cold_step|s<<8);
         if(s==A733_POWER_ROW_PENDING){
-            if(!row_limit)row_limit=now_us()+A733_POWER_PCK_BOUND_US+4000;
+            const uint64_t bound=row_bound(&supply_bound,&verified_bound),t=owner_us();
             /* The row is requested only after the entry hold, which writes nothing, and the decoder writes only
              * after the ON answer: an unanswered row leaves nothing to close. */
-            if(now_us()>=row_limit){copy_record();refuse(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);goto refused;}
-            (void)sunstone_deadline_wait_until(row_limit);
+            if(t>=bound){copy_record();refuse(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);goto refused;}
+            /* The row's wake, which the owner also calls when verification ends, notifies this task. */
+            const uint64_t at=lease_now();uint64_t wait=bound-t;
+            if(at>=vd.limit)wait=0;else if(vd.limit-at<wait)wait=vd.limit-at;
+            (void)sunstone_deadline_wait_until(now_us()+wait);
         }else{
             /* A busy registry or register lock after the binding's own bounded retry: block, then call again. */
             pause_us(VD_BUSY_US);

@@ -288,6 +288,7 @@ struct lifetime {
     unsigned vcu,irq_pending,stuck; /* struct cold_model */
     unsigned fault_close; /* after a refused start, the service's fault close (a733_video_decoder_close, faulted) */
     unsigned late; /* struct cold_model */
+    unsigned early; /* the open starts before the owner's first step, so the row waits for supply verification */
 };
 struct outcome {
     int result;unsigned writes,owner_ppu_writes,owner_commands,decoder_pck_reads,polls_after_on;
@@ -355,8 +356,10 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
     assert(a733_gpu_resources_acquire(&power,2,A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK,100000,&token,&ready)==A733_GPU_RESOURCE_OK);
     assert(a733_power_domain_row_init(&c->row,&d.owner,2,90,&c->token));
     c->row.wake=row_wake;c->row.wake_context=c;
-    domains_boot();c->token=domains_rail(90,A733_RAIL_DCDC2);
-    assert(a733_power_authority_load(&pm->rails.authority)&A733_POWER_DCDC2_VERIFIED);
+    if(!l->early)domains_boot();
+    else d.wake_at=0; /* the service's first step comes when the decoder's loop first runs it */
+    c->token=domains_rail(90,A733_RAIL_DCDC2);
+    assert(!!(a733_power_authority_load(&pm->rails.authority)&A733_POWER_DCDC2_VERIFIED)==!l->early);
     struct a733_video_platform_config config={.clocks=&clocks,.power=&power,.power_client=2,.owner=99,.handoff=123,
         .pck={token,A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK,A733_GPU_RESOURCE_STABLE},
         .module=vendor?0x81000000:0x80000001,.module_hz=vendor?624000000:234000000,.fabric={0,0x80000000,0x80000000},
@@ -620,6 +623,19 @@ int main(int argc,char **argv)
             printf("fault%u %s: closed%d close_accesses%u last %08x=%08x\n",k,faults[k].name,o.closed,o.close_accesses,
                 o.last_address,o.last_word);
         }
+    }
+    /* The open starts before supply verification: the entry hold and the row request run at once, and the row is
+     * answered ON only after the owner has verified DCDC2, A733_POWER_SUPPLY_SETTLE_US after its first step. */
+    {
+        const struct lifetime l={.ack_us=10,.pll=PLL_LOCKS,.pll_entry=FEL_PLL,.service=1,.early=1};
+        const struct outcome o=lifetime(&c,&l,0,0,0);
+        const unsigned w=a733_power_authority_load(&pm->rails.authority);
+        assert(o.result==1&&o.row==A733_POWER_ROW_ON&&o.owner_commands==1&&(w&A733_POWER_DCDC2_VERIFIED));
+        printf("early: result%d verify_at%llu verified_at%llu command_at%llu\n",o.result,
+            (unsigned long long)d.owner.verify_at,(unsigned long long)d.owner.verified_at,
+            (unsigned long long)c.row.transition.command_at);
+        assert(d.owner.verify_at>=A733_POWER_SUPPLY_SETTLE_US&&d.owner.verified_at>=d.owner.verify_at&&
+            c.row.transition.command_at>=d.owner.verified_at);
     }
     /* A late access inside a hold fails the unit with the register lock held: the open reports a fault even in the
      * entry hold, which wrote nothing, and the fault close continues in that hold (it takes no lock) and releases
