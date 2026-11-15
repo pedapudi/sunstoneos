@@ -588,7 +588,9 @@ static void serve(void)
     int r=-1;
     if(g2d.op==OPEN_OP)r=phase==OS_DEVICE_CLOSED?do_open():phase==OS_DEVICE_OPEN?1:-1;
     else if(g2d.op==CLOSE_OP)r=closable()?do_close():phase==OS_DEVICE_CLOSED?1:-1;
-    else if(g2d.op==RUN_OP)r=phase==OS_DEVICE_OPEN?do_run():run_refuse(G2D_STEP_RUN,phase);
+    /* A run on a service that is not OPEN is refused with nothing recorded: a FAULT service's fault may already be
+     * reported, and its fields must not change under the quiesce step's reads (apps/os/device-fault.h). */
+    else if(g2d.op==RUN_OP)r=phase==OS_DEVICE_OPEN?do_run():-1;
     g2d.result=r;
     atomic_store_explicit(&g2d.request,DONE,memory_order_release);
     os_application_wake_task(g2d.waiter);

@@ -51,8 +51,9 @@ static inline void os_device_open_begin(struct os_device_fault *f)
     os_device_clear_fault(f);
 }
 
-/* A refusal in the owner task, made before any write: records the step and value and leaves the phase to the caller,
- * which returns the service to CLOSED (an open) or keeps it OPEN (a run). Returns -1. */
+/* A refusal in the owner task, made before any write, in an open (OPENING) or a run (OPEN) only: records the step and
+ * value and leaves the phase to the caller, which returns the service to CLOSED (an open) or keeps it OPEN (a run).
+ * A request to a service in any other phase is refused with nothing recorded. Returns -1. */
 static inline int os_device_refuse(struct os_device_fault *f, unsigned step, uint32_t value)
 {
     f->fault_step=step;f->fault_value=value;return -1;
