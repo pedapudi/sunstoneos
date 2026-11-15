@@ -86,6 +86,13 @@ The service behaves as follows:
 4. When a close step fails, the service stays FAULT with its resources retained, and its quiesce step publishes FAULT
    with the first fault's site and value. The session then fails at the bound, as before.
 
+The quiesce step runs on the supervisor's core while the owner task closes, so it decides from a single word that the
+owner task publishes after writing the fault record: set when a close step fails, or when the fault is one the close
+cannot settle. It never combines two words such as the phase and a "close started" flag. Two separate loads can fall
+on either side of the close's stores in either load order, and the step then reports a fault while a close that will
+succeed is still running. That report is sticky and ends the session at 0x742. The G2D and RTC checks place the
+quiesce step at every point among the close's stores to the words it reads.
+
 A service whose hardware cannot be stopped by its vendor close (an interrupted SD write transaction, active DMA work,
 an unproved crypto-engine retirement) retains FAULT under step 4; the table above names those cases.
 

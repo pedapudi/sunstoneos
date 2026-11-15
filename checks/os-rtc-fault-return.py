@@ -23,7 +23,12 @@ Cases (docs/designs/failure-return-audit.md, "A faulted device service closes be
   (step 8). The service stays FAULT with site 0x921.
 - set-refused: a calendar set with day 0 is refused by the driver before any access. The service stays OPEN, with no
   fault recorded, and the quiesce's close returns DONE.
-An image built before the RTC close of a faulted service fails the first three cases and set-refused.
+- quiesce-among-close-stores: as open-line-pending, but the quiesce step that runs during the close is placed at
+  every point among the close's stores to the words the step reads (phase, close_started, reported and quiesced), with
+  a pause after each of its first three loads of them so that its loads can straddle one or more stores
+  (harness.TwoCores). No placement may report 0x921; every one must reach DONE with the service CLOSED.
+An image built before the RTC close of a faulted service fails the first three cases and set-refused. An image whose
+quiesce step decides from phase and close_started fails quiesce-among-close-stores.
 
 Usage: os-rtc-fault-return.py --image ELF --output DIR"""
 import argparse
@@ -31,7 +36,7 @@ import hashlib
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2
-from harness import machine as harness_machine, Image, hook_addresses, save, skip_crumbs
+from harness import machine as harness_machine, Image, hook_addresses, save, skip_crumbs, TwoCores
 
 GATE_RUNS = [['--image', '{elf:ret-rtc}', '--output', '{output}']]
 UNIT = '/apps/os/rtc.c'
@@ -66,7 +71,7 @@ class Registers:
 
 
 def run_case(image, parts, layout, enums, name, request, rtc_words, stuck=(), tick_after_open=False, pending=False,
-             close_mask_fails=False):
+             close_mask_fails=False, schedule=None):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -147,11 +152,15 @@ def run_case(image, parts, layout, enums, name, request, rtc_words, stuck=(), ti
     hook_addresses(uc, {NOTE}, lambda m, a, s, u: note(m))
     hook_addresses(uc, {SENTINEL}, lambda m, a, s, u: m.emu_stop())
 
-    def call(function, *args, stack=STACKS + 0x80000):
+    def enter(function, *args, stack=STACKS + 0x80000):
         for register, value in zip((UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2), args):
             uc.reg_write(register, value)
         uc.reg_write(UC_ARM64_REG_SP, stack)
         uc.reg_write(UC_ARM64_REG_LR, SENTINEL)
+        uc.reg_write(UC_ARM64_REG_PC, function)
+
+    def call(function, *args, stack=STACKS + 0x80000):
+        enter(function, *args, stack=stack)
         uc.emu_start(function, SENTINEL, count=5_000_000)
         return uc.reg_read(UC_ARM64_REG_X0)
 
@@ -181,18 +190,36 @@ def run_case(image, parts, layout, enums, name, request, rtc_words, stuck=(), ti
     driver_after_request = get(driver + layout['a733_rtc']['state'])
     state['requested'] = 1
     state['closing'] = True
-    start, passes = state['time'], []
+    start, passes, events = state['time'], [], None
     while state['time'] - start < BOUND_US:
         result = call(image.address('os_quiesce_step'), NOTE) & 0xffffffff
         passes.append(result)
         if result == QUIESCE['DONE']:
             break
-        owner_slice('quiesce')
+        if schedule and events is None:
+            # The owner's close, with one more quiesce step on the supervisor's core placed among its stores.
+            shared = [(field(n), 4) for n in ('phase', 'close_started', 'reported', 'quiesced') if n in layout['rtc']]
+            cores = TwoCores(uc, shared, SENTINEL)
+            state['slice_done'] = False
+            enter(task, 0, stack=STACKS + 0x40000)
+            writer = uc.context_save()
+            enter(image.address('os_quiesce_step'), NOTE)
+            reader = uc.context_save()
+            events = cores.run(writer, reader, schedule, lambda: state['slice_done'],
+                               lambda: uc.reg_read(UC_ARM64_REG_PC) == SENTINEL)
+            passes.append(uc.reg_read(UC_ARM64_REG_X0) & 0xffffffff)
+            cores.close()
+            assert state['slice_done'], (name, schedule, 'the owner task did not reach its wait')
+            if passes[-1] == QUIESCE['DONE']:
+                break
+        else:
+            owner_slice('quiesce')
         state['time'] += PASS_US
     return {
         'case': name, 'results': results, 'fault_after_request': fault_after_request,
         'phase_after_request': phase_after_request, 'driver_after_request': driver_after_request,
         'alarm_enabled': any(o == 0x28 and v & 1 for o, v in rtc_regs.writes), 'passes': len(passes), 'last_result': passes[-1],
+        'schedule': schedule, 'events': events, 'any_fault': QUIESCE['FAULT'] in passes,
         'done_within_bound': passes[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
         'phase': get(field('phase')), 'fault': get(field('fault')),
         'driver_state': get(driver + layout['a733_rtc']['state']),
@@ -270,14 +297,32 @@ def main():
         if problems:
             failures.append(name)
         rows.append(row)
+    # The quiesce step on the supervisor's core placed at every point among the close's stores to the words it reads,
+    # with its loads straddling one or more of them: no placement may report the fault of a close that succeeds.
+    base = ('open-line-pending', None, {'pending': True})
+    writer_events = run_case(image, parts, layout, enums, *base[:2], dict(RTC_WORDS), **base[2],
+                             schedule=(0, 0, 0))['events']['writer']
+    sweep = [(w, k, b) for w in range(writer_events + 1) for k in range(4) for b in range(w, writer_events + 1)]
+    races = []
+    for schedule in sweep:
+        row = run_case(image, parts, layout, enums, *base[:2], dict(RTC_WORDS), **base[2], schedule=schedule)
+        if row['any_fault'] or row['notes'] or not row['done_within_bound'] or row['phase'] != enums['CLOSED']:
+            races.append({'schedule': schedule, 'events': row['events'], 'notes': row['notes'], 'phase': row['phase']})
+    rows.append({'case': 'quiesce-among-close-stores', 'writer_events': writer_events, 'schedules': len(sweep),
+                 'reported': races[:8], 'passed': not races and writer_events >= 2,
+                 'problems': [f'{len(races)} of {len(sweep)} placements reported 0x921 during a close that succeeds']
+                 if races else [] if writer_events >= 2 else ['the close must store at least two shared words']})
+    if not rows[-1]['passed']:
+        failures.append('quiesce-among-close-stores')
     save(a.output / 'result.json', {
         'passed': not failures, 'physical_access': False, 'image': str(a.image),
         'image_sha256': hashlib.sha256(a.image.read_bytes()).hexdigest(), 'cases': rows,
         'sources_sha256': {n: hashlib.sha256((Path(__file__).resolve().parents[1] / n).read_bytes()).hexdigest()
                            for n in ('apps/os/rtc.c', 'drivers/rtc/a733_rtc.c', 'apps/os/quiesce.c', 'checks/os-rtc-fault-return.py')}})
     for row in rows:
-        print('PASS' if row['passed'] else 'FAIL', row['case'], f"fault {row['fault']}, {row['passes']} passes, "
-              f"{row['elapsed_us']} us", '; '.join(row['problems']))
+        detail = f"{row['schedules']} placements over {row['writer_events']} close stores" if 'schedules' in row else \
+            f"fault {row['fault']}, {row['passes']} passes, {row['elapsed_us']} us"
+        print('PASS' if row['passed'] else 'FAIL', row['case'], detail, '; '.join(row['problems']))
     if failures:
         raise SystemExit(f'{len(failures)} of {len(rows)} cases failed')
     print('PASS faulted RTC service: closes and returns within the bound when its close can settle the driver; '
