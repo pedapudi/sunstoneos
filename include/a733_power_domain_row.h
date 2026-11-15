@@ -27,11 +27,13 @@ enum a733_power_row_state {
  * (answered generation << 3) | enum a733_power_row_state. */
 /* The latest admission and PCK600 transition of one domain, service task
  * only; it adds no register access. It exists to size A733_POWER_PCK_SPIN_US
- * from board data and is deleted once that is done, at the latest on
- * 2026-12-14. The samples are domain-2 OFF-to-ON transitions, at most one per
- * board power cycle, since domain 2 stays ON across the decoder's close and is
- * adopted afterwards; domain 5 is not a stand-in. The 50 us spin stays as it
- * is until three such samples have accumulated over later power lifetimes.
+ * from board data. It, a733_power_domains_measure_transitions() and their
+ * model cases are deleted once that is done, at the latest on 2026-12-14. The
+ * samples are OFF-to-ON transitions of domain 2, at most one per board power
+ * cycle since domain 2 stays ON across the decoder's close, or of domain 5,
+ * which stands in for it: a GPU image powers domain 5 on and off within one
+ * power lifetime. The 50 us spin stays as it is until three samples have been
+ * timed.
  *
  * The owner fails a transition at any status read whose bits 3:0 are neither
  * the starting value nor the target, so a successful one reads the starting

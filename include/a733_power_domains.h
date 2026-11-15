@@ -35,8 +35,9 @@ _Static_assert(((A733_POWER_SUPPLY_DONE | A733_POWER_DCDC2_VERIFIED | A733_POWER
  * READY. */
 #define A733_POWER_SUPPLY_BUDGET_US 100000u
 /* Provisional spin after a PCK600 command. It stays until at least three
- * transitions of domain 2, or of domain 5, have been timed on the board with
- * measure_transitions set; their command-to-status times then size it. */
+ * OFF-to-ON transitions of domain 2, or of domain 5 as its stand-in, have been
+ * timed on the board with measure_transitions set (struct
+ * a733_power_transition); their command-to-status times then size it. */
 #define A733_POWER_PCK_SPIN_US 50u
 /* Bound from pck600_domains.c lines 112-121, capped by the service deadline.
  * Target status must be observed and checked strictly before that bound. */

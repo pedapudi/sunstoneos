@@ -179,12 +179,13 @@ register access, and the access traces of domains 1, 4 and 5 are unchanged.
 in a measurement run only, makes the service read status back to back from
 the command until the target or the 10 ms bound, so the record brackets the
 time to the target within one read gap. The service task then holds its
-core for up to that bound. The samples are domain-2 OFF-to-ON transitions,
-at most one per board power cycle: domain 2 stays ON across the decoder's
-close and is adopted afterwards. Domain 5 is not a stand-in. The 50 µs spin
-stays as it is until three such samples have accumulated over later power
-lifetimes; the record is deleted once the spin is sized, at the latest on
-2026-12-14.
+core for up to that bound. The samples are OFF-to-ON transitions of domain
+2 or of domain 5. Domain 2 gives at most one per board power cycle, because it
+stays ON across the decoder's close and is adopted afterwards. Domain 5 stands
+in for it: a GPU image powers domain 5 on and off within one power lifetime.
+The 50 µs spin stays as it is until three samples have been timed. The
+record, the measurement mode and their model cases are deleted once the spin
+is sized, at the latest on 2026-12-14.
 
 ## Supplies are verified once per boot
 
