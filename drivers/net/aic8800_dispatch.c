@@ -91,6 +91,7 @@ static int before_parse(struct aic8800_dispatch *d)
     /* Invalid declared parameters must never supply unchecked VIF offsets. */
     int valid=parameters<=AIC8800_SDIO_MAX_PARAMETERS&&parameters<=length-12;
     if(claimed_message(d,id,valid?p+16:NULL,valid?parameters:SIZE_MAX))return 0;
+    if(id==0x1004)increment(&d->unclaimed_scan_results);
     struct aic8800_sdio_response r={.record=p,.record_bytes=length+4,.consumed=consumed,
         .transport_type=p[2],.has_message=1,.message_id=id};
     if(!diagnostic(d,&r,valid?AIC8800_DISPATCH_UNCLAIMED:AIC8800_DISPATCH_MALFORMED_UNCLAIMED))return 1;

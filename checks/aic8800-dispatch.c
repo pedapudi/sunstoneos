@@ -146,6 +146,8 @@ static void scan_application(void)
     for(unsigned i=0;i<200&&wifi.state!=AIC8800_WIFI_SCAN_DONE;++i)dispatcher_step();
     assert(wifi.state==AIC8800_WIFI_SCAN_DONE&&wifi.summary.accepted&&wifi.summary.received==5);
     assert(bootstrap_dispatch.retired_records==5&&bootstrap_dispatch.discarded_diagnostics==1);
+    /* The result for another interface (vif 2) is the one scan result retired without an event. */
+    assert(bootstrap_dispatch.unclaimed_scan_results==1);
     assert(bootstrap_dispatch.record_count==4&&!bootstrap_dispatch.event_count);
     platform_puts("PASS dispatcher: foreign and stale events retire before actual scan completion; FIFO backpressure preserves results\n");
 }

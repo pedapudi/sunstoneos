@@ -34,6 +34,7 @@ file(GLOB a733_kernel_headers "${FREERTOS_DIR}/include/*.h")
 list(APPEND a733_identity_inputs ${a733_kernel_headers}
   "${a733_root}/include/platform.h" "${a733_root}/runtime/include/string.h")
 set(a733_identity "${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};armv8-a;O2;NC;8")
+sunstone_sort_inputs(a733_identity_inputs)
 foreach(input IN LISTS a733_identity_inputs)
   file(SHA256 "${input}" digest)
   string(APPEND a733_identity "${digest}")

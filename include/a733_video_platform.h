@@ -5,6 +5,7 @@
 #include "a733_video_h264.h"
 #include "a733_video_hevc.h"
 #include "a733_video_unit.h"
+#include "a733_power_domain_row.h"
 
 /* Privileged immutable configuration. Borrow exact live tokens from the ONE
  * clock registry and PCK resource manager; neither may be released until a
@@ -18,6 +19,11 @@
  * module_hz: a caller-supplied number does not establish electrical validity.
  */
 enum a733_video_start { A733_VIDEO_INHERITED = 0, A733_VIDEO_COLD_NS_ROM = 1 };
+/* A cold start (COLD_NS_ROM) needs row: the consumer's registered domain-2
+ * row (a733_power_domain_row_init in a733_power_domains.h), whose rail token
+ * holds DCDC2. The binding requests ON once after its read-only entry and
+ * returns pending until the owner answers; the caller blocks on the row's
+ * wake and calls again. The binding writes no PCK600 register. */
 struct a733_video_platform_config {
     struct a733_clock_leases *clocks;
     struct a733_clock_token clock;
@@ -27,6 +33,7 @@ struct a733_video_platform_config {
     uint64_t owner, handoff;
     uint32_t module, module_hz, fabric[3], fabric_hz[3];
     enum a733_video_start start;
+    struct a733_power_domain_row *row;
 };
 struct a733_video_platform_ops {
     int (*now_us)(void *,uint64_t *);
@@ -69,11 +76,26 @@ struct a733_video_platform_ops {
      */
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,unsigned,uint32_t);
+    /* Optional plain per-core clock for the PLL lock-wait gaps (struct a733_video_unit_ops). */
+    int (*spin_now_us)(void *,uint64_t *);
 };
 /* Codec-neutral decoder sequencing on the shared VE resource core: admission,
  * inherited or cold start, identity, memory and reset/default preparation.
  * Each codec binding passes its own typed job through admit and memory; the
  * job pointer is the binding's object, never another codec's structure. */
+/* What a cold start saw, for the caller's record: the three critical gates
+ * at entry and at A1, the 0x5e4 word written and read back when bit 18 was
+ * opened (zero when no write was needed), the times (binding clock, us) at
+ * the start and end of the entry hold, the row's ON answer, the end of hold
+ * A, the end of the PLL lock wait after its settle, the end of hold B, and
+ * the start and end of the close's hold, and the lock wait's PLL reads. */
+struct a733_video_cold_record {
+    uint32_t entry_gates[3], gates[3], mclk_written, mclk_readback;
+    uint64_t entry_at, entered_at, on_at, hold_a_at, locked_at, hold_b_at;
+    uint64_t close_at, closed_at; /* after the close's lock, or its start in a kept hold; after its unlock */
+    unsigned lock_reads;
+    uint32_t vcu[2]; /* VE+0x804 read before the pulse's set and before its clear write */
+};
 struct a733_video_decoder {
     struct a733_video_unit unit;
     struct a733_video_platform_config config;
@@ -81,7 +103,8 @@ struct a733_video_decoder {
     int (*memory)(void *,uint64_t,const void *,uint64_t);
     void *context;
     uint64_t version,reset_until;
-    unsigned admitted,checked,mapped,prepared,step,cold_step;
+    unsigned admitted,checked,mapped,prepared,step,cold_step,requested,quiesced,rom_checked;
+    struct a733_video_cold_record cold;
 };
 /* JPEG binding. */
 struct a733_video_platform {
@@ -89,6 +112,29 @@ struct a733_video_platform {
     struct a733_video_platform_ops ops;
     void *cookie;
 };
+/* A decoder with no codec binding, for a service that only opens and closes it (apps/os/video_decode.c): the
+ * configuration rules of a733_video_platform_init, the unit's operations, no job callbacks. 1 initialized. */
+int a733_video_decoder_init(struct a733_video_decoder *,const struct a733_video_platform_config *,
+    const struct a733_video_unit_ops *,void *cookie);
+/* Open such a decoder: the start (the cold start, or the inherited baseline), then the identity block read under one
+ * hold, which sets version. d is the deadline of every call until the open ends. 1 open; 0 pending: the row has not
+ * answered or the register lock was busy, so call again after the row's wake or a short block;
+ * A733_VIDEO_OPEN_REFUSED: refused with no register written and the register lock free, so the decoder is as it was
+ * and needs no close; A733_VIDEO_OPEN_FAULT: failed after the first write, or keeping the register lock after a
+ * late access (in any hold, the entry hold included), so a733_video_decoder_close(..., 1) must close it. */
+enum { A733_VIDEO_OPEN_REFUSED = -1, A733_VIDEO_OPEN_FAULT = -2 };
+int a733_video_decoder_open(struct a733_video_decoder *,uint64_t d);
+/* A refused open drops its deadline, so a later open may pass a new one; one refused only at its deadline is not left
+ * failed and resumes where it stopped (an outstanding row request stays). cancel ends a pending open that the caller
+ * gives up, such as an unanswered row past the caller's bound, the same way: A733_VIDEO_OPEN_REFUSED, or -1 when the
+ * open has written or holds the lock and only a close ends it. */
+int a733_video_decoder_cancel(struct a733_video_decoder *);
+/* The close of a started decoder (faulted 0) or of one that failed (faulted 1), in the vendor's order under one
+ * register-lock hold; docs/video-platform.md, "Close", describes the steps and which failed units it touches. The
+ * caller ensures no job is outstanding; d is a new deadline for this call. faulted 0 refuses a failed unit or a held
+ * lock with no access. 1 closed for the rest of the power lifetime (after a fault the unit stays failed); 0 effect-free
+ * busy lock, call again; -1 refused: an uncertain unit, untouched, or a close step whose readback differs. */
+int a733_video_decoder_close(struct a733_video_decoder *,uint64_t d,unsigned faulted);
 /* Pure scope derivation; requires the exclusive scopes below and the exact
  * shared result.
  * Preparation never releases, powers down, or claims physical qualification.
@@ -116,6 +162,8 @@ int a733_video_platform_retained_copy(void *,uint64_t,uint64_t,
  */
 int a733_video_platform_native_read(void *,uintptr_t,uint32_t *);
 int a733_video_platform_native_write(void *,uintptr_t,unsigned,uint32_t);
+/* The native read allowlist as a pure rule, for native_read and models: 1 readable. */
+int a733_video_platform_native_readable(uintptr_t);
 /* The native write allowlist as a pure rule, for native_write and models:
  * returns 1 allowed with the owned mask for a733_video_unit_native_write, 0
  * refused and -1 when read fails. read observes the PLL_VE0 consumers. */

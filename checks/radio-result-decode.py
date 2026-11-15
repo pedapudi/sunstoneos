@@ -65,6 +65,52 @@ def main():
                      'entropy_failed': False, 'candidates': 2, 'frequency_mhz': 2437, 'rssi_dbm': -41,
                      'ms_connect_mod_65536': 15000, 'ms_authorized_mod_65536': 15900}, assoc
     assert radio_result.decode(RECORD)['association'] is None
+    # An access point entry holds BSSID, RSSI, frequency and channel. An entry with an SSID length or SSID bytes is
+    # refused, and the error names no byte of it.
+    entry = bytes.fromhex('021122334455') + bytes([0, 0xc3]) + struct.pack('<H2B', 2437, 6, 0) + bytes(32)
+    listed = bytearray(RECORD)
+    struct.pack_into('<I', listed, 12, len(RECORD) + len(entry))
+    struct.pack_into('<I', listed, 216, 1)
+    assert radio_result.decode(bytes(listed) + entry)['scan']['aps'] == [
+        {'bssid': '02:11:22:33:44:55', 'frequency_mhz': 2437, 'channel': 6, 'rssi_dbm': -61}]
+    # The scan counts (flags bit 10) follow the list: 3 sightings, firmware count 12, 2 merges, 4 set aside.
+    counted = bytearray(listed)
+    struct.pack_into('<I', counted, 12, len(RECORD) + len(entry) + 16)
+    struct.pack_into('<I', counted, 36, head_flags | 1024)
+    scan = radio_result.decode(bytes(counted) + entry + struct.pack('<4I', 3, 12, 2, 4))['scan']
+    assert (scan['sightings'], scan['firmware_reported'], scan['merges'], scan['set_aside']) == (3, 12, 2, 4), scan
+    try:
+        radio_result.decode(bytes(counted) + entry + struct.pack('<4I', 3, 12, 1, 4))
+    except ValueError:
+        pass
+    else:
+        raise SystemExit('scan counts that disagree with the listed count were accepted')
+    # Version 3 with every section: scan counts, the association tail, then the RSN summary (flags bit 11). The
+    # summary is the stage-1 refusal shape: a WPA/WPA2 mixed element, TKIP group, CCMP and TKIP pairwise, PSK.
+    full = bytearray(listed)
+    struct.pack_into('<I', full, 8, 3)
+    struct.pack_into('<I', full, 12, len(RECORD) + len(entry) + 16 + 48 + 16)
+    struct.pack_into('<I', full, 36, head_flags | 1024 | 512 | 2048)
+    rsn = struct.pack('<3BbHH2I', 4, 2, 1 | 8 | 16, -1, 1, 0, 1 << 4 | 1 << 2, 1 << 2)
+    decoded = radio_result.decode(bytes(full) + entry + struct.pack('<4I', 3, 12, 2, 4) + tail + rsn)
+    assert decoded['association']['stage'] == 'authorized' and decoded['scan']['merges'] == 2
+    assert decoded['rsn'] == {'check': 'group-not-ccmp', 'element_found': True, 'other_oui': False, 'malformed': False,
+                              'parse_result': -1, 'version': 1, 'group': 'TKIP', 'pairwise': ['TKIP', 'CCMP-128'],
+                              'akm': ['PSK'], 'capabilities': 0, 'mfp_capable': False, 'mfp_required': False}, decoded['rsn']
+    struct.pack_into('<I', full, 8, 4)
+    try:
+        radio_result.decode(bytes(full) + entry + struct.pack('<4I', 3, 12, 2, 4) + tail + rsn)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit('a record version the decoder does not know was accepted')
+    for named in (entry[:6] + bytes([4]) + entry[7:], entry[:12] + b'case' + entry[16:]):
+        try:
+            radio_result.decode(bytes(listed) + named)
+        except ValueError as error:
+            assert 'case' not in str(error)
+        else:
+            raise SystemExit('an access point entry with SSID bytes was accepted')
     try:
         radio_result.decode(wire[:-4])
     except ValueError:
