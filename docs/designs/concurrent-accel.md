@@ -640,6 +640,41 @@ The planner changes only after a second width, predicted before its run, also fi
 - **After C:** 240 values per row, a 480-byte row 32 bytes off a multiple of 64. C predicts 32,768 units per job, A
   40,960 and B 38,400.
 
+**Results.** One returning run on port 3-1 (entry `1794739767299812242-b733706f`, image built from bc6179ca4, SHA-256
+`5331b464…8967`) decided no form. Every control held, so the run is not void:
+
+- Both GPU modes repeated their counts per job within 0.1% (mode 1: 102,757 read requests, 201,668 read units, 32,798
+  write requests, 131,096 write units; mode 0: 37,222, 136,126, 32,799, 131,103). The jobs/s ratio was 1.544.
+- The relu at 176, 128 and 256 values per row repeated its write requests and units within 0.02% and its rate within
+  0.03%.
+- Idle and the core-2 stream counted 0 on both ports. Every output matched its reference, PLL_NPU stayed locked, and
+  the top point held at the start and the end.
+
+At 144 values per row:
+
+| Quantity per job | Measured | A | B | C |
+| --- | --- | --- | --- | --- |
+| Write units | 26,623 | 30,720 | 23,040 | 32,768 |
+| Write requests | 2,304 | 3,072 | 2,304 | not predicted |
+| Jobs/s | 12,189 | 9,990-11,042 | 12,684-14,020 | 9,455-10,450 |
+
+- **Write units** fit no form within 1%: 208 per 8 rows, against 240 for A, 180 for B and 256 for C. The decision stops
+  here, so the outcome is "none".
+- **Write requests** equal B's count, 18 per 8 rows. Each request carried 11.56 units, against 10 at the aligned widths.
+- **Jobs/s** was 12,189. The job-time fit gives 11,860 at the measured 26,623 units, 2.8% below the measurement and
+  within the fit's residuals.
+- **Read requests** were 2,844 per job, 8.3% below the rule's 3,100, outside its 5% range.
+- **Read units** were 30,003 per job, inside the range from 128 to 176 values per row (24,884 to 36,145).
+
+The tile planner is unchanged. Width 144 adds a fourth constraint for host analysis. Both misaligned widths moved more
+units than their bytes predict at the aligned widths' 1.25 units per 16 bytes: 208 per 8 rows against 180 at 144, and
+256 against 220 at 176. At 144 the request count follows the contiguous chunks, but at 176 it does not (21 against 22).
+
+The admission before the run read a composed state file: the latest port 3-1 state capture (run
+`1794738427185556712-c450b701`) with the five NPU entry-gate and PCK4 words of run 3bc9fbc0's NPU-on proof. At the board
+the runner read those five words again, read-only over FEL under the port lock, found the NPU on, and used that read.
+The run took 32.9 s, with a 6.0 s reset, against the 39.8 s budget.
+
 ## Stage 2: DMA completion timing
 
 DMA is a separate later stage. Its known work:
