@@ -151,8 +151,10 @@ void g2d_check_main(const struct ss_grant *grant)
     for (unsigned k = 0; k < G2D_CHECK_OPS && !failed; ++k) {
         struct g2d_check_op *o = &result.op[k];
         job = (struct ss_g2d_job){.op = SS_G2D_BLIT,
-            .source = {G2D_CHECK_LARGE_SOURCE, o->format, 0, width, height, stride, 0},
-            .output = {G2D_CHECK_LARGE_SURFACE, o->output_format, 0, width, height, stride, 0},
+            .source = {.region = G2D_CHECK_LARGE_SOURCE, .format = o->format, .width = width, .height = height,
+                       .stride = stride},
+            .output = {.region = G2D_CHECK_LARGE_SURFACE, .format = o->output_format, .width = width, .height = height,
+                       .stride = stride},
             .sx = o->sx, .sy = o->sy, .dx = o->dx, .dy = o->dy, .w = o->w, .h = o->h};
         o->result = (uint32_t)finish_call(run_call, &o->done);
         if ((int)o->result != 1) {

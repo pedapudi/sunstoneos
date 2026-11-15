@@ -183,7 +183,8 @@ class Image:
     Objects are shared between the images of one run when their source and
     flags are the same."""
 
-    def __init__(self, work, services_source=None, extra_defines=(), extra_sources=(), latency=False, partitioned=False):
+    def __init__(self, work, services_source=None, extra_defines=(), extra_sources=(), latency=False, partitioned=False,
+                 board_source=None):
         self.work = Path(work)
         # False, True, or the directory holding a replacement kernel/scheduler/freertos.c.
         self.partitioned = partitioned
@@ -192,6 +193,7 @@ class Image:
         self.extra_sources = list(extra_sources)
         self.latency = latency
         self.services_source = Path(services_source) if services_source else ROOT / 'apps/os/services.c'
+        self.board_source = Path(board_source) if board_source else ROOT / 'apps/board/main.c'
         self.defines = DEFINES + list(extra_defines)
         self.kernel = freertos_dir()
         self.log = self.work / 'build.log'
@@ -310,7 +312,10 @@ class Image:
             units += [(k / name, ()) for name in ('event_groups.c', 'stream_buffer.c', 'timers.c')]
             units += [(ROOT / 'kernel/scheduler' / name, ()) for name in
                       ('owner.c', 'notification.c', 'deadline.c', 'freertos_registry.c', 'freertos_control.c')]
-        units = [(self.services_source if u[0] == ROOT / 'apps/os/services.c' else u[0], u[1]) for u in units]
+        replaced = {ROOT / 'apps/os/services.c': self.services_source, ROOT / 'apps/board/main.c': self.board_source}
+        # A replacement includes its original's quoted headers from the original's directory.
+        units = [(replaced[u[0]], u[1] + ('-iquote', str(u[0].parent))) if replaced.get(u[0], u[0]) != u[0] else u
+                 for u in units]
         objects = self.compile_all(units, generated)
         elf = self.work / 'os.elf'
         done = run([LLD, '--error-limit=0', '-nostdlib', '-static', '--gc-sections', wrap, *['--wrap=' + w for w in wraps],
@@ -592,6 +597,22 @@ def unguarded_prestart_scheduler(work):
     return directory
 
 
+def a55_board(work):
+    """An apps/board/main.c whose PMIC task is created on the A55 cluster, where every OS service created without an
+    affinity ran before the service core became the default (include/os_space.h). Its vTaskCoreAffinitySet to core 0
+    before the start is then a change, which the unguarded scheduler above turns into a yield."""
+    source = (ROOT / 'apps/board/main.c').read_text()
+    create = '        board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);\n'
+    assert source.count(create) == 1, 'apps/board/main.c no longer creates its tasks without an affinity'
+    source = source.replace(create, create.replace('xTaskCreateStatic(', 'xTaskCreateStaticAffinitySet(').replace(
+        '&board.tasks[i]);', '&board.tasks[i],A733_SMP_A55_MASK);'))
+    assert source.count('        if(!i)vTaskCoreAffinitySet(board.handles[i],1);\n') == 1, 'the PMIC task no longer moves to core 0 before the start'
+    directory = Path(work)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / 'main.c').write_text(source)
+    return directory / 'main.c'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -645,7 +666,7 @@ def main():
         application = image.application('latency', ['apps/latency/native.c', mutated], ROOT / 'apps/latency/manifest.json')
         return image.build(application)
 
-    def build_partitioned(name, latency=False, scheduler=True):
+    def build_partitioned(name, latency=False, scheduler=True, board=None):
         """The same board composition on the private owner scheduler (configSS_PARTITIONED_SCHEDULER)."""
         if latency:
             image = Image(out / name, extra_defines=['-DSUNSTONE_LATENCY=1'],
@@ -654,7 +675,7 @@ def main():
             application = image.application('latency', ['apps/latency/native.c', 'apps/latency/workload.c'],
                                              ROOT / 'apps/latency/manifest.json')
         else:
-            image = Image(out / name, partitioned=scheduler)
+            image = Image(out / name, partitioned=scheduler, board_source=board)
             application = image.application('hello-compute', ['apps/hello-compute/main.c'],
                                              usb_manifest(name, ROOT / 'apps/hello-compute/manifest.json'))
         return image.build(application)
@@ -772,7 +793,8 @@ def main():
     with ThreadPoolExecutor(max_workers=8) as pool:
         partitioned_elf = pool.submit(build_partitioned, 'build-partitioned')
         partitioned_latency_elf = pool.submit(build_partitioned, 'build-partitioned-latency', True)
-        prestart_elf = pool.submit(build_partitioned, 'build-prestart-yield', False, old_scheduler)
+        prestart_elf = pool.submit(build_partitioned, 'build-prestart-yield', False, old_scheduler,
+                                   a55_board(out / 'prestart-yield-board'))
         os_elf = pool.submit(build_hello, 'build-os', args.services_source)
         no_usb_elf = pool.submit(build_hello, 'build-no-usb', None, False)
         (out / 'build-reverted').mkdir()
@@ -845,6 +867,12 @@ def main():
     c.require(c.cleared is not None, 'the OS never cleared the thermal throttle')
     boot_line = lines(c.output, 'BOOT')[0]
     c.require(boot_line['cores'] == '8' and boot_line['workload'] == '2', 'board description differs')
+    # The thermal service is created without an affinity, so it runs on the service core alone (include/os_space.h,
+    # os_space_default_affinity). On the A55 mask it landed on CPU2, where the stage 7b latency series (2026-11-15)
+    # showed slow busy wakes every 25 ms, the service's read period.
+    space = lines(c.output, 'TASK-SPACE')
+    c.require(len(space) == 1 and space[0].get('thermal_cores') == '1',
+              'the thermal service may run outside the service core: %s' % (space,))
 
     # 2. The zero sealed deadline. The earlier services.c refuses the application's first wait.
     c = run_case('zero-sealed-deadline-reverted', control_elf, scenario(usb_ready_ms=usb_delay_ms))
@@ -963,8 +991,9 @@ def main():
     c.clean()
     c.require(c.main is not None and c.main['name'] == 'latency' and c.main['core'] == '6' and c.main['live'] == '1',
               'latency did not reach its main entry on core 6')
-    # Negative control: the scheduler as it was when the board run failed. The first yield is taken
-    # before any task has installed its stack, on core 0, with SP_EL0 in the code block.
+    # Negative control: the scheduler as it was when the board run failed, with the PMIC task placed as it was then
+    # (a55_board). The first yield is taken before any task has installed its stack, on core 0, with SP_EL0 in the
+    # code block.
     c = run_case('partitioned-prestart-yield-reverted', prestart_elf, scenario(usb_ready_ms=usb_delay_ms))
     c.require(c.status == 6 and lines(c.output, 'SP-EL0-VIOLATION'), 'the old scheduler passed the SP_EL0 check')
     violation = lines(c.output, 'SP-EL0-VIOLATION')[0]
@@ -1279,6 +1308,8 @@ def main():
     space = lines(c.output, 'TASK-SPACE')
     c.require(len(space) == 1 and space[0].get('main') == '1' and space[0].get('sdowner') == '0' and space[0].get('sdentry') == '0',
               'the application main task must be tagged and the SD owner untagged, and in the kernel\'s table at its first instruction: %s' % (space,))
+    c.require(space[0].get('sdowner_cores') == '1' and space[0].get('thermal_cores') == '1',
+              'an OS service that the application\'s call started may run outside the service core: %s' % (space,))
     # A hint on the application's default notification index during the owner's open (a USB-change event, as application.c sends
     # them) must not end the wait: enable succeeds. The owner as the fourth board submission had it (one sleep on that index)
     # returns early with stage 11, which is the control.
