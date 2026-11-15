@@ -80,7 +80,12 @@ int a733_video_unit_now(struct a733_video_unit *u,uint64_t *out)
     *out=n;return 1;
 }
 int a733_video_unit_timely(struct a733_video_unit *u)
-{uint64_t n;return a733_video_unit_now(u,&n)==1&&n<u->deadline;}
+{
+    uint64_t n;
+    if(a733_video_unit_now(u,&n)!=1)return 0;
+    if(n>=u->deadline){u->late=1;return 0;}
+    return 1;
+}
 /* A busy registry is effect-free: another task is inside its short critical
  * section. Retry for at most two scheduler ticks, so an equal-priority holder
  * on this core can finish after a time slice; then report 0 (not held). */
@@ -108,26 +113,36 @@ int a733_video_unit_lock(struct a733_video_unit *u)
     if(u->locked)return a733_video_unit_fail(u);
     int r=u->ops.enter(u->cookie,u->deadline);
     if(r==1)u->locked=1;
+    if(r!=0&&r!=1)u->uncertain=1;
     if((r!=0&&r!=1)||!a733_video_unit_timely(u))return a733_video_unit_fail(u);
     return r;
 }
 int a733_video_unit_unlock(struct a733_video_unit *u)
 {
     if(u->failed||!u->locked||!a733_video_unit_timely(u))return a733_video_unit_fail(u);
-    if(u->ops.leave(u->cookie)!=1)return a733_video_unit_fail(u);
+    if(u->ops.leave(u->cookie)!=1){u->uncertain=1;return a733_video_unit_fail(u);}
     u->locked=0;
     return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);
 }
+int a733_video_unit_refuse_held(struct a733_video_unit *u)
+{
+    if(!u->failed)(void)a733_video_unit_unlock(u);
+    return a733_video_unit_fail(u);
+}
+/* The deadline is checked when a hold starts and when it ends (lock and unlock), not on each access: a hold is a
+ * bounded run of accesses, and an overrun inside it fails the unlock with the mutex held. */
 int a733_video_unit_read(struct a733_video_unit *u,uintptr_t a,uint32_t *v)
 {
-    if(!u->locked||!a733_video_unit_timely(u)||u->ops.read(u->cookie,a,v)!=1||
-       !a733_video_unit_timely(u))return a733_video_unit_fail(u);
+    if(u->failed||!u->locked)return a733_video_unit_fail(u);
+    u->last_address=a;
+    if(u->ops.read(u->cookie,a,v)!=1){u->uncertain=1;return a733_video_unit_fail(u);}
+    u->last_word=*v;
     return 1;
 }
 int a733_video_unit_write(struct a733_video_unit *u,uintptr_t a,unsigned width,uint32_t v)
 {
-    if(!u->locked||!a733_video_unit_timely(u)||u->ops.write(u->cookie,a,width,v)!=1||
-       !a733_video_unit_timely(u))return a733_video_unit_fail(u);
+    if(u->failed||!u->locked)return a733_video_unit_fail(u);
+    if(u->ops.write(u->cookie,a,width,v)!=1){u->uncertain=1;u->last_address=a;return a733_video_unit_fail(u);}
     return 1;
 }
 int a733_video_unit_check(struct a733_video_unit *u,uintptr_t a,uint32_t mask,uint32_t expected)
@@ -138,6 +153,13 @@ int a733_video_unit_update(struct a733_video_unit *u,uintptr_t a,uint32_t mask,u
     if(a733_video_unit_read(u,a,&old)!=1)return 0;
     value=(old&~mask)|(value&mask);
     return a733_video_unit_write(u,a,4,value)==1&&a733_video_unit_read(u,a,&actual)==1&&actual==value;
+}
+int a733_video_unit_rmw(struct a733_video_unit *u,uintptr_t a,uint32_t mask,uint32_t value,uint32_t *before)
+{
+    uint32_t old;
+    if(a733_video_unit_read(u,a,&old)!=1)return 0;
+    if(before)*before=old;
+    return a733_video_unit_write(u,a,4,(old&~mask)|(value&mask))==1;
 }
 /* PLL_VE0 at CCU+0x220, A733 User Manual V1.00 4.1.6.36: enable 31, LDO 30,
  * lock enable 29, LOCK 28 (read-only status), output gate 27, P0 22:20,
@@ -263,13 +285,24 @@ int a733_video_unit_pll_start(struct a733_video_unit *u)
 /* The lock wait reads without the register mutex: the exclusive PLL_VE0
  * token makes this unit its only writer, as the NPU startup's token does for
  * PLL_NPU. The deadline ends the wait. */
+/* One read of the control word in the lock wait: the deadline is checked once per read, on the shared clock. */
 static int unlocked_read(void *v,uint32_t *out)
 {
     struct a733_video_unit *u=v;
-    return !u->locked&&a733_video_unit_timely(u)&&u->ops.read(u->cookie,PLL,out)==1&&a733_video_unit_timely(u);
+    ++u->pll_reads;
+    if(u->locked)return 0;
+    u->last_address=PLL;
+    if(u->ops.read(u->cookie,PLL,out)!=1){u->uncertain=1;return 0;}
+    u->last_word=*out;
+    return a733_video_unit_timely(u);
 }
+/* The gap and settle clock: the plain per-core clock when given, which the lock wait reads in a spin. */
 static int unit_now(void *v,uint64_t *out)
-{struct a733_video_unit *u=v;return a733_video_unit_now(u,out)==1&&*out<u->deadline;}
+{
+    struct a733_video_unit *u=v;
+    if(u->ops.spin_now_us)return u->ops.spin_now_us(u->cookie,out)==1;
+    return a733_video_unit_now(u,out)==1&&*out<u->deadline;
+}
 int a733_video_unit_pll_wait(struct a733_video_unit *u)
 {
     if(!u->config.program_pll||u->pll_done)return 1;
@@ -284,6 +317,15 @@ int a733_video_unit_pll_open(struct a733_video_unit *u)
     if(!u->pll_locked||a733_video_unit_read(u,PLL,&word)!=1||word!=(PLL_ENABLED|PLL_LOCK|u->pll_inherited)||
        !pll_write(u,&word,BIT(27),BIT(27))||word!=(PLL_OPEN|PLL_LOCK|u->pll_inherited))return 0;
     u->pll_done=1;return 1;
+}
+int a733_video_unit_pll_stop(struct a733_video_unit *u)
+{
+    if(!u->config.program_pll||!u->pll_started)return 1;
+    static const uint32_t disable[4]={BIT(27),BIT(29),BIT(31),BIT(30)};
+    uint32_t word;
+    if(a733_video_unit_read(u,PLL,&word)!=1||(word&PLL_INHERITED)!=u->pll_inherited)return 0;
+    for(unsigned i=0;i<4;++i)if(!pll_write(u,&word,disable[i],0))return 0;
+    return (word&~PLL_LOCK)==(A733_VIDEO_PLL_FACTORS|u->pll_inherited);
 }
 int a733_video_unit_irq_quiet(struct a733_video_unit *u)
 {
@@ -308,9 +350,10 @@ int a733_video_unit_baseline(struct a733_video_unit *u)
 }
 int a733_video_unit_identity(struct a733_video_unit *u,uint64_t *version)
 {
-    const struct a733_video_unit_desc *d=u->desc;uintptr_t base=d->ve+d->identity;uint32_t f,h,l;
-    if(a733_video_unit_read(u,base+0xf0,&f)!=1||(f!=d->feature[0]&&f!=d->feature[1])||
-       a733_video_unit_read(u,base+0xe0,&h)!=1||a733_video_unit_read(u,base+0xe4,&l)!=1)return 0;
+    const struct a733_video_unit_desc *d=u->desc;uintptr_t base=d->ve+d->identity;uint32_t *w=u->identity;
+    if(a733_video_unit_read(u,base+0xf0,&w[0])!=1||(w[0]!=d->feature[0]&&w[0]!=d->feature[1])||
+       a733_video_unit_read(u,base+0xe0,&w[1])!=1||a733_video_unit_read(u,base+0xe4,&w[2])!=1)return 0;
+    const uint32_t h=w[1],l=w[2];
     *version=((uint64_t)(h&0xfffff)<<32)|(l&0xfffff);
     for(unsigned i=0;i<d->version_count;++i)if(*version==d->versions[i])return 1;
     return 0;
@@ -318,11 +361,32 @@ int a733_video_unit_identity(struct a733_video_unit *u,uint64_t *version)
 #ifdef __aarch64__
 #include "a733_mapping_check.h"
 #include "a733_mmio.h"
-static int device(uintptr_t a)
+/* Every 4 KiB page a video binding accesses: the decoder's and the encoder's VE windows, the two CCU pages, the GIC
+ * distributor, R_CCU, PCK600 domains 2 (decoder) and 3 (encoder), the RTC page and the boot ROM page that holds the
+ * decoder's identity words. */
+static const uintptr_t pages[]={0x01c0e000,0x01c10000,0x02002000,0x02003000,0x03400000,0x07010000,0x07062000,
+    0x07063000,0x07090000,0x00019000};
+/* 0 not checked, 1 every page identity-mapped Device-nGnRnE outer shareable, -1 one is not. */
+static int mapped;
+int a733_video_unit_native_map(void)
 {
     static const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
-    return a733_mapping_check(aarch64_device_translate,a,a,&rule);
+    int state=__atomic_load_n(&mapped,__ATOMIC_ACQUIRE);
+    if(state)return state==1;
+    state=1;
+    for(unsigned i=0;i<sizeof(pages)/sizeof(*pages);++i)
+        if(!a733_mapping_check(aarch64_device_translate,pages[i],pages[i],&rule))state=-1;
+    __atomic_store_n(&mapped,state,__ATOMIC_RELEASE);
+    return state==1;
 }
+static int device(uintptr_t a)
+{
+    if(!a733_video_unit_native_map())return 0;
+    for(unsigned i=0;i<sizeof(pages)/sizeof(*pages);++i)if((a&~(uintptr_t)0xfff)==pages[i])return 1;
+    return 0;
+}
+#else
+int a733_video_unit_native_map(void){return 0;}
 #endif
 int a733_video_unit_native_read(uintptr_t a,uint32_t *out)
 {

@@ -60,6 +60,9 @@ struct a733_video_unit_ops {
     int (*leave)(void *);
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,unsigned,uint32_t);
+    /* Optional: a plain per-core microsecond clock in now_us's timebase, which times the PLL lock-wait gaps without
+     * the shared monotonic clock's compare-and-swap. NULL uses now_us. */
+    int (*spin_now_us)(void *,uint64_t *);
 };
 struct a733_video_unit {
     const struct a733_video_unit_desc *desc;
@@ -70,9 +73,17 @@ struct a733_video_unit {
     a733_clock_mask_t shared;
     uint32_t selected_mhz[3];
     unsigned initialized,failed,locked;
-    /* PLL programming: the entry state, bit 24 as read, and progress. */
+    /* Why a unit failed: uncertain, an access or a mutex operation that did not return exactly 1 (its effect is
+     * unknown); late, a deadline check that found the deadline passed. The address and word of the latest read (the
+     * address alone for a write that did not complete), which is the word a refused comparison judged. */
+    unsigned uncertain,late;
+    uintptr_t last_address;
+    uint32_t last_word;
+    uint32_t identity[3]; /* the identity block's +0xf0, +0xe0 and +0xe4 words as last read */
+    /* PLL programming: the entry state, bit 24 as read, progress, and the
+     * lock wait's PLL reads. */
     uint32_t pll_inherited;
-    unsigned pll_state,pll_started,pll_locked,pll_done;
+    unsigned pll_state,pll_started,pll_locked,pll_done,pll_reads;
 };
 extern const struct a733_video_unit_desc a733_video_decoder_unit,a733_video_encoder_unit;
 
@@ -98,12 +109,21 @@ int a733_video_unit_timely(struct a733_video_unit *);
 int a733_video_unit_held(struct a733_video_unit *);
 int a733_video_unit_lock(struct a733_video_unit *);
 int a733_video_unit_unlock(struct a733_video_unit *);
-/* Accesses require the held mutex and fail the unit on any uncertainty. */
+/* Fail the unit from inside a register-lock hold. A refusal on a value read
+ * completely (the unit is not yet failed) releases the mutex first; an
+ * uncertain access, which the core has already marked failed, retains it.
+ * Every failure inside a hold goes through here. */
+int a733_video_unit_refuse_held(struct a733_video_unit *);
+/* Accesses require the held mutex and fail the unit on any uncertainty. They do not read the clock: lock and
+ * unlock check the deadline once per hold. */
 int a733_video_unit_read(struct a733_video_unit *,uintptr_t,uint32_t *);
 int a733_video_unit_write(struct a733_video_unit *,uintptr_t,unsigned,uint32_t);
 int a733_video_unit_check(struct a733_video_unit *,uintptr_t,uint32_t mask,uint32_t expected);
 /* Read-modify-write of mask bits, then verify the readback. */
 int a733_video_unit_update(struct a733_video_unit *,uintptr_t,uint32_t mask,uint32_t value);
+/* Read-modify-write of mask bits with no readback, for a register the vendor writes without one and whose readback
+ * no source documents: the word read before the write is stored through before (may be NULL). 1 written. */
+int a733_video_unit_rmw(struct a733_video_unit *,uintptr_t,uint32_t mask,uint32_t value,uint32_t *before);
 /* Fabric words, DCXO/reference, selected VE PLL, PERI0 outputs and the shared
  * PCK clock gate, in that order. Returns 1 when all match the configuration. */
 int a733_video_unit_clocks(struct a733_video_unit *);
@@ -127,18 +147,31 @@ int a733_video_unit_clocks_entry(struct a733_video_unit *);
 int a733_video_unit_pll_start(struct a733_video_unit *);
 int a733_video_unit_pll_wait(struct a733_video_unit *);
 int a733_video_unit_pll_open(struct a733_video_unit *);
+/* stop, under the held mutex with the module gate closed: the output gate,
+ * lock enable, enable and LDO cleared in that order (ccu_gate.c
+ * ccu_pll_gate_helper_disable), leaving the factors and bit 24. 1 at once
+ * when nothing is programmed or pll_start has not run. */
+int a733_video_unit_pll_stop(struct a733_video_unit *);
 /* Clocks plus PCK ON, module/bus/local gates, autonomous power control and a
- * masked, inactive, level-triggered interrupt. No VE register is read. */
+ * masked, inactive, level-triggered interrupt. No VE register is read. The
+ * PCK policy and status reads stay although the decoder's cold start follows
+ * the owner's ON answer: the encoder, on domain 3, shares this baseline and
+ * has no row. */
 int a733_video_unit_baseline(struct a733_video_unit *);
 /* GIC distributor idle, interrupt masked, not pending or active, level. */
 int a733_video_unit_irq_quiet(struct a733_video_unit *);
 /* Read the identity block; returns 1 for an accepted feature word and listed
- * compound version, which is stored through the pointer in either case. */
+ * compound version, which is stored through the pointer in either case. The
+ * words read are kept in identity. */
 int a733_video_unit_identity(struct a733_video_unit *,uint64_t *);
-/* Lowest native access for one allowlisted physical address: identity-mapped
- * Device-nGnRnE translation, DSB SY before and after, volatile access. A
- * nonzero owned mask refuses a write that changes any bit outside it. Callers
- * apply their allowlists first. Non-AArch64 builds refuse. */
+/* Check once that every page a video binding accesses is identity-mapped Device-nGnRnE: 1 when it is. The decoder
+ * and encoder inits call it, so the page walks fall outside every hold; the first native access makes the check if
+ * no init has. Non-AArch64 builds return 0. */
+int a733_video_unit_native_map(void);
+/* Lowest native access for one allowlisted physical address on a checked
+ * page: DSB SY before and after, volatile access. A nonzero owned mask
+ * refuses a write that changes any bit outside it. Callers apply their
+ * allowlists first. Non-AArch64 builds refuse. */
 int a733_video_unit_native_read(uintptr_t,uint32_t *);
 int a733_video_unit_native_write(uintptr_t,unsigned,uint32_t owned,uint32_t);
 #endif
