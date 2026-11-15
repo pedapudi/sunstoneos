@@ -8,10 +8,21 @@ from pathlib import Path
 import struct
 import subprocess
 ROOT = Path(__file__).resolve().parents[1]
-CASES = ["lifecycle", "key-link", "key-failure", "key-timeout", "late-completion", "window", "window:events",
-         "window:events:silent", "window:events:unserviced", "window:events:other", "key-bound:5900", "key-bound:6100"]
-GATE_RUNS = [['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', c]
-             for c in CASES]
+# Every case; the gate reads this list literally.
+GATE_RUNS = [
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'lifecycle'],
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'key-link'],
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'key-failure'],
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'key-timeout'],
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'late-completion'],
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'window'],
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'window:events'],
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'window:events:silent'],
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'window:events:unserviced'],
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'window:events:other'],
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'key-bound:5900'],
+    ['--upstream', '{cache}/sources/radio/stacks/wpa_supplicant-2.12', '--evidence', '{output}', '--case', 'key-bound:6100'],
+]
 # The access point's key data, AES key wrapped (RFC 3394) under the synthetic PTK's KEK, as fixed known answers. They
 # were produced by the cryptography package (46.0.5), which also reproduces RFC 3394 section 4.1 (KEK 000102..0f,
 # data 00112233..ff, wrapped 1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5). Where the package is installed the
