@@ -17,10 +17,11 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN1_WINDOW = 'checks/data/scheduler-window-axi-cap-run1.json'
+NPU_WINDOW = 'checks/data/scheduler-window-npu-model.json'
 CHECK_INPUTS = ['apps/latency/host.py', 'kernel/scheduler/latency_trace.h',
                 'kernel/scheduler/latency_trace.c', 'checks/scheduler-latency-history.c',
                 'tools/sunstone-image-link.py', 'include/sunstone_latency.h',
-                'checks/data/scheduler-window-axi-cap-run1.json']
+                'checks/data/scheduler-window-axi-cap-run1.json', 'checks/data/scheduler-window-npu-model.json']
 FREQUENCY = 24_000_000
 MAGIC = 0x5353534348545231
 RECORDS = 32
@@ -581,6 +582,20 @@ def run(decode):
     short['window']['irqs'] = short['window']['irqs'][1:]
     short['window']['header'][0] = 15
     rejected('a selection origin missing while the IRQ ring is not full', pack(short))
+    # The stage 3b NPU model: the stand-in NPU's completion interrupt (INTID 27) on CPU0 every 250 us, beside the tick,
+    # fills the 16-row IRQ ring faster than CPU0 selects, so the selections cite dispatches the ring has overwritten.
+    npu = json.loads((ROOT / NPU_WINDOW).read_text())
+    dense = copy.deepcopy(v5)
+    dense['wake'][0], dense['history'][0], dense['window'] = npu['wake0'], npu['history0'], npu['window']
+    def npu_overwritten(value):
+        window = value['cpu0_wake_window']
+        origins = [(row['irq_sequence'], row['origin']) for row in window['selections'] if row['irq_sequence']]
+        assert origins == [(1277, 'irq_overwritten'), (1290, 'irq_overwritten'), (1291, 'irq_overwritten'),
+                           (1295, 'irq_overwritten'), (1297, 'irq_overwritten'), (1299, 'irq'), (1300, 'irq')], origins
+        assert not window['flags'] and len(window['irqs']) == 16
+        assert {row['interrupt'] for row in window['irqs']} == {27, 30}, window['irqs']
+    accepted('version 5 names selection origins that NPU interrupts on CPU0 overwrote (stage 3b model rows)', dense,
+             npu_overwritten)
     for name, field, value in (('IRQ count exceeds capacity', 0, 17),
                                ('selection count exceeds capacity', 1, 17),
                                ('unknown window flags', 2, 16), ('window capacity differs', 3, 15)):
