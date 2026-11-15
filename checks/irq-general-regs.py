@@ -21,7 +21,7 @@ task-only functions of TASK_ONLY. It then requires:
 The walk includes the panic path (configASSERT calls platform_panic) and the fault entries, so printf, memchr and the
 other FP users of newlib are proven unreachable from them as well. Four mutations must each fail: an FP instruction
 planted in a function that only an indirect call reaches, the guard of an IRQ-path context save replaced by a NOP,
--mgeneral-regs-only removed from a reachable unit, and the TASK_ONLY entry of a function that reaches FP removed.
+-mgeneral-regs-only removed from a reachable unit, and the TASK_ONLY entry of a function whose direct calls reach FP removed.
 It reads files only.
 """
 import argparse
@@ -348,6 +348,21 @@ def walk(image, task_only, cache):
     return seen
 
 
+def reaches_fp(image, address, cache):
+    """Whether the function at address, or a function its direct branches and calls reach, uses FP."""
+    seen, stack = set(), [address]
+    while stack:
+        at = stack.pop()
+        if at in seen:
+            continue
+        seen.add(at)
+        targets, _, fp = scan(image, at, cache)
+        if fp:
+            return True
+        stack.extend(t for t in targets if image.in_code(t))
+    return False
+
+
 def chain(image, seen, address, limit=8):
     names = []
     while address is not None and len(names) < limit:
@@ -454,11 +469,14 @@ def main():
         assert any('-mgeneral-regs-only' in line and unit in line for line in bad), bad[:3]
         mutations.append('removed -mgeneral-regs-only from %s' % unit.split('.dir/')[-1])
         # 4: a task-only function that reaches FP made a candidate of the indirect calls.
-        if reaching:
-            name = reaching[0]
+        # The entry is one whose direct calls reach FP in this image: the secondary cores' entries reach FP only
+        # through the GPU image's boot path. The unmutated image has no FP problem, so any FP line is the drop's.
+        to_fp = [n for n in reaching if any(reaches_fp(image, a, cache) for a in image.defined(n, TASK_ONLY[n][0]))]
+        if to_fp:
+            name = to_fp[0]
             reduced = {k: v for k, v in TASK_ONLY.items() if k != name}
             _, _, _, bad, _ = check(build, elf, task_only=reduced, commands=commands)
-            assert any('uses FP' in line and name in line for line in bad), (name, bad[:3])
+            assert any('uses FP' in line for line in bad), (name, bad[:3])
             mutations.append('dropped the task-only entry of %s' % name)
         assert len(mutations) >= 3, mutations
         results.append({'image': str(elf), 'functions': len(seen), 'units': len(units), 'context_transfers': transfers,
