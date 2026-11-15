@@ -72,6 +72,7 @@ GATE_RUNS = [[
     '--walk', '{build:sup}', '--walk', '{build:headset}', '--walk', '{build:os-usb-ledger}',
     '--walk', '{build:resident-stop}', '--walk', '{build:card-profile}', '--walk', '{build:ret-npu-load}',
     '--walk', '{build:ret-gpu}', '--walk', '{build:ret-g2d}', '--walk', '{build:ret-latency}',
+    '--walk', '{build:ret-latency-bar}', '--walk', '{build:ret-latency-bar-precise}',
     '--walk', '{build:ret-radio-scan}', '--walk', '{build:ret-walks-cached}', '--walk', '{build:ret-walks-uncached}',
     '--walk', '{build:storage-read}', '--walk', '{build:storage-read-p1}', '--walk', '{build:a733-applications}',
     '--walk', '{build:cpu-reliability-model}',

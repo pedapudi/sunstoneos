@@ -154,10 +154,23 @@ _Static_assert(sizeof(struct ss_latency_cause_report) == 17328u, "cause report w
  *
  * Version 3 adds the deadline to each sample, keeps each cell's three largest
  * and its smallest cycles of every segment and part, and keeps the three
- * largest wakes of each setting, measured from the deadline. */
+ * largest wakes of each setting, measured from the deadline.
+ *
+ * Version 4 has the layout of version 3. The woken task copies its linked
+ * chain with interrupts open, and copies again when an interrupt on its core
+ * started a chain during the copy; first_state counts the wakes torn in every
+ * copy. SS_WAKE_SEG_COPIES bounds the copies. One copy is a chain_state of 752
+ * bytes (latency_cause.c), 94 ns at the 8.0 GB/s that apps/memcpy-bench
+ * measured for aligned copies in the caches on an A55 at 1794 MHz
+ * (docs/designs/code-generation-flags.md). CPU0 takes the most interrupts:
+ * the tick and, under the NPU, up to one completion per job, 177,768 jobs/s
+ * (docs/status/latency.md). With interrupts arriving at random at that rate, a
+ * copy is torn with a probability of about 0.02 and four copies in a row with
+ * about 2e-7, or about one wake in 5 million. */
 #define SS_WAKE_SEG_MAGIC UINT64_C(0x5353574b53454731)
 #define SS_WAKE_SEG_FOOTER_MAGIC UINT64_C(0x5353574b53454631)
-#define SS_WAKE_SEG_VERSION 3u
+#define SS_WAKE_SEG_VERSION 4u
+#define SS_WAKE_SEG_COPIES 4u
 #define SS_WAKE_POINTS 9u
 #define SS_WAKE_SEGMENTS (SS_WAKE_POINTS - 1u)
 #define SS_WAKE_PARTS 5u
@@ -189,8 +202,10 @@ struct ss_wake_seg_core {
      * count linked wakes with those flags. */
     uint64_t linked, unlinked, nested, interrupted;
     /* The first busy wake's chain at running: bit 16 seen, bit 8 linked, bit 9
-     * linked through the held chain, bits 0-7 the next point the current chain
-     * expected. arms counts the timer register writes this core made while
+     * linked through the held chain, bit 10 torn, bits 0-7 the next point the
+     * current chain expected. Bits 32-63 count the busy wakes, #0 included,
+     * whose chain was torn in every copy (SS_WAKE_SEG_COPIES); such a wake is
+     * neither linked nor unlinked and files nothing. arms counts the timer register writes this core made while
      * measuring; arm_cycles sums their cycles and arm_max is the largest. */
     uint64_t first_state, arms, arm_cycles, arm_max;
     struct ss_wake_seg_cell cell[2];

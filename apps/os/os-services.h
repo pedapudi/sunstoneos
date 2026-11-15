@@ -129,7 +129,8 @@ enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICE
  *   SUNSTONE_A733_OS_LARGE_SD, set by cmake/sunstone-image.cmake for the image's tables);
  * - the SD0 owner task of a write-capable image (apps/os/sd_owner.c), which the large-region loader or the application
  *   starts;
- * - the background load's tasks (runtime/bg_load.c), a measurement option. */
+ * - the background load's tasks (runtime/bg_load.c), a measurement option;
+ * - the latency diagnostic's wake tasks in its precise mode (apps/latency/workload.c), a measurement option. */
 #define OS_DMA_POOL_OWNERS 2u
 #define OS_BOARD_DEADLINE_OWNERS 4u
 #define OS_APPLICATION_DEADLINE_OWNERS (1u + OS_WITH_GPU(1u +) 0u)
@@ -149,10 +150,18 @@ enum { OS_SERVICE_APPLICATION = 5, OS_SUPERVISED_ROWS(OS_SERVICE_ID_) OS_SERVICE
 #else
 #define OS_BG_DEADLINES 0u
 #endif
+/* The latency diagnostic's precise mode registers its eight wake tasks, one per core (apps/latency/workload.c,
+ * latency_workload_init); checks/deadline-owners.py counts them from the wake task's TCB array. */
+#define OS_LATENCY_PRECISE_OWNERS 8u
+#ifdef SUNSTONE_LATENCY_PRECISE
+#define OS_LATENCY_DEADLINES OS_LATENCY_PRECISE_OWNERS
+#else
+#define OS_LATENCY_DEADLINES 0u
+#endif
 #define OS_START_OWNERS_(name, prefix, start, with, owners) with((owners) +)
 #define OS_DEADLINE_OWNERS (OS_START_ROWS(OS_START_OWNERS_) 0u - OS_WITH_DMA(OS_DMA_POOL_OWNERS +) 0u + \
     OS_BOARD_DEADLINE_OWNERS + OS_APPLICATION_DEADLINE_OWNERS + OS_LARGE_SD_DEADLINES + OS_SD_OWNER_DEADLINES + \
-    OS_BG_DEADLINES)
+    OS_BG_DEADLINES + OS_LATENCY_DEADLINES)
 /* The supervision table's rows after the application's, and the grant each one needs, indexed by service id. */
 #define OS_SERVICE_ENTRY_(NAME, name, window_us, grant, with) with({name, window_us},)
 #define OS_SERVICE_TABLE OS_SUPERVISED_ROWS(OS_SERVICE_ENTRY_)
