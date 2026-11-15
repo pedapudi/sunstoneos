@@ -266,13 +266,13 @@ write with bit 31 clear.
 | Row request and answer | 0 | 0 in the decoder; 6 PPU writes and their reads in the owner if the domain is OFF | none |
 | Hold A | 22 (7) | 40: 22, plus 7 old-word reads, 9 PLL policy reads and 2 `0xa88` policy reads | held |
 | PLL lock wait | 4 to 100 PLL reads | same | none |
-| Hold B | 36 (4) | 43: 36, plus 4 old-word reads and 3 PLL policy reads | held |
+| Hold B | 34 (4) | 41: 34, plus 4 old-word reads and 3 PLL policy reads | held |
 | `prepare`, identity | 3 (0) | 3 | held |
 | `prepare`, each of 18 steps | at most 3 (1) | at most 4 | held, one step per call |
 | Quiesce | 18 (7) | 38: 18, plus 7 old-word reads, 12 PLL policy reads and 1 `0xa88` policy read | held |
 
-The longest register-lock hold is hold B, 43 native accesses. At the 1 µs
-per access that the design assumes, that is about 43 µs, which bounds how long
+The longest register-lock hold is hold B, 41 native accesses. At the 1 µs
+per access that the design assumes, that is about 41 µs, which bounds how long
 a band-2 task that needs the register lock waits behind the decoder; the
 mutex's priority inheritance raises the decoder task while it waits. Stage 1
 on the board measures each hold.
