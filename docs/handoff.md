@@ -50,6 +50,51 @@ in their subsystem file; host evidence establishes no physical qualification.
 - [PCIe](status/pcie.md): implemented; no endpoint is available for physical qualification.
 - [Application](status/application.md): implemented; paced recognition with thermal capture passes six fresh sessions. All 32 corpus recordings run exactly on the CPU at 0.028× real time aggregate; the default source pins reproduce one recording at 0.0332× on the board. Accelerator and autonomous execution remain open.
 
+## Decisions for the owner
+
+Each item below waits for the owner of the boards and the project. Nothing in this list blocks the other work, except
+where an item says so. Recorded on 2026-11-15.
+
+1. **How long the SD owner may hold the application's main task without the watchdog noticing.**
+   - *Context.* Since 2026-11-15, the SD owner task (`apps/os/sd_owner.c`) exists from OS start and opens the card
+     on the first storage call. When the main task waits for a storage request, it declares itself blocked to the
+     supervisor until `OS_SD_PIECE_BOUND_US` (`apps/os/sd_hw.h`) has passed. That bound covers one write piece after
+     one loader read. Past it, the wait goes on undeclared, and the supervisor stops renewing the watchdog one
+     progress window later.
+   - *Why it matters.* The write enable re-reads the backup sectors, and the close, or a piece that needs recovery,
+     can outlast the bound. Such a request could reset the board with the card in the middle of a write.
+   - *Options.* (a) Give each request kind its own bound, taken from its measured worst time, in `post`. The
+     watchdog then still catches a hung request. (b) Declare every storage wait blocked until the session deadline.
+     That is simpler, but a hung request keeps the board alive until the session ends. The recommendation is (a).
+   - *Blocks.* The board run in item 2. The work is item 12 of [storage open work](status/storage.md).
+2. **Reconnect port 3-3.** The board on USB port 3-3 is off the bus and needs a physical replug.
+   - *Waiting on it.* The board qualification of the SD owner created at OS start: `storage-write-test` mode 6 on
+     the scratch card, predicted to match run `1794607200843702122-d2ed7876`
+     ([storage status](status/storage.md), item 11). Settle item 1 first, because the run writes to the card.
+   - *Unaffected.* The board on port 3-1 runs every other stage.
+3. **Old radio results that may hold the names of nearby networks.**
+   - *Context.* Before commit `691e349e2` (2026-11-14), the radio image's scan record kept each access point's
+     network name (SSID). The image now records only the access point's hardware address, frequency and signal
+     strength. `tools/radio_result.py` refuses a record that carries any name bytes, and `tools/evidence.py` keeps
+     addresses out of committed evidence. Nothing from those old results is in the repository.
+   - *What remains.* 28 radio runs from before that commit keep their results in the local board queue,
+     `~/.cache/sunstoneos/board-queue/entries/<run>/run/`: 27 runs from 2026-11-03, submitted by the radio staging
+     work, and one from 2026-11-14. No one has opened them to check which of them hold names.
+   - *Options.* Delete those runs' result files, or keep them as they are. An earlier report called them
+     "the 11-06 results"; the queue holds no radio run from that date.
+4. **Whether CPU0 is held to the real-time bar.**
+   - *Current ruling (2026-11-14, reversible).* CPU0 is the service core. It runs the scheduler tick, the PMIC,
+     RTC and supervisor services, the expiry of precise deadlines, and the USB2 and radio owners when an image
+     builds them (`include/os_space.h` gives OS service tasks CPU0 by default). The latency bar applies to cores
+     1-7. It takes the worst busy wake over the whole busy phase, including the first wake after a load step, as
+     the maximum over three runs. A candidate passes when that maximum is at most the baseline's plus 1 µs. CPU0 is
+     still measured and reported.
+   - *Why.* The robots' load changes in steps, and with the services on one core the other seven can be judged on
+     worst-case wake latency. CPU0's own longest busy wake in the NPU load stage was 44.96 µs with the NPU running
+     and 50.79 µs without ([latency status](status/latency.md)).
+   - *If reversed.* The services would need to move to other cores or have bounded run times, and the bar would
+     include CPU0, which today misses it.
+
 <a id="open-branches"></a>
 
 ## Open branches

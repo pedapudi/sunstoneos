@@ -172,7 +172,7 @@ coordinator.
 
 Measured on 2026-11-15: five code landings took 911 to 1252 s of gate time each and ran 385 to 436 of the 486 steps
 that a full gate runs, though most of the branches changed fewer than 30 files. One landing that changed two lines of one check ran 386
-steps in 911 s. The items below are ordered by the time they would save.
+steps in 911 s. The items below are ordered by the time they would save; item 8 was found later and is unranked.
 
 1. **A landing gate leaves no record for the next landing to reuse.** `tools/integration-gate.py` writes
    `gate-record.json` only when its plan has a revision range, and a landing gate runs with `--changed`, which has none.
@@ -205,6 +205,11 @@ steps in 911 s. The items below are ordered by the time they would save.
    deadline runtime and the owner count conflicted with a third that landed first, and each then needed a merge, its
    checks and another gate. The coordinator can run `git merge-tree` of each reviewed branch against the branches
    already queued, and order or merge overlapping branches before any of them is gated.
+8. **Two gate checks take the real board lock.** `checks/credential-zero.py` and `checks/wifi-credential.py` run the
+   board runner's code with its default cache directory, so they take `~/.cache/sunstoneos/board-fel.lock`, which a
+   runner holds only while it loads a board over FEL. While they hold it, every running gate pauses before its next
+   step, as it would for a real board run: one landing gate paused six times in its first 10 minutes. These checks
+   should point the runner at a temporary cache directory, as `checks/board-runner.py` does.
 
 ## Check
 
