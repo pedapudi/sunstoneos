@@ -53,7 +53,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import (UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_X0,
                                  UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3)
-from harness import machine as harness_machine, Image, hook_addresses, save, skip_crumbs, TwoCores
+from harness import machine as harness_machine, flat_members, Image, hook_addresses, save, skip_crumbs, TwoCores
 
 GATE_RUNS = [['--image', '{elf:ret-vdec}', '--output', '{output}']]
 UNIT = '/apps/os/video_decode.c'
@@ -114,8 +114,7 @@ def members(image):
             for die in cu.iter_DIEs():
                 if die.tag == 'DW_TAG_variable' and die.attributes.get('DW_AT_name') and \
                         die.attributes['DW_AT_name'].value == b'vd' and 'DW_AT_type' in die.attributes:
-                    layout = {c.attributes['DW_AT_name'].value.decode(): c.attributes['DW_AT_data_member_location'].value
-                              for c in die.get_DIE_from_attribute('DW_AT_type').iter_children() if c.tag == 'DW_TAG_member'}
+                    layout = flat_members(die.get_DIE_from_attribute('DW_AT_type'))
                 if die.tag == 'DW_TAG_enumerator':
                     enums[die.attributes['DW_AT_name'].value.decode()] = die.attributes['DW_AT_const_value'].value
     return layout, enums

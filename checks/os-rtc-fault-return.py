@@ -36,7 +36,7 @@ import hashlib
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2
-from harness import machine as harness_machine, Image, hook_addresses, save, skip_crumbs, TwoCores
+from harness import machine as harness_machine, flat_members, Image, hook_addresses, save, skip_crumbs, TwoCores
 
 GATE_RUNS = [['--image', '{elf:ret-rtc}', '--output', '{output}']]
 UNIT = '/apps/os/rtc.c'
@@ -185,7 +185,7 @@ def run_case(image, parts, layout, enums, name, request, rtc_words, stuck=(), ti
     if request:
         op, a, b = request
         results[op] = serve(op, a, b)
-    fault_after_request = get(field('fault'))
+    fault_after_request = get(field('fault_step'))
     phase_after_request = get(field('phase'))
     driver_after_request = get(driver + layout['a733_rtc']['state'])
     state['requested'] = 1
@@ -221,7 +221,7 @@ def run_case(image, parts, layout, enums, name, request, rtc_words, stuck=(), ti
         'alarm_enabled': any(o == 0x28 and v & 1 for o, v in rtc_regs.writes), 'passes': len(passes), 'last_result': passes[-1],
         'schedule': schedule, 'events': events, 'any_fault': QUIESCE['FAULT'] in passes,
         'done_within_bound': passes[-1] == QUIESCE['DONE'], 'elapsed_us': state['time'] - start,
-        'phase': get(field('phase')), 'fault': get(field('fault')),
+        'phase': get(field('phase')), 'fault': get(field('fault_step')),
         'driver_state': get(driver + layout['a733_rtc']['state']),
         'notes': [(hex(s), hex(v)) for s, v in state['notes']], 'clock_releases': state['released'],
         'rtc': {hex(k): hex(v) for k, v in sorted(rtc_regs.words.items())},
@@ -245,8 +245,7 @@ def main():
             for die in cu.iter_DIEs():
                 if unit.endswith(UNIT) and die.tag == 'DW_TAG_variable' and die.attributes.get('DW_AT_name') and \
                         die.attributes['DW_AT_name'].value == b'rtc' and 'DW_AT_type' in die.attributes:
-                    layout['rtc'] = {c.attributes['DW_AT_name'].value.decode(): c.attributes['DW_AT_data_member_location'].value
-                                     for c in die.get_DIE_from_attribute('DW_AT_type').iter_children() if c.tag == 'DW_TAG_member'}
+                    layout['rtc'] = flat_members(die.get_DIE_from_attribute('DW_AT_type'))
                 if die.tag == 'DW_TAG_enumerator' and (unit.endswith(UNIT) or 'A733_CLOCK_OK' == die.attributes['DW_AT_name'].value.decode()
                                                        or die.attributes['DW_AT_name'].value.decode().startswith('A733_RTC_')):
                     enums.setdefault(die.attributes['DW_AT_name'].value.decode(), die.attributes['DW_AT_const_value'].value)
@@ -292,6 +291,8 @@ def main():
                 problems.append('the service must stay FAULT')
             if len(row['notes']) != 1 or int(row['notes'][0][0], 16) & 0xfff != SITE_RTC:
                 problems.append('one fault note with site 0x921 expected')
+            elif int(row['notes'][0][1], 16) != row['fault'] << 24:
+                problems.append(f"the note's value must be the fault step << 24, {row['fault'] << 24:#x}: {row['notes'][0][1]}")
         row['passed'] = not problems
         row['problems'] = problems
         if problems:

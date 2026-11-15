@@ -42,7 +42,7 @@ from unicorn import UC_HOOK_MEM_UNMAPPED
 from unicorn.arm64_const import (UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_X0,
                                  UC_ARM64_REG_X1, UC_ARM64_REG_X2)
 from unicorn import arm64_const
-from harness import machine as harness_machine, Image, hook_addresses, instruction_sites, save, skip_crumbs
+from harness import machine as harness_machine, flat_members, Image, hook_addresses, instruction_sites, save, skip_crumbs
 
 GATE_RUNS = [['--image', '{elf:ret-g2d}', '--output', '{output}']]
 UNIT = '/apps/os/g2d.c'
@@ -409,8 +409,7 @@ def main():
                 if die.tag == 'DW_TAG_variable' and die.attributes.get('DW_AT_name') and \
                         die.attributes['DW_AT_name'].value == b'g2d' and 'DW_AT_type' in die.attributes:
                     typ = die.get_DIE_from_attribute('DW_AT_type')
-                    fields['g2d'] = {c.attributes['DW_AT_name'].value.decode(): c.attributes['DW_AT_data_member_location'].value
-                                     for c in typ.iter_children() if c.tag == 'DW_TAG_member'}
+                    fields['g2d'] = flat_members(typ)
                 if die.tag == 'DW_TAG_enumerator':
                     n, v = die.attributes['DW_AT_name'].value.decode(), die.attributes['DW_AT_const_value'].value
                     want = {'CLOSED': CLOSED, 'OPEN': OPEN, 'FAULT': FAULT, 'CLOSE_OP': CLOSE_OP, 'RUN_OP': RUN_OP,
