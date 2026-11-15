@@ -12,6 +12,21 @@ RAILS = {0: 'dcdc1', 7: 'dcdc8', 19: 'bldo5', 20: 'cldo1'}
 
 
 ASSOC_BYTES = 48
+SCAN_COUNTS_BYTES = 16   # struct a733_radio_scan_counts, present when head flags bit 10 is set
+RSN_BYTES = 16           # struct a733_radio_rsn, present when head flags bit 11 is set
+# Record versions this decoder reads (A733_RADIO_RESULT_VERSION). Admission refuses an image that writes another.
+VERSIONS = (2, 3)
+RSN_CHECKS = ['passed', 'no-element', 'too-long', 'malformed', 'group-not-ccmp', 'pairwise-no-ccmp', 'mfp-required',
+              'no-psk', 'other']
+# Suite types under OUI 00-0F-AC (IEEE 802.11-2020 Table 9-149 and Table 9-151).
+CIPHERS = {1: 'WEP-40', 2: 'TKIP', 4: 'CCMP-128', 5: 'WEP-104', 6: 'BIP-CMAC-128', 7: 'group-not-allowed',
+           8: 'GCMP-128', 9: 'GCMP-256', 10: 'CCMP-256', 11: 'BIP-GMAC-128', 12: 'BIP-GMAC-256', 13: 'BIP-CMAC-256'}
+AKMS = {1: '802.1X', 2: 'PSK', 3: 'FT-802.1X', 4: 'FT-PSK', 5: '802.1X-SHA256', 6: 'PSK-SHA256', 8: 'SAE',
+        9: 'FT-SAE', 11: 'suite-B', 12: 'suite-B-192', 18: 'OWE', 24: 'SAE-EXT-KEY', 25: 'FT-SAE-EXT-KEY'}
+
+
+def suites(mask, names):
+    return [names.get(n, n) for n in range(32) if mask >> n & 1]
 ASSOC_FIELDS = ('stage', 'link', 'status', 'supplicant', 'rsn', 'eapol_rx', 'eapol_tx', 'flags', 'candidates',
                 'frequency_rssi', 'ms_connect', 'ms_authorized')
 
@@ -25,7 +40,7 @@ def record_length(head):
     if len(head) < HEAD_BYTES or head[:8] != MAGIC:
         raise ValueError('not a radio result record')
     version, total, head_bytes, ap_bytes = struct.unpack_from('<4I', head, 8)
-    if version != 2 or head_bytes != HEAD_BYTES or ap_bytes != AP_BYTES or total < HEAD_BYTES:
+    if version not in VERSIONS or head_bytes != HEAD_BYTES or ap_bytes != AP_BYTES or total < HEAD_BYTES:
         raise ValueError('unsupported radio result version')
     return total
 
@@ -37,7 +52,8 @@ def decode(data):
         raise ValueError('radio result record is shorter than its header says')
     data = data[:total]
     ap_count = struct.unpack_from('<I', data, 216)[0]
-    tail = ASSOC_BYTES if flags_of(data) & 512 else 0
+    tail = (ASSOC_BYTES if flags_of(data) & 512 else 0) + (SCAN_COUNTS_BYTES if flags_of(data) & 1024 else 0) + \
+        (RSN_BYTES if flags_of(data) & 2048 else 0)
     if total != HEAD_BYTES + ap_count * AP_BYTES + tail:
         raise ValueError('radio result length does not match its access point count')
     stage, failed, failure_stage, flags = struct.unpack_from('<4I', data, 24)
@@ -93,7 +109,16 @@ def decode(data):
     # fail_site: source line << 16 | 0x100 when the session decided the failure (the platform decided none) | stage.
     result['platform_failure'] = {'line': fail_site >> 16, 'stage': fail_site & 0xff,
                                   'source': 'session' if fail_site & 0x100 else 'platform'} if fail_site else None
-    if fail_site & 0x100 and (fail_site >> 9) & 0x7f:
+    if fail_site & 0x100 and (fail_site & 0xff) != 1 and (fail_site >> 9) & 0x7f:
+        # A live session fault (drivers/net/a733_radio_session.c): the transport error (0 when the dispatcher or
+        # network decided) and the Wi-Fi error.
+        transport = ['none', 'host', 'timeout', 'setup', 'rx-bounds', 'unsupported-irq', 'message', 'firmware',
+                     'runtime', 'wifi', 'data']
+        wifi = ['none', 'time', 'message', 'mac', 'version', 'status', 'result', 'transport']
+        code = (fail_site >> 9) & 15
+        result['platform_failure']['transport_error'] = transport[code] if code < len(transport) else code
+        result['platform_failure']['wifi_error'] = wifi[(fail_site >> 13) & 7]
+    elif fail_site & 0x100 and (fail_site >> 9) & 0x7f:
         # A refused transport adoption: bit 0 pointers/state, 1 config, 2 function count, 3 function 2 identity,
         # 4 function 1 manufacturer, 5 function 1 block size, 6 function 1 enable timeout.
         result['platform_failure']['refusal_groups'] = [i for i in range(7) if (fail_site >> 9) >> i & 1]
@@ -110,15 +135,26 @@ def decode(data):
         n = data[o + 6]
         rssi = struct.unpack_from('<b', data, o + 7)[0]
         freq, channel, security = struct.unpack_from('<H2B', data, o + 8)
-        if n > 32:
-            raise ValueError('SSID length out of range')
-        aps.append({'bssid': data[o:o + 6].hex(':'), 'ssid': data[o + 12:o + 12 + n].decode('utf-8', 'replace'),
+        if n or any(data[o + 12:o + AP_BYTES]):
+            # The image records no SSID (a733_radio_report_ap); a record that carries one is refused before any
+            # field of it reaches a result file.
+            raise ValueError('An access point entry carries SSID bytes; the record must hold none')
+        aps.append({'bssid': data[o:o + 6].hex(':'),
                     'frequency_mhz': freq, 'channel': channel, 'rssi_dbm': rssi})
     result['scan'] = {'listed': ap_count, 'reported': reported, 'dropped': dropped,
                       'aps': sorted(aps, key=lambda a: -a['rssi_dbm'])}
+    if flags & 1024:
+        # Records from images before flag bit 10 have only 'reported': the larger of the sightings and the firmware's
+        # count, which cannot tell repeated BSSIDs from results that never became events.
+        sightings, firmware, merges, set_aside = struct.unpack_from('<4I', data, HEAD_BYTES + ap_count * AP_BYTES)
+        if sightings != 0xffffffff and ap_count != sightings - merges - dropped:
+            raise ValueError('radio result scan counts do not match its access point count')
+        result['scan'].update(sightings=sightings, firmware_reported=firmware, merges=merges, set_aside=set_aside)
     result['association'] = None
     if flags & 512:
-        values = dict(zip(ASSOC_FIELDS, struct.unpack_from('<12I', data, total - ASSOC_BYTES)))
+        # Sections in order: scan counts (bit 10), association tail (bit 9), RSN summary (bit 11).
+        at = HEAD_BYTES + ap_count * AP_BYTES + (SCAN_COUNTS_BYTES if flags & 1024 else 0)
+        values = dict(zip(ASSOC_FIELDS, struct.unpack_from('<12I', data, at)))
         stages = ['none', 'candidate-found', 'entropy-ready', 'connecting', 'security-pending', 'securing', 'authorized']
         links = ['down', 'connecting', 'associated-open', 'security-pending', 'disconnecting', 'unresolved', 'secured']
         rssi = values['frequency_rssi'] >> 16
@@ -134,6 +170,18 @@ def decode(data):
             'candidates': values['candidates'], 'frequency_mhz': values['frequency_rssi'] & 0xffff,
             'rssi_dbm': rssi - 65536 if rssi >= 32768 else rssi,
             'ms_connect_mod_65536': values['ms_connect'], 'ms_authorized_mod_65536': values['ms_authorized']}
+    result['rsn'] = None
+    if flags & 2048:
+        check, group, rsn_flags, parse, version, capabilities, pairwise, akm = struct.unpack_from('<3BbHH2I', data,
+                                                                                                  total - RSN_BYTES)
+        result['rsn'] = {
+            'check': RSN_CHECKS[check] if check < len(RSN_CHECKS) else check,
+            'element_found': bool(rsn_flags & 1), 'other_oui': bool(rsn_flags & 2), 'malformed': bool(rsn_flags & 4),
+            'parse_result': parse, 'version': version,
+            'group': 'absent' if group == 0xfe else 'other-oui' if group == 0xff else CIPHERS.get(group, group),
+            'pairwise': suites(pairwise, CIPHERS) if rsn_flags & 8 else 'absent (CCMP-128)',
+            'akm': suites(akm, AKMS) if rsn_flags & 16 else 'absent (802.1X)',
+            'capabilities': capabilities, 'mfp_capable': bool(capabilities & 0x80), 'mfp_required': bool(capabilities & 0x40)}
     return result
 
 

@@ -21,6 +21,11 @@ option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
 set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
   "GPU diagnostic limit: constructor, firmware, jobs:N or layer:K")
 option(SUNSTONE_GPU_FAST_TIMING "Capture optional GPU IRQ-entry counter timestamps" OFF)
+option(SUNSTONE_NPU_WAKE_TIMING "Capture the NPU interrupt entry and producer resume counters in the EL0 ring" OFF)
+option(SUNSTONE_ACCEL_PLL_WATCH "Read PLL_NPU around every PLL_GPU0 write and at the next NPU completion" OFF)
+if(SUNSTONE_ACCEL_PLL_WATCH AND NOT SUNSTONE_A733_OS_GPU)
+  message(FATAL_ERROR "SUNSTONE_ACCEL_PLL_WATCH requires SUNSTONE_A733_OS_GPU")
+endif()
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
 option(SUNSTONE_A733_CPU_TOPOLOGY "Expose read-only topology and per-core architectural observations" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
@@ -73,6 +78,13 @@ if(SUNSTONE_A733_OS_USB_JPEG AND SUNSTONE_A733_OS_GPU_LINEAR)
 endif()
 if(SUNSTONE_A733_OS_USB_JPEG AND NOT SUNSTONE_A733_OS_USB_CLASSES)
   message(FATAL_ERROR "USB JPEG requires USB class services")
+endif()
+# The OS image programs the IOMMU through its one owner (drivers/iommu/a733_iommu_owner.c, docs/iommu.md). USB JPEG
+# still programs it through drivers/iommu/a733_iommu.c, so the two would share the banks with no common state. The
+# two files also define one symbol, a733_iommu_programmer, so a link of both fails even without this refusal.
+if(SUNSTONE_A733_OS_USB_JPEG)
+  message(FATAL_ERROR "USB JPEG programs the IOMMU through drivers/iommu/a733_iommu.c; the OS image's IOMMU owner "
+    "must be its only programmer, so USB JPEG is refused until its decoder attaches through the owner")
 endif()
 if(NOT SUNSTONE_BOARD_SUPERVISED OR NOT TARGET sunstone-a733-board)
   message(FATAL_ERROR "The OS kit requires the supervised native board composition")
@@ -139,7 +151,7 @@ set(os_added apps/os/admission.c apps/os/lifetime.c apps/os/sealed.c apps/os/ide
   apps/os/usb-service.c apps/os/large.c apps/os/large_load.c drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c drivers/storage/storage_digest_extensions.c drivers/storage/storage_digest_ce.S kernel/appmem/app_region.c kernel/appmem/large_admit.c kernel/umem/umem.c apps/os/application.c apps/os/session.c apps/os/grants.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
-  apps/os/thermal.c apps/os/i2c.c drivers/i2c/a733_i2c_bus.c apps/os/rtc.c drivers/rtc/a733_rtc.c apps/os/g2d.c apps/os/video_decode.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
+  apps/os/thermal.c apps/os/i2c.c drivers/i2c/a733_i2c_bus.c apps/os/rtc.c drivers/rtc/a733_rtc.c apps/os/g2d.c drivers/g2d/a733_g2d.c apps/os/iommu.c drivers/iommu/a733_iommu_owner.c apps/os/video_decode.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
 if(SUNSTONE_A733_OS_SD_WRITE)
   # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.
@@ -327,6 +339,9 @@ endforeach()
 list(APPEND os_added apps/os/quiesce.c apps/os/cpu-return.c apps/os/cpu-return-el0.S apps/os/cpu-return-spi.c apps/os/cpu-return-entry.c)
 list(APPEND os_include_dirs "${os_build}")
 list(APPEND os_external_inputs "${os_qualification}/runtime.h" "${os_build}/cpu-return-runtime.h")
+# The video decoder service (apps/os/video_decode.c) runs the decoder platform binding. Both are an object library
+# that an image links only when its application declares the video-decode device (cmake/sunstone-image.cmake); the
+# USB JPEG option links the binding into the core instead.
 if(SUNSTONE_A733_OS_USB_JPEG)
   list(APPEND os_added apps/os/usb-jpeg-native.c apps/jpeg/input.c
     drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c
@@ -401,7 +416,7 @@ list(REMOVE_DUPLICATES os_sources)
 # Device implementations are separate object libraries. Each selected owner
 # receives the same OS configuration; the core itself holds shared services.
 set(os_service_targets)
-foreach(service audio headset gpu npu radio)
+foreach(service audio headset gpu npu radio video-decode)
   set(service_sources)
   foreach(source IN LISTS os_sources)
     set(selected FALSE)
@@ -415,6 +430,8 @@ foreach(service audio headset gpu npu radio)
       set(selected TRUE)
     elseif(service STREQUAL "radio" AND source MATCHES "/apps/os/radio[^/]*\\.c$")
       set(selected TRUE)
+    elseif(service STREQUAL "video-decode" AND source MATCHES "/apps/os/video_decode\\.c$")
+      set(selected TRUE)
     endif()
     if(selected)
       list(APPEND service_sources "${source}")
@@ -425,7 +442,16 @@ foreach(service audio headset gpu npu radio)
     add_library(sunstone-a733-os-${service} OBJECT EXCLUDE_FROM_ALL ${service_sources})
     target_link_libraries(sunstone-a733-os-${service} PRIVATE sunstone-os-settings)
     list(APPEND os_external_inputs ${service_sources})
-    if(service STREQUAL "headset")
+    if(service STREQUAL "video-decode")
+      # Linked per image, by the application's manifest, with the decoder binding unless the core already has it.
+      if(NOT SUNSTONE_A733_OS_USB_JPEG)
+        target_sources(sunstone-a733-os-video-decode PRIVATE "${os_root}/drivers/video/a733_video_platform.c"
+          "${os_root}/drivers/video/a733_video_unit.c")
+        list(APPEND os_external_inputs "${os_root}/drivers/video/a733_video_platform.c"
+          "${os_root}/drivers/video/a733_video_unit.c")
+      endif()
+      target_compile_definitions(sunstone-a733-os-video-decode PRIVATE SUNSTONE_A733_OS_VIDEO_DECODE=1)
+    elseif(service STREQUAL "headset")
       # Linked per image, by the application's manifest (cmake/sunstone-image.cmake), not into every image.
       target_compile_definitions(sunstone-a733-os-headset PRIVATE SUNSTONE_A733_OS_HEADSET=1
         SUNSTONE_BLUETOOTH_HEADSET=1 SUNSTONE_BLUETOOTH_CAPTURE_PROFILE=1 SUNSTONE_BLUETOOTH_MSBC=1)
@@ -484,6 +510,8 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${os_usb_failure_test}>:SUNSTONE_A733_USB_FAILURE_TEST=1>"
   "$<$<BOOL:${os_return_only}>:SUNSTONE_A733_OS_RETURN_ONLY=1>"
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
+  "$<$<BOOL:${SUNSTONE_NPU_WAKE_TIMING}>:SUNSTONE_NPU_WAKE_TIMING=1>"
+  "$<$<BOOL:${SUNSTONE_ACCEL_PLL_WATCH}>:SUNSTONE_ACCEL_PLL_WATCH=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO_SCAN}>:SUNSTONE_A733_OS_RADIO_SCAN=1>")
 # The EL0 ring is linked too; the application's declaration selects it (apps/os/npu-session.h, os_npu_session_queued).
 target_sources(sunstone-a733-os-core PRIVATE "${os_root}/runtime/npu_app_queue.c" "${os_root}/apps/os/npu-queue.c")

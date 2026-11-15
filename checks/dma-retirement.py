@@ -7,6 +7,7 @@ import os
 import subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
+import harness  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_INPUTS = ['include/dma_service.h', 'drivers/dma/dma_service.c',
@@ -63,8 +64,8 @@ set_target_properties(dma-retirement-model PROPERTIES SUFFIX ".elf"
 
     def run(name, command, timeout=None):
         commands.append(command)
-        result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, timeout=timeout, env=environment)
+        result = harness.until_booted(lambda: subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, timeout=timeout, env=environment), lambda done: (done.stdout or '') + (done.stderr or ''))
         (out / (name + '.log')).write_text(result.stdout)
         return result
 

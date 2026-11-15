@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
 
 static unsigned inbox_loads, entry_loads, spill_exchanges;
 void ss_owner_test_scan(unsigned kind)
@@ -148,7 +149,25 @@ static void race_inspect(void *ctx, unsigned slot, unsigned priority)
 {
     (void)ctx; (void)priority;
     assert(slot < RACE_SOURCES * RACE_SLOTS);
+#ifdef SS_RACE_LOSE_ONE
+    /* Test (checks/scheduler-owner.py): the owner loses the hint of one slot in one round, as a lapped entry or a missed spill would. */
+    if (slot == 7 && atomic_load(&want[slot]) == 5) return;
+#endif
     atomic_store(&got[slot], atomic_load(&want[slot]));
+}
+/* A hint is lost when an owner pass that began after its publication found nothing to inspect and the slot is still not inspected: a
+ * pass returns zero only when nothing was visible to it, and every hint published before it began is. The owner counts those idle
+ * passes; the source reads the count after its publication and needs two more, since the pass that was running at the read may have
+ * begun before the publication. A strict priority order lets other sources' hints overtake a waiting one for as long as they keep
+ * arriving, so no number of passes bounds the wait; an idle pass does, and no host time enters the claim. */
+static _Atomic unsigned owner_idle_passes, owner_passes;
+/* A host that does not schedule the owner thread at all makes no progress to judge: ten seconds of host time without a pass stop the run
+ * with the inconclusive status (checks/harness.py, INCONCLUSIVE_EXIT), which the check runs once more and then reports as inconclusive. */
+static _Noreturn void host_stalled(unsigned source, unsigned round)
+{
+    fprintf(stderr, "INCONCLUSIVE: source %u round %u: the owner thread ran no pass within ten seconds of host time\n", source, round);
+    fflush(stderr);
+    _exit(75);
 }
 static void *race_source(void *argument)
 {
@@ -159,16 +178,22 @@ static void *race_source(void *argument)
             atomic_store(&want[slot], round);
             ss_owner_publish(&race, source, slot, (slot + round) % 8);
         }
+        const unsigned idle_published = atomic_load(&owner_idle_passes);
+        unsigned seen = atomic_load(&owner_passes);
         struct timespec start, now;
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (unsigned i = 0; i < RACE_SLOTS; ++i)
-            while (atomic_load(&got[source * RACE_SLOTS + i]) < round) {
-                clock_gettime(CLOCK_MONOTONIC, &now);
-                if (now.tv_sec - start.tv_sec > 10) {
-                    fprintf(stderr, "source %u round %u: slot %u never inspected\n",
-                            source, round, source * RACE_SLOTS + i);
+            while (1) {
+                const unsigned idle = atomic_load(&owner_idle_passes), passes = atomic_load(&owner_passes);
+                if (atomic_load(&got[source * RACE_SLOTS + i]) >= round) break;
+                if (idle - idle_published >= 2) {
+                    fprintf(stderr, "source %u round %u: slot %u never inspected, with %u idle owner passes after its publication\n",
+                            source, round, source * RACE_SLOTS + i, idle - idle_published);
                     abort();
                 }
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                if (passes != seen) { seen = passes; start = now; }
+                else if (now.tv_sec - start.tv_sec > 10) host_stalled(source, round);
                 sched_yield();
             }
     }
@@ -177,8 +202,12 @@ static void *race_source(void *argument)
 static void *race_owner(void *unused)
 {
     (void)unused;
-    while (!atomic_load(&race_done))
-        if (!ss_owner_drain(&race, race_inspect, NULL)) sched_yield();
+    while (!atomic_load(&race_done)) {
+        const unsigned inspected = ss_owner_drain(&race, race_inspect, NULL);
+        if (!inspected) atomic_fetch_add(&owner_idle_passes, 1u);
+        atomic_fetch_add(&owner_passes, 1u);
+        if (!inspected) sched_yield();
+    }
     return NULL;
 }
 static void concurrent_sources(void)

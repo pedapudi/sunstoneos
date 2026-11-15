@@ -17,4 +17,8 @@
  * That reset does not prove drain. RCQ uses a separate zeroed, uncached
  * 4096-byte READ-only IOMMU mapping. */
 int a733_g2d_commands(void *,size_t,const struct a733_g2d_session *);
+/* The same commands with the caller's device addresses: the source and output buffers' first pixels (before the
+ * operation's x and y offsets) and the 4096-byte command page, which must be page aligned. */
+int a733_g2d_commands_at(void *,size_t,const struct a733_g2d_session *,uint32_t source_iova,uint32_t output_iova,
+    uint32_t rcq_iova);
 #endif

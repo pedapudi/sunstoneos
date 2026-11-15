@@ -90,6 +90,8 @@ struct board_radio {
     uint8_t cand_bssid[6],cand_rsn[256];
     uint16_t cand_frequency,cand_rsn_bytes;
     int8_t cand_rssi;
+    /* The RSN summary in the record: whether one is set, and the RSSI of the result it came from. */
+    uint8_t rsn_recorded;int8_t rsn_rssi;
     unsigned cand_found,entropy_begun,wiped; /* wiped: the credential-derived memory was zeroed; the session is not polled again */
     /* Link recovery: owner-drained events while reassociating, and the bound
      * for admitting recovery after a clean loss is first reported. */

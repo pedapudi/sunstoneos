@@ -15,6 +15,11 @@ FIXTURES = {
 }
 
 IMAGES = {
+    # the returning video decoder check image (apps/vdec-check, docs/video-decode-os.md), whose fault return
+    # checks/os-vdec-fault-return.py runs
+    'ret-vdec': {'configure': [
+        '-DSUNSTONE_APPLICATION=vdec-check',
+    ], 'target': 'sunstone-a733-os-vdec-check', 'elf': 'sunstone-a733-os-vdec-check.elf'},
     'os-usb-ledger': {'configure': [
         '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=hello-compute',
@@ -55,12 +60,17 @@ IMAGES = {
         '-DSUNSTONE_APPLICATION=gpu-lifecycle',
         '-DSUNSTONE_A733_OS_GPU=ON',
     ], 'target': 'sunstone-a733-os-gpu-lifecycle', 'elf': 'sunstone-a733-os-gpu-lifecycle.elf'},
-    # the returning G2D check image (apps/g2d-check, docs/g2d-os.md), whose fault return checks/os-g2d-fault-return.py runs
+    # the returning G2D check image (apps/g2d-check, docs/g2d-os.md), whose fault return checks/os-g2d-fault-return.py
+    # and operation path checks/os-g2d-operation.py run
     'ret-g2d': {'configure': [
         '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_APPLICATION=g2d-check',
     ], 'target': 'sunstone-a733-os-g2d-check', 'elf': 'sunstone-a733-os-g2d-check.elf'},
     # the returning latency diagnostic image
+    # the returning RTC alarm image (apps/rtc-alarm), whose fault return checks/os-rtc-fault-return.py runs
+    'ret-rtc': {'configure': [
+        '-DSUNSTONE_APPLICATION=rtc-alarm',
+    ], 'target': 'sunstone-a733-os-rtc-alarm', 'elf': 'sunstone-a733-os-rtc-alarm.elf'},
     'ret-latency': {'configure': [
         '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
         '-DSUNSTONE_LATENCY=ON',

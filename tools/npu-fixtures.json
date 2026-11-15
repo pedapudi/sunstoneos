@@ -5,6 +5,7 @@
  {"name": "sub", "tool": "variants", "kind": "bin", "op": "Sub", "rows": 16, "width": 176},
  {"name": "mul", "tool": "variants", "kind": "bin", "op": "Mul", "rows": 16, "width": 176},
  {"name": "relu", "tool": "variants", "kind": "un", "op": "Relu", "rows": 16, "width": 176},
+ {"name": "relu-large", "tool": "variants", "kind": "un", "op": "Relu", "rows": 1024, "width": 176},
  {"name": "sig", "tool": "variants", "kind": "un", "op": "Sigmoid", "rows": 16, "width": 176},
  {"name": "tanh", "tool": "variants", "kind": "un", "op": "Tanh", "rows": 16, "width": 176},
  {"name": "swish", "tool": "variants", "kind": "un", "op": "Swish", "rows": 16, "width": 176},

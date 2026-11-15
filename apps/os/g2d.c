@@ -2,13 +2,21 @@
  * register access. Open follows the vendor g2d_open order (g2d.c 569-616, 672-688 in the pinned g2d_rcq source):
  * PCK600 domain 1 through the shared power-domain owner, the G2D and DE_SYS resets deasserted, the module clock set to
  * PERI0_300M undivided with its gate off, the bus gate, the module gate, then g2d_bsp_open's local gates and resets.
- * Close gates and resets the engine in the g2d_clock_disable order (641-668); the domain stays ON. The INTID 83 route
- * is emitted for an application that declares the device; this stage runs no job, so the INTID stays disabled and its
- * handler touches no register. */
+ * Close gates and resets the engine in the g2d_clock_disable order (641-668); the domain stays ON.
+ * An operation follows g2d_mixer_apply (g2d_mixer.c 996-1030): the RCQ command page built by a733_g2d_commands_at,
+ * the RCQ header address and length, the task-end interrupt enable, then the update bit. INTID 83 is enabled from the
+ * open to the close; its handler acknowledges task end, pulses the mixer AHB reset and wakes the owner, in the order of
+ * g2d_handle_irq (g2d.c 802-812). The engine's buffers are the application's large regions, mapped for master 10
+ * through the OS image's IOMMU owner (apps/os/iommu.h) at the first operation after an open and unmapped at the close. */
 #include "os.h"
 #include "application.h"
 #include "../board/application.h"
 #include "a733_clock_reference.h"
+#include "a733_g2d.h"
+#include "app_large.h"
+#include "gicv3_spi.h"
+#include "iommu.h"
+#include "owner-memory.h"
 #include "a733_gpu_resources.h"
 #include "a733_mapping_check.h"
 #include "a733_mmio.h"
@@ -39,8 +47,14 @@ _Static_assert(OS_GPU_CLIENT==7u,"the G2D client choice skips the GPU queue's cl
 /* Bound of one open or close, inside the session deadline: the supply verification (5,160 + 100,000 us after provider
  * start), the domain transition (10,000 us) and the register sequence, with margin. */
 #define G2D_CALL_US 500000u
+/* Bound of one operation from the update bit to the task-end interrupt: the vendor's WAIT_CMD_TIME_MS for one frame
+ * (g2d_driver_i.h 42-44). */
+#define G2D_JOB_US 100000u
+#define G2D_MASTER 10u
+#define G2D_RCQ_BYTES 4096u
+#define G2D_RCQ_HEADER_BYTES 128u /* eight 16-byte block headers, the last the zero-dirty terminator */
 enum phase {CLOSED,OPENING,OPEN,CLOSING,FAULT};
-enum op {NONE,OPEN_OP,CLOSE_OP};
+enum op {NONE,OPEN_OP,CLOSE_OP,RUN_OP};
 enum {POSTED=1,DONE=2};
 /* Fault steps (ss_g2d_fault): which check refused or failed. Steps below G2D_STEP_WRITES write nothing, so a refusal
  * there leaves the engine closed. */
@@ -48,7 +62,16 @@ enum {
     G2D_STEP_NONE, G2D_STEP_RAIL, G2D_STEP_CLOCK, G2D_STEP_PCK, G2D_STEP_SUPPLY, G2D_STEP_ENTRY, G2D_STEP_DOMAIN,
     G2D_STEP_PERI0, G2D_STEP_MODULE, G2D_STEP_ENGINE, G2D_STEP_INTID, G2D_STEP_WRITES=16, G2D_STEP_ROW, G2D_STEP_ROW_TIMEOUT, G2D_STEP_LOCK,
     G2D_STEP_G2D_RESET, G2D_STEP_DE_SYS_RESET, G2D_STEP_MUX, G2D_STEP_BUS_GATE, G2D_STEP_MODULE_GATE,
-    G2D_STEP_TOP, G2D_STEP_LOCAL, G2D_STEP_MODULE_WORD, G2D_STEP_CLOSE=32
+    G2D_STEP_TOP, G2D_STEP_LOCAL, G2D_STEP_MODULE_WORD, G2D_STEP_GIC, G2D_STEP_CLOSE=32,
+    /* An operation. Refusals below G2D_STEP_RUN_WRITES change nothing. A failure that leaves the engine idle and the
+     * IOMMU consistent (the command build and the CPU cache maintenance) is also a refusal: the service stays open
+     * and its close detaches master 10. A failure that may leave the engine running or the IOMMU or an engine
+     * register in an unknown state makes the service FAULT, which retains its gates, leases and mapping. */
+    G2D_STEP_RUN=48, G2D_STEP_RUN_SURFACE, G2D_STEP_RUN_GEOMETRY, G2D_STEP_RUN_MEMORY, G2D_STEP_RUN_IOVA,
+    G2D_STEP_RUN_WRITES=56, G2D_STEP_RUN_ATTACH, G2D_STEP_RUN_MAP, G2D_STEP_RUN_CACHE, G2D_STEP_RUN_BUSY,
+    G2D_STEP_RUN_LAUNCH, G2D_STEP_RUN_TIMEOUT, G2D_STEP_RUN_IRQ, G2D_STEP_RUN_FINISH, G2D_STEP_RUN_IOMMU_FAULT,
+    G2D_STEP_RUN_IOMMU, G2D_STEP_CLOSE_GIC=72, G2D_STEP_CLOSE_DETACH, G2D_STEP_CLOSE_STOP, G2D_STEP_CLOSE_RESET,
+    G2D_STEP_CLOSE_IDLE
 };
 static struct {
     struct a733_power_domain_row row;
@@ -59,12 +82,31 @@ static struct {
     struct ss_g2d_info info;
     struct ss_g2d_closed closed;
     atomic_uint phase,request,quiesce_wanted,quiesced;
-    /* 1 once a close has started since the last open: a FAULT service gets one close attempt (docs/g2d-os.md). */
+    /* 1 once a close has started since the last open: a FAULT service gets one close attempt (docs/g2d-os.md). Only
+     * the owner task reads it. */
     atomic_uint close_started;
+    /* 1 once a close step failed. The owner task stores it after the fault fields; quiesce_step loads it and nothing
+     * else, see there. A reported service stays FAULT, so it is never cleared. */
+    atomic_uint reported;
     unsigned op;int result;
     uint32_t fault_step,fault_value;
     uint64_t limit;
     TaskHandle_t waiter;
+    /* Operations. job and done belong to the owner task while a RUN_OP request is posted. */
+    struct ss_g2d_job job;
+    struct ss_g2d_done done;
+    struct a733_g2d_session commands;
+    struct gicv3_spi gic;
+    uint8_t *rcq;
+    uint64_t rcq_iova;
+    uint32_t mapped_region;        /* large region index + 1 mapped for master 10, 0 none */
+    uint64_t region_iova;
+    struct a733_iommu_span spans[2];   /* the mapped region and the command page */
+    unsigned attached;
+    /* Written by the interrupt handler, read by the owner after the wake. */
+    atomic_uint armed,irq_seen,irq_count,stray;
+    uint32_t irq_status,irq_reset;
+    uint64_t irq_ticks;
 } g2d;
 static TaskHandle_t owner;
 static StaticTask_t owner_tcb;
@@ -92,9 +134,13 @@ static int refuse(unsigned step,uint32_t value){g2d.fault_step=step;g2d.fault_va
 static int fail(unsigned step,uint32_t value)
 {
     if(!g2d.fault_step){g2d.fault_step=step;g2d.fault_value=value;}
-    atomic_store(&g2d.phase,FAULT);return -1;
+    atomic_store(&g2d.phase,FAULT);
+    if(atomic_load(&g2d.close_started))atomic_store_explicit(&g2d.reported,1,memory_order_release);
+    return -1;
 }
 static void wake_owner(void *unused){(void)unused;if(owner)xTaskNotifyGive(owner);}
+static uint64_t owner_us(void){uint64_t t=0;return a733_pmic_now(&providers.shared.pmic,&t)==1?t:0;}
+static unsigned settled_supply;
 
 static const uintptr_t platform_words[SS_G2D_PLATFORM_WORDS]={
     [SS_G2D_CCU_PLL_REF]=CCU,[SS_G2D_CCU_PERI0]=CCU+0xa0,[SS_G2D_CCU_PERI0_GATES]=CCU+0x1908,
@@ -169,7 +215,9 @@ static int tokens(void)
     const uint64_t until=now_us()+G2D_CALL_US;
     for(;;){
         const unsigned w=a733_power_authority_load(&providers.shared.rails.authority);
-        if(w&A733_POWER_DCDC2_VERIFIED)return 1;
+        if(w&A733_POWER_DCDC2_VERIFIED){
+            g2d.info.verified_seen_us=owner_us();g2d.info.verify_at_us=providers.domains.verify_at;return 1;
+        }
         if((w&A733_POWER_SUPPLY_DONE)||now_us()>=until||!timely())return refuse(G2D_STEP_SUPPLY,w);
         (void)sunstone_deadline_wait_until(until);
     }
@@ -185,7 +233,6 @@ static void sample_status(void)
         g2d.info.status_ticks[i]=(uint32_t)(ss_counter_ticks()-g2d.info.requested_ticks);
     }
 }
-static uint64_t owner_us(void){uint64_t t=0;return a733_pmic_now(&providers.shared.pmic,&t)==1?t:0;}
 /* The owner's command time for domain 1, read after the row's ON answer has published it. */
 static uint64_t command_us(void)
 {
@@ -268,6 +315,14 @@ static int do_open(void)
     if(g2d.info.after[SS_G2D_CCU_G2D_CLK]!=(0x80000000u|G2D_MODULE_WORD))
         return fail(G2D_STEP_MODULE_WORD,g2d.info.after[SS_G2D_CCU_G2D_CLK]);
     g2d.info.module_hz=G2D_MODULE_HZ;
+    g2d.info.settled_supply=settled_supply;
+    /* INTID 83 enabled for the open engine: its task-end interrupt enable (G2D 0x20 bit 4) stays clear until an
+     * operation starts, and the handler does nothing unless an operation armed it. */
+    {
+        int r=0;
+        for(unsigned i=0;i<100&&!r;++i){r=gicv3_spi_rearm(&g2d.gic);if(!r)pause_us(10);}
+        if(r!=1)return fail(G2D_STEP_GIC,(uint32_t)r);
+    }
     g2d.info.opened_ticks=ss_counter_ticks();
     atomic_store(&g2d.phase,OPEN);
     return 1;
@@ -292,7 +347,35 @@ static int do_close(void)
      * touched only while both read open. The fault record keeps the first failure. */
     uint32_t bgr=0x10001u;
     if(faulted&&!rd(CCU+0xa44,&bgr))return fail(G2D_STEP_CLOSE,1);
-    if((bgr&0x10001u)==0x10001u&&!update(G2D+0x20,0x50,0))return fail(G2D_STEP_CLOSE,0);
+    const int engine=(bgr&0x10001u)==0x10001u;
+    if(engine&&!update(G2D+0x20,0x50,0))return fail(G2D_STEP_CLOSE,0);
+    /* INTID 83 disabled and observed disabled, then master 10 detached while the engine still runs, before its gates
+     * and reset: the IOMMU's last detach disables both banks and returns the clock lease. */
+    {
+        int r=gicv3_spi_mask(&g2d.gic);
+        for(unsigned i=0;r==1&&i<200;++i){r=gicv3_spi_masked(&g2d.gic);if(r==1)break;if(r==0)pause_us(10);}
+        if(r!=1)return fail(G2D_STEP_CLOSE_GIC,(uint32_t)r);
+    }
+    /* A faulted engine may still be running an operation (a timeout, a launch that did not read back, a busy engine):
+     * it is stopped before master 10 returns to bypass, which would widen what it can reach to all of memory. The
+     * RCQ update is turned off as g2d_mixer_apply does before a job (g2d_mixer.c 1003), the mixer and rotator AHB
+     * resets are pulsed as the vendor's timeout recovery does (g2d_wait_cmd_finish, g2d.c 786; g2d_bsp_reset,
+     * g2d_top.c 86-93), and the engine must then read idle: update (0x28 bit 0) and the mixer's start (0x100 bit 31)
+     * clear. */
+    if(faulted&&engine){
+        uint32_t v=0;
+        if(!update(G2D+0x28,1u,0))return fail(G2D_STEP_CLOSE_STOP,0);
+        if(!update(G2D+0x08,3u,0))return fail(G2D_STEP_CLOSE_RESET,0);
+        if(!update(G2D+0x08,3u,3u))return fail(G2D_STEP_CLOSE_RESET,1);
+        if(!rd(G2D+0x28,&v)||(v&1u))return fail(G2D_STEP_CLOSE_IDLE,v);
+        if(!rd(G2D+0x100,&v)||(v&0x80000000u))return fail(G2D_STEP_CLOSE_IDLE,v);
+    }
+    /* The owner's record decides: a first attach that faulted after its clock lease records master 10 as attached
+     * before any of its writes, although the service never saw the attach complete. */
+    if(g2d.attached||(os_iommu_owner()->attached>>G2D_MASTER&1u)){
+        if(os_iommu_detach(1u<<G2D_MASTER)!=1)return fail(G2D_STEP_CLOSE_DETACH,os_iommu_owner()->fault_step);
+        g2d.attached=0;g2d.mapped_region=0;
+    }
     if(ccu(G2D_STEP_CLOSE+1,CCU+0xa40,0x80000000,0)<0||ccu(G2D_STEP_CLOSE+2,CCU+0xa44,1u,0)<0||
        ccu(G2D_STEP_CLOSE+3,CCU+0xa44,1u<<16,0)<0)return -1;
     uint32_t de_clk,de_bgr,di_clk,di_bgr;
@@ -309,6 +392,147 @@ static int do_close(void)
 /* An open service, or a FAULT one whose close has not started: the close then runs the vendor order from the state the
  * fault left, and on success the service is CLOSED with its fault record kept. */
 static int closable(unsigned phase){return phase==OPEN||(phase==FAULT&&!atomic_load(&g2d.close_started));}
+/* --- operations ----------------------------------------------------------------------------------------------- */
+const struct large_slot *os_large_slot(unsigned index);
+static int run_refuse(unsigned step,uint32_t value){g2d.fault_step=step;g2d.fault_value=value;return -1;}
+static int zero(const void *p,size_t n){const uint8_t *b=p;for(size_t i=0;i<n;++i)if(b[i])return 0;return 1;}
+/* The large region holding a surface, or null: ready, writable for an output, and the surface's rows inside it. */
+static const struct large_slot *surface_slot(const struct ss_g2d_surface *f,int write)
+{
+    const struct large_slot *l=os_large_slot(f->region);
+    if(!l||__atomic_load_n(&l->state,__ATOMIC_ACQUIRE)!=SS_LARGE_READY||(write&&!(l->flags&SS_LARGE_WRITE))||
+       f->format>7||f->reserved||!f->width||!f->height||f->stride<f->width*4||(f->stride&3)||(f->offset&3))return NULL;
+    const uint64_t bytes=(uint64_t)f->stride*f->height;
+    return f->offset<=l->bytes&&bytes<=l->bytes-f->offset?l:NULL;
+}
+static int g2d_rd(unsigned off,uint32_t *v){return rd(G2D+off,v);}
+static int g2d_wr(unsigned off,uint32_t v){return wr(G2D+off,v);}
+/* The output's region mapped for master 10, with the command page: an attach at the open's first operation, a
+ * remap when a later operation names another region. */
+static int map_region(const struct large_slot *l,unsigned region)
+{
+    if(g2d.mapped_region==region+1)return 1;
+    struct ss_g2d_done *d=&g2d.done;
+    const struct a733_iommu_span span={0,l->base,l->bytes,
+        (l->flags&SS_LARGE_WRITE)?A733_IOMMU_READ|A733_IOMMU_WRITE:A733_IOMMU_READ};
+    struct a733_iommu_span next=span;
+    if(os_iommu_iova(l->bytes,UINT64_C(0x200000),&next.iova)!=1)return run_refuse(G2D_STEP_RUN_IOVA,region);
+    if(!g2d.attached){
+        if(os_iommu_iova(G2D_RCQ_BYTES,G2D_RCQ_BYTES,&g2d.rcq_iova)!=1)return run_refuse(G2D_STEP_RUN_IOVA,0xffff);
+        g2d.spans[0]=next;
+        g2d.spans[1]=(struct a733_iommu_span){g2d.rcq_iova,(uint64_t)(uintptr_t)g2d.rcq,G2D_RCQ_BYTES,A733_IOMMU_READ};
+        d->surface_physical=l->base;
+        const uint64_t t0=now_us();
+        const int r=os_iommu_attach(1u<<G2D_MASTER,g2d.spans,2);
+        const struct a733_iommu_owner *o=os_iommu_owner();
+        const struct a733_iommu_owner_entry *e=&o->entry;
+        if(e->recorded){
+            for(unsigned b=0;b<2;++b){
+                d->iommu_bank_words[4*b]=e->enable[b];d->iommu_bank_words[4*b+1]=e->status[b];
+                d->iommu_bank_words[4*b+2]=e->l1[b];d->iommu_bank_words[4*b+3]=e->l2[b];
+            }
+            d->iommu_bypass[0]=e->bypass[0];d->iommu_bypass[1]=e->bypass[G2D_MASTER];
+        }
+        d->iommu_fault_step=o->fault_step;d->iommu_fault_word=o->fault_word;d->iommu_fault_read=o->fault_read;
+        d->iommu_refused=o->refused_word;d->directory_physical=o->directory_physical;
+        if(r!=1){
+            /* A refusal with no write leaves the IOMMU closed; anything else is a fault of the session. The fault
+             * value keeps the owner's step and the whole 17-bit register offset. */
+            if(o->state!=A733_IOMMU_OWNER_FAULT)return run_refuse(G2D_STEP_RUN_ATTACH,o->refused_word);
+            return fail(G2D_STEP_RUN_ATTACH,o->fault_step<<20|(o->fault_word&0xfffff));
+        }
+        d->attach_us=now_us()-t0;
+        g2d.attached=1;d->iommu_attached=1;
+    }else{
+        if(os_iommu_unmap(&g2d.spans[0],1)!=1||os_iommu_map(&next,1)!=1){
+            const struct a733_iommu_owner *o=os_iommu_owner();
+            d->iommu_fault_step=o->fault_step;d->iommu_fault_word=o->fault_word;d->iommu_fault_read=o->fault_read;
+            return fail(G2D_STEP_RUN_MAP,o->fault_step<<20|(o->fault_word&0xfffff));
+        }
+        g2d.spans[0]=next;
+    }
+    g2d.mapped_region=region+1;g2d.region_iova=next.iova;
+    return 1;
+}
+/* g2d_mixer_apply: update and task-end interrupt off, the RCQ header address and length, the interrupt on, then the
+ * update bit; the handler completes it. */
+static int do_run(void)
+{
+    const struct ss_g2d_job *j=&g2d.job;
+    struct ss_g2d_done *d=&g2d.done;
+    memset(d,0,sizeof(*d));
+    d->magic=SS_G2D_DONE_MAGIC;d->bytes=sizeof(*d);d->submit_ticks=ss_counter_ticks();
+    g2d.fault_step=0;g2d.fault_value=0;
+    g2d.limit=lease_now()+G2D_CALL_US;
+    if(g2d.limit>session_deadline())g2d.limit=session_deadline();
+    if(atomic_load(&g2d.irq_seen)||atomic_load(&g2d.stray))
+        return run_refuse(G2D_STEP_RUN_IRQ,atomic_load(&g2d.irq_seen)|atomic_load(&g2d.stray)<<8);
+    /* Fill only in this stage: no source, an ARGB8888 output (the builder writes back in the source's order). */
+    if(j->op!=SS_G2D_FILL||j->sx||j->sy||!zero(&j->source,sizeof(j->source))||j->reserved[0]||j->reserved[1]||
+       j->output.format)return run_refuse(G2D_STEP_RUN,j->op);
+    const struct large_slot *l=surface_slot(&j->output,1);
+    if(!l)return run_refuse(G2D_STEP_RUN_SURFACE,j->output.region);
+    struct a733_g2d_session *c=&g2d.commands;
+    memset(c,0,sizeof(*c));
+    c->width=j->output.width;c->height=j->output.height;c->stride=j->output.stride;c->op=A733_G2D_FILL;
+    c->dx=j->dx;c->dy=j->dy;c->w=j->w;c->h=j->h;c->color=j->color;
+    if(!a733_g2d_geometry_valid(c))return run_refuse(G2D_STEP_RUN_GEOMETRY,0);
+    if(!g2d.rcq&&!(g2d.rcq=os_owner_memory(G2D_RCQ_BYTES,G2D_RCQ_BYTES,OS_MEMORY_DEVICE)))
+        return run_refuse(G2D_STEP_RUN_MEMORY,0);
+    if(map_region(l,j->output.region)!=1)return -1;
+    const uint64_t output_iova=g2d.region_iova+j->output.offset;
+    d->output_iova=(uint32_t)output_iova;
+    /* The fill reads no source; the layer's address names the output, which is mapped. */
+    if(!a733_g2d_commands_at(g2d.rcq,G2D_RCQ_BYTES,c,(uint32_t)output_iova,(uint32_t)output_iova,(uint32_t)g2d.rcq_iova))
+        return run_refuse(G2D_STEP_RUN_GEOMETRY,1);
+    /* The surface's lines leave the CPU caches before the engine writes it; the command page is non-cacheable. The
+     * maintenance takes whole 64-byte lines, so the range is widened to the lines the surface touches; they lie in
+     * the page-aligned region, and the rows' padding is the application's own memory. */
+    const uintptr_t first=(uintptr_t)(l->base+j->output.offset);
+    const uintptr_t at=first&~(uintptr_t)63;
+    const size_t bytes=((first+(size_t)j->output.stride*j->output.height+63)&~(uintptr_t)63)-at;
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,bytes))return run_refuse(G2D_STEP_RUN_CACHE,0);
+    __asm__ volatile("dsb sy":::"memory");
+    uint32_t v;
+    if(!g2d_rd(0x28,&v)||(v&1)||!rd(G2D+0x100,&v)||(v&0x80000000))return fail(G2D_STEP_RUN_BUSY,v);
+    if(!g2d_wr(0x20,0)||!g2d_wr(0x24,5)||!g2d_rd(0x24,&v)||(v&5))return fail(G2D_STEP_RUN_LAUNCH,v);
+    if(!g2d_wr(0x28,0)||!g2d_wr(0x2c,(uint32_t)g2d.rcq_iova)||!g2d_wr(0x30,0)||!g2d_wr(0x34,G2D_RCQ_HEADER_BYTES))
+        return fail(G2D_STEP_RUN_LAUNCH,1);
+    atomic_store_explicit(&g2d.armed,1,memory_order_release);
+    if(!g2d_wr(0x20,0x10))return fail(G2D_STEP_RUN_LAUNCH,2);
+    d->launch_ticks=ss_counter_ticks();
+    if(!g2d_wr(0x28,1))return fail(G2D_STEP_RUN_LAUNCH,3);
+    const uint64_t until=now_us()+G2D_JOB_US;
+    while(!atomic_load_explicit(&g2d.irq_seen,memory_order_acquire)){
+        if(now_us()>=until){
+            /* Disarmed first: a handler that already took the interrupt sets irq_seen, which is read once more. */
+            if(atomic_exchange(&g2d.armed,0)&&!atomic_load(&g2d.irq_seen)){
+                uint32_t status=0;(void)g2d_rd(0x24,&status);
+                return fail(G2D_STEP_RUN_TIMEOUT,status);
+            }
+            while(!atomic_load_explicit(&g2d.irq_seen,memory_order_acquire))pause_us(1);
+            break;
+        }
+        (void)sunstone_deadline_wait_until(until);
+    }
+    const unsigned seen=atomic_exchange(&g2d.irq_seen,0);
+    d->rcq_status=g2d.irq_status;d->reset_word=g2d.irq_reset;d->irq_ticks=g2d.irq_ticks;
+    d->irq_count=atomic_load(&g2d.irq_count);d->stray_interrupts=atomic_load(&g2d.stray);
+    if(seen!=1||!(g2d.irq_status&1))return fail(G2D_STEP_RUN_IRQ,g2d.irq_status);
+    /* The handler acknowledged task end and pulsed the mixer reset: task end reads clear, the reset word reads back. */
+    if(!g2d_rd(0x24,&d->status_after)||(d->status_after&1)||!g2d_rd(0x08,&v)||v!=(g2d.irq_reset|1u))
+        return fail(G2D_STEP_RUN_FINISH,v);
+    struct a733_iommu_owner_fault f;
+    d->iommu_scan=(uint32_t)os_iommu_scan(G2D_MASTER,&f);
+    _Static_assert(sizeof(f)==sizeof(d->iommu_fault),"the fault record fits the done record");
+    memcpy(d->iommu_fault,&f,sizeof(f));
+    d->iommu_fault_step=os_iommu_owner()->fault_step;d->iommu_fault_word=os_iommu_owner()->fault_word;
+    if(d->iommu_scan!=1)return fail(d->iommu_scan==0?G2D_STEP_RUN_IOMMU_FAULT:G2D_STEP_RUN_IOMMU,f.micro_status);
+    /* Lines the CPU may have fetched during the operation are dropped before the application reads the output. */
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,bytes))return run_refuse(G2D_STEP_RUN_CACHE,1);
+    d->done_ticks=ss_counter_ticks();
+    return 1;
+}
 static void serve(void)
 {
     if(atomic_load_explicit(&g2d.request,memory_order_acquire)!=POSTED)return;
@@ -316,6 +540,7 @@ static void serve(void)
     int r=-1;
     if(g2d.op==OPEN_OP)r=phase==CLOSED?do_open():phase==OPEN?1:-1;
     else if(g2d.op==CLOSE_OP)r=closable(phase)?do_close():phase==CLOSED?1:-1;
+    else if(g2d.op==RUN_OP)r=phase==OPEN?do_run():run_refuse(G2D_STEP_RUN,phase);
     g2d.result=r;
     atomic_store_explicit(&g2d.request,DONE,memory_order_release);
     os_application_wake_task(g2d.waiter);
@@ -334,16 +559,49 @@ static void os_g2d_task(void *unused)
     }
 }
 
-/* The handler never runs in this stage: INTID 83 stays disabled. */
-void os_g2d_irq(void){}
+/* INTID 83 (g2d_handle_irq): with an operation armed, acknowledge task end (G2D 0x24 bit 0, write one to clear),
+ * pulse the mixer AHB reset (G2D 0x08 bit 0) and wake the owner. Unarmed, or with task end clear, the line is masked
+ * at the distributor and the owner fails the operation. Built with -mgeneral-regs-only, like every unit it calls. */
+void os_g2d_irq(void)
+{
+    BaseType_t woken=pdFALSE;
+    atomic_fetch_add_explicit(&g2d.irq_count,1,memory_order_relaxed);
+    if(!atomic_exchange_explicit(&g2d.armed,0,memory_order_acq_rel)){
+        /* No operation armed: counted apart, so that it cannot overwrite a completion the owner has not read yet. */
+        (void)gicv3_spi_mask(&g2d.gic);
+        atomic_fetch_add_explicit(&g2d.stray,1,memory_order_release);
+    } else {
+        const uint32_t status=a733_mmio_read32_dsb_sy_both(G2D+0x24);
+        g2d.irq_status=status;g2d.irq_ticks=ss_counter_ticks();
+        unsigned seen=2;
+        if(status&1u){
+            a733_mmio_write32_dsb_sy_both(G2D+0x24,1u);
+            const uint32_t reset=a733_mmio_read32_dsb_sy_both(G2D+0x08);
+            g2d.irq_reset=reset;
+            a733_mmio_write32_dsb_sy_both(G2D+0x08,reset&~1u);
+            a733_mmio_write32_dsb_sy_both(G2D+0x08,reset|1u);
+            seen=1;
+        } else (void)gicv3_spi_mask(&g2d.gic);
+        atomic_store_explicit(&g2d.irq_seen,seen,memory_order_release);
+    }
+    if(owner)vTaskNotifyGiveFromISR(owner,&woken);
+    portYIELD_FROM_ISR(woken);
+}
 
 int os_g2d_task_privileged(void (*entry)(void *),void *context){return !context&&entry==os_g2d_task;}
 int os_g2d_pins(struct a733_pin_handoff *pins){return pins!=NULL;}
 /* A FAULT service first gets its close (docs/designs/failure-return-audit.md, "A faulted device service closes
- * before it reports"): DONE when every close step read back, FAULT when one failed. */
+ * before it reports"): DONE when every close step read back, FAULT when one failed.
+ *
+ * This step runs on the supervisor's core while the owner task closes, so it decides from the one word the owner
+ * publishes. Deciding from phase and close_started together is racy in either load order: with the close storing
+ * close_started and then CLOSING, a load of close_started can see 1 while the next load of phase still sees the
+ * fault's FAULT; with the stores swapped, a load of phase can see FAULT before CLOSING lands and the next load of
+ * close_started sees 1. Either way the step reports 0x931 while a close that will succeed is running, and the sticky
+ * report ends the session at 0x742. */
 static enum os_quiesce_result quiesce_step(struct os_quiesce *q)
 {
-    if(atomic_load(&g2d.phase)==FAULT&&atomic_load(&g2d.close_started)){
+    if(atomic_load_explicit(&g2d.reported,memory_order_acquire)){
         (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_RETURN|SUNSTONE_CRUMB_FAIL_BOARD<<12|0x931,
             g2d.fault_step<<24|(g2d.fault_value&0xffffff),SUNSTONE_CRUMB_HERE());
         return OS_QUIESCE_FAULT;
@@ -363,6 +621,12 @@ int os_g2d_start(void)
      * the first request. */
     if(!a733_power_domain_row_init(&g2d.row,&providers.domains,1,G2D_OWNER,&g2d.rail))return 0;
     g2d.row.wake=wake_owner;
+    g2d.gic=(struct gicv3_spi){GICD,G2D_INTID};
+    /* No OS-image path changes DCDC2 or DCDC4 before the owner verifies them: DCDC2 has no writer, and the GPU
+     * platform's DCDC4 raise holds an exclusive rail lease through its own settle, which the verifier's shared lease
+     * waits out (docs/g2d-os.md#the-supply-verification-wait). The NPU startup marks the supply settled on the same
+     * grounds. The call takes effect only before the power service first runs. */
+    settled_supply=(unsigned)a733_power_domains_settled_supply(&providers.domains);
     owner=xTaskCreateStaticAffinitySet(os_g2d_task,"os-g2d",sizeof(owner_stack)/sizeof(owner_stack[0]),NULL,4,
         owner_stack,&owner_tcb,1);
     return owner!=NULL;
@@ -399,6 +663,15 @@ int ss_g2d_fault(uint32_t *step,uint32_t *value)
     if(step)*step=g2d.fault_step;
     if(value)*value=g2d.fault_value;
     return g2d.fault_step?1:0;
+}
+int ss_g2d_run(const struct ss_g2d_job *job,struct ss_g2d_done *done)
+{
+    if(!job)return -1;
+    const unsigned state=atomic_load_explicit(&g2d.request,memory_order_acquire);
+    if(granted()&&state!=POSTED&&state!=DONE)g2d.job=*job;
+    const int r=call(RUN_OP);
+    if(r!=0&&done&&g2d.done.magic==SS_G2D_DONE_MAGIC)*done=g2d.done;
+    return r;
 }
 static int ready(void){return atomic_load(&g2d.request)==DONE||atomic_load(&g2d.phase)==FAULT;}
 void ss_g2d_wait(uint32_t wait_us)

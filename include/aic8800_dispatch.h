@@ -31,7 +31,9 @@ struct aic8800_dispatch {
     const uint8_t *terminal_event_record;
     struct aic8800_dispatch_event events[AIC8800_DISPATCH_EVENTS];
     struct aic8800_dispatch_record records[AIC8800_DISPATCH_RECORDS];
-    uint64_t next_sequence,retired_records,discarded_diagnostics;
+    /* unclaimed_scan_results: scan result records retired as diagnostics, for another
+     * interface or after the scan's end event; none of them became an event. */
+    uint64_t next_sequence,retired_records,discarded_diagnostics,unclaimed_scan_results;
     unsigned event_head,event_count,record_head,record_count;
     uint8_t initialized,entered,faulted;
 };

@@ -31,7 +31,10 @@ secondaries off. These inputs do not establish general recognition or startup
 repeatability. Selected GPU compute, open-queue NPU recognition and verified
 read-only storage failures also retire all eight cores without a watchdog reset
 ([return evidence](../evidence/failure-return.jsonl)). [CPU status](cpu.md)
-identifies the CPU result and failed controls.
+identifies the CPU result and failed controls. In one returning image, GPU vector-add jobs, NPU relu jobs and five CPU
+streaming workers ran together on port 3-1 with every output correct, both device retirement receipts valid and PLL_NPU
+locked through three GPU power cycles ([concurrent design](../designs/concurrent-accel.md), entry
+`1794707177945351013-cb244af9`).
 
 ## Capabilities
 
@@ -43,7 +46,7 @@ identifies the CPU result and failed controls.
 | Eight-worker CPU-only mimus recording | qualified on the board | 90-frame reference matched, seven secondaries off | [CPU status](cpu.md) |
 | GPU compute queue and trusted GPU peer | selected compute failure board-qualified | two completed jobs, one abandoned output, firmware OFF and worker PARK at return | [return record](../evidence/failure-return.jsonl); broader GPU scope in [GPU status](gpu.md) |
 | Typed session for an image that grants a device (`tools/session.py`) | host-tested | control, NPU, GPU and credential-free radio-scan profiles have typed builders; USB host facts remain required | `checks/session-build.py`; [runner document](../board-runner.md) |
-| Concurrent CPU, GPU and NPU operation | host-tested | none on the board | [NPU status](npu.md) |
+| Concurrent CPU, GPU and NPU operation ([design](../designs/concurrent-accel.md)) | correctness and retirement qualified on the board; throughput under CPU streaming open | 278,635 NPU completions with a GPU job in flight, no output mismatch, GPU and NPU retirement receipts valid, PLL_NPU word and lock unchanged through 52 PLL_GPU0 writes; with five workers streaming 6.5 GB/s the GPU job rate falls 63% (9,558 to 3,512 jobs/s) and the NPU relu rate 54% (177,768 to 81,744 jobs/s) | `1794707177945351013-cb244af9` in [latency.jsonl](../evidence/latency.jsonl) |
 | Lifetime from the contract magic in one OS image ([design](../designs/one-os-image.md#lifetime-word-and-sealed-session)) | returning: board-qualified for the scoped images; supervised: host-qualified EL3 stop paths; resident: bounded hello-compute completion and watchdog reset qualified on port 3-3 | resident: matching RTC session, core-0 EL3 stop `0x0111/0x5000`, no retained fault or board failure, return to FEL and lost DRAM | resident `1794474070488494360-23d98e20` below; returning `1793948483319321125-4d7fb7af` and the [NPU](npu.md), [latency](latency.md) and [radio](radio.md) records; supervised `1793940886685882479-99c7d548` and `1793943016757588735-a94fc5b2`; `checks/el3-stop-trace.py`, `checks/os-lifetime-admission.py`, `checks/os-sealed-session.py`, `checks/board-lifetime-admission.py` |
 | Warm PCM-to-transcription time | open | target 0.05 times the audio duration | `application-recognition-time-target` (not run) |
 
@@ -58,7 +61,14 @@ unqualified.
 1. Run an NPU image that fails before its NPU service starts, to confirm on the board that the never-started stop report keeps the port usable.
 2. Run the checks that need external inputs (H.264 capture, SAE); the full gate lists nine remaining checks.
 3. Qualify GPU recovery and application recognition.
-4. Qualify simultaneous CPU, GPU and NPU operation; the optional builds have host evidence only.
+4. Recover GPU and NPU throughput under CPU streaming. Five workers streaming 6.5 GB/s cut the GPU job rate by 63% and the
+   NPU relu rate by 54% (entry `1794707177945351013-cb244af9`). A sweep of streaming sets (entry
+   `1794709286170370328-b5d81897`) shows that the loss grows with the number of concurrent CPU streams more than with the
+   bytes they move: one A76 stream at 7.6 GB/s costs the NPU 29%, three A55 streams at 7.0 GB/s cost it 48%. The vendor
+   sets no quality-of-service value for these masters. A 262,144-element add and a 360,448-byte relu lose more, 68-69% at the
+   stage-1 set, and three interleaved areas on one core cost about the same as one at fewer bytes (entry
+   `1794711666388475314-76dd9c8e`). An add with four elements per lane runs the GPU alone at 676 jobs/s, three times the one-element add
+   (entry `1794714617637336813-d6d9ac0d`). The open levers are the CPU-side bandwidth limiter and per-master request counters ([design](../designs/concurrent-accel.md#stage-1c-larger-jobs-lose-more-under-cpu-streaming)).
 5. Qualify returning accelerator execution; [NPU status](npu.md) lists the finite images that already pass.
 6. Add broader application inputs, native audio input, autonomous card boot, fault recovery and concurrent thermal qualification.
 7. Qualify continued resident supervision after application completion and autonomous card boot. The bounded hello-compute diagnostic passes over FEL with no USB0 grant; it intentionally stops renewal after successful completion. Ordinary resident builds continue supervision, with host evidence. USB0-granted FEL sessions still need ROM takeover admission and current rail readbacks ([entry contract and open work](../designs/resident-fel.md), [physical evidence](../evidence/application.jsonl)).

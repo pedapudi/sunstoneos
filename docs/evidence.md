@@ -10,7 +10,7 @@ Each board run is one line of machine-readable JSON. Status and design files des
 | --- | --- |
 | `id`, `entry_id`, `port` | The queue entry ID, which doubles as the record ID, and the board port. A result without a queue entry has a short lowercase slug as its `id` and no `entry_id`. |
 | `date` | The date of the run. |
-| `image_sha256`, `git_revision` | The image hash and the revision that built it, copied from `result.json`. |
+| `image_sha256`, `git_revision` | The image hash and the revision of the source the image ran from (the `--host-tree` it was prepared from, else the board-queue checkout), copied from `result.json`; the daemon's own revision is `daemon_git_revision` there. |
 | `image` | The image name or build target, for a run whose hash is not recorded. |
 | `design` | The path of the design or status document that describes the feature the run tested. |
 | `hypothesis` | What the run tests, copied from the entry. |
@@ -25,6 +25,17 @@ Each board run is one line of machine-readable JSON. Status and design files des
 | `note` | Optional. One or two sentences for a fact that no field holds. |
 
 A board run's prediction and result go in an evidence record, one record per run, in `docs/evidence/<topic>.jsonl`. Write the prediction into the record before the run and add the measurements and conclusion after it. The design or status file keeps only the present-state facts and cites the record by file and ID.
+
+## Records hold no device address
+
+Records are committed and published, while radio scan and association results stay in the board queue on this machine. A record therefore holds no BSSID or other MAC address, and no frequency and RSSI of a single access point, since that pair picks out the access point that the user's credential matched in the queue's scan list. Counts, ranges and an RSSI without a channel frequency are allowed.
+
+`tools/evidence.py` applies the rule when it writes a record and when it validates the committed records:
+
+- **Addresses.** A value written as six colon- or hyphen-separated byte pairs, or as three dot-separated groups of four hex digits, is refused unless it is a protocol constant in `PROTOCOL_ADDRESSES`: the unset and broadcast addresses, the IEEE 802.1X PAE group address and the LLC/SNAP header. A measurement or condition named for a BSSID is refused.
+- **Signal pairs.** A sentence with exactly one Wi-Fi channel frequency and one dBm figure is refused; a range counts both of its ends. So are measurements and conditions that hold an RSSI beside a channel frequency.
+
+`checks/evidence-addresses.py` covers both refusals and the allowed constants, and confirms that the committed records pass.
 
 ## Recording a result
 

@@ -191,8 +191,16 @@ unsigned npu_application_irq_count(void)
 { return __atomic_load_n(&delivered_count,__ATOMIC_ACQUIRE); }
 #endif
 #endif
+#ifdef SUNSTONE_NPU_WAKE_TIMING
+/* The virtual counter at the entry of the latest NPU interrupt; the EL0 ring copies it when the completion notifies its
+ * producer (apps/os/npu-queue.c, struct ss_npu_queue_wake). Written and read on the interrupt's core only. */
+uint64_t npu_irq_entry_counter;
+#endif
 void NPU_IRQ_HANDLER(void)
 {
+#ifdef SUNSTONE_NPU_WAKE_TIMING
+    __asm__ volatile("isb\n mrs %0,cntvct_el0":"=r"(npu_irq_entry_counter)::"memory");
+#endif
     /* A claimed resident queue owns the destructive event read. Leave the
      * level SPI enabled: the queue acknowledges the device before EOI and
      * directly notifies its waiting client. Errors mask this same source. */

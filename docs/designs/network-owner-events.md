@@ -170,7 +170,12 @@ capacity publication, restored admission, ready work and both notification-index
 assignments.
 
 A bounded board pass publishes ready work when it stops after progress or
-changes its orchestration stage. The next wait consumes that publication before
+changes its orchestration stage. It also publishes ready work when it takes an event while the transport
+holds a receive record. The dispatcher queue holds four events; a scan burst
+that fills it leaves the next record held, and a held transport reports no work
+while its function interrupt stays masked. Without the hint the owner slept until
+the scan's one-second command deadline and the transport failed in MANAGEMENT
+(board run `1794712987077481541-5b26ea3e`). The next wait consumes that publication before
 arming a timer. Shutdown and abort exclude the inactive socket and protocol
 timers. Due RSN callbacks run under the existing supplicant serialization even
 while receive waits for a function interrupt. Only active protocol states supply

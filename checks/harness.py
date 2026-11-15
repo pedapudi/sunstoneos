@@ -37,9 +37,104 @@ LLD = Path(os.environ.get('SUNSTONE_HOST_LLD', CACHE / 'host/usr/bin/ld.lld-21')
 QEMU_DETERMINISTIC = ['-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off']
 
 
-def qemu_kill_seconds(name):
-    limit = json.loads((Path(__file__).resolve().parents[1] / 'tools/gate-slots.json').read_text())['qemu_checks'][name]
+# A guest run can end without saying anything about the claim of the check that started it, for two reasons that depend on the host and not on
+# the code under test:
+#   boot    a multi-core guest gives each boot wait (the secondary cores coming online, the primary core's initialisation flag, a register
+#           clearing) one second of its own counter. On a loaded host that second can pass before the application runs, and the guest
+#           prints "FAIL boot-timeout <wait>" (platform/qemu-smp/platform.c, platform/qemu-os/platform.c). The guest's bound is unchanged.
+#   kill    the check's wall-clock bound on the run (qemu_kill_seconds, host_kill_seconds) expired, or a threaded host model's own hang
+#           guard did (it exits with INCONCLUSIVE_EXIT: a wait for another thread that the host did not schedule within seconds).
+#           With a fixed icount the guest's time follows the instructions it executes, so the bound is a hang guard and not a result:
+#           a loaded host can stall a run past it. A limit that is part of the claim is not a hang guard: it is stated in the model's own
+#           progress (a job still in flight, a count reached), never in elapsed host time.
+# The check runs the guest again: up to BOOT_ATTEMPTS times after a boot-stage failure, and once after a kill. When the run still ends that
+# way the claim is inconclusive: the exception is an AssertionError, so a check that does not catch it fails, and the process exits with
+# INCONCLUSIVE_EXIT, which tools/integration-gate.py reports as its own status. A failure of the application or the model is a different
+# line and is returned at once; a guest that hangs is killed twice and so is inconclusive too, never a pass.
+BOOT_TIMEOUT = re.compile(r'^FAIL boot-timeout (\S+)\s*$', re.M)
+BOOT_ATTEMPTS = 3
+KILL_ATTEMPTS = 2
+INCONCLUSIVE_EXIT = 75      # EX_TEMPFAIL
+
+
+class Inconclusive(AssertionError):
+    """A run that says nothing about the claim being checked, because of the host: run the check again."""
+
+
+class BootInconclusive(Inconclusive):
+    """The guest failed in its boot stage in every attempt."""
+
+
+class KillInconclusive(Inconclusive):
+    """The wall-clock bound killed the run in every attempt."""
+
+
+_previous_excepthook = sys.excepthook
+
+
+def _report_inconclusive(kind, value, trace):
+    if isinstance(value, Inconclusive):
+        sys.stdout.flush()
+        sys.stderr.write('INCONCLUSIVE: %s\n' % value)
+        sys.stderr.flush()
+        os._exit(INCONCLUSIVE_EXIT)
+    _previous_excepthook(kind, value, trace)
+
+
+sys.excepthook = _report_inconclusive
+
+
+def boot_stage_failure(log):
+    """The boot wait that the guest gave up on, or None when the log shows no boot-stage failure."""
+    found = BOOT_TIMEOUT.search(log)
+    return found.group(1) if found else None
+
+
+def until_booted(run_once, log_of=lambda result: result, code_of=None):
+    """run_once() again while it ends in a boot-stage failure (its console log is log_of(result)), is killed (it raises
+    subprocess.TimeoutExpired) or stops itself on a hang guard (its exit status, code_of(result), is INCONCLUSIVE_EXIT); the first other
+    result is returned. The attempts are BOOT_ATTEMPTS in all, a kill or a hang guard twice among them."""
+    stages, kills = [], 0
+    for _ in range(BOOT_ATTEMPTS):
+        try:
+            result = run_once()
+            stopped = None if code_of is None or code_of(result) != INCONCLUSIVE_EXIT else 'its own hang guard'
+        except subprocess.TimeoutExpired as expired:
+            stopped = 'the wall-clock bound of %s s' % expired.timeout
+        if stopped:
+            kills += 1
+            if kills >= KILL_ATTEMPTS:
+                raise KillInconclusive('inconclusive: %s stopped the run in %d of %d attempts; the run says nothing about the claim'
+                                       % (stopped, kills, kills)) from None
+            continue
+        stage = boot_stage_failure(log_of(result))
+        if stage is None:
+            return result
+        stages.append(stage)
+    raise BootInconclusive('inconclusive: the guest failed in its boot stage in %d of %d attempts (%s); the run says nothing about the claim'
+                           % (len(stages), BOOT_ATTEMPTS, ', '.join(stages)))
+
+
+def run_qemu(command, timeout, **kwargs):
+    """subprocess.run of a guest with captured text output, run again after a boot-stage failure or a kill (until_booted)."""
+    return until_booted(lambda: subprocess.run(command, capture_output=True, text=True, timeout=timeout, **kwargs),
+                        lambda done: (done.stdout or '') + (done.stderr or ''), lambda done: done.returncode)
+
+
+def _kill_seconds(table, name):
+    limit = json.loads((Path(__file__).resolve().parents[1] / 'tools/gate-slots.json').read_text())[table][name]
     return limit['kill_multiplier'] * limit['slowest_loaded_run_seconds']
+
+
+def qemu_kill_seconds(name):
+    """The wall-clock bound on a QEMU run of the check: kill_multiplier times the slowest run measured at the gate's parallelism
+    (tools/measure-kill-limits.py records the measurement in tools/gate-slots.json). A run past it is run again (until_booted)."""
+    return _kill_seconds('qemu_checks', name)
+
+
+def host_kill_seconds(name):
+    """The same for a check that runs its own host binaries (host_checks of tools/gate-slots.json)."""
+    return _kill_seconds('host_checks', name)
 
 
 def copy_image(source, destination):
@@ -344,6 +439,76 @@ def hook_addresses(uc, addresses, callback):
     for address in sorted(addresses):
         uc.hook_add(UC_HOOK_CODE, callback, begin=address, end=address)
     return addresses
+
+
+class TwoCores:
+    """Run two code paths of one emulated image as two cores would, switching between them at chosen accesses.
+
+    A writer (such as a service's owner task) and a reader (such as its quiesce step on the supervisor's core) share some
+    words. Each store by the writer to a shared word and each load by the reader of one is an event. run() takes a
+    schedule (a, k, b): the writer runs until just after its a-th event (a = 0: before it starts), the reader until just
+    after its k-th event (k = 0: no pause), the writer on until just after its b-th event (b <= a: no further step), then
+    the reader to its end and the writer to its end. Trying every (a, k, b) covers each place the reader's loads can fall
+    among the writer's stores, including a pair of loads that straddles one or more stores.
+
+    A pause takes effect at the next instruction, through a code hook: Unicorn stops before a code hook's instruction
+    with the program counter correct, while a stop requested from a memory hook leaves the counter at the accessing
+    instruction. The memory hooks therefore only count."""
+
+    def __init__(self, uc, words, sentinel, budget=5_000_000):
+        from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_HOOK_MEM_READ
+        self.uc, self.sentinel, self.budget = uc, sentinel, budget
+        self.side, self.count, self.target, self.pending, self.paused = None, {'writer': 0, 'reader': 0}, None, False, False
+        self.hooks = [uc.hook_add(UC_HOOK_CODE, self._code)]
+        for address, size in words:
+            self.hooks.append(uc.hook_add(UC_HOOK_MEM_WRITE, self._access, 'writer', address, address + size - 1))
+            self.hooks.append(uc.hook_add(UC_HOOK_MEM_READ, self._access, 'reader', address, address + size - 1))
+        # Unicorn compiles hook calls into translated code, so code translated before these hooks never calls them.
+        uc.ctl_flush_tb()
+
+    def close(self):
+        for hook in self.hooks:
+            self.uc.hook_del(hook)
+        self.uc.ctl_flush_tb()
+
+    def _access(self, uc, access, address, size, value, side):
+        if self.side == side:
+            self.count[side] += 1
+            if self.count[side] == self.target:
+                self.pending = True
+
+    def _code(self, uc, address, size, data):
+        if self.pending:
+            self.pending, self.paused = False, True
+            uc.emu_stop()
+
+    def _resume(self, side, context, target, ended):
+        """Run side from its saved context; return its context when it paused, None when it ended."""
+        from unicorn.arm64_const import UC_ARM64_REG_PC
+        self.side, self.target, self.pending, self.paused = side, target, False, False
+        self.uc.context_restore(context)
+        self.uc.emu_start(self.uc.reg_read(UC_ARM64_REG_PC), self.sentinel, count=self.budget)
+        self.side = None
+        if self.paused:
+            return self.uc.context_save()
+        assert ended(), (side, 'neither paused nor ended')
+        return None
+
+    def run(self, writer, reader, schedule, writer_ended, reader_ended):
+        """writer and reader are saved contexts at their entries; each *_ended() says whether that side finished."""
+        a, k, b = schedule
+        self.count = {'writer': 0, 'reader': 0}
+        if writer is not None and a > 0:
+            writer = self._resume('writer', writer, a, writer_ended)
+        if reader is not None:
+            reader = self._resume('reader', reader, k or None, reader_ended)
+        if writer is not None and b > a:
+            writer = self._resume('writer', writer, b, writer_ended)
+        if reader is not None:
+            reader = self._resume('reader', reader, None, reader_ended)
+        if writer is not None:
+            writer = self._resume('writer', writer, None, writer_ended)
+        return dict(self.count)
 
 
 def save(path, value):

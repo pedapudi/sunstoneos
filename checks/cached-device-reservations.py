@@ -10,6 +10,7 @@ import struct
 import subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
+import harness  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_RUNS = [
@@ -105,8 +106,8 @@ endforeach()
             log = out / (name + '-' + str(suffix) + '.log')
         log.write_text('')
         try:
-            r = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, timeout=timeout, env=environment)
+            r = harness.until_booted(lambda: subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, timeout=timeout, env=environment), lambda done: (done.stdout or '') + (done.stderr or ''))
         except subprocess.TimeoutExpired as error:
             output = error.stdout or b''
             log.write_text(output.decode(errors='replace') if isinstance(output, bytes) else output)
