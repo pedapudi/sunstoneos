@@ -1570,12 +1570,18 @@
  
  #endif /* configNUM_THREAD_LOCAL_STORAGE_POINTERS */
  /*-----------------------------------------------------------*/
-@@ -6220,6 +6913,19 @@
+@@ -6220,6 +6913,25 @@
      void * pvTaskGetThreadLocalStoragePointer( TaskHandle_t xTaskToQuery,
                                                 BaseType_t xIndex )
      {
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
 +traceENTER_pvTaskGetThreadLocalStoragePointer( xTaskToQuery, xIndex );
++/* The caller's own pointers are read with a plain load: no pin, no object lock. Invariant: a task's pointer at
++ * SUNSTONE_DEADLINE_TLS is written only by that task, once, in sunstone_deadline_register before its first wait
++ * (runtime/deadline.c), so no other core races the read. With no current task the result is NULL. A pointer that another task writes needs the locked path. */
++if (xTaskToQuery == NULL) {
++TCB_t * ss_self = ssKernelSelf(); void * ss_trace_result = (ss_self == NULL || xIndex < 0 || xIndex >= configNUM_THREAD_LOCAL_STORAGE_POINTERS) ? NULL : ss_self->pvThreadLocalStoragePointers[xIndex];
++traceRETURN_pvTaskGetThreadLocalStoragePointer(ss_trace_result); return ss_trace_result; }
 +UBaseType_t ss_handle_irq = portSET_INTERRUPT_MASK();
 +if (xIndex < 0 || xIndex >= configNUM_THREAD_LOCAL_STORAGE_POINTERS) { void * ss_trace_result = (NULL); portCLEAR_INTERRUPT_MASK(ss_handle_irq); traceRETURN_pvTaskGetThreadLocalStoragePointer(ss_trace_result); return ss_trace_result; }
 +struct ss_kernel_pin pin;

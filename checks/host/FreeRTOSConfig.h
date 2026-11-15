@@ -34,6 +34,9 @@ void host_trace_give(void);
 #define configUSE_TIMERS 0
 #define configUSE_TASK_NOTIFICATIONS 1
 #define configTASK_NOTIFICATION_ARRAY_ENTRIES 3
+/* One task-local pointer: the task's deadline-owner slot (SUNSTONE_DEADLINE_TLS, include/sunstone_deadline.h). Nothing
+ * else in the tree or the kernel patches uses the task-local pointers. */
+#define configNUM_THREAD_LOCAL_STORAGE_POINTERS 1
 #define configCHECK_FOR_STACK_OVERFLOW 0
 #ifdef SUNSTONE_GPU_TIMING
 /* As include/FreeRTOSConfig.h: the diagnostic notes a worker block on a queue receive. */

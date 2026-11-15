@@ -2,7 +2,7 @@
 """Execute GPU peer notification selection, startup and precise fence waits.
 
 The actual application selector, runtime deadline wait and GPU notification
-publishers execute. Kernel delivery and timeline values are modeled. The four-second primary/peer ordering
+publishers execute. Kernel delivery, task-local pointers and timeline values are modeled. The four-second primary/peer ordering
 models the failed lifecycle handshake, not a physical latency prediction.
 """
 import argparse
@@ -48,7 +48,7 @@ def run(path, case, ready_index=None, completion_index=None):
     skip_crumbs(u, image)
     task, peer, service, queue = 0x80001000, 0x80001100, 0x80003000, 0x80010000
     current = peer if 'peer' in case or case.startswith('startup-') else task
-    state = {'now': 1100, 'wait_indices': [], 'callback': False, 'publisher_index': None}
+    state = {'now': 1100, 'wait_indices': [], 'callback': False, 'publisher_index': None, 'task_local': {}}
 
     def put(address, value, width=8):
         u.mem_write(address, int(value).to_bytes(width, 'little'))
@@ -98,7 +98,8 @@ def run(path, case, ready_index=None, completion_index=None):
                  'vTaskExitCritical', 'sunstone_deadline_now_us', 'sunstone_deadline_kick',
                  'ulTaskGenericNotifyTake', 'pvr_gpu_call', 'ss_live', 'ss_fail',
                  'gpu_queue_peer_main', 'board_service_deadline_register', 'application_entry_ready',
-                 'os_session_inputs', 'a733_smp_counter', 'xTaskGenericNotify', 'vTaskGenericNotifyGiveFromISR'):
+                 'os_session_inputs', 'a733_smp_counter', 'xTaskGenericNotify', 'vTaskGenericNotifyGiveFromISR',
+                 'pvTaskGetThreadLocalStoragePointer', 'vTaskSetThreadLocalStoragePointer'):
         if name in image.symbols:
             hooks[image.address(name)] = name
     hooks[0x80000200] = 'job-clock'
@@ -117,6 +118,11 @@ def run(path, case, ready_index=None, completion_index=None):
         elif name == 'xTaskGetApplicationTaskTag':
             ret(0x80022000 if case == 'main-selector' else 0)
         elif name in ('vTaskEnterCritical', 'vTaskExitCritical', 'sunstone_deadline_kick'):
+            ret()
+        elif name == 'pvTaskGetThreadLocalStoragePointer':
+            ret(state['task_local'].get('%x:%d' % (current, args[1]), 0))
+        elif name == 'vTaskSetThreadLocalStoragePointer':
+            state['task_local']['%x:%d' % (current, args[1])] = args[2]
             ret()
         elif name == 'sunstone_deadline_now_us':
             ret(state['now'])

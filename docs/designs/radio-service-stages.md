@@ -262,11 +262,21 @@ confirmation four bytes longer, and with the first one a byte short;
 `checks/aic8800-dispatch.c` cover the binding messages, the memory
 confirmations and the dispatcher's matching rules.
 
-Two board runs reached the pairwise key add. In run 5 (entry
+Three board runs reached the pairwise key add. In run 5 (entry
 1794738427185556712-c450b701) no confirmation came within the 1 s bound the
 image then had; that remains unexplained. In run 6 (entry
 1794745255109339882-f869332f) the confirmation came at once as two bytes with
 status 0, and the image refused it because it then required exactly 4 bytes.
+In run 7 (entry 1794751437798567373-be2dcf1b), with the lengths above, the
+stage ended authorized: connect 4.13 s after arming, both key adds and the port
+open confirmed, the link secured 0.42 s after connect, the orderly shutdown
+matched and the board returned 4.66 s after arming.
+
+The trace counts milliseconds from the transport's clock read at the start of
+each owner pass. A confirmation read in the same pass as its write completed
+reads 0 ms, as every confirmation did in run 7, so the trace resolves no
+latency below one pass and one millisecond. The 6000 ms command bound stays
+until a run measures a latency it can be tightened against.
 
 ## The address stage leases an IPv4 address and resolves one name
 
