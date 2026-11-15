@@ -386,9 +386,12 @@ static int cpu_gpu_case(unsigned mode)
  * host CPUs at their recorded events.
  * - The power service (core 0) runs service_step() when notified or when its
  *   ticks elapse, as the blocked task wakes; otherwise it advances model time
- *   to the host's elapsed time since the threads started and yields, so that
- *   model time passes at least as fast as host time, whatever the speed of
- *   its loop.
+ *   by SERVICE_STEP_US and yields. It advances only after each running NPU
+ *   and GPU thread has passed one of its loops since the previous advance,
+ *   so that model deadlines count the threads' own progress: a thread that
+ *   the host does not schedule stops model time instead of expiring a
+ *   deadline. A host watchdog fails the run when no thread progresses for
+ *   HOST_WATCHDOG_US of host time.
  * - The NPU bootstrap (core 1) has a job in flight from its start. Until the
  *   job completes it checks the job's invariant continuously
  *   (npu_invariant()); it then calls a733_npu_startup_stop, retrying BUSY.
@@ -409,6 +412,8 @@ static int cpu_gpu_case(unsigned mode)
  * to the sampled runs in case 8 and to those runs in case 9. A failed condition
  * prints one JSON line with its "violation" text and aborts. */
 #define RUN_LIMIT_US 2000000u /* model-time bound of each run's threads */
+#define SERVICE_STEP_US 1u
+#define HOST_WATCHDOG_US 60000000u
 static atomic_ulong events;
 static atomic_int job_active,gpu_active,gpu_done,threads_finished;
 static unsigned threaded_mode,run_index;
@@ -430,7 +435,12 @@ static _Noreturn void violation(const char *what,unsigned long value)
         (unsigned long long)gpu_delay_us,(unsigned long long)npu_delay_us);
     fflush(stderr);abort();
 }
-static void bounded(const char *what){if(model_now()>=run_limit)violation(what,0);}
+/* Loop passes of the NPU (0) and GPU (1) threads, and which of them run. */
+static atomic_uint beats[2];
+static atomic_int alive[2];
+static _Thread_local int beat_slot=-1;
+static void beat(void){if(beat_slot>=0)atomic_fetch_add_explicit(&beats[beat_slot],1,memory_order_relaxed);}
+static void bounded(const char *what){beat();if(model_now()>=run_limit)violation(what,0);}
 /* The NPU job's invariant: the PCK clock gate, the NPU AHB and MBUS master
  * gates, PLL_NPU unchanged and locked, the domain-4 row ON and the NPU's PCK
  * lease live. LOCK is read through the model's read path, which reports it. */
@@ -454,26 +464,35 @@ static void npu_invariant(void)
     if(lease!=A733_GPU_RESOURCE_OK)violation("NPU PCK lease not live while the NPU job is in flight",lease);
     ++rec.samples;
     if(before && atomic_load(&gpu_active))++rec.samples_in_gpu;
+    beat();
 }
 static uint64_t host_us(void)
 {struct timespec t;assert(!clock_gettime(CLOCK_MONOTONIC,&t));return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u;}
 static void *service_thread(void *unused)
 {
     (void)unused;rec.service_cpu=sched_getcpu();
-    const uint64_t host_start=host_us(),model_start=model_now();
+    unsigned seen[2]={0,0};uint64_t progressed=host_us();
     while(!atomic_load(&threads_finished)) {
         int due;
         {MODEL_GUARD();due=d.notified || m.now>=d.wake_at;}
         if(due){service_step();++rec.service_steps;continue;}
-        const uint64_t paced=model_start+(host_us()-host_start);
-        {MODEL_GUARD();if(paced>m.now)m.now=paced;}
+        int advance=1;unsigned now_beats[2];
+        for(unsigned i=0;i<2;++i) {
+            now_beats[i]=atomic_load_explicit(&beats[i],memory_order_relaxed);
+            if(atomic_load(&alive[i]) && now_beats[i]==seen[i])advance=0;
+        }
+        if(advance) {
+            seen[0]=now_beats[0];seen[1]=now_beats[1];progressed=host_us();
+            MODEL_GUARD();m.now+=SERVICE_STEP_US;
+        } else if(host_us()-progressed>HOST_WATCHDOG_US)
+            violation("deadline: no thread progressed within the host watchdog",0);
         sched_yield();
     }
     return 0;
 }
 static void *npu_thread(void *unused)
 {
-    (void)unused;bootstrap_running=1;
+    (void)unused;bootstrap_running=1;beat_slot=0;
     rec.job_begin=event();atomic_store(&job_active,1);
     if(threaded_mode==8)
         while(!atomic_load(&gpu_done)){npu_invariant();bounded("deadline: the GPU retirement did not complete during the NPU job");}
@@ -489,14 +508,14 @@ static void *npu_thread(void *unused)
     }
     rec.stop_end=event();
     if(x!=A733_NPU_PLATFORM_READY)violation("the NPU local stop did not return READY",x);
-    bootstrap_running=0;return 0;
+    atomic_store(&alive[0],0);bootstrap_running=0;return 0;
 }
 static void *gpu_thread(void *unused)
 {
-    (void)unused;
+    (void)unused;beat_slot=1;
     while(!atomic_load(&job_active)){bounded("deadline: the NPU job did not start");sched_yield();}
     const uint64_t start=model_now()+gpu_delay_us;
-    while(model_now()<start)sched_yield();
+    while(model_now()<start){bounded("deadline: the GPU delay did not end");sched_yield();}
     rec.gpu_cpu=sched_getcpu();rec.gpu_begin=event();rec.gpu_begin_us=model_now();atomic_store(&gpu_active,1);
     if(a733_pmic_consumer_health(&supply)!=1)violation("the GPU supply consumer is not healthy at retirement",0);
     gpu_deadline=run_limit;
@@ -513,7 +532,7 @@ static void *gpu_thread(void *unused)
     }
     if(released!=A733_GPU_RESOURCE_OK)violation("a733_gpu_resources_release of client 9 failed",released);
     rec.gpu_end_us=model_now();rec.gpu_end=event();
-    atomic_store(&gpu_active,0);atomic_store(&gpu_done,1);
+    atomic_store(&gpu_active,0);atomic_store(&gpu_done,1);atomic_store(&alive[1],0);
     return 0;
 }
 static uint64_t random_state;
@@ -544,7 +563,7 @@ static void end_state(unsigned wire,uint32_t ahb,uint32_t mbus,uint32_t pck,uint
 static int threaded_case(unsigned mode,unsigned runs,uint64_t seed,unsigned minimum)
 {
     threaded_mode=mode;random_state=seed ? seed : 1;
-    const uint64_t gpu_span=mode==8 ? 200 : 50,npu_span=mode==8 ? 200 : 50;
+    const uint64_t gpu_span=mode==8 ? 200 : 50,npu_span=mode==8 ? 200 : 10;
     unsigned overlapped=0,sampled=0,stop_inside=0,distinct=0,samples=0,in_gpu=0,status_busy=0,release_busy=0,stop_busy=0;
     uint64_t gpu_min_us=UINT64_MAX,gpu_max_us=0;
     register_waits=0;
@@ -555,6 +574,7 @@ static int threaded_case(unsigned mode,unsigned runs,uint64_t seed,unsigned mini
         const uint64_t pck_token=s.pck.token;
         job_pll=r.ccu[0x2a0/4];memset(&rec,0,sizeof(rec));atomic_store(&events,0);
         atomic_store(&job_active,0);atomic_store(&gpu_active,0);atomic_store(&gpu_done,0);atomic_store(&threads_finished,0);
+        atomic_store(&beats[0],0);atomic_store(&beats[1],0);atomic_store(&alive[0],1);atomic_store(&alive[1],1);
         run_limit=m.now+RUN_LIMIT_US;
         pthread_t service,npu,gpu_task;
         assert(!pthread_create(&service,0,service_thread,0));
