@@ -20,8 +20,9 @@
 #define A733_POWER_DOMAIN1_FAULT  (1u << 11)
 #define A733_POWER_DOMAIN4_FAULT  (1u << 12)
 #define A733_POWER_DOMAIN5_FAULT  (1u << 13)
+#define A733_POWER_DOMAIN2_FAULT  (1u << 14)
 _Static_assert(((A733_POWER_SUPPLY_DONE | A733_POWER_DCDC2_VERIFIED | A733_POWER_DCDC4_VERIFIED |
-    A733_POWER_DOMAIN1_FAULT | A733_POWER_DOMAIN4_FAULT | A733_POWER_DOMAIN5_FAULT) &
+    A733_POWER_DOMAIN1_FAULT | A733_POWER_DOMAIN2_FAULT | A733_POWER_DOMAIN4_FAULT | A733_POWER_DOMAIN5_FAULT) &
     (A733_POWER_PROVIDER_READY | A733_POWER_PMIC_TRANSFER)) == 0, "state-word bits are disjoint");
 
 #define A733_POWER_PCK_DOMAIN(domain) (UINT32_C(0x07060000) + UINT32_C(0x1000) * (domain))
@@ -33,7 +34,9 @@ _Static_assert(((A733_POWER_SUPPLY_DONE | A733_POWER_DCDC2_VERIFIED | A733_POWER
  * the provider is READY; the provider's startup deadline bounds the wait for
  * READY. */
 #define A733_POWER_SUPPLY_BUDGET_US 100000u
-/* Provisional spin after a PCK600 command; board evidence replaces it. */
+/* Provisional spin after a PCK600 command. It stays until at least three
+ * transitions of domain 2, or of domain 5, have been timed on the board with
+ * measure_transitions set; their command-to-status times then size it. */
 #define A733_POWER_PCK_SPIN_US 50u
 /* Bound from pck600_domains.c lines 112-121, capped by the service deadline.
  * Target status must be observed and checked strictly before that bound. */
@@ -63,12 +66,29 @@ struct a733_power_service_config {
 /* Domain states, service task only. */
 enum { A733_POWER_DOMAIN_UNKNOWN, A733_POWER_DOMAIN_OFF, A733_POWER_DOMAIN_ON_WAIT,
        A733_POWER_DOMAIN_ON, A733_POWER_DOMAIN_OFF_WAIT, A733_POWER_DOMAIN_FAILED };
+/* The latest admission and PCK600 transition of one domain, service task
+ * only; it adds no register access. It exists to size A733_POWER_PCK_SPIN_US
+ * from board data and is deleted once that is done, at the latest on
+ * 2026-12-14.
+ *
+ * The owner fails a transition at any status read whose bits 3:0 are neither
+ * the starting value nor the target, so a successful one reads the starting
+ * value reads - 1 times and then the target once; all_and and all_or show
+ * whether any other bit (bit 8, dynamic enable in Arm's PPU layout, among
+ * them) changed in any read. Times are the service clock just before each
+ * read; command_at is taken after the policy write completed. */
+struct a733_power_transition {
+    uint32_t policy_before, status_before; /* full words at the latest admission or release */
+    uint32_t policy_written, first_word, pending_word, reached_word, all_and, all_or;
+    uint32_t reads, spin_reads, commands;
+    uint64_t command_at, first_at, pending_at, reached_at;
+};
 struct a733_power_domain {
     unsigned id, state, count;
     unsigned delays_ready; /* all five delay words written and read back */
     uint64_t command_at, deadline;
 };
-#define A733_POWER_DOMAINS 3u /* 1, 4 and 5 */
+#define A733_POWER_DOMAINS 4u /* 1, 4, 5 and 2 */
 struct a733_power_domains {
     struct a733_power_domains *self;
     struct a733_pmic *pmic;
@@ -87,6 +107,8 @@ struct a733_power_domains {
     uint64_t verify_at, verify_deadline, last_now;
     unsigned running, supply_stage, supply_verified, failed;
     unsigned settled_supply; /* Before the service runs only; then read-only. */
+    unsigned measure_transitions; /* likewise; see a733_power_domains_measure_transitions() */
+    struct a733_power_transition transition[A733_POWER_DOMAINS]; /* by slot; service task only */
 };
 
 /* Before the scheduler: bind zeroed storage to the PMIC provider, whose
@@ -102,17 +124,26 @@ int a733_power_domains_init(struct a733_power_domains *, struct a733_pmic *,
  * selector change (drivers/regulator/core.c lines 2905-2930 and 3660-3713,
  * linux-orangepi 2ac08e8c). Returns 0 once the service has run. */
 int a733_power_domains_settled_supply(struct a733_power_domains *);
-/* Register a zeroed row before the service task first runs: domain 1, 4 or 5,
- * the consumer's owner identity and its rail token, which must hold the
- * domain's supply (DCDC2 for domains 1 and 4, DCDC4 for domain 5) by the time
+/* Before the service task first runs, in a measurement run only (the video
+ * decoder's first board stage): after each PCK600 command the service reads
+ * status back to back until the target or the A733_POWER_PCK_BOUND_US bound,
+ * instead of spinning for A733_POWER_PCK_SPIN_US and then reading once per
+ * step, so that the transition record brackets the time to the target within
+ * one read gap. The service task then holds its core for up to that bound.
+ * Returns 0 once the service has run. */
+int a733_power_domains_measure_transitions(struct a733_power_domains *);
+/* Register a zeroed row before the service task first runs: domain 1, 2, 4 or
+ * 5, the consumer's owner identity and its rail token, which must hold the
+ * domain's supply (DCDC2 for domains 1, 2 and 4, DCDC4 for domain 5) by the time
  * of the first request. The token storage stays at this address and is not
  * changed while the row is counted. Returns 1 on success, no hardware access.
  * Inline, so that the GPU platform registers its row without linking the
- * owner. The NPU startup uses a domain-4 row and retains it at local CLOSE. */
+ * owner. The NPU startup uses a domain-4 row and retains it at local CLOSE;
+ * the video decoder uses a domain-2 row. */
 static inline int a733_power_domain_row_init(struct a733_power_domain_row *r, struct a733_power_domains *d,
     unsigned domain, uint64_t owner, const struct a733_rail_token *rail)
 {
-    if (!r || r->domains || !d || d->self != d || d->running || (domain != 1 && domain != 4 && domain != 5) ||
+    if (!r || r->domains || !d || d->self != d || d->running || (domain != 1 && domain != 2 && domain != 4 && domain != 5) ||
         !owner || !rail || !a733_ranges_disjoint(r, sizeof(*r), d, sizeof(*d))) return 0;
     *r = (struct a733_power_domain_row){.domains = d, .rail = rail, .next = d->rows, .notify = d->ops.notify,
         .notify_context = d->context, .owner = owner, .domain = domain};
@@ -136,9 +167,11 @@ int a733_power_service_idle(const struct a733_power_domains *);
  * 0 before. One acquire load; any task. */
 int a733_power_service_ready(const struct a733_power_domains *);
 /* Read-only domain-level check for a consumer that must write its own resets
- * and clocks before its row request (the NPU): MBUS gates, the PPU clock, and
- * command and status both OFF or both ON. 1 consistent, 0 refused. When state
- * is not NULL and the check passes, it receives the status read, 0 for OFF or
- * 8 for ON. Any task; no write. Only domains 1, 4 and 5. */
+ * and clocks before its row request (the NPU): the domain's MBUS gates (none
+ * for domain 2, whose gates are critical clocks that its consumer handles),
+ * the PPU clock, and command and status both OFF or both ON. 1 consistent,
+ * 0 refused. When state is not NULL and the check passes, it receives the
+ * status read, 0 for OFF or 8 for ON. Any task; no write. Domains 1, 2, 4
+ * and 5. */
 int a733_power_domain_check(struct a733_power_domains *, unsigned domain, unsigned *state);
 #endif

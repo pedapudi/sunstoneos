@@ -1,7 +1,7 @@
 # Design: one power-domain owner and one PMIC service task
 
-Status: **implemented and host-tested** for domains 1, 4 and 5 and the service
-task; **qualified on the board** only for the PMIC snapshot step times of the
+Status: **implemented and host-tested** for domains 1, 2, 4 and 5 and the
+service task (domain 2's consumer, the video decoder, is not yet on its row); **qualified on the board** only for the PMIC snapshot step times of the
 service (bundle 6, read-only); **open** for domain transitions on the board.
 [docs/power-domains.md](../power-domains.md) describes the component.
 [power-authority.md](power-authority.md) covers the rail ledger, the state
