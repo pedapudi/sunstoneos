@@ -6,7 +6,7 @@ managers, and the actual PMIC provider, rail ledger and power-domain owner (chec
 register model of the CCU, the published nonsecure boot ROM and the decoder. PCK domain 2 exists only in the owner
 model's PPU words: the decoder requests it through its row and writes no PCK600 register. The model starts from the
 port 3-3 FEL words (gates 0x5c0 0x110103ff, 0x5e0 0xf1055803, 0x5e4 0x4; PLL_VE0 0x41305a00) and from fifteen other
-PLL entry and lock cases, domain 2 OFF, ON or incoherent, critical gates clear after ON, two power lifetimes
+PLL entry and lock cases, the CCU words a hold-B fault left (refused at entry with no write), domain 2 OFF, ON or incoherent, critical gates clear after ON, two power lifetimes
 joined by the quiesce (docs/designs/video-pll.md), the VE+0x804 pulse under two readbacks that no source documents,
 and faults after the first write closed by a733_video_decoder_fault_close. Every read the binding makes must pass the
 native read allowlist. Each mutant changes one text in one driver source; the model must

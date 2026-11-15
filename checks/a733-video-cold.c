@@ -433,6 +433,9 @@ static void reset_released(struct model *m){m->ccu[0xa8c/4]|=1u<<18;}
 static void mbus_clear(struct model *m){m->ccu[0x5e0/4]&=~(1u<<14);}
 static void ahb_clear(struct model *m){m->ccu[0x5c0/4]&=~1u;}
 static void mclk_open(struct model *m){m->ccu[0x5e4/4]=0x40306;}
+/* The CCU words a hold-B fault left (run bd447f26), in case a watchdog reset keeps them: module gate and bus gate
+ * open, reset released, the MBUS gate open. */
+static void hold_b_left(struct model *m){m->ccu[0xa88/4]=0x81000000;m->ccu[0xa8c/4]=0x40004;m->ccu[0x5e4/4]=0x40306;}
 int main(int argc,char **argv)
 {
     assert(argc==3||(argc==4&&!strcmp(argv[3],"--reset")));
@@ -500,6 +503,7 @@ int main(int argc,char **argv)
         {0xe1204d00u,PLL_LOCKS,1,3,0xf9204d00u,0,"left enabled by a failed start: relocked"},
         {0xf1204d00u,PLL_LOCKS,1,3,0xf9204d00u,0,"left enabled and locked: relocked"},
         {0xc1204d00u,PLL_LOCKS,1,2,0xf9204d00u,0,"left enabled before lock enable: relocked"},
+        {0xf9204d00u,PLL_LOCKS,0,0,0xf9204d00u,hold_b_left,"hold-B words kept across a reset refused"},
     };
     for(unsigned row=0;row<sizeof(vendor_cases)/sizeof(vendor_cases[0]);++row) {
         const struct lifetime l={.ack_us=10,.pll=vendor_cases[row].scenario,.pll_entry=vendor_cases[row].entry,

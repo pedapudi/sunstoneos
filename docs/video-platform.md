@@ -428,7 +428,8 @@ fixture. PCK domain 2 exists only in the owner model. The cases cover:
   byte changed, PERI0 status clear, a PPU that never acknowledges, an
   uncertain write, an unlisted identity and the 26 MHz board;
 - the vendor point from the FEL words and fifteen other PLL entry and lock
-  states;
+  states, and the CCU words a hold-B fault left (module gate and bus gate open,
+  reset released), refused at entry with no write;
 - domain 2 left ON (adopted with no PCK write), policy and status disagreeing
   (refused by the owner with no decoder write), reset released at entry
   (refused with no request), either master gate clear after ON (refused at A1
