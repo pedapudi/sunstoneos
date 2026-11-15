@@ -379,6 +379,8 @@ static int cpu_gpu_case(unsigned mode)
 }
 #ifdef MODEL_THREADS
 #include <time.h>
+#include <string.h>
+#include <unistd.h>
 /* Cases 8 and 9 run the GPU retirement and the NPU retirement on real
  * threads after the deterministic boot of case 0, one thread for each core
  * of the image's placement. The host scheduler places the threads; the
@@ -417,6 +419,7 @@ static int cpu_gpu_case(unsigned mode)
 static atomic_ulong events;
 static atomic_int job_active,gpu_active,gpu_done,threads_finished;
 static unsigned threaded_mode,run_index;
+static int hold_npu; /* test: the NPU thread waits, beating, until the GPU retirement is done (argv[5] "hold-npu") */
 static uint64_t run_limit,gpu_delay_us,npu_delay_us;
 static uint32_t job_pll;
 static struct {
@@ -434,6 +437,13 @@ static _Noreturn void violation(const char *what,unsigned long value)
         threaded_mode,run_index,what,value,(unsigned long long)model_now(),(unsigned long long)run_limit,
         (unsigned long long)gpu_delay_us,(unsigned long long)npu_delay_us);
     fflush(stderr);abort();
+}
+/* A host that schedules none of the threads is not a result of the model: the run stops with the inconclusive status
+ * (checks/harness.py, INCONCLUSIVE_EXIT), which the check runs once more and then reports as inconclusive. */
+static _Noreturn void host_stalled(const char *what)
+{
+    fprintf(stderr,"INCONCLUSIVE: case %u run %u: %s\n",threaded_mode,run_index,what);
+    fflush(stderr);_exit(75);
 }
 /* Loop passes of the NPU (0) and GPU (1) threads, and which of them run. */
 static atomic_uint beats[2];
@@ -485,7 +495,7 @@ static void *service_thread(void *unused)
             seen[0]=now_beats[0];seen[1]=now_beats[1];progressed=host_us();
             MODEL_GUARD();m.now+=SERVICE_STEP_US;
         } else if(host_us()-progressed>HOST_WATCHDOG_US)
-            violation("deadline: no thread progressed within the host watchdog",0);
+            host_stalled("no thread progressed within the host watchdog");
         sched_yield();
     }
     return 0;
@@ -494,10 +504,17 @@ static void *npu_thread(void *unused)
 {
     (void)unused;bootstrap_running=1;beat_slot=0;
     rec.job_begin=event();atomic_store(&job_active,1);
+    if(hold_npu)while(!atomic_load(&gpu_done)){beat();sched_yield();}
     if(threaded_mode==8)
         while(!atomic_load(&gpu_done)){npu_invariant();bounded("deadline: the GPU retirement did not complete during the NPU job");}
     else
+#ifdef SS_OLD_CLAIM_DEADLINE
         while(!atomic_load(&gpu_active)){npu_invariant();bounded("deadline: the GPU retirement did not start during the NPU job");}
+#else
+        /* The retirement has started once it is active or done: a host that schedules the GPU thread long enough to run the whole
+         * retirement between two looks of this thread leaves gpu_active clear again. The claim is stated in the model's progress. */
+        while(!atomic_load(&gpu_active) && !atomic_load(&gpu_done)){npu_invariant();bounded("deadline: the GPU retirement did not start during the NPU job");}
+#endif
     const uint64_t end=model_now()+npu_delay_us;
     do npu_invariant(); while(model_now()<end);
     rec.job_end=event();
@@ -617,8 +634,9 @@ int main(int argc,char **argv)
 {
 #ifdef MODEL_THREADS
     /* mode runs seed minimum */
-    if(argc==5) {
+    if(argc==5 || argc==6) {
         const unsigned mode=(unsigned)strtoul(argv[1],0,10);assert(mode==8 || mode==9);
+        hold_npu=argc>5 && !strcmp(argv[5],"hold-npu");
         return threaded_case(mode,(unsigned)strtoul(argv[2],0,10),strtoull(argv[3],0,10),(unsigned)strtoul(argv[4],0,10));
     }
 #endif

@@ -15,14 +15,17 @@ enum a733_radio_stage {
     A733_RADIO_STAGE_IDENTIFIED, A733_RADIO_STAGE_SCANNED, A733_RADIO_STAGE_ASSOCIATED
 };
 #define A733_RADIO_RESULT_MAGIC UINT64_C(0x3152444152333337) /* bytes "733RADR1" */
-#define A733_RADIO_RESULT_VERSION 2u
+/* Version 3 adds the scan counts (head flags bit 10) and the RSN summary (bit 11). The image exports the version it
+ * writes as os_radio_result_version, and admission refuses an image whose version the runner's decoder lacks. */
+#define A733_RADIO_RESULT_VERSION 3u
 /* Four supplies are observed (DCDC1, DCDC8, BLDO5, CLDO1); SDIO defines
  * function numbers 0 to 7. Both are protocol or topology counts, not caps. */
 #define A733_RADIO_RESULT_RAILS 4u
 #define A733_RADIO_RESULT_FUNCTIONS 8u
 struct a733_radio_result_rail { uint8_t rail, enable, selector, flags; uint32_t programmed_uv; }; /* flags: bit0 enabled, bit1 decoded */
 struct a733_radio_result_function { uint16_t manufacturer, device; uint8_t class_code, present, pad[2]; };
-/* frequency_mhz and channel are as reported; security is 0 (not parsed). */
+/* frequency_mhz and channel are as reported; security is 0 (not parsed). ssid_bytes and ssid are always 0: the
+ * layout keeps the fields so that records already captured still decode. */
 struct a733_radio_result_ap { uint8_t bssid[6], ssid_bytes; int8_t rssi_dbm; uint16_t frequency_mhz; uint8_t channel, security, ssid[32]; };
 struct a733_radio_result_head {
     uint64_t magic;
@@ -61,6 +64,43 @@ struct a733_radio_assoc {
     uint32_t stage, link, status, supplicant, rsn, eapol_rx, eapol_tx, flags, candidates, frequency_rssi, ms_connect, ms_authorized;
 };
 _Static_assert(sizeof(struct a733_radio_assoc)==48,"association tail");
+/* The scan's counts, appended after the access point list and before any association tail when head flags bit 10 is
+ * set. sightings: scan results delivered as events. firmware_reported: the count in the firmware's scan-end event
+ * (SCANU_START_CFM result_cnt, which the vendor header describes as "Number of scan results available"). merges:
+ * sightings of a BSSID already listed, which replace its entry. set_aside: scan result records that the dispatcher
+ * retired without an event (another interface, or after the scan-end event). The listed count is sightings - merges -
+ * dropped. */
+struct a733_radio_scan_counts { uint32_t sightings, firmware_reported, merges, set_aside; };
+_Static_assert(sizeof(struct a733_radio_scan_counts)==16,"scan counts tail");
+/* The RSN element of the scan result the association stage judged: the passing candidate, or while none passes, the
+ * strongest result with the credential's SSID. Appended after the association tail when head flags bit 11 is set. It
+ * holds security capabilities only: no address, SSID or key.
+ * check: why the candidate test refused the element (enum a733_radio_rsn_check). group: the group cipher's suite
+ * type under OUI 00-0F-AC, A733_RADIO_RSN_SUITE_OTHER for another OUI, A733_RADIO_RSN_SUITE_ABSENT when the element
+ * ends before it. flags: bit 0 an RSN element was found, bit 1 a pairwise or key-management suite has another OUI,
+ * bit 2 the element is malformed (a count or length runs past its end), bit 3 it has a pairwise list, bit 4 it has a
+ * key-management list (an absent list means CCMP and 802.1X). parse_result: wpa_parse_wpa_ie_rsn's return
+ * (0 accepted). version and capabilities: the element's fields (capabilities bit 6 MFP required, bit 7 MFP capable).
+ * pairwise and akm: bit n set for suite type n under OUI 00-0F-AC (n < 32). */
+struct a733_radio_rsn {
+    uint8_t check, group, flags;
+    int8_t parse_result;
+    uint16_t version, capabilities;
+    uint32_t pairwise, akm;
+};
+_Static_assert(sizeof(struct a733_radio_rsn)==16,"RSN summary tail");
+#define A733_RADIO_RSN_SUITE_OTHER 0xffu
+#define A733_RADIO_RSN_SUITE_ABSENT 0xfeu
+/* The candidate test's checks in the order aic8800_supplicant_config_valid applies them. */
+enum a733_radio_rsn_check {
+    A733_RADIO_RSN_PASSED, A733_RADIO_RSN_NO_ELEMENT, A733_RADIO_RSN_TOO_LONG, A733_RADIO_RSN_MALFORMED,
+    A733_RADIO_RSN_GROUP_NOT_CCMP, A733_RADIO_RSN_PAIRWISE_NO_CCMP, A733_RADIO_RSN_MFP_REQUIRED,
+    A733_RADIO_RSN_NO_PSK, A733_RADIO_RSN_OTHER /* every RSN condition met; the configuration or parser refused */
+};
+/* Summarize an RSN element (ID 48, its length byte, then the body); element NULL records that none was found. */
+void a733_radio_rsn_summarize(struct a733_radio_rsn *,const uint8_t *element,size_t bytes);
+/* The first RSN condition of the PSK candidate test that the summary fails, or A733_RADIO_RSN_PASSED. */
+enum a733_radio_rsn_check a733_radio_rsn_classify(const struct a733_radio_rsn *);
 /* Memory comes from the caller: the radio build supplies the FreeRTOS heap. */
 struct a733_radio_allocator {
     void *(*allocate)(void *context,size_t bytes);
@@ -73,7 +113,9 @@ struct a733_radio_report {
     size_t ap_count,ap_capacity;
     struct a733_radio_allocator memory;
     struct a733_radio_assoc assoc;
-    unsigned has_assoc;
+    struct a733_radio_scan_counts scan;
+    struct a733_radio_rsn rsn;
+    unsigned has_assoc,has_scan,has_rsn;
 };
 /* Zero storage. Returns 0 if the allocator is incomplete. */
 int a733_radio_report_init(struct a733_radio_report *,const struct a733_radio_allocator *);
@@ -85,6 +127,8 @@ void a733_radio_report_platform(struct a733_radio_report *,const struct a733_rad
 /* The session's failure site, when the platform decided none (its fail_site is zero): source line << 16 | 0x100 |
  * stage. Call after a733_radio_report_platform. */
 void a733_radio_report_session_failure(struct a733_radio_report *,unsigned line,unsigned stage);
+/* Set the RSN summary (and head flags bit 11). */
+void a733_radio_report_rsn(struct a733_radio_report *,const struct a733_radio_rsn *);
 /* Set the association tail (and head flags bit 9). */
 void a733_radio_report_association(struct a733_radio_report *,const struct a733_radio_assoc *);
 void a733_radio_report_firmware(struct a733_radio_report *);
@@ -92,10 +136,14 @@ struct aic8800_firmware;
 void a733_radio_report_firmware_progress(struct a733_radio_report *,const struct aic8800_firmware *,uint64_t ticks_per_ms);
 void a733_radio_report_identity(struct a733_radio_report *,uint32_t chip_word,uint32_t subrevision_word);
 /* One scan result; the list keeps one entry per BSSID (the latest sighting) and
- * grows as needed. When memory runs out the result is counted in aps_dropped. */
-void a733_radio_report_ap(struct a733_radio_report *,const uint8_t bssid[6],const uint8_t *ssid,unsigned ssid_bytes,
-    uint16_t frequency_mhz,int8_t rssi_dbm);
+ * grows as needed. When memory runs out the result is counted in aps_dropped.
+ * The entry takes no SSID: a scan hears the user's network among its neighbours,
+ * and the record reaches the host's result files. ssid_bytes stays 0, and the
+ * host decoder refuses an entry whose length is not 0. */
+void a733_radio_report_ap(struct a733_radio_report *,const uint8_t bssid[6],uint16_t frequency_mhz,int8_t rssi_dbm);
 void a733_radio_report_scan_done(struct a733_radio_report *,unsigned reported);
+/* The dispatcher's count of scan result records retired without an event (saturates at UINT32_MAX). */
+void a733_radio_report_set_aside(struct a733_radio_report *,uint64_t set_aside);
 /* Length of the encoded record, and the encoding. encode returns the bytes
  * written, or 0 when capacity is smaller than the length. */
 size_t a733_radio_report_bytes(const struct a733_radio_report *);
