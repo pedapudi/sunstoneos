@@ -367,10 +367,11 @@ Three later deadlines follow in session time. The radio client application must 
 less the 5 s return reserve in `apps/radio-scan/manifest.json`, which is earlier than its 52 s run bound from its start.
 The radio owner's deadline is 10 ms before the session end, and the session ends at 60 s.
 
-- **Nominal.** Firmware is confirmed near 16.7 s. The scan takes about 3 s, the join well under 1 s and each handshake
-  message tens of milliseconds, so authorization comes near 21 s. The lease should follow within 1 to 2 s and the DNS answer within tens of
-  milliseconds; the fence and the normal shutdown follow, and the stage ends near 24 s.
-- **Worst case.** The association bounds (scan 10 s, join 8 s, security 14 s) can carry authorization to 48.7 s, and
+- **Nominal.** On the board, firmware is confirmed about 2 s into the session and association authorizes about 4.5 s
+  in. The lease should follow within 1 to 2 s and the DNS answer within tens of milliseconds; with the fence and the
+  normal shutdown, the stage ends near 8 s.
+- **Worst case.** With firmware confirmed at the 16.7 s the association budget allows, the association bounds (scan
+  10 s, join 8 s, security 14 s) can carry authorization to 48.7 s, and
   the stage's 17 s then stops at the 50 s startup deadline. The failure shutdown starts there, the client must finish by
   55 s, and the return has the 5 s reserve before the 60 s session end.
 
