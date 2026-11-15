@@ -14,8 +14,8 @@ The indices are defined in [include/sunstone_notify.h](../include/sunstone_notif
 
 The deadline wait obtains its index from `sunstone_deadline_notify_index()`. The default is index 0 (an OS service
 task keeps its own); `apps/os/application.c` returns index 2 for a task that carries the application tag, which the
-main task receives when the application starts and every task it creates inherits. The SD owner, an OS task that an
-application call creates, drops the tag.
+main task receives when the application starts and every task it creates inherits. The SD owner is an OS task that
+the OS start list creates, and it carries no application tag.
 The trusted GPU peer is created by the OS without that address-space tag.
 Its explicit task identity selects index 2 for startup and fence waits; the
 startup-ready publication also gives index 2. OS service tasks keep index 0.
@@ -27,7 +27,7 @@ startup-ready publication also gives index 2. OS service tasks keep index 0.
 | `os_application_usb_ready`, `os_application_usb_changed`, `os_application_host_observed` (`apps/os/application.c`) | main task, index 2 | Always. It ended any index 0 wait of the main task, including the application's deadline wait (status "notified" after microseconds) | Only while the main task sleeps in an OS wait that registered (`application_wait_until`: `main_entry`, `ss_usb_wait`, `ss_host_recv`); that wait removes what the OS gave |
 | `os_host_offer` (mailbox) | the task in `ss_host_recv` | Always | Same gating |
 | `os_large_finish` (`apps/os/large.c`) | a task registered in `ss_large_wait` | Without a lock; a notification after the wait returned stayed pending | Under the kernel lock the waiter also takes; the waiter removes what the loader gave |
-| `read_blocking` / SD owner ready wait (`apps/os/sd_owner.c`) | the caller | Index 1, and the ready wait repeats until the owner has answered or its time bound has passed | Unchanged |
+| SD owner request and ready waits (`apps/os/sd_owner.c`) | the caller | Index 1 for both waits; the ready wait repeated until the owner answered or its time bound passed | A request wait (`post`) repeats on index 1 until the owner has finished the request. The ready wait (`wait_ready`) waits for an event-group bit that the owner sets once the open's result is stored and never clears, so no task notification ends it |
 
 `ss_host_recv` also repeats its wait until a request arrives, the session ends or the timeout has passed, so a wake-up
 for another reason does not end the call.

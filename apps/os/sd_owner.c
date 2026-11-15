@@ -4,13 +4,14 @@
  * every card operation. It serves two mailboxes, each holding at most one request: the loader's reads (high priority)
  * and the writer's reads and write pieces (low priority). A write piece is at most OS_SD_WRITE_PIECE_SECTORS sectors, and
  * the owner looks at the loader's mailbox between pieces, so a model-loading read waits for at most the piece in flight.
- * Callers sleep on a task notification until the owner finishes their request; the owner sleeps on one until a request
- * arrives. Controller completion and bounded register waits are served inside a request by apps/os/large_sd.c.
+ * Each request lives on its caller's stack, and the caller sleeps on a task notification until the owner finishes it; the
+ * owner sleeps on one until a request arrives. Tasks that wait for the card to open wait on one event-group bit. Controller completion and bounded register waits are served inside a request by apps/os/large_sd.c.
  *
  * os_large_device() here replaces the read-only binding's entry for the loader (large_sd.c names its own
  * os_sd_open_owner_device in this build) and returns a proxy whose requests the owner runs. */
 #include "FreeRTOS.h"
 #include "task.h"
+#include "event_groups.h"
 #include "sd_hw.h"
 #include "quiesce.h"
 #include "cpu-return.h"
@@ -44,11 +45,11 @@ struct request {
 };
 static _Atomic(struct request *) loader_slot, writer_slot;
 static _Atomic(TaskHandle_t) owner;
-/* A task that waits for the card to open: an entry on its own stack, listed until the owner has taken its handle. The
- * owner takes the whole list once, when it publishes the open's result, and leaves WAITERS_TAKEN in its place. */
-struct ready_waiter { struct ready_waiter *next; TaskHandle_t task; atomic_int released; };
-#define WAITERS_TAKEN ((struct ready_waiter *)1)
-static _Atomic(struct ready_waiter *) ready_waiters;
+/* Set once, after the open's result is in `ready`: every task that waits for the open (start) waits for this bit, and it
+ * stays set, so a later caller returns at once. */
+#define READY_BIT ((EventBits_t)1)
+static StaticEventGroup_t ready_storage;
+static EventGroupHandle_t ready_group;
 static StaticTask_t owner_tcb;
 static StackType_t owner_stack[OWNER_STACK_WORDS];
 static const struct os_sd_hw *hw;
@@ -145,11 +146,11 @@ static enum os_quiesce_result storage_quiesce_step(struct os_quiesce *q)
         return OS_QUIESCE_DONE;             /* no task can open after this claim */
     if(state==SD_CLOSED)return OS_QUIESCE_DONE;
     if(state==SD_FAILED){
-        /* The open's own note (owner_main) is overwritten by this record, so this record carries the open's diagnostic word as its value. */
+        /* The open's own note (open_card) is overwritten by this record, so this record carries the open's diagnostic word as its value. */
         (void)os_quiesce_fault(q,SUNSTONE_CRUMB_FAIL_BOARD<<12|0x901,diag_word(),SUNSTONE_CRUMB_HERE());
         return OS_QUIESCE_FAULT;
     }
-    if(owner)xTaskNotifyGive(owner);       /* wake an IRQ/timer wait to observe the shared deadline */
+    xTaskNotifyGive(owner);                /* wake an IRQ/timer wait to observe the shared deadline */
     if(retirement_fault(q))return OS_QUIESCE_FAULT;
     return os_quiesce_result(q);
 }
@@ -269,19 +270,11 @@ static int owner_open_allowed(void)
     os_quiesce_complete(&storage_quiesce);return 0;
 }
 
-/* The open's result for every task that waits for it (start): ready first, then the list, so that a caller that finds the
- * list taken also finds the result. Each entry's fields are read before it is released, since its task may then return. */
+/* The open's result for every task that waits for it (start): the result first, then the bit, which wakes every waiter. */
 static void publish_ready(int result)
 {
     atomic_store(&ready, result);
-    struct ready_waiter *w = atomic_exchange(&ready_waiters, WAITERS_TAKEN);
-    while (w) {
-        struct ready_waiter *next = w->next;
-        TaskHandle_t task = w->task;
-        atomic_store_explicit(&w->released, 1, memory_order_release);
-        xTaskNotifyGiveIndexed(task, WAIT_INDEX);
-        w = next;
-    }
+    (void)xEventGroupSetBits(ready_group, READY_BIT);
 }
 
 /* Open the card for the first storage call. The open's waits are bounded by the owner's own deadline slot
@@ -292,14 +285,15 @@ static int open_card(void)
     hw = os_sd_open_owner();
     atomic_store_explicit(&storage_state,hw?SD_OPEN:SD_FAILED,memory_order_release);
     atomic_store(&first_us, sunstone_deadline_now_us());
-    publish_ready(hw ? 1 : -1);
     if (!hw) {
         /* A failed open leaves the controller's state uncertain and the platform register lock retained, which the thermal service
-         * then reports as its own failure. Note the open's stage first so that the record names the SD0 binding (the diagnostic
-         * word: stage in bits 7:0, its detail above). */
+         * then reports as its own failure. Note the open's stage before any caller hears the failure, so that the record names
+         * the SD0 binding (the diagnostic word: stage in bits 7:0, its detail above). */
         board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), diag_word(), SUNSTONE_CRUMB_HERE());
+        publish_ready(-1);
         return 0;
     }
+    publish_ready(1);
     return 1;
 }
 
@@ -368,25 +362,19 @@ int os_sd_pins(struct a733_pin_handoff *pins) { return pins != NULL; }
  * call asks. It is an OS service task and runs in the kernel's table from its first instruction (include/os_space.h). */
 int os_sd_start(void)
 {
+    ready_group = xEventGroupCreateStatic(&ready_storage);
     owner = os_task_create_static(NULL, owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb);
-    return owner != NULL;
+    return ready_group != NULL && owner != NULL;
 }
 
 /* The owner task: for the QEMU check that it holds no application tag. */
 TaskHandle_t os_sd_owner_task(void) { return owner; }
 
-/* Wait for the open's result. The entry is listed before the result is read and the owner stores the result before it
- * takes the list, so either the owner finds the entry or this task finds the list taken. A wake is only a hint: the wait
- * ends when the owner has released the entry. No deadline slot is needed, because the owner's open is bounded. */
+/* Wait for the open's result. The bit is set after the result is stored and is never cleared, and a task notification
+ * cannot end an event-group wait. No deadline slot is needed, because the owner's open is bounded by its own. */
 static int wait_ready(void)
 {
-    struct ready_waiter self = {.task = xTaskGetCurrentTaskHandle()};
-    struct ready_waiter *head = atomic_load(&ready_waiters);
-    do {
-        if (head == WAITERS_TAKEN) return atomic_load(&ready) == 1;
-        self.next = head;
-    } while (!atomic_compare_exchange_weak(&ready_waiters, &head, &self));
-    while (!atomic_load_explicit(&self.released, memory_order_acquire)) ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, portMAX_DELAY);
+    (void)xEventGroupWaitBits(ready_group, READY_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     return atomic_load(&ready) == 1;
 }
 
@@ -394,7 +382,7 @@ static int wait_ready(void)
  * before the open has finished waits for its result. */
 static int start(void)
 {
-    if(os_cpu_return_requested()||!owner)return 0;
+    if(os_cpu_return_requested())return 0;
     unsigned state=SD_UNOPENED;
     if(atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_STARTING,memory_order_acq_rel,memory_order_acquire))
         xTaskNotifyGive(owner);
@@ -435,14 +423,15 @@ const struct os_large_device *os_large_device(void)
 void os_large_device_close(void) {}
 
 /* --- the writer's view -------------------------------------------------------------------------------------------- */
-static struct request writer_request;
+/* Each request is built on its caller's stack and held there until the owner finishes it (post waits), so a task whose
+ * post is refused because the mailbox holds another task's request changes nothing of that request. */
 static int writer_read(void *c, uint64_t sector, uint32_t count, uint8_t *out)
 {
     (void)c;
     for (uint32_t done = 0; done < count;) {
         uint32_t n = count - done < OS_SD_WRITE_PIECE_SECTORS ? count - done : OS_SD_WRITE_PIECE_SECTORS;
-        writer_request = (struct request){.kind = K_READ, .sector = sector + done, .count = n, .buffer = out + (size_t)done * 512u};
-        if (!post(&writer_slot, &writer_request, 1)) return 0;
+        struct request r = {.kind = K_READ, .sector = sector + done, .count = n, .buffer = out + (size_t)done * 512u};
+        if (!post(&writer_slot, &r, 1)) return 0;
         done += n;
     }
     return 1;
@@ -451,49 +440,49 @@ static int writer_write(void *c, uint64_t sector, uint32_t count, const uint8_t 
 {
     (void)c;
     if (!count || count > OS_SD_WRITE_PIECE_SECTORS) return 0;            /* the service splits at its max_write_sectors */
-    writer_request = (struct request){.kind = K_WRITE, .sector = sector, .count = count, .source = data};
-    return post(&writer_slot, &writer_request, 1);
+    struct request r = {.kind = K_WRITE, .sector = sector, .count = count, .source = data};
+    return post(&writer_slot, &r, 1);
 }
 static int writer_transaction(void *c, unsigned event, unsigned operation, uint32_t *token)
 {
     (void)c;
-    writer_request = (struct request){.kind=K_TRANSACTION,.event=event,.operation=operation,.token=*token};
-    if (!post(&writer_slot, &writer_request, 1)) return 0;
-    *token=writer_request.token;
+    struct request r = {.kind=K_TRANSACTION,.event=event,.operation=operation,.token=*token};
+    if (!post(&writer_slot, &r, 1)) return 0;
+    *token=r.token;
     return 1;
 }
 static int writer_classified(void *c, uint64_t sector, uint32_t count, const uint8_t *data, unsigned phase, uint32_t token)
 {
     (void)c;
     if (!count || count > OS_SD_WRITE_PIECE_SECTORS) return 0;
-    writer_request = (struct request){.kind=K_CLASSIFIED_WRITE,.sector=sector,.count=count,.source=data,.phase=phase,.token=token};
-    return post(&writer_slot, &writer_request, 1);
+    struct request r = {.kind=K_CLASSIFIED_WRITE,.sector=sector,.count=count,.source=data,.phase=phase,.token=token};
+    return post(&writer_slot, &r, 1);
 }
 /* Admit the writes: the runner-delivered bounds blob (the first input, kept unchanged), verified against the card. */
 static int writes_enable(const uint8_t *blob, size_t bytes)
 {
     if (!start()) return 0;
-    writer_request = (struct request){.kind = K_ENABLE, .source = blob, .bytes = bytes};
-    if (!post(&writer_slot, &writer_request, 1)) return 0;
-    writer_request = (struct request){.kind = K_UNIT};
-    if (!post(&writer_slot, &writer_request, 1)) return 0;
-    unit_sectors = writer_request.value;
+    struct request enable = {.kind = K_ENABLE, .source = blob, .bytes = bytes};
+    if (!post(&writer_slot, &enable, 1)) return 0;
+    struct request unit = {.kind = K_UNIT};
+    if (!post(&writer_slot, &unit, 1)) return 0;
+    unit_sectors = unit.value;
     return 1;
 }
 static int reads_open(void)
 {
     if (!start()) return 0;
-    writer_request = (struct request){.kind = K_UNIT};
-    if (!post(&writer_slot, &writer_request, 1)) return 0;
-    unit_sectors = writer_request.value;
+    struct request unit = {.kind = K_UNIT};
+    if (!post(&writer_slot, &unit, 1)) return 0;
+    unit_sectors = unit.value;
     return 1;
 }
 /* Register the application's flush buffer so the FAT32 service flushes from it straight into the controller. */
 static int write_region(uint8_t *base, size_t bytes)
 {
     if (!start()) return 0;
-    writer_request = (struct request){.kind = K_REGION, .buffer = base, .bytes = bytes};
-    return post(&writer_slot, &writer_request, 1);
+    struct request r = {.kind = K_REGION, .buffer = base, .bytes = bytes};
+    return post(&writer_slot, &r, 1);
 }
 /* The block device for the FAT32 write service; call after os_sd_writes_enable. */
 static int writer_device(struct fwr_device *d)
@@ -513,8 +502,8 @@ int ss_storage_device(struct fwr_device *d) { return writer_device(d); }
 int ss_storage_close(void)
 {
     if (!hw) return 0;
-    writer_request = (struct request){.kind = K_CLOSE};
-    return post(&writer_slot, &writer_request, 1);
+    struct request r = {.kind = K_CLOSE};
+    return post(&writer_slot, &r, 1);
 }
 int ss_storage_diagnostic(uint64_t out[4])
 {

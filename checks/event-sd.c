@@ -1,6 +1,7 @@
 /* Production SD waits with the real FreeRTOS notification/deadline code.
  * Hardware completion is scripted; this does not qualify a card or GIC. */
 #include "host_rtos.h"
+#include "event_groups.h"
 #include "sunstone_deadline.h"
 #include "a733_mmc_platform.h"
 #include "sunstone_notify.h"
@@ -74,12 +75,13 @@ static const struct os_sd_hw *os_sd_open_owner(void)
     return mode==13?NULL:&hardware;
 }
 static void board_fail_note(unsigned site,unsigned detail,const void *where)
-{(void)site;(void)detail;(void)where;assert(mode==13);++fail_notes;}
+{(void)site;(void)detail;(void)where;assert(mode==13&&!ready);++fail_notes;}
 #define SUNSTONE_CRUMB_FAIL_SITE(group) 1u
 #define SUNSTONE_CRUMB_HERE() ((const void *)1)
 static unsigned diag_word(void){return 0;}
 static int owner_quiesce_step(void){return 0;}
-enum kind { K_READ, K_ASYNC_READ };
+enum kind { K_READ, K_ASYNC_READ, K_ENABLE, K_UNIT };
+static uint32_t unit_sectors;
 struct request {
     enum kind kind;uint64_t sector;uint32_t count;uint8_t *buffer;
     const uint8_t *source;size_t bytes;TaskHandle_t waiter;uint32_t value,token;
@@ -91,6 +93,7 @@ static void finish(struct request *,int);
 static void serve(struct request *r)
 {
     ++served;
+    if(r->kind==K_UNIT)r->value=8u;
     if(mode==8){
         assert(sunstone_deadline_register());
         while(!completed)assert(sunstone_deadline_wait_until(now_us()+500000u)!=SUNSTONE_DEADLINE_ERROR);
@@ -143,37 +146,46 @@ static void publisher(void *unused)
     vTaskSuspend(NULL);
 }
 /* Application tasks that hold no deadline slot and start storage (modes 12 to 14): a worker first, then a second task
- * while the owner is still opening the card, then a third after the open's result. */
+ * while the owner is still opening the card, then a third after the open's result. In mode 12 they make the kit's calls:
+ * the worker and the third ss_storage_open_read, the second ss_storage_enable; in modes 13 and 14 they call start(). */
 static int started[3];
 static void storage_caller(void *which)
 {
     unsigned i=(unsigned)(uintptr_t)which;
-    started[i]=start()+1;
+    static const uint8_t bounds[16];
+    started[i]=(mode!=12?start():i==1?ss_storage_enable(bounds,sizeof bounds):ss_storage_open_read())+1;
     xTaskNotifyGiveIndexed(test_task,SS_NOTIFY_DEADLINE);
     vTaskSuspend(NULL);
 }
+/* The context switches a case may make: each task it creates switches in and out once, the test task sleeps and wakes
+ * once, and each scripted interrupt adds one wake of its target. A step scheduled with host_run_at runs in the shim's
+ * script task, so it counts as a task. A finite tick wait in an idle phase adds a switch per expiry, 20 a second at 50 ms. */
+static unsigned switch_bound(unsigned tasks,unsigned interrupts){return 2u*tasks+2u+interrupts;}
 static void test(void *unused)
 {
     (void)unused;test_task=xTaskGetCurrentTaskHandle();assert(sunstone_deadline_register());
     host_timer_handler(sunstone_deadline_irq);
+    ready_group=xEventGroupCreateStatic(&ready_storage);assert(ready_group);
     if(mode==0){
+        uint64_t initial=host_switches();
         owner=owner_task=host_task_create("sd-idle",owner_main,NULL,2);
-        /* Until a storage call asks, the owner leaves the card unopened. */
+        /* Until a storage call asks, the owner leaves the card unopened and stays asleep. */
         assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_EXPIRED);
         assert(!opens&&!hw&&ready==0);
+        assert(host_switches()-initial<=switch_bound(1,0));
         assert(start()==1&&opens==1&&ready==1);
         assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_EXPIRED);
         assert(wake_count==0&&served==0);
         struct request r={0};atomic_store(&loader_slot,&r);xTaskNotifyGive(owner_task);
         assert(sunstone_deadline_wait_until(now_us()+1000u)==SUNSTONE_DEADLINE_NOTIFIED);
         assert(wake_count==1&&served==1&&r.done==1);
-        printf("PASS idle SD owner: 0 unrequested wakes/s; one request causes one wake\n");
+        printf("PASS idle SD owner: asleep before the first call, 0 unrequested wakes/s after the open; one request causes one wake\n");
     } else if(mode==1||mode==2){
         uint64_t initial=host_switches();
         host_task_create("sd-publish",publisher,NULL,2);
         if(mode==2)host_irq_at(now_us()+50000,event,NULL);
         assert(wait_ready()==1);assert(now_us()==123456u);
-        assert(host_switches()-initial<10); /* Finite tick waits exceed this before the publication. */
+        assert(host_switches()-initial<=switch_bound(1,mode==2)); /* Finite tick waits exceed this before the publication. */
         puts(mode==1?"PASS ready publication wakes its waiter once":"PASS a stray hint on the waiting index leaves the wait for the open");
     } else if(mode==3||mode==4||mode==5||mode==10){
         owner_task=host_task_create("sd-read",worker,NULL,3);
@@ -189,8 +201,9 @@ static void test(void *unused)
         if(mode==6)host_run_at(now_us()+123456,event,NULL);
         uint64_t initial=host_switches();
         assert(read_pmic_ready()==(mode==6));assert(!pmic_waiter);
-        assert(host_switches()-initial<10);
-        puts("PASS PMIC ready publication or one absolute startup expiry");
+        uint64_t switched=host_switches()-initial;
+        printf("PASS PMIC ready publication or one absolute startup expiry: %llu switches\n",(unsigned long long)switched);fflush(stdout);
+        assert(switched<=switch_bound(mode==6,0));   /* mode 6's publication is a script step */
     } else if(mode==11){
         struct ss_storage_owner_stats before={0},after={0};
         assert(!ss_storage_owner_stats(&before));
@@ -213,8 +226,15 @@ static void test(void *unused)
         host_task_create("second",storage_caller,(void *)(uintptr_t)1,3);
         while(!started[0]||!started[1])
             assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_NOTIFIED);
-        assert(started[0]==2&&started[1]==2&&opens==1&&ready==1&&now_us()==200000u);
-        puts("PASS a worker and a second task start storage together; each hears the one open");
+        /* Both hear the one open. The writer mailbox holds one request, so the worker's request is served and the second
+         * task's post is refused cleanly: its own request, and nothing of the worker's, is given back. */
+        assert(started[0]==2&&started[1]==1&&opens==1&&ready==1&&now_us()==200000u);
+        assert(served==1&&unit_sectors==8u);
+        /* A call after the open returns from the ready wait at once. */
+        host_task_create("late",storage_caller,(void *)(uintptr_t)2,3);
+        assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_NOTIFIED);
+        assert(started[2]==2&&served==2&&opens==1&&now_us()==200000u);
+        puts("PASS two kit calls during the open: both hear it, one is served and one refused cleanly; a later call returns at once");
     } else if(mode==13){
         owner=owner_task=host_task_create("sd-owner",owner_main,NULL,2);
         host_task_create("worker",storage_caller,(void *)(uintptr_t)0,3);
@@ -223,13 +243,12 @@ static void test(void *unused)
         host_task_create("second",storage_caller,(void *)(uintptr_t)1,3);
         while(!started[0]||!started[1])
             assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_NOTIFIED);
-        assert(started[0]==1&&started[1]==1&&opens==1&&ready==-1&&storage_state==SD_FAILED);
+        /* The callers outrank the owner, so the note is already written when they hear the failure. */
+        assert(started[0]==1&&started[1]==1&&opens==1&&ready==-1&&storage_state==SD_FAILED&&fail_notes==1);
         assert(now_us()==200000u);
-        /* The callers outrank the owner, so it notes the failure once they are done. */
-        assert(sunstone_deadline_wait_until(now_us()+1000u)==SUNSTONE_DEADLINE_EXPIRED&&fail_notes==1);
         host_task_create("late",storage_caller,(void *)(uintptr_t)2,3);
         assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_NOTIFIED);
-        assert(started[2]==1&&opens==1&&now_us()==201000u);
+        assert(started[2]==1&&opens==1&&now_us()==200000u);
         puts("PASS a failed open answers every waiting task and every later one");
     } else if(mode==14){
         owner=owner_task=host_task_create("sd-owner",owner_main,NULL,2);

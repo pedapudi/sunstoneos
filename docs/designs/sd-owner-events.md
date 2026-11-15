@@ -9,10 +9,12 @@ platform and its retained-fault
 contract in [the card reference](../sd-card.md).
 
 The SD service owns all controller access. Its idle task waits indefinitely for
-a request notification. A caller opening that service waits for the ready
-publication or its existing ten-second absolute deadline. The caller uses the
-runtime notification index selected for its task. Application index zero remains
-available to the application. Asynchronous loader requests notify the loader
+a request notification. A caller opening that service waits for an event-group
+bit that the owner sets once the open's result is stored and never clears; a
+task notification cannot end that wait, and a call made after the open returns
+at once. The open itself is bounded by the owner's own deadlines. A request
+wait uses notification index 1, so application index zero remains available to
+the application. Asynchronous loader requests notify the loader
 when they finish; their poll callback blocks until that publication.
 
 The read-only loader owns the controller directly. It uses the existing SMHC0
@@ -38,8 +40,10 @@ retains its registered task handle.
 
 No periodic wake is required while either owner is idle. The host regression
 observes zero idle wakes over one second and no completion wake before an
-injected interrupt. The startup wait must have one timer deadline and no
-50 ms health polls. Host models establish software wait behavior; physical
+injected interrupt. Before the first storage call the owner stays asleep: the
+host regression bounds its context switches across the first second, and a
+50 ms timeout in that phase alone fails it. The PMIC startup wait has one timer
+deadline and no 50 ms health polls. Host models establish software wait behavior; physical
 evidence applies only to the recorded image, card input and conditions.
 
 The read-only loader publishes the existing storage statistics interface after

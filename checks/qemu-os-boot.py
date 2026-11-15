@@ -579,19 +579,6 @@ def reverted_services(work):
     return path
 
 
-def reverted_owner(work):
-    """apps/os/sd_owner.c with the wait of the fourth board submission: start() sleeps once on the caller's default notification
-    index and then reads the result, so any hint on that index ends the wait before the owner has opened the card."""
-    source = (ROOT / 'apps/os/sd_owner.c').read_text()
-    begin = source.index('static int wait_ready(void)\n{')
-    end = source.index('\n}\n', begin) + 3
-    source = (source[:begin] + 'static int wait_ready(void)\n{\n    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);\n'
-              '    return atomic_load(&ready) == 1;\n}\n' + source[end:])
-    path = Path(work) / 'sd_owner_reverted.c'
-    path.write_text(source)
-    return path
-
-
 def unguarded_prestart_scheduler(work):
     """The directory of a kernel/scheduler/freertos.c from before the owner scheduler refused to
     yield or wait for an owner while the scheduler is not running (round 10 of the series).
@@ -711,11 +698,11 @@ def main():
         application = image.application('large-6g', ['apps/large-6g/main.c'], manifest)
         return image.build(application)
 
-    def build_storage_write(owner_source=None):
+    def build_storage_write():
         """The storage-write application on the write-capable owner (apps/os/sd_owner.c) over the board's RAM-disk card."""
-        image = Image(out / ('build-storage-write' + ('-reverted' if owner_source else '')),
+        image = Image(out / 'build-storage-write',
                       extra_defines=['-DSUNSTONE_A733_OS_SD_WRITE=1'],
-                      extra_sources=[str(owner_source or 'apps/os/sd_owner.c'), 'platform/qemu-os/sd_hw.c',
+                      extra_sources=['apps/os/sd_owner.c', 'platform/qemu-os/sd_hw.c',
                                                                    'drivers/storage/a733_storage_bounds.c'])
         application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
                                                            'apps/storage-write-test/sha256_ce.S'],
@@ -724,7 +711,7 @@ def main():
 
     def build_storage_write_space():
         """The storage-write image with the upper memory mapped, so that the application has an address space and its
-        main task a tag; the owner is started by that task's call."""
+        main task a tag; the owner is created by the OS start list."""
         image = Image(out / 'build-storage-write-space',
                       extra_defines=['-DQEMU_OS_UPPER=1', '-DQEMU_OS_SD_OWNER=1', '-DSUNSTONE_A733_OS_SD_WRITE=1'],
                       extra_sources=['apps/os/sd_owner.c', 'platform/qemu-os/sd_hw.c', 'drivers/storage/a733_storage_bounds.c'])
@@ -839,11 +826,8 @@ def main():
         usb_race_elf = pool.submit(build_usb_race).result()
         wake_race_elf = pool.submit(build_wake_race).result()
         storage_write_space_elf = pool.submit(build_storage_write_space).result()
-        (out / 'build-reverted-owner').mkdir()
-        reverted_owner_elf = pool.submit(build_storage_write, reverted_owner(out / 'build-reverted-owner'))
         large_elf, large_big_elf, large_6g_elf, large_nodigest_elf = large_elf.result(), large_big_elf.result(), large_6g_elf.result(), large_nodigest_elf.result()
         storage_write_elf = storage_write_elf.result()
-        reverted_owner_elf = reverted_owner_elf.result()
         latency_direct_elf = latency_direct_elf.result()
         os_elf, control_elf, latency_elf, el0_elf, partitioned_elf, partitioned_latency_elf, prestart_elf, facts_elf = (
             os_elf.result(), control_elf.result(), latency_elf.result(), el0_elf.result(),
@@ -1327,17 +1311,12 @@ def main():
     c.require(space[0].get('sdowner_cores') == '1' and space[0].get('thermal_cores') == '1',
               'the SD owner or the thermal service runs outside the service core: %s' % (space,))
     # A hint on the application's default notification index during the owner's open (a USB-change event, as application.c sends
-    # them) must not end the wait: enable succeeds. A wait as the fourth board submission had it (one sleep on that index)
-    # returns before the open's result, and the enable fails: the control.
+    # them) must not end the wait: enable succeeds. The host check's mutant of the wait (checks/event-sd.py) is the control.
     stray = scenario(usb_ready_ms=usb_delay_ms, fault=10)
     c = run_case('storage-write-enable-stray-notification', storage_write_elf, stray, [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
     c.clean()
     d = decode_result(c)
     c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'a stray notification ended the owner wait: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
-    c = run_case('storage-write-enable-stray-reverted', reverted_owner_elf, stray, [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
-    c.clean()
-    d = decode_result(c)
-    c.require(d['status'] == 1, 'the earlier owner wait survived the stray notification: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
     # A retained platform register lock (what a failed controller transaction leaves): the thermal service cannot read its sensors
     # and, after the five seconds without a reading, ends the session as CRITICAL for lack of a reading, with the stale marker and
     # the channel in the record (nothing in the SD path is at fault in this record).

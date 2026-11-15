@@ -164,7 +164,8 @@ function(add_sunstone_image target)
   endif()
   if(image_uses_card)
     target_link_libraries(${target} PRIVATE sunstone-a733-os-sd)
-    # The image's tables then count the loader's deadline owner (apps/os/os-services.h, OS_LARGE_SD_DEADLINES).
+    # A read-only image's tables then count the loader's deadline owner (apps/os/os-services.h, OS_LARGE_SD_DEADLINES); in
+    # a write-capable image the sd start row counts the owner instead, and the loader adds no slot.
     target_compile_definitions(${target} PRIVATE SUNSTONE_A733_OS_LARGE_SD=1)
   endif()
   # The headset service, with the Bluetooth stack and the mSBC codec: only where the application declares the
