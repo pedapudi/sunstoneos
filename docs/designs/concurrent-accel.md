@@ -1022,13 +1022,13 @@ DMA is a separate later stage. Its known work:
 - **The grants table still refuses the NPU beside the RAM-copy service** in the returning lifetime, for the same reason the
   GPU row existed. A host check that composes the DMA and NPU retirements must come first.
 
-## Stage 3b: NPU jobs on the service core beside the cores 1-7 wakes
+## Stage 3b: NPU jobs on the service core add no wake time on cores 1-7
 
 A cap on CPU bandwidth did not change the wake time of cores 1-7, so queueing in the DRAM controller from CPU traffic does
 not set their wake tail. Stage 3b runs the NPU instead, with the NPU's interrupt (INTID 97), its owner tasks and the task
 that submits its jobs all on CPU0, the service core. It measures two things in one run: whether NPU traffic beside CPU
-streams lengthens the wakes of cores 1-7, and how many NPU jobs per second survive the streams. Status: implemented and
-host-checked; no board run yet.
+streams lengthens the wakes of cores 1-7, and how many NPU jobs per second survive the streams. Status: measured on the
+board in three runs.
 
 ### Image
 
@@ -1087,6 +1087,56 @@ stage 3a.
   streams and 29% with one; the loss is a measurement and does not decide the stage.
 - **CPU0 and CPU5.** CPU0's own largest busy wake in the on and off sub-phases is the cost of placing the NPU there.
   CPU0's tick releases CPU5's wakes, so CPU5 is reported apart and is not judged.
+
+### Results
+
+**Conditions.** Three returning runs on port 3-1 (queue entries `1794768349005512237-d9663a1e`,
+`1794768381004364085-1649bff4` and `1794768411282102304-ff080e61`), image `9e1db0391c1b` built from commit f9523c0dd.
+The clocks are the approved points: CPU-L 1794 MHz, CPU-B 2002 MHz, DRAM 2040 MHz and the NPU at 852 MHz and 800 mV.
+Each run took 24.9 to 26.2 s on the runner, 6.5 s of it in the launch and upload.
+
+**Wakes.** On-minus-off is each run's mean wake in the on sub-phases (P1 and P2) minus its mean in the off sub-phase
+after them (N3). The values are the mean of three runs, with the per-run range in brackets.
+
+| Core | On minus off, mean of wakes (µs) | Zone | Largest on wake minus largest off wake (µs) | In-run null N3 minus N0 (µs) |
+| --- | --- | --- | --- | --- |
+| CPU1 | -0.84 (-1.00 to -0.67) | under 0.5 | +1.83 | -0.59 |
+| CPU2 | -0.66 (-0.87 to -0.37) | under 0.5 | +1.08 | -0.63 |
+| CPU3 | -0.53 (-0.66 to -0.37) | under 0.5 | +1.92 | -0.69 |
+| CPU4 | +0.77 (+0.62 to +0.88) | inside the null | -0.17 | +0.02 (-1.59 to +1.17) |
+| CPU6 | -0.10 (-0.59 to +0.35) | inside the null | +3.17 | -0.54 (-1.36 to +0.30) |
+| CPU7 | -0.36 (-0.60 to -0.22) | inside the null | +0.67 | -0.26 (-1.08 to +0.39) |
+| CPU5, released by CPU0's tick, not judged | +0.61 (+0.04 to +1.41) | outside the null | +7.71 | -1.56 (-2.33 to -1.17) |
+
+The mean wake on cores 1-3 is shorter with the NPU running than without it in every run, so NPU traffic beside the CPU
+streams does not lengthen their wakes. On CPU2, leaving out the wakes at the thermal service's 25 ms period gives -0.66 µs
+as well. The largest wakes of the on sub-phases exceed those of N3 by at most 1.92 µs on cores 1-3 and 3.17 µs on CPU6.
+
+**NPU throughput.**
+
+- **Alone**, with no stream running: 142,975 to 143,020 jobs/s in the three runs. The prediction of 160,000 to
+  195,000 jobs/s missed; stage 1 measured 177,768 jobs/s with the owner on CPU1 and without the latency diagnostic. The
+  spread is 0.03%, so the rate is set by a fixed cost per job: 6.99 µs, against 5.63 µs in stage 1. These runs do not
+  separate the candidates, which are CPU0's other work (its tick releases two cores, and the OS services run on it)
+  and the diagnostic's scheduler and wake-segment traces, which record each interrupt.
+- **Beside the streams** of cores 4-7: 77,228 to 78,377 jobs/s, 45.2 to 46.0% below the rate alone (predicted 45 to
+  60%).
+- **Streams.** The off sub-phases ran at 7.56 to 7.82 GB/s and the on sub-phases at 6.88 to 7.07 GB/s. The NPU's
+  77,000 jobs/s move about 0.87 GB/s, so the streams lost about as much bandwidth as the NPU used.
+- **Setup.** The queue opened in 107.6 ms and closed in 1.0 ms, both outside the measured windows. Every compared
+  output matched the reference, and the off sub-phases ran no job.
+
+**CPU0.** CPU0's largest busy wake was 44.96 µs in the on sub-phases and 50.79 µs in the off ones (maximum over three
+runs), against a prediction of 45 to 60 µs off and 2 to 15 µs more on. That figure covers only part of CPU0's wakes. CPU0
+does not stream, so a release counts as a sample only when CPU0 is idle (`admitted` in `apps/latency/workload.c`). With
+the NPU on, the releases that found CPU0 running the producer or the owner were not sampled. CPU0's 32 samples then
+took 87 to 138 ms instead of 33 ms, with gaps of up to 15 ticks between them, while CPU5 kept its 1 ms period. The wake
+latency of a CPU0 task that preempts NPU work is unmeasured.
+
+**Conclusion.** NPU work placed on CPU0 at 77,000 jobs/s does not lengthen the wakes of cores 1-7. Interference between
+NPU and CPU traffic in the DRAM controller is therefore not what sets their wake tail. The NPU keeps 54% of its alone
+rate beside four streaming cores. Two questions stay open: the 20% lower NPU-alone rate with the owner on CPU0, and
+CPU0's own wake latency while it runs NPU work.
 
 ### Host evidence
 
