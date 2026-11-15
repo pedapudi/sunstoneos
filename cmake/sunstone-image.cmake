@@ -164,6 +164,8 @@ function(add_sunstone_image target)
   endif()
   if(image_uses_card)
     target_link_libraries(${target} PRIVATE sunstone-a733-os-sd)
+    # The image's tables then count the loader's deadline owner (apps/os/os-services.h, OS_LARGE_SD_DEADLINES).
+    target_compile_definitions(${target} PRIVATE SUNSTONE_A733_OS_LARGE_SD=1)
   endif()
   # The headset service, with the Bluetooth stack and the mSBC codec: only where the application declares the
   # audio-headset device, required or optional. The image's tables then carry its start entry (apps/os/os-services.h).

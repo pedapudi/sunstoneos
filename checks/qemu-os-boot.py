@@ -20,6 +20,12 @@ Cases: normal start to the first application and its normal finish; the zero
 sealed deadline that refused every application wait with failure 0x757
 (negative control: the check must fail with the earlier apps/os/services.c);
 sensors not yet read at application start; an OS service that fails to start.
+
+Every case also counts the image's deadline-owner registrations. The board
+wraps sunstone_deadline_register and reports, before each exit, how many tasks
+claimed a precise-wait slot and how many were refused. A case fails when any
+registration is refused, which means the image's slots (OS_DEADLINE_OWNERS)
+were too few.
 """
 import argparse
 import hashlib
@@ -74,7 +80,7 @@ def run(command, log=None, **kwargs):
 
 DEFINES = ['-DSUNSTONE_A733_OS=1', '-DSUNSTONE_A733_SMP_DIAGNOSTIC=1', '-DSUNSTONE_BOARD_APPLICATION=1',
            '-DSUNSTONE_BOARD_SUPERVISED=1', '-DSUNSTONE_BOARD_USB2_DUAL=1', '-DSUNSTONE_TASK_DEADLINES=1',
-           '-DSUNSTONE_A733_IRQ_TABLE=1', '-DSUNSTONE_CRUMBS=1',
+           '-DSUNSTONE_A733_IRQ_TABLE=1', '-DSUNSTONE_CRUMBS=1', '-DSUNSTONE_DEADLINE_IMAGE_SLOTS=1',
            # The patched tasks.c gives each core's current-task entry a cache line (include/sunstone_current_tcb.h).
            '-DportCURRENT_TCB_SHIFT=6']
 CFLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mgeneral-regs-only', '-ffreestanding',
@@ -183,7 +189,8 @@ class Image:
     Objects are shared between the images of one run when their source and
     flags are the same."""
 
-    def __init__(self, work, services_source=None, extra_defines=(), extra_sources=(), latency=False, partitioned=False):
+    def __init__(self, work, services_source=None, extra_defines=(), extra_sources=(), latency=False, partitioned=False,
+                 board_source=None):
         self.work = Path(work)
         # False, True, or the directory holding a replacement kernel/scheduler/freertos.c.
         self.partitioned = partitioned
@@ -192,6 +199,7 @@ class Image:
         self.extra_sources = list(extra_sources)
         self.latency = latency
         self.services_source = Path(services_source) if services_source else ROOT / 'apps/os/services.c'
+        self.board_source = Path(board_source) if board_source else ROOT / 'apps/board/main.c'
         self.defines = DEFINES + list(extra_defines)
         self.kernel = freertos_dir()
         self.log = self.work / 'build.log'
@@ -310,10 +318,15 @@ class Image:
             units += [(k / name, ()) for name in ('event_groups.c', 'stream_buffer.c', 'timers.c')]
             units += [(ROOT / 'kernel/scheduler' / name, ()) for name in
                       ('owner.c', 'notification.c', 'deadline.c', 'freertos_registry.c', 'freertos_control.c')]
-        units = [(self.services_source if u[0] == ROOT / 'apps/os/services.c' else u[0], u[1]) for u in units]
+        replaced = {ROOT / 'apps/os/services.c': self.services_source, ROOT / 'apps/board/main.c': self.board_source}
+        # A replacement includes its original's quoted headers from the original's directory.
+        units = [(replaced[u[0]], u[1] + ('-iquote', str(u[0].parent))) if replaced.get(u[0], u[0]) != u[0] else u
+                 for u in units]
         objects = self.compile_all(units, generated)
         elf = self.work / 'os.elf'
-        done = run([LLD, '--error-limit=0', '-nostdlib', '-static', '--gc-sections', wrap, *['--wrap=' + w for w in wraps],
+        # Every image counts its deadline registrations (platform/qemu-os/board.c, DEADLINE-OWNERS).
+        done = run([LLD, '--error-limit=0', '-nostdlib', '-static', '--gc-sections', wrap, '--wrap=sunstone_deadline_register',
+                    *['--wrap=' + w for w in wraps],
                     *(['--wrap=vApplicationIRQHandler'] if self.latency else []),
                     '-T', ROOT / 'platform/qemu-os/link.ld', '-Map', self.work / 'os.map',
                     '-o', elf, *objects], self.log)
@@ -513,6 +526,8 @@ class Case:
         self.main = (lines(output, 'APP-MAIN') or [None])[0]
         self.finished = (lines(output, 'APP-FINISHED') or [None])[0]
         self.cleared = (lines(output, 'THROTTLE-CLEARED') or [None])[0]
+        # The tasks that registered a deadline owner and the first registrations refused.
+        self.owners = (lines(output, 'DEADLINE-OWNERS') or [None])[0]
 
     def require(self, condition, message):
         assert condition, '%s: %s\n--- console (%s) ---\n%s' % (self.name, message, self.log, self.output[-3000:])
@@ -521,6 +536,15 @@ class Case:
         """The run ended without a failure record, panic, exception, stop or timeout."""
         bad = [l for l in self.output.splitlines() if l.startswith(FAILURES)]
         self.require(not bad and self.status == 0, 'unexpected end: status %d, %s' % (self.status, bad[:3]))
+        self.require(self.owners is not None, 'the run ended without its DEADLINE-OWNERS report')
+
+    def owners_within_slots(self):
+        """Every task that registered a deadline owner found a slot: no first registration was refused, so the image's
+        slots (OS_DEADLINE_OWNERS, apps/os/os-services.h) were enough."""
+        if self.owners is None:
+            return
+        registered, refused = (int(self.owners[k]) for k in ('registered', 'refused'))
+        self.require(refused == 0, '%d tasks registered a deadline owner and %d were refused' % (registered, refused))
 
     def failed_with(self, group, detail=None):
         self.require(self.failure is not None and self.status == 3, 'no failure record (status %d)' % self.status)
@@ -592,6 +616,22 @@ def unguarded_prestart_scheduler(work):
     return directory
 
 
+def a55_board(work):
+    """An apps/board/main.c whose PMIC task is created on the A55 cluster, where every OS service created without an
+    affinity ran before the service core became the default (include/os_space.h). Its vTaskCoreAffinitySet to core 0
+    before the start is then a change, which the unguarded scheduler above turns into a yield."""
+    source = (ROOT / 'apps/board/main.c').read_text()
+    create = '        board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);\n'
+    assert source.count(create) == 1, 'apps/board/main.c no longer creates its tasks without an affinity'
+    source = source.replace(create, create.replace('xTaskCreateStatic(', 'xTaskCreateStaticAffinitySet(').replace(
+        '&board.tasks[i]);', '&board.tasks[i],A733_SMP_A55_MASK);'))
+    assert source.count('        if(!i)vTaskCoreAffinitySet(board.handles[i],1);\n') == 1, 'the PMIC task no longer moves to core 0 before the start'
+    directory = Path(work)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / 'main.c').write_text(source)
+    return directory / 'main.c'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -645,7 +685,7 @@ def main():
         application = image.application('latency', ['apps/latency/native.c', mutated], ROOT / 'apps/latency/manifest.json')
         return image.build(application)
 
-    def build_partitioned(name, latency=False, scheduler=True):
+    def build_partitioned(name, latency=False, scheduler=True, board=None):
         """The same board composition on the private owner scheduler (configSS_PARTITIONED_SCHEDULER)."""
         if latency:
             image = Image(out / name, extra_defines=['-DSUNSTONE_LATENCY=1'],
@@ -654,7 +694,7 @@ def main():
             application = image.application('latency', ['apps/latency/native.c', 'apps/latency/workload.c'],
                                              ROOT / 'apps/latency/manifest.json')
         else:
-            image = Image(out / name, partitioned=scheduler)
+            image = Image(out / name, partitioned=scheduler, board_source=board)
             application = image.application('hello-compute', ['apps/hello-compute/main.c'],
                                              usb_manifest(name, ROOT / 'apps/hello-compute/manifest.json'))
         return image.build(application)
@@ -680,6 +720,7 @@ def main():
     def build_storage_write(owner_source=None):
         """The storage-write application on the write-capable owner (apps/os/sd_owner.c) over the board's RAM-disk card."""
         image = Image(out / ('build-storage-write' + ('-reverted' if owner_source else '')),
+                      extra_defines=['-DSUNSTONE_A733_OS_SD_WRITE=1'],
                       extra_sources=[str(owner_source or 'apps/os/sd_owner.c'), 'platform/qemu-os/sd_hw.c',
                                                                    'drivers/storage/a733_storage_bounds.c'])
         application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
@@ -690,7 +731,8 @@ def main():
     def build_storage_write_space():
         """The storage-write image with the upper memory mapped, so that the application has an address space and its
         main task a tag; the owner is started by that task's call."""
-        image = Image(out / 'build-storage-write-space', extra_defines=['-DQEMU_OS_UPPER=1', '-DQEMU_OS_SD_OWNER=1'],
+        image = Image(out / 'build-storage-write-space',
+                      extra_defines=['-DQEMU_OS_UPPER=1', '-DQEMU_OS_SD_OWNER=1', '-DSUNSTONE_A733_OS_SD_WRITE=1'],
                       extra_sources=['apps/os/sd_owner.c', 'platform/qemu-os/sd_hw.c', 'drivers/storage/a733_storage_bounds.c'])
         application = image.application('storage-write', ['apps/storage-write-test/main.c', 'drivers/storage/fat32_rw.c',
                                                            'apps/storage-write-test/sha256_ce.S'],
@@ -772,7 +814,8 @@ def main():
     with ThreadPoolExecutor(max_workers=8) as pool:
         partitioned_elf = pool.submit(build_partitioned, 'build-partitioned')
         partitioned_latency_elf = pool.submit(build_partitioned, 'build-partitioned-latency', True)
-        prestart_elf = pool.submit(build_partitioned, 'build-prestart-yield', False, old_scheduler)
+        prestart_elf = pool.submit(build_partitioned, 'build-prestart-yield', False, old_scheduler,
+                                   a55_board(out / 'prestart-yield-board'))
         os_elf = pool.submit(build_hello, 'build-os', args.services_source)
         no_usb_elf = pool.submit(build_hello, 'build-no-usb', None, False)
         (out / 'build-reverted').mkdir()
@@ -821,6 +864,7 @@ def main():
         inputs += list(extra_inputs)
         output, status, seconds = boot(elf, raw, contract, scenario_bytes, inputs, out / (name + '.log'), memory=memory)
         case = Case(name, output, status, seconds, out / (name + '.log'))
+        case.owners_within_slots()
         results.append(case)
         return case
 
@@ -845,6 +889,12 @@ def main():
     c.require(c.cleared is not None, 'the OS never cleared the thermal throttle')
     boot_line = lines(c.output, 'BOOT')[0]
     c.require(boot_line['cores'] == '8' and boot_line['workload'] == '2', 'board description differs')
+    # The thermal service is created without an affinity, so it runs on the service core alone (include/os_space.h,
+    # os_space_default_affinity). On the A55 mask it landed on CPU2, where the stage 7b latency series (2026-11-15)
+    # showed slow busy wakes every 25 ms, the service's read period.
+    space = lines(c.output, 'TASK-SPACE')
+    c.require(len(space) == 1 and space[0].get('thermal_cores') == '1',
+              'the thermal service may run outside the service core: %s' % (space,))
 
     # 2. The zero sealed deadline. The earlier services.c refuses the application's first wait.
     c = run_case('zero-sealed-deadline-reverted', control_elf, scenario(usb_ready_ms=usb_delay_ms))
@@ -963,8 +1013,9 @@ def main():
     c.clean()
     c.require(c.main is not None and c.main['name'] == 'latency' and c.main['core'] == '6' and c.main['live'] == '1',
               'latency did not reach its main entry on core 6')
-    # Negative control: the scheduler as it was when the board run failed. The first yield is taken
-    # before any task has installed its stack, on core 0, with SP_EL0 in the code block.
+    # Negative control: the scheduler as it was when the board run failed, with the PMIC task placed as it was then
+    # (a55_board). The first yield is taken before any task has installed its stack, on core 0, with SP_EL0 in the
+    # code block.
     c = run_case('partitioned-prestart-yield-reverted', prestart_elf, scenario(usb_ready_ms=usb_delay_ms))
     c.require(c.status == 6 and lines(c.output, 'SP-EL0-VIOLATION'), 'the old scheduler passed the SP_EL0 check')
     violation = lines(c.output, 'SP-EL0-VIOLATION')[0]
@@ -1279,6 +1330,8 @@ def main():
     space = lines(c.output, 'TASK-SPACE')
     c.require(len(space) == 1 and space[0].get('main') == '1' and space[0].get('sdowner') == '0' and space[0].get('sdentry') == '0',
               'the application main task must be tagged and the SD owner untagged, and in the kernel\'s table at its first instruction: %s' % (space,))
+    c.require(space[0].get('sdowner_cores') == '1' and space[0].get('thermal_cores') == '1',
+              'an OS service that the application\'s call started may run outside the service core: %s' % (space,))
     # A hint on the application's default notification index during the owner's open (a USB-change event, as application.c sends
     # them) must not end the wait: enable succeeds. The owner as the fourth board submission had it (one sleep on that index)
     # returns early with stage 11, which is the control.
@@ -1334,6 +1387,7 @@ def main():
                                     partitioned_latency_elf, prestart_elf, facts_elf)},
                'cases': [{'name': r.name, 'status': r.status, 'wall_seconds': round(r.seconds, 3),
                           'failure': r.failure and r.failure['line'], 'main': r.main and r.main['line'],
+                          'deadline_owners': r.owners and r.owners['line'],
                           'finished': r.finished and r.finished['line'][:80]} for r in results]}
     (out / 'result.json').write_text(json.dumps(summary, indent=2) + '\n')
     print('PASS qemu-os-boot: %d cases in %.1f s (build %.1f s)' % (len(results), elapsed, built))

@@ -55,6 +55,12 @@ elseif(SUNSTONE_APPLICATION STREQUAL "g2d-rotate")
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/g2d-rotate/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/g2d-rotate/manifest.json")
   add_sunstone_image(sunstone-a733-os-g2d-rotate LIFETIME ${os_lifetime} APPLICATION g2d-rotate)
+elseif(SUNSTONE_APPLICATION STREQUAL "g2d-convert")
+  # The camera-frame conversion stage: NV16 to ARGB8888 and scaling for model input (docs/g2d-os.md#camera-frame-conversion).
+  add_sunstone_application(g2d-convert
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/g2d-convert/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/g2d-convert/manifest.json")
+  add_sunstone_image(sunstone-a733-os-g2d-convert LIFETIME ${os_lifetime} APPLICATION g2d-convert)
 elseif(SUNSTONE_APPLICATION STREQUAL "i2c-scan")
   add_sunstone_application(i2c-scan
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/i2c-scan/main.c"

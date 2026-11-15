@@ -9,7 +9,7 @@ sys.dont_write_bytecode = True
 import harness
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECK_INPUTS = ['include/os_space.h', 'checks/os-space-create.c']
+CHECK_INPUTS = ['include/os_space.h', 'include/a733_smp_placement.h', 'checks/os-space-create.c']
 
 
 def main():

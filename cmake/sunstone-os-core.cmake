@@ -160,7 +160,7 @@ set(os_added apps/os/admission.c apps/os/lifetime.c apps/os/sealed.c apps/os/ide
   apps/os/usb-service.c apps/os/large.c apps/os/large_load.c drivers/storage/sunxi_mmc.c drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/fat32_ro.c drivers/storage/storage_digest.c drivers/storage/storage_digest_extensions.c drivers/storage/storage_digest_ce.S kernel/appmem/app_region.c kernel/appmem/large_admit.c kernel/umem/umem.c apps/os/application.c apps/os/session.c apps/os/grants.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
   runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
-  apps/os/thermal.c apps/os/i2c.c drivers/i2c/a733_i2c_bus.c apps/os/rtc.c drivers/rtc/a733_rtc.c apps/os/g2d.c drivers/g2d/a733_g2d.c drivers/g2d/a733_g2d_rotate.c apps/os/iommu.c drivers/iommu/a733_iommu_owner.c apps/os/video_decode.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
+  apps/os/thermal.c apps/os/i2c.c drivers/i2c/a733_i2c_bus.c apps/os/rtc.c drivers/rtc/a733_rtc.c apps/os/g2d.c drivers/g2d/a733_g2d.c drivers/g2d/a733_g2d_rotate.c drivers/g2d/a733_g2d_convert.c apps/os/iommu.c drivers/iommu/a733_iommu_owner.c apps/os/video_decode.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
 if(SUNSTONE_A733_OS_SD_WRITE)
   # One SD0 owner task serves the loader's reads and the FAT32 write service (apps/os/sd_owner.c); the SD core is built with its write path.
@@ -525,6 +525,8 @@ endif()
 target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_A733_RADIO_IRQ=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   SUNSTONE_A733_OS_HEADSET_IRQ=1
   SUNSTONE_CRUMBS=1
+  # The image's tables hold the deadline slots, sized by the services the image links (include/sunstone_deadline.h).
+  SUNSTONE_DEADLINE_IMAGE_SLOTS=1
   "$<$<BOOL:${os_usb_failure_test}>:SUNSTONE_A733_USB_FAILURE_TEST=1>"
   "$<$<BOOL:${os_return_only}>:SUNSTONE_A733_OS_RETURN_ONLY=1>"
   "$<$<BOOL:${SUNSTONE_GPU_FAST_TIMING}>:SUNSTONE_GPU_FAST_TIMING=1>"
