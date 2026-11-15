@@ -325,7 +325,13 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
     default:return leave(s,fail(s));
     }
     if(t->state==AIC8800_TRANSPORT_FAULT||s->dispatcher.faulted||
-        (s->sockets.initialized&&atomic_load(&s->sockets.network.failed)))return leave(s,fail(s));
+        (s->sockets.initialized&&atomic_load(&s->sockets.network.failed))){
+        /* The detail names the fault: bits 3:0 the transport error (0 while the transport is live, so a faulted
+         * dispatcher or network decided), bits 6:4 the Wi-Fi error. Refusal groups use the detail only in ADOPT. */
+        if(!s->fail_detail)s->fail_detail=(t->state==AIC8800_TRANSPORT_FAULT?(unsigned)t->error&15u:0u)|
+            ((unsigned)s->wifi.error&7u)<<4;
+        return leave(s,fail(s));
+    }
     if(s->stage==NETWORK&&aic8800_network_lost(&s->sockets.network))return leave(s,A733_SESSION_LOST);
     return leave(s,s->stage==NETWORK?A733_SESSION_NETWORK:s->stage==MANAGEMENT?A733_SESSION_MANAGEMENT:A733_SESSION_PENDING);
 }
