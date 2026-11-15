@@ -85,3 +85,9 @@ Run `1794714415147688285-6b3ec3f5` on port 3-1 matched every row and returned no
 - The identity was `0x0003331000021320` with `+0xf0` reading `0`.
 - Domain 2 was adopted ON at policy and status 8, with no command and no sample.
 - `0x804` read `0x5555aaaa` both before and after the write that sets bits 0 and 4: the pulse bits read zero. The exact readback in the image of run `1794712072331160946-bd447f26` therefore refused hold B.
+
+**Image identity.** The image that run ran, `7d63776e…5e4c`, is what commit 6fef74d18 builds, apart from its build id:
+
+- A rebuild of 6fef74d18 from a separate checkout, with a source path and a build directory of the same lengths as the original's, differs from it in 48 bytes, all outside code. 32 are `a733_smp_build_id` in `.rodata` (`0x41200d88`); 16 are in `.debug_line`, which is not loaded. Every other loaded byte is equal.
+- The build id (cmake/a733-board.cmake) hashes the digests of `board_inputs` in list order. In the rebuild that list held the same files in a different order, because its order follows the checkout's absolute path. The build id therefore changes with where the tree is checked out, a reproducibility defect that this branch does not fix. The path-map order in cmake/aarch64-clang.cmake, sorted by root length, also changes with path lengths, which is why the rebuild used equal lengths.
+- The record's `git_revision`, `4f4d44e73`, is not the image's source. tools/board.py sets it from `git rev-parse HEAD` in the checkout that serves the board queue, the bringup worktree, which was at 4f4d44e73 when the run started.
