@@ -14,7 +14,8 @@ RAILS = {0: 'dcdc1', 7: 'dcdc8', 19: 'bldo5', 20: 'cldo1'}
 ASSOC_BYTES = 48
 SCAN_COUNTS_BYTES = 16   # struct a733_radio_scan_counts, present when head flags bit 10 is set
 RSN_BYTES = 16           # struct a733_radio_rsn, present when head flags bit 11 is set
-FAULT_BYTES = 16         # struct aic8800_fault_site, present when head flags bit 12 is set; the last section
+FAULT_BYTES = 16         # struct aic8800_fault_site, present when head flags bit 12 is set
+TRACE_BYTES = 28         # struct aic8800_transport_trace, present when head flags bit 13 is set; the last section
 # AIC8800_SITE file codes (include/aic8800_security.h).
 SITE_FILES = {0: 'other', 1: 'aic8800_supplicant.c', 2: 'aic8800_supplicant_os.c', 3: 'aic8800_sae.c',
               4: 'aic8800_sdio_transport.c', 5: 'aic8800_security.c'}
@@ -61,7 +62,8 @@ def decode(data):
     data = data[:total]
     ap_count = struct.unpack_from('<I', data, 216)[0]
     tail = (ASSOC_BYTES if flags_of(data) & 512 else 0) + (SCAN_COUNTS_BYTES if flags_of(data) & 1024 else 0) + \
-        (RSN_BYTES if flags_of(data) & 2048 else 0) + (FAULT_BYTES if flags_of(data) & 4096 else 0)
+        (RSN_BYTES if flags_of(data) & 2048 else 0) + (FAULT_BYTES if flags_of(data) & 4096 else 0) + \
+        (TRACE_BYTES if flags_of(data) & 8192 else 0)
     if total != HEAD_BYTES + ap_count * AP_BYTES + tail:
         raise ValueError('radio result length does not match its access point count')
     stage, failed, failure_stage, flags = struct.unpack_from('<4I', data, 24)
@@ -182,9 +184,10 @@ def decode(data):
             'ms_connect_mod_65536': values['ms_connect'], 'ms_authorized_mod_65536': values['ms_authorized']}
     result['rsn'] = None
     fault_bytes = FAULT_BYTES if flags & 4096 else 0
+    trace_bytes = TRACE_BYTES if flags & 8192 else 0
     if flags & 2048:
         check, group, rsn_flags, parse, version, capabilities, pairwise, akm = struct.unpack_from(
-            '<3BbHH2I', data, total - fault_bytes - RSN_BYTES)
+            '<3BbHH2I', data, total - trace_bytes - fault_bytes - RSN_BYTES)
         result['rsn'] = {
             'check': RSN_CHECKS[check] if check < len(RSN_CHECKS) else check,
             'element_found': bool(rsn_flags & 1), 'other_oui': bool(rsn_flags & 2), 'malformed': bool(rsn_flags & 4),
@@ -193,7 +196,9 @@ def decode(data):
             'pairwise': suites(pairwise, CIPHERS) if rsn_flags & 8 else 'absent (CCMP-128)',
             'akm': suites(akm, AKMS) if rsn_flags & 16 else 'absent (802.1X)',
             'capabilities': capabilities, 'mfp_capable': bool(capabilities & 0x80), 'mfp_required': bool(capabilities & 0x40)}
-    result['fault_site'] = decode_fault_site(data[total - FAULT_BYTES:total]) if fault_bytes else None
+    end = total - trace_bytes
+    result['fault_site'] = decode_fault_site(data[end - FAULT_BYTES:end]) if fault_bytes else None
+    result['transport_trace'] = decode_transport_trace(data[end:total]) if trace_bytes else None
     return result
 
 
@@ -223,6 +228,39 @@ def decode_fault_site(raw):
         'head_in_flight': bool(actions & 2), 'port_pending': bool(actions & 4),
         'handshake_completed': bool(actions & 8), 'eapol_deferred': bool(actions & 16),
         'stop_site': site(stop_site), 'ms_mod_65536': ms}
+
+
+PHASES = ['block-lo-read', 'block-hi-read', 'block-lo-write', 'block-hi-write', 'block-lo-verify', 'block-hi-verify',
+          'enable-read', 'enable-write', 'enable-ready', 'pad-f2', 'pad-f1', 'settle', 'byte-mode', 'irq-read',
+          'irq-write', 'function-irq-read', 'function-irq-write', 'credit', 'tx', 'rx-status', 'rx-length', 'rx',
+          'parse', 'restore-pad', 'restore-settle', 'firmware-step', 'runtime-step']
+RECORD_KINDS = ['unclaimed', 'print', 'unsupported-data', 'malformed-unclaimed']
+
+
+def decode_transport_trace(raw):
+    """The transport trace (include/aic8800_fault_site.h): what the bus did after the last command write."""
+    (tx_id, tx_flags, credit, tx_age_ms, rx_records, responses, data, data_cfms, others, aggregates, status_reads,
+     last_id, phase, last_status, queued, kinds, held_type, data_cfm, irq_wakes, irq, slow_id, slow_ms) = struct.unpack(
+        '<H2BHH6BH8BHH', raw)
+    records = queued & 15
+    return {
+        'tx_id': tx_id, 'tx_submitted': bool(tx_flags & 1), 'tx_completed': bool(tx_flags & 2),
+        'data_write_after': bool(tx_flags & 4), 'irq_wait': bool(tx_flags & 8), 'record_held': bool(tx_flags & 16),
+        'dispatcher_faulted': bool(tx_flags & 32),
+        'credit': credit, 'tx_age_ms': tx_age_ms, 'rx_records': rx_records,
+        'rx_by_kind': {'responses': responses, 'data': data, 'data_confirmations': data_cfms, 'other': others},
+        'rx_aggregates': aggregates, 'status_reads': status_reads, 'rx_last_id': last_id,
+        'phase': PHASES[phase] if phase < len(PHASES) else phase, 'last_status': last_status,
+        'queued_events': queued >> 4, 'queued_records': records,
+        'queued_record_kinds': [RECORD_KINDS[(kinds >> (2 * i)) & 3] for i in range(min(records, 4))],
+        'held_type': None if held_type == 255 else held_type,
+        'data_cfm': {'sent': bool(data_cfm & 1), 'retry': bool(data_cfm & 2), 'software_retry': bool(data_cfm & 4),
+                     'acknowledged': bool(data_cfm & 8)},
+        'interrupts': irq_wakes >> 4, 'wakes': irq_wakes & 15,
+        'host_saw_sdio_latch': bool(irq & 1), 'controller_read': bool(irq & 2),
+        'controller_sdio_latch': bool(irq & 4) if irq & 2 else None,
+        'controller_sdio_unmasked': bool(irq & 8) if irq & 2 else None, 'gic_masked': bool(irq & 16),
+        'slowest_confirmed_id': slow_id or None, 'slowest_confirmation_ms': slow_ms if slow_id else None}
 
 
 if __name__ == '__main__':
