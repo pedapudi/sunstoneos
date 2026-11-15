@@ -7,6 +7,7 @@
  {"name": "relu", "tool": "variants", "kind": "un", "op": "Relu", "rows": 16, "width": 176},
  {"name": "relu-large", "tool": "variants", "kind": "un", "op": "Relu", "rows": 1024, "width": 176},
  {"name": "relu-w128", "tool": "variants", "kind": "un", "op": "Relu", "rows": 1024, "width": 128},
+ {"name": "relu-w144", "tool": "variants", "kind": "un", "op": "Relu", "rows": 1024, "width": 144},
  {"name": "relu-w192", "tool": "variants", "kind": "un", "op": "Relu", "rows": 1024, "width": 192},
  {"name": "relu-w256", "tool": "variants", "kind": "un", "op": "Relu", "rows": 1024, "width": 256},
  {"name": "sig", "tool": "variants", "kind": "un", "op": "Sigmoid", "rows": 16, "width": 176},

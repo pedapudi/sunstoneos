@@ -57,6 +57,9 @@ struct board_radio {
     uint64_t event_until,event_caller_limit,event_caller_due;
     unsigned client_registered,client_retry;
     unsigned event_ready,event_before_stage;
+    /* The radio's interrupt and wake counts at the end of the pass that completed the last command write, and that
+     * write's completion time: the base of the transport trace's counts. */
+    uint64_t trace_interrupts,trace_wakes,trace_tx_at;
 #endif
     struct a733_radio_entropy entropy;
     struct a733_ce_entropy ce_source;

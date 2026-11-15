@@ -1,6 +1,7 @@
 #include "a733_clock_reference.h"
 #include "a733_radio_platform.h"
 #include "a733_range.h"
+#include "sunxi_smhc.h"
 #define CCU UINT32_C(0x02002000)
 #define SDC UINT32_C(0x04021000)
 #define GIC UINT32_C(0x03400000)
@@ -263,6 +264,16 @@ static int host_access(struct a733_radio_platform *p,uint32_t off,uint32_t *v,un
     return ok;
 }
 static int host_read(void *p,uint32_t off,uint32_t *v){return host_access(p,off,v,0);}
+int a733_radio_platform_sdio_irq_view(struct a733_radio_platform *p,uint32_t *raw,uint32_t *mask)
+{
+    if(!p||!raw||!mask||p->fault||p->core_call||p->stop_requested||p->stage!=RSTAGE_READY||!p->borrower.generation||
+        p->ops.current(p->cookie)!=1)return 0;
+    unsigned expected=0;
+    if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return 0;
+    int ok=p->ops.read(p->cookie,SDC+SUNXI_SMHC_RINT,raw)==1&&p->ops.read(p->cookie,SDC+SUNXI_SMHC_IMASK,mask)==1;
+    atomic_store_explicit(&p->busy,0,memory_order_release);
+    return ok;
+}
 static int host_write(void *p,uint32_t off,uint32_t v){return host_access(p,off,&v,1);}
 /* Runs only from the widening controller poll, with the platform register
  * lock held. Card output is stopped; the shared PERI0 parent is never written.
