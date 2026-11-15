@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "a733_memory_local.h"
 #include "../../kernel/scheduler/bands.h"
+#include "../../kernel/scheduler/perturb.h"
 
 #define UART 0x09000000UL
 #define GICD 0x08000000UL
@@ -185,6 +186,14 @@ static void storm_arm(void) {
     unsigned c = core();
     uintptr_t s = GICR + c * 0x20000 + 0x10000;
     storm_period = frequency() / 30000;
+#ifdef SS_KERNEL_TEST_PERTURB
+    /* An injected delay makes each interrupt exit longer. Once one exit costs as much as the storm's period (about 2,800
+     * owner-drain turns) the core runs only exits and the model prints no verdict, which says nothing about the scheduler.
+     * The period grows with the injected turns, as the bounds of checks/scheduler-partitioned-qemu.c do (limit). */
+    unsigned turns = 0;
+    for (unsigned site = 0; site < SS_PERTURB_SITES; ++site) turns += ((const volatile uint32_t *)(uintptr_t)SS_KERNEL_TEST_PERTURB)[1 + site];
+    storm_period *= 1 + turns / 300;
+#endif
     *(volatile uint8_t *)(s + 0x400 + STORM_IRQ) = (configMAX_API_CALL_INTERRUPT_PRIORITY - 1) << portPRIORITY_SHIFT;
     write32(s + 0x100, 1U << STORM_IRQ);
     __asm__ volatile("dsb sy" ::: "memory");
