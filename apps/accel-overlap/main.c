@@ -17,7 +17,7 @@
  *
  * Built with ACCEL_OVERLAP_COUNTERS (the GPU-width build on the inline-argument program, add4inline/, plus the NSI port 6
  * and 18 traffic counters), eight phases run: idle; the GPU with its arguments loaded by every lane (mode 1); the GPU with
- * its arguments in registers, once per task (mode 0); the NPU relu at widths 176, 128, 192 and 256; and the core-2 stream.
+ * its arguments in registers, once per task (mode 0); the NPU relu at widths 176, 128, 144 (its output rows at a 320-byte stride) and 256; and the core-2 stream.
  * In each, the devices run for 20 ms, then the OS counter owner (include/a733_nsi_counters.h) begins both ports with a
  * 100 ms period. The counts latch at each period end, so both banks are sampled 3 ms before and 2 ms after each of five
  * period ends, with the jobs collected so far, and the devices stop after the last sample. */
@@ -109,7 +109,7 @@ static const uint32_t large_streams[SWEEP_PHASES] = {0, 0, 0, 0x01, 0x10, 0x07, 
 #endif
 static struct accel_overlap_large_result large_result;
 #ifdef ACCEL_OVERLAP_COUNTERS
-/* The counter periods: idle, the GPU in mode 1 and mode 0, the NPU relu at widths 176, 128, 192 and 256 (graphs 0 to 3 of
+/* The counter periods: idle, the GPU in mode 1 and mode 0, the NPU relu at widths 176, 128, 144 at a 320-byte output stride, and 256 (graphs 0 to 3 of
  * the models region), the core-2 stream. A phase's devices stop after its last sample; PHASE_LIMIT only bounds it. */
 #define COUNTER_RUN_PHASES ACCEL_OVERLAP_COUNTER_PHASES
 #define COUNTER_PERIOD 60000000u         /* 100 ms at the 600 MHz NSI clock */
@@ -487,6 +487,16 @@ static void npu_producer(void *unused)
         memcpy(t.data, vectors + e->input_offset, e->input_bytes);
         if (!ss_npu_queue_dirty(queue, graphs[g], SS_NPU_INPUT, 0, 0, e->input_bytes)) fail(0x034, g);
         if (ss_npu_queue_tensor(queue, graphs[g], SS_NPU_INPUT, 1, &t)) fail(0x035, g);
+        /* A graph whose reference is longer than its input writes its output rows at a wider stride
+         * (tools/npu-row-stride.py): the reference holds ACCEL_OVERLAP_ROW_PADDING in every byte the engine must not
+         * write, so the output starts with that pattern. The queue cleans the dirty range to the point of coherency
+         * before the graph's first job and cleans and invalidates the output before the CPU reads it
+         * (runtime/npu_app_queue.c, clean_dirty and ss_npu_queue_acquire_handle). */
+        if (e->reference_bytes > e->input_bytes) {
+            if (!ss_npu_queue_tensor(queue, graphs[g], SS_NPU_OUTPUT, 0, &t) || t.bytes < e->reference_bytes) fail(0x03a, g);
+            memset(t.data, ACCEL_OVERLAP_ROW_PADDING, t.bytes);
+            if (!ss_npu_queue_dirty(queue, graphs[g], SS_NPU_OUTPUT, 0, 0, t.bytes)) fail(0x03b, g);
+        }
     }
     atomic_store_explicit(&npu_ready, 1, memory_order_release);
     xTaskNotifyGive(main_task);

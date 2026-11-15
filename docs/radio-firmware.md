@@ -158,7 +158,7 @@ owned receive aggregate.
 The consumer receives a borrowed view and must copy any asynchronous work before
 consuming it. While a record is held, the aggregate remains unchanged and no new
 command is submitted. The deadline still advances. Binding indication `0x0417`
-requires its declared 16-byte challenge, remains subject to the same backpressure,
+requires at least its declared 16-byte challenge, remains subject to the same backpressure,
 and sets a retained `binding_required` flag. The loader preserves the first
 challenge for the runtime worker, which computes the reply and checks confirmation.
 

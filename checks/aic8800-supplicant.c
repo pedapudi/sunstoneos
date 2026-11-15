@@ -58,6 +58,19 @@ static void window_surround(void)
         window_release=m.now+window_latency;memset(receive,0,sizeof(receive));m.card[1][4]=0;
     }
 }
+/* late-completion: the first clock read after a confirmed key add returns the command's deadline. */
+static int late_completion;
+static int late_now(void *context,uint64_t *out)
+{
+    if(late_completion==1&&security.state==AIC8800_SECURITY_DONE&&security.operation==AIC8800_SECURITY_ADD&&
+        security.completion_deadline){m.now=security.completion_deadline;late_completion=2;}
+    return now_cb(context,out);
+}
+/* window-events variants after the first key add is written: 1 silent (no reply), 2 the reply sits in the card with
+ * its function interrupt raised but the owner never polls, 3 a different message arrives instead of the reply. */
+static int key_variant;
+/* key-bound: the first key add's reply waits this many ticks after the write (0: at once). */
+static uint64_t key_delay,key_release;
 static int entropy(void *ctx,uint8_t *out,size_t bytes)
 {
     assert(ctx==&m&&bytes==32);++entropy_calls;
@@ -90,8 +103,18 @@ static int security_write(void *ctx,uint32_t off,uint32_t value)
             if(id==36) {
                 assert(p[14]==44&&p[20]==16&&p[56]==2&&p[57]==1);
                 unsigned which=p[59]?1:(p[16]==1?2:3);assert(!memcmp(p+24,vectors[which],16));
-                ++key_adds;uint8_t cfm[]={reject_key?7:0,(uint8_t)(10+which),0xa5,0x5a};control_reply(37,cfm,4);
+                /* MM_KEY_ADD_CFM as the board's firmware sends it: status and hw_key_idx, two bytes (run 6). */
+                ++key_adds;uint8_t cfm[]={reject_key?7:0,(uint8_t)(10+which)};control_reply(37,cfm,2);
                 if(drop_key_reply){memset(receive,0,sizeof(receive));m.card[1][4]=0;}
+                if(key_delay&&key_adds==1){
+                    memcpy(delayed,receive,sizeof(delayed));memset(receive,0,sizeof(receive));m.card[1][4]=0;
+                    key_release=m.now+key_delay;
+                }
+                if(key_variant&&key_adds==1){
+                    memset(receive,0,sizeof(receive));m.card[1][4]=0;
+                    if(key_variant==2)control_reply(37,cfm,2);
+                    else if(key_variant==3){const uint8_t credits[4]={3,0,8,0};message(receive,0x140b,credits,4);m.card[1][4]=1;}
+                }
             } else if(id==38) {
                 assert(p[16]>=11&&p[16]<=13);++deletes;uint8_t opaque[]={0xa5,0x5a};control_reply(39,opaque,2);
             } else {
@@ -186,7 +209,7 @@ static void authorized(void)
 static int allzero(const void *p,size_t n){const uint8_t *b=p;for(size_t i=0;i<n;++i)if(b[i])return 0;return 1;}
 int main(int argc,char **argv)
 {
-    assert(argc==3||argc==4);FILE *f=fopen(argv[1],"rb");assert(f);
+    assert(argc>=3&&argc<=5);FILE *f=fopen(argv[1],"rb");assert(f);
     for(unsigned i=0;i<15;++i){uint8_t n[2];assert(fread(n,1,2,f)==2);sizes[i]=n[0]|(unsigned)n[1]<<8;assert(sizes[i]<=256&&fread(vectors[i],1,sizes[i],f)==sizes[i]);}
     assert(fgetc(f)==EOF&&!fclose(f));checkpoint();
     if(!strcmp(argv[2],"lifecycle")) {
@@ -256,9 +279,17 @@ int main(int argc,char **argv)
          * controller latches the card's function interrupt, and otherwise sleeps to the transport's next deadline. */
         int events=argc>3&&!strcmp(argv[3],"events");unsigned sleeps=0;
         if(events){host.events=1;m.allow_irq_ack=1;window_latency=20;}
+        if(events&&argc>4)key_variant=!strcmp(argv[4],"silent")?1:!strcmp(argv[4],"unserviced")?2:!strcmp(argv[4],"other")?3:-1;
+        assert(key_variant>=0);
         for(unsigned i=0;i<20000;++i) {
             if(window_held_blocks&&!m.card[1][4]&&m.now>=window_release){
                 memcpy(receive,window_held,sizeof(receive));m.card[1][4]=window_held_blocks;window_held_blocks=0;}
+            if(key_variant==2&&key_adds==1&&security.state==AIC8800_SECURITY_WAITING&&!transport.pending&&
+                (m.card[1][4]||window_held_blocks)){
+                /* The card raises its interrupt for the reply; the owner sleeps on to the key add's deadline. */
+                if(window_held_blocks){memcpy(receive,window_held,sizeof(receive));m.card[1][4]=window_held_blocks;window_held_blocks=0;}
+                m.irq_level=1;m.now=security.deadline;++sleeps;
+            }
             if(events) {
                 m.irq_level=m.card[1][4]!=0;uint64_t until=0;
                 /* A command in flight completes in microseconds on the board; only an idle bus sleeps. */
@@ -285,6 +316,27 @@ int main(int argc,char **argv)
         fprintf(stderr,"window%s: sleeps=%u now=%llu transport=%u error=%u dispatcher=%u RSN=%u internal=%d data=%u/%u security=%u op=%u eapol=%u keys=%u ports=%u records=%u data=%u events=%u\n",events?"-events":"",sleeps,(unsigned long long)m.now,
             transport.state,transport.error,dispatcher.faulted,supplicant.state,supplicant.rsn_state,data.state,data.error,
             security.state,security.operation,eapol_tx,key_adds,ports,window_records,window_data,window_events);
+        if(key_variant){
+            /* The record's transport trace separates the three: nothing came, the reply waited behind an unserviced
+             * interrupt, or another message came. */
+            assert(transport.state==AIC8800_TRANSPORT_FAULT&&supplicant.state==AIC8800_SUPPLICANT_FAULT&&key_adds==1);
+            uint32_t raw=0,mask=0;assert(host.config.ops.read32(host.config.context,0x38,&raw)&&host.config.ops.read32(host.config.context,0x30,&mask));
+            struct aic8800_transport_trace tr;aic8800_transport_trace_capture(&tr,&transport,&dispatcher,0,0,0,1,raw,mask);
+            struct aic8800_fault_site site;aic8800_fault_site_capture(&site,&transport,&supplicant,1234);
+            fprintf(stderr,"trace %s: tx %u flags %#x credit %u age %u rx %u kinds %u/%u/%u/%u aggregates %u status %u last %#x phase %u "
+                "queued %#x kinds %#x held %u data_cfm %#x irq %#x site %#x reason %u\n",argv[4],tr.tx_id,tr.tx_flags,tr.credit,
+                tr.tx_age_ms,tr.rx_records,tr.rx_kind[0],tr.rx_kind[1],tr.rx_kind[2],tr.rx_kind[3],tr.rx_aggregates,
+                tr.status_reads,tr.rx_last_id,tr.phase,tr.queued,tr.queued_kinds,tr.held_type,tr.data_cfm,tr.irq,
+                site.transport_site,site.slot>>4);
+            assert(tr.tx_id==36&&(tr.tx_flags&3u)==3u&&tr.credit&&(tr.irq&2u)&&(site.slot>>4)==AIC8800_SECURITY_STOP_DEADLINE&&
+                (site.security&15u)==AIC8800_SECURITY_WAITING&&tr.data_cfm==9);
+            if(key_variant==1)assert(!tr.rx_records&&!tr.rx_aggregates&&!(tr.irq&4u)&&(tr.tx_flags&8u));
+            if(key_variant==2)assert(!tr.rx_records&&!tr.rx_aggregates&&(tr.irq&4u)&&(tr.tx_flags&8u));
+            if(key_variant==3)assert(tr.rx_records&&tr.rx_kind[0]&&tr.rx_last_id==0x140b&&!(tr.irq&4u));
+            printf("transport trace: a key add %s\n",key_variant==1?"answered by nothing":key_variant==2?
+                "answered in the card behind an unserviced interrupt":"answered by another message");
+            return 0;
+        }
         assert(transport.state!=AIC8800_TRANSPORT_FAULT&&!dispatcher.faulted);
         assert(supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&wifi.link==AIC8800_WIFI_SECURED&&key_adds==2&&ports==1);
         puts("RSN window: message 4 to the open port with the station's other receive records through the dispatcher");return 0;
@@ -294,6 +346,43 @@ int main(int argc,char **argv)
     else if(!strcmp(argv[2],"tx-uncertain")){uncertain_tx=1;inject(5);}
     else if(!strcmp(argv[2],"timeout")){drop_reply=1;inject(5);}
     else if(!strcmp(argv[2],"key-timeout")){inject(5);settled();drop_key_reply=1;inject(7);}
+    else if(!strcmp(argv[2],"late-completion")) {
+        /* The only observation after a key add's confirmation is the clock read that ends the same transport poll
+         * (aic8800_transport_poll's post label). Here that read lands on the command's deadline: the pass that
+         * parsed the confirmation ran late. */
+        inject(5);settled();late_completion=1;host.config.ops.now=late_now;inject(7);
+    }
+    else if(!strcmp(argv[2],"key-bound")) {
+        /* The board's bound: 6000 ms per supplicant command, the reference's RWNX_80211_CMD_TIMEOUT_MS for SDIO with one
+         * command queued (tools/radio_scan_prepare.py). The pairwise key add's reply comes argv[3] ms after the write;
+         * the handshake and transport bounds lie beyond it, as the profile's security stage and lease renewal do. */
+        assert(argc==4);unsigned ms=(unsigned)strtoul(argv[3],0,10);assert(ms>=1000u&&ms<=10000u);
+        const uint64_t tick_ms=10u;supplicant.config.command_timeout=6000u*tick_ms;
+        transport.deadline=m.now+30000u*tick_ms;supplicant.deadline=m.now+20000u*tick_ms;
+        key_delay=ms*tick_ms;inject(5);settled();inject(7);
+        for(unsigned i=0;i<200000&&transport.state!=AIC8800_TRANSPORT_FAULT&&
+            supplicant.state!=AIC8800_SUPPLICANT_AUTHORIZED;++i){
+            if(key_release&&m.now>=key_release&&!m.card[1][4]){memcpy(receive,delayed,sizeof(delayed));m.card[1][4]=1;key_release=0;}
+            step();
+        }
+        uint64_t written=transport.trace_tx_at;
+        if(ms<6000u){
+            assert(supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&wifi.link==AIC8800_WIFI_SECURED&&key_adds==2&&ports==1);
+            /* The record's trace names the slowest confirmation: the pairwise key add, about argv[3] ms. */
+            fprintf(stderr,"bound %u: slowest %u after %u ms\n",ms,transport.trace_slow_id,transport.trace_slow_ms);
+            assert(transport.trace_slow_id==36&&transport.trace_slow_ms+10u>=ms&&transport.trace_slow_ms<=ms+10u);
+            printf("command bound: a key confirmation %u ms after the write is accepted\n",ms);return 0;
+        }
+        assert(transport.state==AIC8800_TRANSPORT_FAULT&&supplicant.state==AIC8800_SUPPLICANT_FAULT&&key_adds==1);
+        struct aic8800_fault_site site;aic8800_fault_site_capture(&site,&transport,&supplicant,1234);
+        struct aic8800_transport_trace tr;aic8800_transport_trace_capture(&tr,&transport,0,0,0,0,0,0,0);
+        fprintf(stderr,"bound %u: site %#x reason %u security %#x cfm %u tx %u age %u rx %u written %llu\n",ms,site.transport_site,
+            site.slot>>4,site.security,site.cfm_bytes,tr.tx_id,tr.tx_age_ms,tr.rx_records,(unsigned long long)written);
+        assert(site.transport_site==transport.fail_site&&(site.slot>>4)==AIC8800_SECURITY_STOP_DEADLINE&&
+            (site.security&15u)==AIC8800_SECURITY_WAITING&&!site.cfm_bytes&&tr.tx_id==36&&!tr.rx_records&&
+            tr.tx_age_ms>=5990u&&tr.tx_age_ms<=6000u);
+        printf("command bound: a key confirmation %u ms after the write stops the security worker at its deadline\n",ms);return 0;
+    }
     else if(!strcmp(argv[2],"key-link")) {
         /* The link leaves security-pending while a key add awaits its confirmation. */
         inject(5);settled();drop_key_reply=1;inject(7);
@@ -307,6 +396,14 @@ int main(int argc,char **argv)
     assert(supplicant.owner==&transport&&security.owner==&transport&&!allzero(supplicant.config.pmk,32));
     /* The record's fault site separates a confirmation that never came from one the firmware refused. */
     struct aic8800_fault_site site;aic8800_fault_site_capture(&site,&transport,&supplicant,1234);
+    if(!strcmp(argv[2],"late-completion")) {
+        fprintf(stderr,"site: transport %#x/%u data %#x security %#x slot %#x cfm %u/%u/%u supplicant %#x actions %#x stop %#x rsn %d eapol %u\n",
+            site.transport_site,site.transport_error,site.data,site.security,site.slot,site.expected_cfm,site.cfm_bytes,
+            site.cfm_status,site.supplicant,site.actions,site.stop_site,supplicant.rsn_state,eapol_tx);
+        assert((site.slot>>4)==AIC8800_SECURITY_STOP_COMPLETION&&(site.security&15u)==AIC8800_SECURITY_DONE&&
+            site.cfm_bytes==2&&!site.cfm_status&&supplicant.rsn_state==9&&eapol_tx==2);
+        printf("fault site: a late observation of a confirmed key add names the completion\n");
+    }
     if(!strcmp(argv[2],"key-timeout")||!strcmp(argv[2],"key-failure")||!strcmp(argv[2],"key-link")) {
         unsigned refused=!strcmp(argv[2],"key-failure"),link=!strcmp(argv[2],"key-link");
         fprintf(stderr,"site: transport %#x/%u data %#x security %#x slot %u cfm %u/%u/%u supplicant %#x actions %#x stop %#x\n",
@@ -316,7 +413,7 @@ int main(int argc,char **argv)
         assert((site.security&15u)==AIC8800_SECURITY_WAITING&&(site.security&16u)&&
             (site.security>>5)==AIC8800_SECURITY_ADD&&site.expected_cfm==37&&(site.slot&7u)==0&&
             (site.slot>>4)==(refused?AIC8800_SECURITY_STOP_CONFIRMATION:link?AIC8800_SECURITY_STOP_LINK:AIC8800_SECURITY_STOP_DEADLINE));
-        assert(refused?site.cfm_bytes==4&&site.cfm_status==7:!site.cfm_bytes&&!site.cfm_status);
+        assert(refused?site.cfm_bytes==2&&site.cfm_status==7:!site.cfm_bytes&&!site.cfm_status);
         assert((site.supplicant&15u)==AIC8800_SUPPLICANT_FAULT&&(site.actions&1u)&&(site.actions&2u)&&(site.actions&8u));
         /* The security worker stopped first; the transport's fault then stopped the supplicant. */
         assert((site.stop_site>>12)==4u);

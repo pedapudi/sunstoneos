@@ -140,6 +140,9 @@ def configured_sources(work):
     assert done.returncode == 0, 'the OS image configure failed:\n' + done.stdout[-2000:] + done.stderr[-2000:]
     files = work / 'build/CMakeFiles'
     link = shlex.split((files / (IMAGE_TARGET + '.dir') / 'link.txt').read_text())
+    # CMake moves the objects into response files (@CMakeFiles/...rsp, relative to the build directory) when the link
+    # command would be too long, which depends on the build directory's path length.
+    link = [x for w in link for x in (shlex.split((work / 'build' / w[1:]).read_text()) if w.startswith('@') else [w])]
     objects = [w for w in link if w.endswith('.obj')]
     source_of = {}
     for library in sorted({o.split('/')[1] for o in objects}):

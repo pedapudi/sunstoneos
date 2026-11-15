@@ -36,7 +36,7 @@ a 232-byte head that gives the total length and the access point count, then one
 44-byte entry per access point, then the 16-byte scan counts when head flags
 bit 10 is set, then the 48-byte association tail when bit 9 is set, then the
 16-byte RSN summary when bit 11 is set, then the 16-byte fault site when bit 12
-is set. The head carries the record version
+is set, then the 28-byte transport trace when bit 13 is set. The head carries the record version
 (3 since the scan counts and the RSN summary). The image exports the version it
 writes as `os_radio_result_version`, and admission refuses an image whose
 version the runner's `tools/radio_result.py` does not read, naming both
@@ -102,8 +102,15 @@ device is touched. The sequence after the passive 2.4 GHz scan is:
    stage.
 
 Time budget, against the 50 s startup deadline (firmware confirmed near 16.7 s of session time): scan 10 s, authentication
-and association 8 s, four-way handshake 8 s, supplicant command 1 s. A normal run should need about 3 s of scan, well under
-1 s to join, and tens of milliseconds per handshake message. Each bound also stops at the session deadline.
+and association 8 s, the security stage 14 s, each supplicant command 6 s. A normal run should need about 3 s of scan, well
+under 1 s to join, and tens of milliseconds per handshake message. Each bound also stops at the session deadline.
+
+The command bound is the reference's: `RWNX_80211_CMD_TIMEOUT_MS` is 6000 ms for SDIO (`aic8800_fdrv/rwnx_cmds.h`),
+multiplied by the command manager's queue size, which is 1 while one command is outstanding, as it always is here. The
+bounds nest so that a full wait ends at the security worker's own deadline: the security stage holds a handshake of up to
+8 s and then the pairwise key add's 6 s, and the runtime lease renews 7 s before its end, so no lease end falls inside a
+command's wait. `checks/radio-stage-limit.py` checks these relations on the prepared profile, and the `key-bound` case of
+`checks/aic8800-supplicant.py` accepts a confirmation 5.9 s after the write and stops at the deadline for one at 6.1 s.
 
 Credential residue. The runner backs up image RAM before it delivers the credential, so the backups hold none. After the
 return it reads only named blocks: the return report, the output record, the radio descriptor and the record it names, and
@@ -178,6 +185,88 @@ while waiting, with no matched confirmation; a refused key add records the
 confirmation's length and status. `checks/aic8800-supplicant.py` covers both
 cases (`key-timeout` and `key-failure`), and `checks/radio-result-decode.py`
 covers the decoding.
+
+The transport trace (`struct aic8800_transport_trace`) records what the bus
+did after the last command write, so an unanswered confirmation says whether
+anything came back. The image writes it with the fault site, and also alone
+when the security stage ends authorized, so a slow confirmation that still
+arrived in time leaves its latency in the record. It holds:
+
+- the command's message id, whether its CMD53 write was submitted and
+  completed, and the flow-control value that admitted it;
+- the time from that write to the transport's last clock read;
+- since that write: receive records by transport type, receive reads,
+  function 1 status reads, and the id of the last command response;
+- whether the transport waits for the function interrupt, the last function 1
+  status value and the transport's phase;
+- the SD controller's SDIO interrupt latch and mask, read once at capture
+  (`a733_radio_platform_sdio_irq_view`, a register read that changes nothing),
+  whether the host saw the latch, and the radio's GIC interrupts and owner
+  wakes since the write;
+- the dispatcher's queued events and diagnostic records by kind, the held
+  record's transport type, and the status of the last data confirmation;
+- the request id of the slowest security command that was confirmed, and the
+  time from its write to its confirmation in milliseconds.
+
+The `window:events` variants of `checks/aic8800-supplicant.py` give three
+distinct traces for a key add: `silent` (nothing came: no records, latch
+clear), `unserviced` (the reply sits in the card behind a raised interrupt the
+owner never serviced: no records, latch set) and `other` (another message came:
+records counted, the last response id named). The `key-bound` case holds the
+key add's confirmation for a given time: at 5900 ms it is accepted and the
+authorized trace names it as the slowest, and at 6100 ms the stage stops with
+reason deadline.
+
+### Confirmations are read for the fields used
+
+The reference's command manager (`rwnx_cmds.c`, lines 475 to 482, and
+`aic_bsp_driver.c`, lines 161 to 168, for the firmware loader) copies a
+confirmation's parameters for the length the firmware sends, up to 1024 bytes
+(`IPC_E2A_MSG_SIZE_BASE` of 256 words, with `CONFIG_RWNX_TL4` off), and the
+handlers read only their fields. The indication handlers in `rwnx_msg_rx.c`
+read their fields the same way, with no length check. This driver does the
+same: each message is refused only when it is shorter than the bytes read, and
+a longer one is read for the same fields.
+
+| Message | Reference struct | Fields read | Shortest accepted |
+|---|---|---|---|
+| MM_SET_RF_CALIB_CFM | 16 bytes | the four gain table addresses | 16 |
+| MM_GET_MAC_ADDR_CFM | 6 bytes | `mac_addr` | 6 |
+| MM_VERSION_CFM | 28 bytes, the last one padding | the version words, `features`, `max_sta_nb`, `max_vif_nb` | 27 |
+| MM_ADD_IF_CFM | 2 bytes | `status`, `inst_nbr` | 2 |
+| SCANU_START_CFM | 3 bytes | `vif_idx`, `status`, `result_cnt` | 3 |
+| SM_CONNECT_CFM | 1 byte | `status` | 1 |
+| SM_CONNECT_IND | 852 bytes | every field through `ac_param` | 852 |
+| SM_DISCONNECT_IND | 6 bytes, the last one padding | `reason_code`, `vif_idx`, `ft_over_ds`, `reassoc` | 5 |
+| MM_KEY_ADD_CFM | 4 bytes, the last two alignment | `status`, `hw_key_idx` | 2 |
+| DBG_MEM_READ_CFM, DBG_MEM_WRITE_CFM | 8 bytes | `memaddr`, `memdata` | 8 |
+| the firmware loader's other confirmations | 4 bytes | the 32-bit status | 4 |
+| DBG_BINDING_CFM | 1 byte | the status | 1 |
+| DBG_BINDING_IND | 16 bytes | `enc_data` | 16 |
+
+Confirmations whose parameters are not read (MM_RESET_CFM, MM_START_CFM,
+ME_CONFIG_CFM, ME_CHAN_CONFIG_CFM, SCANU_START_CFM_ADDTIONAL,
+SM_DISCONNECT_CFM, MM_KEY_DEL_CFM and ME_SET_CONTROL_PORT_CFM) are accepted at
+any length. The codec refuses a message longer than 1024 bytes, the reference's
+bound. The security worker keeps the first 64 bytes of a confirmation for the
+record, and the station event keeps the first 852 bytes of an indication. A
+data confirmation (transport type 0x12, a 12-byte record) is not a message and
+is not covered here.
+
+`checks/aic8800-wifi.c` checks each management and key confirmation at its
+shortest accepted length and one byte shorter, and two mutants that restore an
+exact length (MM_KEY_ADD_CFM at 4 bytes, SM_CONNECT_IND at 852 bytes) must
+fail it. `checks/aic8800-firmware.c` runs the firmware load with every
+confirmation four bytes longer, and with the first one a byte short;
+`checks/aic8800-runtime.c`, `checks/aic8800-sdio-codec.c` and
+`checks/aic8800-dispatch.c` cover the binding messages, the memory
+confirmations and the dispatcher's matching rules.
+
+Two board runs reached the pairwise key add. In run 5 (entry
+1794738427185556712-c450b701) no confirmation came within the 1 s bound the
+image then had; that remains unexplained. In run 6 (entry
+1794745255109339882-f869332f) the confirmation came at once as two bytes with
+status 0, and the image refused it because it then required exactly 4 bytes.
 
 ## Entropy and credentials gate association only
 

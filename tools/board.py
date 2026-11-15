@@ -1675,10 +1675,19 @@ def run_image(args, backend=Live):
                             decoded = decoder.decode(payload)
                         except (ValueError, struct.error) as error:
                             raise ValueError('Invalid decoded result: '+str(error)) from error
-                        # The decoded result is the evidence; the reviewer compares it with the hypothesis.
-                        result['decoded'] = decoded
+                        # The decoded result is the evidence; the reviewer compares it with the hypothesis. An answer
+                        # that JSON cannot hold must not cost the run its result.json: record why and keep the rest
+                        # (output.bin holds the payload for a later decode).
+                        parts = {'decoded': decoded}
                         if hasattr(decoder, 'failures'):
-                            result['decoder_failures'] = decoder.failures(decoded)
+                            parts['decoder_failures'] = decoder.failures(decoded)
+                        for name, value in parts.items():
+                            try:
+                                json.dumps(value, sort_keys=True)
+                            except (TypeError, ValueError) as error:
+                                result.setdefault('decode_error', {})[name] = '%s: %s' % (type(error).__name__, error)
+                            else:
+                                result[name] = value
                 elif not result.get('expected_reset'):
                     decoded = result.get('breadcrumbs',{})
                     fault = decoded.get('fault',{})
@@ -1767,7 +1776,8 @@ def result_passed(result, decoded=True):
     return (result.get('outcome') == 'returned' or
             (result.get('outcome') == 'watchdog-reset' and result.get('expected_reset') is True and
              result.get('dram_lost') is True and result.get('rom_returned') is True and
-             not result.get('first_failure') and not result.get('quarantined'))) and (not decoded or not result.get('decoder_failures'))
+             not result.get('first_failure') and not result.get('quarantined'))) and \
+        (not decoded or not (result.get('decoder_failures') or result.get('decode_error')))
 
 
 def result_summary(result, limit=1500):
@@ -1788,6 +1798,8 @@ def result_summary(result, limit=1500):
         lines.append('decoded: none (no decoder, or the image did not return a result)')
     if result.get('decoder_failures'):
         lines.append('decoder failures: ' + short(result['decoder_failures']))
+    if result.get('decode_error'):
+        lines.append('decode error: ' + short(result['decode_error']))
     return lines
 
 
