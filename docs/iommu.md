@@ -14,6 +14,10 @@ or reclaim buffers. Supervised profiles can retain all resources until planned
 whole-board power removal; they do not require watchdog expiry or ROM return.
 Returning operation requires separately qualified recovery.
 
+The OS image uses a second component, the [IOMMU owner](../drivers/iommu/a733_iommu_owner.c), for every master that
+it drives. The owner is described in
+[The OS-image owner shares one directory among its masters](#the-os-image-owner-shares-one-directory-among-its-masters).
+
 ## Two banks serve ten physical masters
 
 The register banks start at `0x03900000` and `0x03910000`, within a 128 KiB
@@ -184,8 +188,9 @@ The source also has separate range invalidations for the TLB and page-table
 walk cache. TLB range endpoints encode addresses shifted by 12; walk-cache
 endpoints encode addresses shifted by 22. Each request uses the same fixed
 delay followed by an explicit clear. These operations do not provide an
-independent completion or reclamation contract, so live remapping and unmapping
-remain unsupported.
+independent completion or reclamation contract, so the native controller does not
+remap or unmap live tables. The OS-image owner does both, and requires its caller
+to drain every master that used a span before unmapping it.
 
 Page-table publication is distinct from payload cache maintenance. Camera
 memory admission must prepare frame pages for device writes and the parameter
@@ -218,6 +223,73 @@ are allowed while the admission proof remains valid; an empty later snapshot
 cannot restore ACTIVE. The integration layer must continue holding power and
 clock leases and must serialize every caller.
 
+## The OS-image owner shares one directory among its masters
+
+The owner holds the IOMMU for one OS-image lifetime. A device service attaches
+its masters with their spans, maps and unmaps buffers while attached, and detaches
+its masters in its quiesce step after draining them. Each span is a run of whole
+pages with an IOVA below 4 GiB (`A733_IOMMU_IOVA_LIMIT`), a physical address in
+DRAM below 2^34, and read, write or both permissions. Calls are synchronous; the
+OS-image wiring serializes them.
+
+- **First attach.** The owner takes the `A733_CLOCK_IOMMU_SYS` lease. It then
+  records both banks' enable, interrupt status and walk status words, and the
+  micro status and bypass words of the new masters and of USB master 0. A bank
+  already enabled or any nonzero status word refuses the attach with no
+  register write, and the lease is returned. Otherwise the owner allocates one
+  16 KiB directory, writes the spans' entries, and programs both banks in the
+  order of the Linux `sunxi_iommu_hw_init`: directory base, prefetch `0x3007f`,
+  range invalidation modes, interrupt enables (0), bypass (0 for the new
+  masters, 1 for USB), a flush held for 10 microseconds, automatic clock
+  gating, and enable. Every write except the flush requests is read back.
+- **USB stays bypassed.** The device tree lists USB as an IOMMU master with no
+  power domain, and the Linux setup writes its bypass to 1. The OS image's USB
+  controllers run DMA throughout a session, so the first attach sets USB's
+  bypass with the attached masters. The owner touches no other unattached
+  master: those micro registers need the master's power domain and clocks, and
+  the Linux register wrappers skip a master that has not probed.
+- **Later attach and map.** The owner adds the new entries to the same
+  directory. It allocates a 4 KiB second-level table the first time a span
+  touches a 4 MiB window. It then invalidates the TLB from the span's first
+  page to eight pages past its end, and the page-walk cache over the windows
+  the span touches, in both banks, as `sunxi_zap_tlb` does for version 0x16.
+  An attach then sets the new masters' interrupt enable to 0 and bypass to 0,
+  as `sunxi_enable_device_iommu` does. Neither writes a bank's directory base,
+  enable or global flush, which other attached masters depend on.
+- **Unmap.** The owner clears the entries, then invalidates the TLB and the
+  page-walk cache over each span. Linux invalidates before clearing; clearing
+  first means no walk can cache a cleared entry after the invalidation.
+  Second-level tables stay allocated until the last detach.
+- **Detach.** Each detached master returns to bypass; Linux's detach changes no
+  register. After the last master, the owner flushes, disables both banks,
+  releases every table and returns the clock lease. Linux has no disable path;
+  its suspend only gates the clocks. If a bank does not read back disabled,
+  the owner keeps the tables and the lease, because the bank may still walk them.
+- **Faults.** Device interrupts stay disabled. A scan reads both banks' status
+  and walk words and one master's micro status, address and data words into
+  that master's fault record. Any failed register access or table allocation
+  leaves the owner in its fault state for the lifetime; later attaches are
+  refused, and detach still runs.
+
+Table memory comes from the caller through an allocation callback; the OS image
+supplies non-cacheable pages from the unified allocator. The owner never writes
+the IOMMU bus gate words. A caller attaches a master only while that master's
+power domain is on and its clocks run.
+
+Status: host-tested. The host test, [a733-iommu-owner.py](../checks/a733-iommu-owner.py),
+runs one session in which G2D (master 10) attaches first and the decoder
+(masters 6 and 7) attaches second; all three are on bank 1. A register model
+records every access, and a walk model translates each master's IOVA from its
+own bank's directory base through table memory. The test checks the
+first-attach register sequence, that the second attach writes no directory base
+or enable, that every page of both devices' spans walks to its physical page
+with its permissions, refusals with no register access, fault recording, unmap,
+a map across a 4 MiB boundary, and the release of every table and the lease. A
+mutant that installs a second directory for the decoder's attach fails the
+test, because G2D's pages no longer walk from bank 1. No board run has used the
+owner yet; the later-attach, map, unmap and partial-detach sequences follow the
+Linux source and have host evidence only.
+
 ## Sources and focused evidence
 
 All Linux anchors refer to revision
@@ -240,7 +312,7 @@ The reference check verifies its three Linux input hashes before compiling
 isolated source functions. Pin proposals for central integration accompany the
 external evidence; this component does not modify the central source lock.
 
-No host check walks the published page tables or compares the driver with the Linux initialization, bypass, flush and leaf-encoding functions. The risks are incorrect permissions or addresses, publishing incomplete tables, overwriting inherited global state, and releasing resources after an unproven flush. Earlier host runs walked the published page tables, including a physical-address transition across 4 GiB, with adjacent unmapped pages, permissions, atomic refusal, all-master admission, cache publication, dropped writes, deadlines, time regression, partial admission and retained faults under AddressSanitizer and UndefinedBehaviorSanitizer. The core also compiled freestanding for AArch64. A compilation of unchanged Linux functions matched all 128 KiB of modeled registers except the explicit polled interrupt masks, and all 180 leaf entries across physical-address extensions and permissions.
+No host check walks the native controller's published page tables or compares that controller with the Linux initialization, bypass, flush and leaf-encoding functions. The risks are incorrect permissions or addresses, publishing incomplete tables, overwriting inherited global state, and releasing resources after an unproven flush. Earlier host runs walked the published page tables, including a physical-address transition across 4 GiB, with adjacent unmapped pages, permissions, atomic refusal, all-master admission, cache publication, dropped writes, deadlines, time regression, partial admission and retained faults under AddressSanitizer and UndefinedBehaviorSanitizer. The core also compiled freestanding for AArch64. A compilation of unchanged Linux functions matched all 128 KiB of modeled registers except the explicit polled interrupt masks, and all 180 leaf entries across physical-address extensions and permissions.
 
 Raw sources, executables, generated reference harnesses, logs and snapshots are
 under `~/.cache/sunstoneos/evidence/iommu-20261016/`. The source comparison is in
