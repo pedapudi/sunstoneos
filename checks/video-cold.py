@@ -8,7 +8,10 @@ model's PPU words: the decoder requests it through its row and writes no PCK600 
 port 3-3 FEL words (gates 0x5c0 0x110103ff, 0x5e0 0xf1055803, 0x5e4 0x4; PLL_VE0 0x41305a00) and from fifteen other
 PLL entry and lock cases, the CCU words a hold-B fault left (refused at entry with no write), domain 2 OFF or adopted ON, critical gates clear after ON, two power lifetimes
 joined by the quiesce (docs/designs/video-pll.md), the VE+0x804 pulse under two readbacks that no source documents,
-and faults after the first write closed by a733_video_decoder_close. Every read the binding makes must pass the
+and faults after the first write closed by a733_video_decoder_close. The OS service's lifetimes open the JPEG
+binding's decoder with a733_video_decoder_open, then decode the fixture with the executor at the board's device
+addresses under the run's own deadline: 661 writes. The run with the board's decoder identity prints those writes,
+which this check saves as write-log.json for apps/vdec-check/host.py. Every read the binding makes must pass the
 native read allowlist. The unit's unlocked read (the PLL lock wait and the ROM identity) is also run alone: refused
 with the record untouched while the mutex is held or the unit has failed, and uncertain on a read that fails. Each mutant changes one text in one driver source; the model must
 fail with it.
@@ -18,6 +21,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import struct
 import subprocess
 import sys
 
@@ -126,6 +130,9 @@ MUTANTS = [
     ('drivers/video/a733_video_platform.c', '    p->cold.closed_at=u->last_now;\n', '', 'close hold end not stamped'),
     ('drivers/power/a733_power_domains.c', '    if(k>=0)r->transition=r->domains->transition[k];\n', '',
      'row answered without its transition record'),
+    ('drivers/video/a733_video_platform.c', '    if(r==1)u->deadline=0;\n', '', 'open keeps its deadline: the decode is refused'),
+    ('drivers/video/a733_video_platform.c', '    if(r==1&&p->admit&&!p->admitted) {', '    if(0) {',
+     'bound decoder started before its admission'),
     ('drivers/video/a733_video_platform.c', '    u->deadline=0;\n    return A733_VIDEO_OPEN_REFUSED;',
      '    return A733_VIDEO_OPEN_REFUSED;', 'refused open keeps its deadline'),
     ('drivers/video/a733_video_platform.c', '    if(u->late&&!u->uncertain){u->failed=0;u->late=0;}\n', '',
@@ -178,6 +185,17 @@ assert any(line.startswith('PASS: decoder cold start on the actual owner') for l
 assert any(line.startswith('lifetime2 (CCU at the FEL words): result1') for line in runs['cold'])
 assert any(line.startswith('service: result1') and 'adopted result1' in line for line in runs['cold'])
 assert sum(line.startswith('vcu ') for line in runs['cold']) == 2
+assert any(line.startswith('service decode: writes661') for line in runs['cold'])
+# The service's decode at the board's device addresses (apps/os/video_decode.c), with the board's decoder identity:
+# the 661 writes in order, as apps/vdec-check/record.h logs them, for apps/vdec-check/host.py --write-log.
+log = [line.split() for line in runs['cold --reset'] if line.startswith('write ')]
+assert [int(w[1]) for w in log] == list(range(661)), 'the service decode log is not 661 writes in order'
+format_old = [int(line.split()[1], 16) for line in runs['cold --reset'] if line.startswith('format_old ')]
+assert len(format_old) == 1
+packed = b''.join(struct.pack('<2I', int(w[2], 16) | int(w[3]) << 24, int(w[4], 16)) for w in log)
+write_log = dict(format_old=format_old[0], sha256=hashlib.sha256(packed).hexdigest(),
+                 writes=[[int(w[2], 16), int(w[3]), int(w[4], 16)] for w in log])
+(out / 'write-log.json').write_text(json.dumps(write_log) + '\n')
 assert sum(line.startswith('fault') and ' closed' in line for line in runs['cold']) == 4
 holds = [line for line in runs['cold'] if line.startswith('holds ')]
 refused = []
@@ -194,6 +212,7 @@ for i, (path, old, new, name) in enumerate(MUTANTS):
     assert result.returncode != 0, ('mutant survived', name)
     refused.append(dict(source=path, mutant=name))
 record = dict(rom_sha256=ROM_SHA256, fixture_sha256=hashlib.sha256(jpeg.read_bytes()).hexdigest(), runs=runs, holds=holds,
+              write_log_sha256=write_log['sha256'],
               mutants_refused=refused,
               inputs={name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in CHECK_INPUTS})
 (out / 'result.json').write_text(json.dumps(record, indent=1) + '\n')

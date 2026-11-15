@@ -1,7 +1,9 @@
 {
   "name": "vdec-check",
   "devices": {"required": ["video-decode"], "optional": []},
-  "cpu": {"clock_grants": true, "cluster": "a55", "workers": 0, "priority": 2, "stack_bytes": 8192},
+  "cpu": {"clock_grants": true, "perf": true, "cluster": "a55", "workers": 0, "priority": 2, "stack_bytes": 8192},
+  "large_regions": [{"name": "jpeg", "bytes": 2097152, "access": ["read", "write"]},
+                    {"name": "pixels", "bytes": 2097152, "access": ["read", "write"]}],
   "deadlines": {"run_us": 5000000, "return_reserve_us": 5000000, "progress_window_us": 1000000},
-  "output_limit": 1024
+  "output_limit": 12288
 }

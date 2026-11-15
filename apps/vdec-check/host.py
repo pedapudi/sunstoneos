@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
-"""Host side of vdec-check: decode the result record and list departures from the stage-1 prediction.
+"""Host side of vdec-check: decode the result and list departures from the stage-2 prediction.
 
-The record is the 32-byte header and struct vdec_check_record (apps/vdec-check/record.h) that
-apps/vdec-check/main.c returns. decode() returns the fields. failures() names every departure from the stage-1
-prediction in docs/video-decode-os.md: the open and close succeed, the entry words match the port 3-3 FEL dump where
+The result is the 32-byte header, the decode's answer (struct ss_video_decode_done, include/sunstone_video_decode.h),
+struct vdec_check_record (apps/vdec-check/record.h) and the 2,304 decoded bytes that apps/vdec-check/main.c returns.
+decode() returns the fields. failures() names every departure from the stage-2 prediction in docs/video-decode-os.md.
+
+The decode: it succeeds; the 2,304 bytes, the answer's SHA-256 and the record's SHA-256 all equal the pinned
+reference (tools/jpeg-pixel-reference.py; SHA-256 eada6821...8296); the executor ends DONE with 661 writes, one
+INTID 81 interrupt taken while armed and none stray, the line masked again and neither pending nor active, both
+masters free of IOMMU faults, every guard byte intact, the status word idle after the acknowledgment, and the buffers
+at the predicted device addresses. With write_log (the cold model's log, checks/video-cold.py write-log.json), the
+661 writes must equal the model's, write 651 recomputed from the recorded format word and write 660 from the
+recorded status word.
+
+The open and close, as stage 1 predicted them: the open and close succeed, the entry words match the port 3-3 FEL dump where
 the binding depends on them, the 0x5e4 open reads back 0x40306, PLL_VE0 reads 0xf9204d00 once started and 0x01204d00
 after the close, the module word is 0x81000000 started and 0x01000000 closed, reset and bus gate are released only
 while open, the identity is one the binding lists, and domain 2 answers ON either adopted or after one measured
@@ -14,6 +24,7 @@ A fault after the first write closes the decoder and still returns the record: f
 the unit's failure flags and the address and word of the failing access, and judges the words after that close
 against the close prediction (module gate, reset and bus gate closed, PLL_VE0 disabled).
 """
+import hashlib
 import struct
 
 HEADER = struct.Struct('<8I')
@@ -40,6 +51,26 @@ RECORD = (('magic', 'I', 1), ('bytes', 'I', 1), ('entry', 'I', 20), ('started', 
           ('row_request_us', 'Q', 1), ('row_seen_us', 'Q', 1), ('owner_started_us', 'Q', 1),
           ('owner_verified_us', 'Q', 1), ('requested_ticks', 'Q', 1),
           ('started_ticks', 'Q', 1), ('closed_ticks', 'Q', 1), ('transition', TRANSITION, 1))
+LOG = 661
+DECODE = (('state', 'I', 1), ('index', 'I', 1), ('status', 'I', 1), ('format_old', 'I', 1), ('status_after', 'I', 1),
+          ('writes', 'I', 1), ('width', 'I', 1), ('height', 'I', 1), ('stride', 'I', 1), ('rows', 'I', 1),
+          ('file_bytes', 'I', 1), ('output_bytes', 'I', 1), ('iova', 'I', 3), ('mapped', 'I', 3),
+          ('irq_count', 'I', 1), ('stray', 'I', 1), ('seen', 'I', 1), ('guard', 'I', 1), ('scan', 'I', 2),
+          ('iommu_fault', 'I', 20), ('gic', 'I', 3), ('reserved', 'I', 1), ('begin_ticks', 'Q', 1),
+          ('armed_ticks', 'Q', 1), ('trigger_ticks', 'Q', 1), ('irq_ticks', 'Q', 1), ('finish_ticks', 'Q', 1),
+          ('done_ticks', 'Q', 1), ('output_sha256', 'B', 32), ('log', 'I', 2 * LOG))
+RECORD = RECORD + (('decode', DECODE, 1),)
+DONE = (('magic', 'I', 1), ('bytes', 'I', 1), ('width', 'I', 1), ('height', 'I', 1), ('output_bytes', 'I', 1),
+        ('status', 'I', 1), ('sha256', 'B', 32), ('trigger_ticks', 'Q', 1), ('irq_ticks', 'Q', 1),
+        ('done_ticks', 'Q', 1))
+PIXELS = 48 * 32 + 2 * 24 * 16
+REFERENCE_SHA256 = 'eada68215e5eb2522ba9751de74987eb1f51c948aa455740036460e9a4238296'
+FIXTURE_SHA256 = 'd31a703609ea58038f8b5a352ee6ac3a1e02ccb0b39d74d4f124a57cff16c8e4'
+# The device addresses the image hands out (apps/os/iommu.c IOVA_BASE, apps/os/video_decode.c buffer): the input,
+# luma and chroma buffers in that order, one mapped page each, each between two unmapped pages.
+IOVAS = [0x10001000, 0x10004000, 0x10007000]
+JPEG_DONE = 11  # enum a733_video_jpeg_state
+DONE_MAGIC = 0x454e4456
 
 
 def layout(members):
@@ -70,13 +101,18 @@ def unpack(payload, base, members):
     return out
 
 
-SIZE = HEADER.size + layout(RECORD)[1]
+DONE_SIZE = layout(DONE)[1]
+RECORD_SIZE = layout(RECORD)[1]
+SIZE = HEADER.size + DONE_SIZE + RECORD_SIZE + PIXELS
 CHECK_MAGIC = 0x4b434456
 INFO_MAGIC = 0x49444556
-STATUS = {1: 'opened-and-closed', 2: 'open-refused', 3: 'close-failed'}
+STATUS = {1: 'decoded-and-closed', 2: 'open-refused', 3: 'close-failed', 4: 'decode-failed', 5: 'no-region'}
 ROW = {0: 'idle', 1: 'pending', 2: 'on', 3: 'off', 4: 'refused', 5: 'failed'}
 STEPS = {0: 'none', 1: 'rail', 2: 'clock', 3: 'pck-lease', 4: 'supply', 5: 'config', 6: 'entry-words', 7: 'entry',
-         8: 'row', 9: 'row-timeout', 17: 'cold', 18: 'started-words', 19: 'identity', 32: 'close', 33: 'closed-words'}
+         8: 'row', 9: 'row-timeout', 10: 'decode', 11: 'decode-input', 12: 'decode-output', 13: 'decode-memory',
+         14: 'decode-irq', 17: 'cold', 18: 'started-words', 19: 'decode-run', 20: 'decode-gic', 21: 'decode-timeout',
+         22: 'decode-status', 23: 'decode-drain', 24: 'decode-iommu-fault', 25: 'decode-guard', 32: 'close',
+         33: 'closed-words', 34: 'close-gic', 35: 'close-detach'}
 VERSIONS = (0x0003332100021321, 0x0003331000021320, 0x0003052000012011)
 TICKS_PER_US = 24
 INTID_81 = 1 << 17
@@ -86,14 +122,34 @@ FAILED_FLAGS = ('failed', 'mutex-held', 'uncertain', 'late')
 def decode(payload):
     if len(payload) != SIZE:
         raise ValueError(f'vdec-check result is {len(payload)} bytes, not {SIZE}.')
-    (magic, stage, status, open_result, close_result, fault_step, fault_value, reserved) = HEADER.unpack_from(payload)
-    if magic != CHECK_MAGIC or stage != 1 or reserved:
+    (magic, stage, status, open_result, close_result, fault_step, fault_value, decode_result) = \
+        HEADER.unpack_from(payload)
+    if magic != CHECK_MAGIC or stage != 2:
         raise ValueError('vdec-check result has an unknown header.')
     signed = lambda x: x - (1 << 32) if x >> 31 else x
     out = {'stage': stage, 'status': STATUS.get(status, status), 'open_result': signed(open_result),
-           'close_result': signed(close_result), 'fault_step': STEPS.get(fault_step, fault_step),
+           'close_result': signed(close_result), 'decode_result': signed(decode_result),
+           'fault_step': STEPS.get(fault_step >> 24 if fault_step >> 24 else fault_step, fault_step),
            'fault_value': fault_value}
-    r = unpack(payload, HEADER.size, RECORD)
+    done = unpack(payload, HEADER.size, DONE)
+    done['sha256'] = bytes(done['sha256']).hex()
+    out['done'] = done
+    r = unpack(payload, HEADER.size + DONE_SIZE, RECORD)
+    pixels = payload[HEADER.size + DONE_SIZE + RECORD_SIZE:]
+    out['pixels'] = pixels
+    out['pixels_sha256'] = hashlib.sha256(pixels).hexdigest()
+    dec = r['decode']
+    dec['output_sha256'] = bytes(dec['output_sha256']).hex()
+    dec['log'] = [(dec['log'][2 * i] & 0xffffff, dec['log'][2 * i] >> 24, dec['log'][2 * i + 1]) for i in range(LOG)]
+    dec['log_sha256'] = hashlib.sha256(b''.join(struct.pack('<2I', o | w << 24, v)
+                                                for o, w, v in dec['log'][:dec['writes']])).hexdigest()
+    span = lambda a, b: (dec[b] - dec[a]) / TICKS_PER_US if dec[a] and dec[b] >= dec[a] else None
+    dec['durations_us'] = {'to_trigger': span('begin_ticks', 'trigger_ticks'),
+                           'trigger_to_irq': span('trigger_ticks', 'irq_ticks'),
+                           'irq_to_drained': span('irq_ticks', 'finish_ticks'),
+                           'drained_to_written': span('finish_ticks', 'done_ticks'),
+                           'decode': span('begin_ticks', 'done_ticks')}
+    out['decode'] = dec
     out.update(info_magic=r['magic'], info_bytes=r['bytes'])
     for name in ('entry', 'started', 'closed'):
         out[name] = dict(zip(WORDS, r[name]))
@@ -115,6 +171,7 @@ def decode(payload):
                                     'requested_ticks', 'started_ticks', 'closed_ticks')})
     out['times'] = times
     out['transition'] = r['transition']
+    out['durations_us_decode'] = dec['durations_us']
     # Derived durations in microseconds; zero where a phase was not reached.
     span = lambda a, b: times[b] - times[a] if times[a] and times[b] >= times[a] else None
     out['durations_us'] = {
@@ -124,7 +181,7 @@ def decode(payload):
         'owner_verify': span('owner_started_us', 'owner_verified_us'),
         'request_after_owner_start': span('owner_started_us', 'row_request_us'),
         'open': (times['started_ticks'] - times['requested_ticks']) / TICKS_PER_US if times['started_ticks'] else None,
-        'close': (times['closed_ticks'] - times['started_ticks']) / TICKS_PER_US if times['closed_ticks'] else None}
+        'open_to_close': (times['closed_ticks'] - times['started_ticks']) / TICKS_PER_US if times['closed_ticks'] else None}
     # Reported, not judged: no reading shows 0x1b10 move, so the close is predicted to leave it at 0x20000.
     out['auto_closed_as_entry'] = out['closed']['auto'] & 0x30001 == 0x20000
     t = out['transition']
@@ -133,16 +190,65 @@ def decode(payload):
     return out
 
 
-def failures(d):
-    """Departures from the stage-1 prediction, as strings; empty when the run matches."""
+def log_failures(dec, write_log):
+    """Departures of the board's decoder writes from the cold model's (write-log.json of checks/video-cold.py)."""
+    expected = [tuple(w) for w in write_log['writes']]
+    if len(expected) != LOG:
+        return ['the model log is not 661 writes']
+    # The two words the board reads: the format word folded into write 651, the status word acknowledged in 660.
+    expected[651] = (expected[651][0], expected[651][1], (dec['format_old'] & ~0x77 & 0xffffffff) | 0x22)
+    expected[660] = (expected[660][0], expected[660][1], dec['status'] & 0xf)
+    got = dec['log'][:dec['writes']]
+    bad = [i for i in range(min(len(got), LOG)) if tuple(got[i]) != expected[i]]
+    out = [f"write {i}: {got[i][0]:#x}/{got[i][1]} {got[i][2]:#x}, model {expected[i][0]:#x}/{expected[i][1]} "
+           f"{expected[i][2]:#x}" for i in bad[:8]]
+    if len(bad) > 8:
+        out.append(f'{len(bad) - 8} more writes differ')
+    if len(got) != LOG:
+        out.append(f'{len(got)} writes, model 661')
+    return out
+
+
+def decode_failures(d, write_log=None):
+    """Departures of the decode from the stage-2 prediction."""
     out = []
     def want(ok, text):
         if not ok:
             out.append(text)
-    want(d['status'] == 'opened-and-closed' and d['open_result'] == 1 and d['close_result'] == 1,
-         f"status {d['status']}, open {d['open_result']}, close {d['close_result']}, fault {d['fault_step']} "
-         f"{d['fault_value']:#x}")
-    want(d['info_magic'] == INFO_MAGIC and d['info_bytes'] == SIZE - HEADER.size, 'record header differs')
+    dec, done = d['decode'], d['done']
+    want(d['decode_result'] == 1, f"decode {d['decode_result']}")
+    want(d['pixels_sha256'] == REFERENCE_SHA256, f"pixels SHA-256 {d['pixels_sha256']}, reference {REFERENCE_SHA256}")
+    want(done['magic'] == DONE_MAGIC and done['bytes'] == DONE_SIZE and done['width'] == 48 and done['height'] == 32 and
+         done['output_bytes'] == PIXELS, f"answer {done['magic']:#x} {done['bytes']} {done['width']}x{done['height']} "
+         f"{done['output_bytes']} bytes")
+    want(done['sha256'] == d['pixels_sha256'] == dec['output_sha256'], 'answer, record and returned bytes hash differently')
+    want(dec['state'] == JPEG_DONE and dec['writes'] == LOG, f"executor state {dec['state']} index {dec['index']}, "
+         f"{dec['writes']} writes")
+    want(dec['status'] & 1 and not dec['status'] & 0x0018000e, f"status at completion {dec['status']:#x}")
+    want(not dec['status_after'] & 0x001c3f0f, f"status after the acknowledgment {dec['status_after']:#x}")
+    want(dec['irq_count'] == 1 and dec['stray'] == 0 and dec['seen'] == 1,
+         f"INTID 81: {dec['irq_count']} taken, {dec['stray']} stray, seen {dec['seen']}")
+    want(not (dec['gic'][0] | dec['gic'][1] | dec['gic'][2]) & INTID_81, f"INTID 81 after the decode {dec['gic']}")
+    want(dec['scan'] == [1, 1], f"IOMMU scans {dec['scan']}, faults {dec['iommu_fault']}")
+    want(dec['guard'] == 0, f"guard {dec['guard']:#x}")
+    want(dec['iova'] == IOVAS and dec['mapped'] == [4096] * 3, f"buffers {[hex(a) for a in dec['iova']]} {dec['mapped']}")
+    want((dec['width'], dec['height'], dec['stride'], dec['rows'], dec['file_bytes'], dec['output_bytes']) ==
+         (48, 32, 64, 32, 520, PIXELS), 'picture geometry differs')
+    if write_log is not None:
+        out += log_failures(dec, write_log)
+    return out
+
+
+def failures(d, write_log=None):
+    """Departures from the stage-2 prediction, as strings; empty when the run matches."""
+    out = []
+    def want(ok, text):
+        if not ok:
+            out.append(text)
+    want(d['status'] == 'decoded-and-closed' and d['open_result'] == 1 and d['close_result'] == 1,
+         f"status {d['status']}, open {d['open_result']}, decode {d['decode_result']}, close {d['close_result']}, "
+         f"fault {d['fault_step']} {d['fault_value']:#x}")
+    want(d['info_magic'] == INFO_MAGIC and d['info_bytes'] == RECORD_SIZE, 'record header differs')
     if d['info_magic'] != INFO_MAGIC:
         return out
     if d['fault_closed']:
@@ -176,7 +282,7 @@ def failures(d):
     want(s['module'] == 0x81000000, f"module started {s['module']:#x}")
     want(s['bgr'] == e['bgr'] | 0x40004, f"reset/bus started {s['bgr']:#x}")
     want(s['mclk_gates'] == d['mclk_readback'], f"0x5e4 started {s['mclk_gates']:#x}")
-    if d['status'] == 'opened-and-closed':
+    if d['status'] in ('decoded-and-closed', 'decode-failed'):
         want(c['pll_ve0'] == 0x01204d00, f"PLL_VE0 closed {c['pll_ve0']:#010x}, predicted 0x01204d00")
         want(c['module'] == 0x01000000, f"module closed {c['module']:#x}")
         want(c['bgr'] == e['bgr'], f"reset/bus closed {c['bgr']:#x}")
@@ -193,4 +299,21 @@ def failures(d):
                     t['policy_written'] & 0xf == 8 and t['reached_word'] & 0xf == 8 and t['reads'] == t['spin_reads'] and
                     t['reached_at'] - t['command_at'] <= 10000)
         want(adopted or measured, f"domain 2 neither adopted ON nor one measured OFF-to-ON command: {t}")
+    if d['open_result'] == 1:
+        out += decode_failures(d, write_log)
     return out
+
+
+def fixture_header_matches(root):
+    """1 when apps/vdec-check/fixture.h holds the bytes of apps/jpeg/fixture.py's nonconstant()."""
+    import importlib.util
+    import re
+    spec = importlib.util.spec_from_file_location('jpeg_fixture', root / 'apps/jpeg/fixture.py')
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    text = (root / 'apps/vdec-check/fixture.h').read_text()
+    body = text[text.index('vdec_check_fixture[VDEC_CHECK_FIXTURE_BYTES] = {'):]
+    data = bytes(int(x, 16) for x in re.findall(r'0x([0-9a-f]{2})', body))
+    want = fixture.nonconstant()
+    return data == want and hashlib.sha256(want).hexdigest() == FIXTURE_SHA256 and \
+        hashlib.sha256(fixture.nonconstant_reference()).hexdigest() == REFERENCE_SHA256

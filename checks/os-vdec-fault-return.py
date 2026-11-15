@@ -4,7 +4,7 @@ registry.
 
 The image's own os_quiesce_register, os_quiesce_step, decoder quiesce step, owner task and decoder platform binding run
 under AArch64 emulation, with the owner task run between supervisor passes as its task would be. The binding is
-initialized by its own a733_video_decoder_init from a configuration at the vendor point; the decoder is then left as
+initialized by its own a733_video_platform_init from a configuration at the vendor point; the decoder is then left as
 the stage-1 board run 1794712072331160946-bd447f26 left it, refused in hold B (cold step 4) with PLL_VE0 running and
 open, the module gate open, and reset and bus gate released. The CCU, RTC, R_CCU, GIC, PCK and decoder pages are
 plain registers, and every page the binding uses passes the image's own Device-mapping check, made once at the
@@ -28,6 +28,20 @@ Cases, each starting from a service that failed in hold B (phase FAULT, step VD_
   point among the close's stores to the words the step reads (phase, close_started, reported and quiesced), with a
   pause after each of its first three loads of them so that its loads can straddle one or more stores
   (harness.TwoCores). No placement may report 0x941; every one must reach DONE with the service CLOSED.
+Three cases start from a decode with masters 6 and 7 attached; the IOMMU owner's detach is a hook that records when
+it comes among the CCU writes:
+- decode-timeout-closes: the service is FAULT after the completion interrupt did not come. The quiesce's close masks
+  INTID 81, runs the binding's close and detaches the masters only after reset is asserted; the registry reaches DONE.
+- decode-drained-closes: an OPEN service whose decode drained. The application's close detaches the masters before
+  any CCU write and is answered 1.
+- decode-detach-fails: as decode-timeout-closes, but the detach fails: the service stays FAULT (site 0x941).
+One case runs a decode, from an OPEN service whose decoder is started as after the stage-1 open:
+- decode-runs: the application's decode request through the image's do_decode, executor, binding and INTID 81
+  handler. The large regions, the allocator and the IOMMU owner are hooks; the decoder model sets completion at the
+  trigger, and the planes are filled with the pinned reference at the programmed stride before the handler runs. The
+  answer is 1, the copied 2,304 bytes and the answer's SHA-256 equal the reference, the three buffers are mapped at
+  the predicted device addresses, both masters are scanned, the handler masks INTID 81, the record holds 661 writes
+  and one armed interrupt, and the close that follows detaches the masters before any CCU write.
 One more case starts from a CLOSED service whose open the application has requested, with the CCU at the port 3-3 FEL
 words and the published nonsecure boot ROM mapped:
 - row-wait: the open runs its read-only entry hold and requests domain 2, which the owner never answers. Before
@@ -38,9 +52,10 @@ words and the published nonsecure boot ROM mapped:
 - row-wait-deadline: the same open, but the call deadline (VD_CALL_US) passes during the supply wait, so the binding
   refuses the open at its deadline with the row still pending. The service records the same step,
   VD_STEP_ROW_TIMEOUT, and ends the same way.
-- record-layout: every member offset of the board record (struct vdec_check_record, with the binding's cold record
-  and the owner's transition record embedded) in apps/vdec-check/host.py equals the image's DWARF, so the host
-  decodes the bytes the image returns.
+- record-layout: every member offset of the board record (struct vdec_check_record, with the binding's cold record,
+  the owner's transition record and the decode record embedded) and of the decode's answer in apps/vdec-check/host.py
+  equals the image's DWARF, so the host decodes the bytes the image returns; and apps/vdec-check/fixture.h holds the
+  bytes of apps/jpeg/fixture.py.
 The image of the hold-B run (c1a4e4fc...) fails the first two cases: its quiesce step reports FAULT on every pass
 until the bound. The image of the stage-1 rerun (7d63776e...) fails quiesce-among-close-stores: its quiesce step
 decides from phase and close_started.
@@ -49,6 +64,7 @@ Usage: os-vdec-fault-return.py --image ELF --output DIR"""
 import argparse
 import hashlib
 import importlib.util
+import struct
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn.arm64_const import (UC_ARM64_REG_PC, UC_ARM64_REG_LR, UC_ARM64_REG_SP, UC_ARM64_REG_X0,
@@ -82,11 +98,16 @@ PLL_INHERITED = 1 << 24
 # the module gate open at mux 1, reset and bus gate released, the MBUS clock gate opened with its key.
 HOLD_B = {0x220: 0xf9204d00, 0xa88: 0x81000000, 0xa8c: 0x00040004, 0x5e4: 0x00040306, 0x5c0: 0x1101037f,
           0x5e0: 0xf1045803, 0x1b10: 0x00020000, 0x1918: 0x00030003, 0x1998: 0x00030000}
-LAYOUTS = {'board_application', 'a733_board_session', 'a733_video_decoder', 'a733_video_unit',
+LAYOUTS = {'board_application', 'a733_board_session', 'a733_video_decoder', 'a733_video_unit', 'vdec_check_decode',
+           'ss_video_decode_done',
            'a733_video_platform_config', 'a733_clock_token', 'a733_gpu_resource_lease', 'a733_power_domain_row',
            'vdec_check_record', 'board_provider', 'a733_native_usb', 'a733_rail_leases', 'a733_power_domains',
            'a733_pmic', 'a733_pmic_config', 'a733_rail_token', 'a733_video_cold_record', 'a733_power_transition',
-           'a733_power_service_config', 'video_decode_check_result'}
+           'a733_power_service_config', 'video_decode_check_result', 'large_slot'}
+# The decode case's memory: the application's two large regions and the owner's allocations.
+REGIONS, ARENA = 0x61000000, 0x61200000
+IOVA_BASE = 0x10000000  # apps/os/iommu.c
+VERSION_E0, VERSION_E4 = 0x00033310, 0x00021320  # identity 0x0003331000021320, the board's (run 6b3ec3f5)
 
 
 class Registers:
@@ -101,6 +122,32 @@ class Registers:
     def write(self, uc, offset, size, value, data):
         self.writes.append((offset, value))
         self.words[offset] = self.stuck.get(offset, value)
+
+
+class Distributor(Registers):
+    """The GIC distributor's set-enable and clear-enable words (GICD_ISENABLERn at 0x100, GICD_ICENABLERn at 0x180)."""
+    def write(self, uc, offset, size, value, data):
+        self.writes.append((offset, value))
+        if 0x100 <= offset < 0x180:
+            self.words[offset] = self.words.get(offset, 0) | value
+        elif 0x180 <= offset < 0x200:
+            self.words[offset - 0x80] = self.words.get(offset - 0x80, 0) & ~value
+        else:
+            self.words[offset] = value
+
+
+class Decoder(Registers):
+    """The decoder's registers: the trigger byte (0x118) sets completion in the status word (0x11c), whose bits are
+    write-one-to-clear; every other word is plain."""
+    def write(self, uc, offset, size, value, data):
+        self.writes.append((offset, value))
+        if offset == 0x11c:
+            self.words[0x11c] = self.words.get(0x11c, 0) & ~value
+        elif offset == 0x118:
+            self.words[0x11c] = 1
+            self.triggered = True
+        else:
+            self.words[offset] = value
 
 
 def members(image):
@@ -120,7 +167,8 @@ def members(image):
     return layout, enums
 
 
-def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, application_close=False, schedule=None, row_wait=False):
+def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, application_close=False, schedule=None,
+             row_wait=False, decode=None, detach=1):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -139,19 +187,20 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         uc.mem_map(ROM_BASE, len(rom))
         uc.mem_write(ROM_BASE, rom)
     others = {'rtc': Registers(RTC, 0x1000, {0x160: 0x983fb0f7}), 'r_ccu': Registers(R_CCU, 0x1000, {0x1ac: 1}),
-              'gic': Registers(GIC, 0x1000, {}), 'pck': Registers(PCK, 0x1000, {0: 8, 8: 8}),
-              've': Registers(VE, 0x1000, {})}
+              'gic': Distributor(GIC, 0x1000, {}), 'pck': Registers(PCK, 0x1000, {0: 8, 8: 8}),
+              've': Decoder(VE, 0x1000, {0xe0: VERSION_E0, 0xe4: VERSION_E4})}
     ccu.words[0] = 0xf8675f00
     for regs in (ccu, *others.values()):
         uc.mmio_map(regs.base, regs.size, regs.read, None, regs.write, None)
-    state = {'time': 1000, 'requested': 0, 'notes': [], 'slice_done': False, 'waits': [], 'translations': 0}
+    state = {'time': 1000, 'requested': 0, 'notes': [], 'slice_done': False, 'waits': [], 'translations': 0,
+             'detaches': []}
     L = image.layouts
     vd = image.address('vd', UNIT)
 
     def put(address, value, n=4): uc.mem_write(address, int(value).to_bytes(n, 'little'))
     def get(address, n=4): return int.from_bytes(uc.mem_read(address, n), 'little')
     config = vd + layout['config']
-    decoder = vd + layout['decoder']
+    decoder = vd + layout['platform.decoder']
     unit = decoder + L['a733_video_decoder']['unit']
     def unit_field(field): return unit + L['a733_video_unit'][field]
     def config_field(field): return config + L['a733_video_platform_config'][field]
@@ -212,6 +261,9 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         'os_application_wake_task': lambda m: ret(m),
         'os_session_admitted': lambda m: ret(m, SESSION),
         'a733_rail_poll': lambda m: ret(m, 0),                  # A733_RAIL_READY: the decoder's DCDC2 token
+        # The IOMMU owner's detach of masters 6 and 7: when it comes among the CCU writes, and its answer.
+        'os_iommu_detach': lambda m: (state['detaches'].append((m.reg_read(UC_ARM64_REG_X0), len(ccu.writes))),
+                                      ret(m, detach)),
     }
     for symbol, callback in hooks.items():
         if symbol in image.symbols:
@@ -250,16 +302,19 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     put(clock + token['shared'], shared, 16); put(clock + token['exclusive'], exclusive, 16)
     lease, pck_layout = config_field('pck'), L['a733_gpu_resource_lease']
     put(lease + pck_layout['token'], 1, 8); put(lease + pck_layout['mask'], OSC_PCK); put(lease + pck_layout['mode'], STABLE)
-    assert call(image.address('a733_video_decoder_init'), decoder, config, image.address('ops', UNIT), 0) == 1, \
+    assert call(image.address('a733_video_platform_init'), decoder, config, image.address('platform_ops', UNIT), 0) == 1, \
         (name, 'the binding refused its configuration')
     # The init checks the pages, so no hold that follows walks a page table.
     assert state['translations'] == MAPPED_PAGES, (name, 'the init must check the pages', state['translations'])
+    if decode == 'run':
+        return decode_run_case(uc, image, layout, enums, state, put, get, ret, call, enter, ccu, others, vd, decoder,
+                               unit_field)
     if row_wait:
         return row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call=lambda: call(
             image.address('os_video_decode_task', UNIT), 0, stack=STACKS + 0x40000), ccu=ccu, others=others, vd=vd,
             at_deadline=row_wait == 'deadline')
-    # The decoder as hold B's refusal left it.
-    put(unit_field('failed'), 1)
+    # The decoder as hold B's refusal left it; or, for a decode, started and prepared, its unit not failed.
+    put(unit_field('failed'), 0 if decode else 1)
     for field, value in (('pll_inherited', PLL_INHERITED), ('pll_state', 1), ('pll_started', 1), ('pll_locked', 1),
                          ('pll_done', 1)):
         put(unit_field(field), value)
@@ -269,11 +324,21 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         put(unit_field('locked'), 1)
         if 'uncertain' in L['a733_video_unit']:
             put(unit_field('uncertain'), 1)
-    for field, value in (('admitted', 1), ('requested', 1), ('cold_step', 4)):
+    for field, value in (('admitted', 1), ('requested', 1), ('cold_step', 4)) if not decode else \
+            (('admitted', 1), ('requested', 1), ('cold_step', 5), ('checked', 1), ('prepared', 1)):
         put(decoder + L['a733_video_decoder'][field], value)
     put(vd + layout['initialized'], 1)
-    put(vd + layout['dev.phase'], enums['OS_DEVICE_FAULT'])
-    put(vd + layout['dev.fault_step'], enums['VD_STEP_COLD']); put(vd + layout['dev.fault_value'], 0x204)
+    if decode:
+        # Masters 6 and 7 attached; the executor waiting for completion (timeout) or done (drained).
+        put(vd + layout['attached'], 1)
+        put(vd + layout['run.state'], enums['A733_VIDEO_JPEG_DONE' if decode == 'drained' else 'A733_VIDEO_JPEG_WAIT'])
+        put(vd + layout['decoded'], 1)
+    if decode == 'drained':
+        put(vd + layout['dev.phase'], enums['OS_DEVICE_OPEN'])
+    else:
+        put(vd + layout['dev.phase'], enums['OS_DEVICE_FAULT'])
+        step = 'VD_STEP_DECODE_TIMEOUT' if decode else 'VD_STEP_COLD'
+        put(vd + layout['dev.fault_step'], enums[step]); put(vd + layout['dev.fault_value'], 0x204)
     if 'info' in layout:
         info = vd + layout['info']
         put(info + L['vdec_check_record']['magic'], 0x49444556)
@@ -329,10 +394,151 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
         'close_answer': close_answer, 'record': record, 'schedule': schedule, 'events': events,
         'any_fault': QUIESCE['FAULT'] in results,
         'notes': [(hex(s), hex(v)) for s, v in state['notes']],
+        'detaches': state['detaches'], 'gic_writes': [(hex(a), hex(v)) for a, v in others['gic'].writes],
+        'reset_write': next((i for i, (a, v) in enumerate(ccu.writes) if a == 0xa8c and not v & 1 << 18), None),
         'ccu': {hex(k): hex(ccu.words.get(k, 0)) for k in (0x220, 0xa88, 0xa8c, 0x5e4)},
         'ccu_writes': [(hex(a), hex(v)) for a, v in ccu.writes],
         've_accesses': len(others['ve'].reads) + len(others['ve'].writes), 'translations': state['translations'],
     }
+
+
+def decode_run_case(uc, image, layout, enums, state, put, get, ret, call, enter, ccu, others, vd, decoder, unit_field):
+    """The service's decode, from an OPEN service whose decoder is started (as after run 6b3ec3f5's open), through
+    the image's own do_decode, executor, binding and INTID 81 handler, then the application's close. The IOMMU owner
+    and the allocator are answered by hooks; the decoder model completes at the trigger, and the planes are filled
+    with the pinned reference at the stride the executor programs before the handler runs."""
+    L = image.layouts
+    spec = importlib.util.spec_from_file_location('vdec_check_host', Path(__file__).resolve().parents[1] /
+                                                  'apps/vdec-check/host.py')
+    host = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(host)
+    fspec = importlib.util.spec_from_file_location('jpeg_fixture', Path(__file__).resolve().parents[1] /
+                                                   'apps/jpeg/fixture.py')
+    fixture = importlib.util.module_from_spec(fspec)
+    fspec.loader.exec_module(fixture)
+    jpeg, reference = fixture.nonconstant(), fixture.nonconstant_reference()
+    uc.mem_map(REGIONS, 0x400000)
+    slots = SCRATCH + 0x400
+    for index, base in enumerate((REGIONS, REGIONS + 0x100000)):
+        slot, f = slots + 0x80 * index, L['large_slot']
+        put(slot + f['base'], base, 8); put(slot + f['bytes'], 0x100000, 8)
+        put(slot + f['flags'], 1); put(slot + f['state'], 2)                # SS_LARGE_WRITE, SS_LARGE_READY
+    uc.mem_write(REGIONS, jpeg)
+    uc.mem_write(REGIONS + 0x100000, b'\x5a' * host.PIXELS)
+    put(unit_field('failed'), 0); put(unit_field('token'), VD_OWNER, 8)
+    for field, value in (('admitted', 1), ('requested', 1), ('cold_step', 5), ('checked', 1)):
+        put(decoder + L['a733_video_decoder'][field], value)
+    put(decoder + L['a733_video_decoder']['version'], VERSION_E0 << 32 | VERSION_E4, 8)
+    put(vd + layout['initialized'], 1)
+    put(vd + layout['dev.phase'], enums['OS_DEVICE_OPEN'])
+    alloc = {'next': ARENA, 'iova': IOVA_BASE, 'spans': [], 'scans': []}
+
+    def owner_memory(m):
+        n, align = m.reg_read(UC_ARM64_REG_X0), m.reg_read(UC_ARM64_REG_X1)
+        at = -(-alloc['next'] // align) * align
+        alloc['next'] = at + n
+        ret(m, at)
+
+    def iova(m):
+        n, align, out = (m.reg_read(r) for r in (UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2))
+        at = -(-alloc['iova'] // align) * align
+        alloc['iova'] = at + n
+        put(out, at, 8)
+        ret(m, 1)
+
+    def attach(m):
+        masters, spans, count = (m.reg_read(r) for r in (UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2))
+        alloc['spans'] = [(masters, *(get(spans + 32 * i + 8 * k, 8) for k in range(3)), get(spans + 32 * i + 24))
+                          for i in range(count)]
+        ret(m, 1)
+
+    def scan(m):
+        alloc['scans'].append(m.reg_read(UC_ARM64_REG_X0))
+        uc.mem_write(m.reg_read(UC_ARM64_REG_X1), bytes(40))
+        ret(m, 1)
+
+    for symbol, callback in (('os_large_slot', lambda m: ret(m, slots + 0x80 * m.reg_read(UC_ARM64_REG_X0))),
+                             ('os_owner_memory_below', owner_memory), ('os_iommu_iova', iova),
+                             ('os_iommu_attach', attach), ('os_iommu_scan', scan)):
+        hook_addresses(uc, {image.address(symbol)}, lambda m, a, s, u, c=callback: c(m))
+    job = vd + layout['job']
+    for field, value, n in (('input_region', 0, 4), ('output_region', 1, 4), ('input_offset', 0, 8),
+                            ('output_offset', 0, 8), ('input_bytes', len(jpeg), 4), ('output_bytes', host.PIXELS, 4)):
+        put(job + layout['job.' + field] - layout['job'], value, n)
+    put(vd + layout['op'], enums['DECODE_OP']); put(vd + layout['request'], enums['POSTED'])
+    task = image.address('os_video_decode_task', UNIT)
+    problems = []
+    state['slice_done'] = False
+    call(task, 0, stack=STACKS + 0x40000)
+    ve, gic = others['ve'], others['gic']
+    if not getattr(ve, 'triggered', False) or get(vd + layout['request']) == enums['DONE']:
+        problems.append('the decode must block for INTID 81 after the trigger')
+        return {'case': 'decode-runs', 'passed': False, 'problems': problems,
+                'result': get(vd + layout['result']), 'request': get(vd + layout['request']),
+                'run': (get(vd + layout['run.state']), get(vd + layout['run.index'])), 'waits': state['waits'][-3:],
+                'pc': hex(uc.reg_read(UC_ARM64_REG_PC)), 'lr': hex(uc.reg_read(UC_ARM64_REG_LR)),
+                've_writes': len(ve.writes), 'fault': (hex(get(vd + layout['dev.fault_step'])),
+                                                                hex(get(vd + layout['dev.fault_value'])))}
+    if not gic.words.get(0x108, 0) & 1 << 17:
+        problems.append('INTID 81 must be enabled for the trigger')
+    # The decoder's output: the reference planes at the programmed stride (luma), and Cb then Cr at half of it.
+    spans = alloc['spans']
+    luma, chroma = spans[1][2], spans[2][2]
+    w, h, stride = 48, 32, 64
+    for y in range(h):
+        uc.mem_write(luma + y * stride, reference[y * w:(y + 1) * w])
+    for plane in range(2):
+        base = w * h + plane * 24 * 16
+        for y in range(16):
+            uc.mem_write(chroma + plane * stride * 32 // 4 + y * stride // 2, reference[base + y * 24:base + (y + 1) * 24])
+    context = uc.context_save()
+    call(image.address('os_video_decode_irq'), stack=STACKS + 0xc0000)
+    uc.context_restore(context)
+    state['slice_done'] = False
+    ret(uc, 0)
+    uc.emu_start(uc.reg_read(UC_ARM64_REG_PC), SENTINEL, count=5_000_000)
+    output = bytes(uc.mem_read(REGIONS + 0x100000, host.PIXELS))
+    done = {k: get(vd + layout['done.' + k]) for k in ('magic', 'width', 'height', 'output_bytes')}
+    done_sha = bytes(uc.mem_read(vd + layout['done.sha256'], 32)).hex()
+    result = get(vd + layout['result'])
+    if get(vd + layout['request']) != enums['DONE'] or result != 1:
+        problems.append(f"the decode must be answered 1: {result:#x}, fault "
+                        f"{get(vd + layout['dev.fault_step']):#x} {get(vd + layout['dev.fault_value']):#x}")
+    if hashlib.sha256(output).hexdigest() != host.REFERENCE_SHA256 or done_sha != host.REFERENCE_SHA256:
+        problems.append('the copied active pixels must equal the reference, as must the answer\'s hash')
+    if done != {'magic': host.DONE_MAGIC, 'width': 48, 'height': 32, 'output_bytes': host.PIXELS}:
+        problems.append(f'answer {done}')
+    want_spans = [(0xc0, a, None, 4096, access) for a, access in zip(host.IOVAS, (1, 2, 2))]
+    if [(m_, i, n, a) for m_, i, _, n, a in spans] != [(m_, i, n, a) for m_, i, _, n, a in want_spans]:
+        problems.append(f'masters 6 and 7 must map the three buffers at the predicted addresses: {spans}')
+    if sorted(alloc['scans']) != [6, 7]:
+        problems.append(f"the drain must scan masters 6 and 7 once each: {alloc['scans']}")
+    if gic.words.get(0x108, 0) & 1 << 17:
+        problems.append('the handler must mask INTID 81')
+    info = vd + layout['info.decode']
+    rec = {k: get(info + L['vdec_check_decode'][k]) for k in ('state', 'writes', 'irq_count', 'stray', 'seen', 'guard')}
+    if rec != {'state': enums['A733_VIDEO_JPEG_DONE'], 'writes': 661, 'irq_count': 1, 'stray': 0, 'seen': 1, 'guard': 0}:
+        problems.append(f'record {rec}')
+    log = [(get(info + L['vdec_check_decode']['log'] + 8 * i), get(info + L['vdec_check_decode']['log'] + 8 * i + 4))
+           for i in range(661)]
+    decoder_writes = [(o, v) for o, v in ve.writes if o >= 0x100 and o not in (0x118,)]
+    # The executor's writes as the decoder saw them: the trigger byte, then the disable and acknowledgment.
+    if [o & 0xffffff for o, _ in log][-3:] != [0x118, 0x114, 0x11c]:
+        problems.append('the log must end with the trigger, the disable and the acknowledgment')
+    log_sha = hashlib.sha256(b''.join(struct.pack('<2I', o, v) for o, v in log)).hexdigest()
+    # Then the application's close: the masters detached before the binding's close.
+    detaches = state['detaches']
+    put(vd + layout['op'], enums['CLOSE_OP']); put(vd + layout['request'], enums['POSTED'])
+    state['slice_done'] = False
+    call(task, 0, stack=STACKS + 0x40000)
+    if get(vd + layout['result']) != 1 or get(vd + layout['dev.phase']) != enums['OS_DEVICE_CLOSED']:
+        problems.append('the close after the decode must be answered 1 and end CLOSED')
+    if [m_ for m_, _ in detaches] != [0xc0] or detaches[0][1] != 0:
+        problems.append(f'the close must detach masters 6 and 7 before any CCU write: {detaches}')
+    return {'case': 'decode-runs', 'passed': not problems, 'problems': problems, 'spans': [
+        [hex(x) for x in s_] for s_ in spans], 'log_sha256': log_sha, 'decoder_writes': len(decoder_writes),
+        'log': [[o & 0xffffff, o >> 24, v] for o, v in log],
+        'output_sha256': hashlib.sha256(output).hexdigest(), 'ccu_writes': [(hex(a), hex(v)) for a, v in ccu.writes]}
 
 
 def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu, others, vd, at_deadline=False):
@@ -393,7 +599,7 @@ def row_wait_case(uc, image, layout, enums, state, put, get, ret, task_call, ccu
         problems.append('an unanswered row leaves nothing written and no close')
     if state['translations'] != MAPPED_PAGES:
         problems.append(f"the pages are checked once, {MAPPED_PAGES} translations: {state['translations']}")
-    unit = vd + layout['decoder'] + L['a733_video_decoder']['unit']
+    unit = vd + layout['platform.decoder'] + L['a733_video_decoder']['unit']
     if get(unit + L['a733_video_unit']['deadline'], 8) or get(unit + L['a733_video_unit']['failed']):
         problems.append('the refused open must leave the binding with no deadline and not failed, so a reopen runs')
     return {'case': 'row-wait-deadline' if at_deadline else 'row-wait', 'waits_us': rows, 'passes': len(state['waits']), 'elapsed_us': state['time'],
@@ -409,7 +615,7 @@ def record_layout(image):
     host = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(host)
     L, problems = image.layouts, []
-    nested = {'cold': 'a733_video_cold_record', 'transition': 'a733_power_transition'}
+    nested = {'cold': 'a733_video_cold_record', 'transition': 'a733_power_transition', 'decode': 'vdec_check_decode'}
 
     def compare(members, name):
         offsets = host.layout(members)[0]
@@ -421,8 +627,13 @@ def record_layout(image):
             if isinstance(kind, tuple):
                 compare(kind, nested[member])
     compare(host.RECORD, 'vdec_check_record')
-    if L['video_decode_check_result']['info'] != host.HEADER.size:
-        problems.append('the record does not follow the 32-byte header')
+    compare(host.DONE, 'ss_video_decode_done')
+    r = L['video_decode_check_result']
+    if (r['done'], r['info'], r['pixels']) != (host.HEADER.size, host.HEADER.size + host.DONE_SIZE,
+                                               host.HEADER.size + host.DONE_SIZE + host.RECORD_SIZE):
+        problems.append('the result is not the 32-byte header, the answer, the record and the pixels')
+    if not host.fixture_header_matches(Path(__file__).resolve().parents[1]):
+        problems.append('apps/vdec-check/fixture.h differs from apps/jpeg/fixture.py')
     return problems
 
 
@@ -445,6 +656,45 @@ def main():
     rows.append({'case': 'record-layout', 'passed': not problems, 'problems': problems})
     if problems:
         failures.append('record-layout')
+    # A decode that timed out after the trigger: the close masks INTID 81, asserts reset through the binding's close,
+    # and only then returns masters 6 and 7 to bypass; a drained decode detaches them before any CCU write; a detach
+    # that fails leaves the service FAULT.
+    for name, options in (('decode-timeout-closes', {'decode': 'timeout'}),
+                          ('decode-drained-closes', {'decode': 'drained', 'application_close': True}),
+                          ('decode-detach-fails', {'decode': 'timeout', 'detach': -1})):
+        row = run_case(image, parts, layout, enums, name, **options)
+        problems = []
+        if [m for m, _ in row['detaches']] != [0xc0]:
+            problems.append(f"masters 6 and 7 must be detached once: {row['detaches']}")
+        elif options['decode'] == 'drained':
+            if row['detaches'][0][1] != 0:
+                problems.append('a drained decode detaches before the binding close')
+        elif row['reset_write'] is None or row['detaches'][0][1] <= row['reset_write']:
+            problems.append('after a fault the masters return to bypass only after reset is asserted')
+        if ('0x188', hex(1 << 17)) not in row['gic_writes']:
+            problems.append('the close must mask INTID 81 (GICD_ICENABLER2 bit 17)')
+        if name == 'decode-detach-fails':
+            if row['done_within_bound'] or not row['notes'] or \
+                    any(int(s, 16) & 0xfff != SITE_DECODER for s, _ in row['notes']):
+                problems.append('a failed detach must leave the service FAULT with site 0x941 notes')
+        else:
+            if not row['done_within_bound'] or row['notes'] or row['phase'] != enums['OS_DEVICE_CLOSED']:
+                problems.append('the service must close, with no fault note, and the registry reach DONE')
+            if name == 'decode-timeout-closes' and row['recorded_fault_step'] != enums['VD_STEP_DECODE_TIMEOUT']:
+                problems.append('the first fault must be kept')
+            if name == 'decode-drained-closes' and row['close_answer'] != 1:
+                problems.append('the close of a drained decode must be answered 1')
+        if row['ve_accesses']:
+            problems.append('the close must not touch a decoder register')
+        row['passed'] = not problems
+        row['problems'] = problems
+        if problems:
+            failures.append(name)
+        rows.append(row)
+    row = run_case(image, parts, layout, enums, 'decode-runs', decode='run')
+    rows.append(row)
+    if not row['passed']:
+        failures.append('decode-runs')
     for name, how in (('row-wait', True), ('row-wait-deadline', 'deadline')):
         row = run_case(image, parts, layout, enums, name, row_wait=how)
         rows.append(row)

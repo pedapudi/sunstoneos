@@ -51,7 +51,8 @@ struct a733_video_jpeg_ops {
      * no IOMMU fault on either master, and output cache invalidation/barrier.
      * A codec status bit alone proves none of these. Retain reservations and
      * leases even on success; DONE permits the caller to consume output under
-     * the retained lease. Return 1/0/-1. No native provider exists yet.
+     * the retained lease. Return 1/0/-1. The OS decoder service's drain
+     * (apps/os/video_decode.c, docs/video-decode-os.md) is the native provider.
      */
     int (*finish)(void *, uint64_t token, uint64_t deadline);
 

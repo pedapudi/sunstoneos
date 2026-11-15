@@ -2,7 +2,7 @@
 
 The VE decoder at `0x01c0e000` (JPEG, H.264 and HEVC) is an OS-image service. An application declares the `video-decode` device in its manifest, the session grants it as `SS_DEVICE_VIDEO_DECODE`, and the application calls the class interface in include/sunstone_video_decode.h. One owner task (apps/os/video_decode.c, priority 3, pinned to CPU 4) makes every decoder, CCU and GIC access through the decoder platform binding (drivers/video/a733_video_platform.c). The service and the binding are an object library that an image links only when its application declares `video-decode` (cmake/sunstone-image.cmake), so other images keep their code placement. EL3 admission refuses a grant that the manifest does not declare, so a granted device always has its service. The service writes no PCK600 or PMIC register: the shared power-domain owner (drivers/power/a733_power_domains.c) powers domain 2 for it.
 
-Status: open and close are implemented, host-tested by the cold-start model (`checks/video-cold.py`), and passed board stage 1 on port 3-1 (run `1794714415147688285-6b3ec3f5`, [Board stages](#board-stages)). After a close the decoder stays closed for the rest of the board's power lifetime; a second open is refused. No decode runs through the service yet; INTID 81 stays disabled and its handler is empty.
+Status: open and close are implemented, host-tested by the cold-start model (`checks/video-cold.py`), and passed board stage 1 on port 3-1 (run `1794714415147688285-6b3ec3f5`, [Board stages](#board-stages)). The JPEG decode is implemented and host-tested: the cold-start model runs it on the binding and executor, and `checks/os-vdec-fault-return.py` runs the image's own decode, interrupt handler and close under emulation. It has not run on a board. After a close the decoder stays closed for the rest of the board's power lifetime; a second open is refused.
 
 ## Vendor sequence and the native diff
 
@@ -21,6 +21,23 @@ The reference is the vendor VE driver `cedar_ve.c` and the clock framework (`ccu
 | Close: module gate, bus gate, reset, then PLL_VE0 output gate, lock enable, enable and LDO | `disable_cedar_hw_clk_module`, `disable_cedar_hw_clk_reset`; `ccu_pll_gate_helper_disable`, `ccu_gate.c` 40-69 | Same order in one register-lock hold ([video-platform.md, Close](video-platform.md#close)). |
 
 The open adds checks that the vendor driver does not make, each read before the first write: reset asserted and bus and module gates closed, `0x1b10 & 0x30001 == 0x20000` (CM_VE_DEC_CFG with its module mode disabled and its status field at POWER_ON), the fabric and parent clocks, the 15 boot ROM words, and INTID 81 neither enabled, pending nor active. A refusal at any of these writes nothing. The service waits for the row's answer on the row's wake, under two bounds: until supply verification ends, the owner's supply budget (`A733_POWER_SUPPLY_SETTLE_US` plus `A733_POWER_SUPPLY_BUDGET_US` plus one tick, anchored at the PMIC startup deadline or the first wait, whichever is later), and once DCDC2 is verified, the 10,000 µs PCK600 bound plus two ticks; the open's own deadline caps both. A row that the owner has not answered by its bound writes nothing either: the decoder requests the row only after the entry hold and writes only after the ON answer, so the service records step `VD_STEP_ROW_TIMEOUT` and ends CLOSED with no close. It records the same step when the open's deadline passes first and the binding refuses the open with the row still pending. The binding then drops the refused open's deadline (`a733_video_decoder_cancel`), and an open refused only at its own deadline is not left failed, so a later open resumes at the outstanding row request. A failure after the first write is handled as the next section describes.
+
+## One JPEG picture per open
+
+`ss_video_decode_jpeg` decodes one baseline JPEG picture (8-bit YCbCr 4:2:0, one interleaved scan, at most 1920 by 1080) from one of the application's large regions into another, as packed active YU12: the width-by-height Y plane, then the Cb and Cr planes at half the width and height, rounded up. The owner task runs these steps:
+
+1. It checks both extents against their regions (the output region must be writable), copies the input into a buffer of its own and parses that copy. The decoder reads only the owner's copy, so the application cannot change the bytes during the decode.
+2. It sizes the luma plane (stride by rows, each padded to 32) and the chroma plane (half that) from the parsed picture. Each buffer is a Normal non-cacheable allocation below the IOMMU's 34-bit limit: a poisoned guard page, the buffer's pages, and a second poisoned guard page. Its device-address range likewise has an unmapped page on each side, so an overrun faults in the IOMMU instead of reaching the next buffer.
+3. The JPEG executor (drivers/video/a733_video_jpeg_run.c) reads the identity, and the binding's preparation attaches decoder masters 6 and 7 to the OS IOMMU owner with the input read-only and both planes write-only, then makes its 18 reset and default steps.
+4. The owner polls the executor to the last programming write, enables INTID 81 at the distributor, and makes that write, the trigger. It then blocks until the interrupt handler notifies it, for at most 100 ms. Nothing polls the decoder while it runs.
+5. After the interrupt, the executor reads the status word, which must show completion, clears the MPEG interrupt enables (`0x114 = 0x180`) and acknowledges completion (`0x11c`). Its finish callback is the service's drain.
+6. The owner checks every guard byte and every plane byte past the padded plane, copies the active rows into the output region, and hashes them with SHA-256 for the answer (`ss_video_decode_done`).
+
+The vendor handler (`VideoEngineInterupt` in `cedar_ve.c`, `ve_irq_work` in `ve_plat_sun60iw2.c`) reads the MPEG status and clears the interrupt enables `0x114` bits 6:2 itself before it wakes the waiting task. The service's handler touches no decoder register, because the owner makes every decoder access under the platform register lock. It masks INTID 81 at the distributor, counts the interrupt and notifies the owner, whose executor then makes the same enable write. An interrupt with no decode armed is counted as stray.
+
+The drain rests on these facts. The decoder is stopped when the status word, read after the acknowledgment, shows none of the bits `0x001c3f0f` (completion, error and busy), the same idle value the executor requires before a trigger. Accepted transactions are complete because the vendor driver ends a job at this interrupt (`IOCTL_WAIT_VE_DE` returns) and its library reads the frame with no further step. Neither master may have an IOMMU fault (`os_iommu_scan`). The planes are non-cacheable, so no cache line needs invalidating; a full barrier orders the copy after these checks.
+
+A decode refused before the executor starts (an extent outside its region, an unsupported picture, no memory, INTID 81 already pending or active) records its step and leaves the service OPEN. A failure once the executor has started puts the service in FAULT, as the next section describes. The close masks INTID 81 and checks that it reads masked. Masters 6 and 7 return to bypass only while the decoder cannot run: after a decode that drained, the close detaches them before the binding's close; after a fault, which may leave the decoder running, it detaches them after the binding's close has asserted reset.
 
 ## Faults after the first write
 
@@ -41,9 +58,9 @@ The record names the word a refused comparison judged and why the unit failed ([
 
 The image of that run fails the first two cases.
 
-## The stage-1 record
+## The board record
 
-The class interface carries no register dump. An image built with `SUNSTONE_VIDEO_DECODE_MEASURE` (the vdec-check image) also keeps the stage-1 record, `struct vdec_check_record` in apps/vdec-check/record.h, which the application copies with `vdec_check_record` after each call (560 bytes):
+The class interface carries no register dump. An image built with `SUNSTONE_VIDEO_DECODE_MEASURE` (the vdec-check image) also keeps the board record, `struct vdec_check_record` in apps/vdec-check/record.h, which the application copies with `vdec_check_record` after each call (6,120 bytes). Its first 560 bytes are the open and close record:
 
 - 20 platform words read under the register lock at open before any write, after the cold start, and after the close: the PLL reference, the RTC oscillator word, the AHB, NSI and MBUS clocks, PLL_VE0 and its pattern words, the PLL gate configuration and status, `0x1b10`, the module word, the reset and bus gate word, the three critical gates, the PCK600 bus clock (R_CCU `0x1ac`) and the GIC enable, pending and active words for INTID 81;
 - the binding's cold record (`struct a733_video_cold_record`): the critical gates at entry and before the reset release, the `0x5e4` word written and read back, the phase times and the close's hold ([video-platform.md](video-platform.md#register-lock-holds-bound-band-2-waits)), the number of PLL lock reads, and the two `0x804` words the VCU pulse read before its set and clear writes;
@@ -53,14 +70,23 @@ The class interface carries no register dump. An image built with `SUNSTONE_VIDE
 - the decoder task's row request and answer times, the power-domain owner's first step and the step that published DCDC2 verified, all on the owner's clock, and the system counter at the open request, the started decoder and the close;
 - domain 2's transition record as the power-domain owner published it with the row's latest answer (`transition` in `struct a733_power_domain_row`).
 
-apps/vdec-check/host.py decodes the 592-byte result of the vdec-check application, which is the record behind a 32-byte header, and lists every departure from the stage-1 prediction.
+The rest is the decode record (`struct vdec_check_decode`):
+
+- the executor's final state and index, the status word at completion, the format word it read before programming, the status word the drain read, and the number of decoder writes;
+- the parsed picture, its padded geometry, the input bytes and the active output bytes;
+- each buffer's device address and mapped bytes;
+- the INTID 81 interrupts taken, those taken stray, the guard result, both masters' IOMMU scan results and fault words, and the GIC enable, pending and active words after the decode;
+- system counter stamps of the request, the line enabled, the trigger, the interrupt, the drain and the written output;
+- the SHA-256 of the output, and each of the 661 decoder writes (offset, width and value): 659 programming writes, the enable clear and the acknowledgment.
+
+apps/vdec-check/host.py decodes the 8,536-byte result of the vdec-check application: a 32-byte header, the decode's answer (80 bytes), the record, and the 2,304 decoded bytes. It lists every departure from the stage-2 prediction. Given the cold model's write log (`write-log.json` from `checks/video-cold.py`), it also compares the 661 writes one by one, with write 651 recomputed from the recorded format word and write 660 from the recorded status word.
 
 ## Board stages
 
 Each stage is one run on port 3-1 of the image `sunstone-a733-os-vdec-check` (`-DSUNSTONE_APPLICATION=vdec-check`).
 
 1. **Power, PLL and identity.** Open, then close (also after a failed open, so that a fault is closed and the record returned); no decode. The image calls `a733_power_domains_measure_transitions()`, so the power-domain owner reads status back to back from each PCK600 command to its target or the 10,000 µs bound. That spin runs in the PMIC service task, priority 3 on core 0. For up to 10 ms it holds off band-1 tasks on core 0, core 0's WFI, other PMIC requests and other domains' row answers; higher-priority tasks and interrupts still preempt it. Each command overwrites its domain's record, and the owner publishes the record with each answer to the domain-2 row. A run therefore yields at most one sample: one when domain 2 reads OFF at entry, none when it is adopted ON. Domain 2 stays ON across the close, so at most one sample comes per board power cycle; domain 5 stands in for it (docs/power-domains.md, "A transition record sizes the 50 µs spin").
-2. **JPEG.** One baseline JPEG decode compared with the pinned vendor-library reference; INTID 81 masked again at the close.
+2. **JPEG.** Open, one decode of the 48-by-32 fixture of apps/jpeg/fixture.py (apps/vdec-check/fixture.h) from the large region `jpeg` into the large region `pixels`, then close. The 2,304 bytes must equal the reference of tools/jpeg-pixel-reference.py (SHA-256 `eada6821…8296`); the 661 writes must equal the cold model's ([The board record](#the-board-record)). The application declares `cpu.perf`, and its session grants the high boot mode, so the decode runs with the CPU clusters at their top points.
 3. **H.264.** One frame compared with the same reference.
 
 The stage-1 prediction, from the port 3-3 FEL dump and the host model:
