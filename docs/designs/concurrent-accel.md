@@ -571,6 +571,75 @@ The arguments-once gain is measured; the GPU throughput model and the NPU row ru
 4.50 s from arming, with 4.23 s of phases, against a 55 s session bound.
 
 
+### Width 144: per-row writes, contiguous chunks or whole units for misaligned rows
+
+At 128, 192 and 256 values per row, the relu writes one request of 10 units per 64 values. Two forms fit those widths:
+
+- **A, per row:** each row writes ceil(width / 64) requests of 10 units.
+- **B, contiguous:** the output is written in 64-value chunks across row ends, 10 units each.
+
+Both forms miss the measured counts at 176 values per row, where each 8 rows took 21 write requests and 256 units: A gives
+24 and 240, B gives 22 and 220. A 176-value row holds 352 bytes, 32 bytes off a multiple of 64, and the aligned widths have
+no such offset. A third form takes its basis from the 176 measurement:
+
+- **C, whole units for misaligned rows:** a row whose length in bytes is not a multiple of 64 writes one 512-byte unit
+  (32 units). C predicts no request count.
+
+A 144-value row holds 288 bytes, also 32 bytes off a multiple of 64, so 144 separates the three forms.
+
+**The run.** The counter build runs width 144 in place of 192, as phase 5 of the eight, with the graph `relu-w144` of
+`tools/npu-fixtures.json` (1,024 rows of 16-bit values). The other phases repeat run `1794731628675614053-3bc9fbc0`
+and serve as controls.
+
+**The job-time fit.** That run's four widths give a relu job time of 14.3 µs plus 2.63 ns per write unit. Its residuals
+are within 2.5%:
+
+| Width | Write units | Fit (jobs/s) | Measured (jobs/s) |
+| --- | --- | --- | --- |
+| 128 | 20,480 | 14,671 | 14,654 |
+| 176 | 32,765 | 9,953 | 10,189 |
+| 192 | 30,718 | 10,517 | 10,257 |
+| 256 | 40,968 | 8,194 | 8,189 |
+
+**Predictions per job at 144 values per row.** Jobs/s comes from the fit, within 5%:
+
+| Form | Write requests | Write units | Jobs/s |
+| --- | --- | --- | --- |
+| A | 3,072 (24 per 8 rows) | 30,720 | 10,516 (9,990-11,042) |
+| B | 2,304 (18 per 8 rows) | 23,040 | 13,352 (12,684-14,020) |
+| C | not predicted | 32,768 | 9,952 (9,455-10,450) |
+
+The read requests are the same in every form, so they do not decide among them. The output tiles across a row (two at
+144 values, each 127 values wide) plus floor(width / 32) / 4 give 3 per row, plus 28 per job: 3,100 within 5%. This
+rule fits 128, 192 and 256 and missed 176 by 4%. No form predicts the read units; they are reported against the range
+from 128 to 176 values per row, 24,884 to 36,145.
+
+**Decision order.** [host.py](../../apps/accel-overlap/host.py) applies it, and
+[checks/accel-overlap-counters.py](../../checks/accel-overlap-counters.py) decodes a modeled record of each outcome:
+
+1. A control that misses voids the run. The controls are both GPU modes, which repeat their counts per job within 2%,
+   and the relu at 176, 128 and 256 values per row, which repeats its write requests and units within 1% and its rate
+   within 5%. Idle and the core-2 stream move under 10,000 units per period on each port.
+2. The write units at 144 values per row pick A, B or C within 1%. The forms lie at least 6.7% apart.
+3. The write requests confirm A or B within 1%. Counts that fit no form decide nothing.
+
+**What each outcome changes in the tile planner** ([npu-tiled-execution.md](npu-tiled-execution.md)):
+
+- **A:** a row costs ceil(width / 64) times 10 units, so the planner picks innermost dimensions in multiples of 64
+  values. A 144-value row then costs as much as a 192-value row.
+- **B:** the cost follows the bytes written (1.25 units per 16 bytes) with no rounding per row. The planner needs no
+  row-length rule.
+- **C:** a row that is not a multiple of 64 bytes costs 512 bytes. The planner sets the output row stride (descriptor
+  word 17, [npu-command-formats.md](../hardware/npu-command-formats.md)) to a multiple of 64 bytes, or picks widths
+  that are.
+- **No form:** the planner stays unchanged, and 144 becomes a fourth constraint for host analysis.
+
+The planner changes only after a second width, predicted before its run, also fits:
+
+- **After A or B:** 160 values per row. A predicts 24 requests and 240 units per 8 rows; B predicts 20 and 200.
+- **After C:** 240 values per row, a 480-byte row 32 bytes off a multiple of 64. C predicts 32,768 units per job, A
+  40,960 and B 38,400.
+
 ## Stage 2: DMA completion timing
 
 DMA is a separate later stage. Its known work:

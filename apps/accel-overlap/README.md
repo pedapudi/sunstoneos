@@ -45,7 +45,7 @@ registers once per task. The result keeps the 2,944-byte layout with version 4 a
 
 `--define SUNSTONE_ACCEL_OVERLAP_COUNTERS=ON`, with the OS option `SUNSTONE_ACCEL_NSI_COUNTERS=ON` and `--manifest
 manifest-counters.json`, builds the NSI counter run. Its graphs directory names four relu graphs of 1,024 rows, in
-this order: `relu-large` (176 values per row), `relu-w128`, `relu-w192` and `relu-w256`; pack.py then writes a version-2
+this order: `relu-large` (176 values per row), `relu-w128`, `relu-w144` and `relu-w256`; pack.py then writes a version-2
 vectors region with one input and one reference per graph. The GPU runs the dual-mode add of
 [add4inline/vector_add4_inline.cl](add4inline/vector_add4_inline.cl), compiled with `compile.py compile --profile 3
 --queue-program --inline-arguments` into [add4inline/program.h](add4inline/program.h), which receives its arguments in

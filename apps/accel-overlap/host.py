@@ -17,11 +17,11 @@ LARGE_BYTES = 2944
 # record (result.h: struct accel_overlap_counter_result). Each phase counts five 100 ms periods on both ports.
 COUNTERS_VERSION = 6
 COUNTERS_BYTES = 2944 + 88 + 8 * 808
-COUNTER_NAMES = ('idle', 'gpu-per-lane', 'gpu-once', 'npu-w176', 'npu-w128', 'npu-w192', 'npu-w256', 'core-2')
+COUNTER_NAMES = ('idle', 'gpu-per-lane', 'gpu-once', 'npu-w176', 'npu-w128', 'npu-w144', 'npu-w256', 'core-2')
 COUNTER_DEVICES = (0, 1, 1, 2, 2, 2, 2, 4)
 COUNTER_MODES = (0, 0, 0, 0, 0, 0, 0, 0x01)
 COUNTER_PHASE_MODES = (0, 1, 0, 0, 1, 2, 3, 0)   # the GPU mode or the NPU graph index (main.c, counter_modes)
-NPU_WIDTHS = {'npu-w176': 176, 'npu-w128': 128, 'npu-w192': 192, 'npu-w256': 256}
+NPU_WIDTHS = {'npu-w176': 176, 'npu-w128': 128, 'npu-w144': 144, 'npu-w256': 256}
 PERIODS = 5
 PERIOD_TICKS = 2400000   # 60,000,000 cycles of the 600 MHz NSI clock: 100 ms
 COUNTER_WORDS = ('rq_rd', 'rq_wr', 'dt_rd', 'dt_wr', 'la_rd', 'la_wr')
@@ -370,50 +370,72 @@ def decode_counters(raw):
     return r
 
 
-# Predictions (docs/designs/concurrent-accel.md, "Arguments once per task"), per job in 16-byte beats and bursts. The GPU
-# reads its two input vectors as 32,768 four-beat line requests; mode 1 adds one single-beat request per lane for its
-# argument record (65,536); both keep the last run's residual of 4,555 requests and 5,259 beats. Writes are two 8-byte
-# stores per lane at a 16-byte stride: 131,072 beats in 32,768 requests, plus the last run's 65 and 163.
-GPU_PER_LANE = {'rq_rd': 102859, 'dt_rd': 201867, 'rq_wr': 32833, 'dt_wr': 131235}
-GPU_ONCE = {'rq_rd': 37323, 'dt_rd': 136331, 'rq_wr': 32833, 'dt_wr': 131235}
-GPU_PER_LANE_JOBS = 673.2          # the last run's width program
-# A relu row of 2 x width bytes: whole 512-byte units (rows), or 256-byte bursts. Reads add the last run's residual.
-NPU_READ_RESIDUAL = {'dt_rd': 3404, 'rq_rd': 1182}
+# Predictions (docs/designs/concurrent-accel.md, "Width 144"), per job in 16-byte units. The controls repeat run
+# 1794731628675614053-3bc9fbc0 (image from 3c1d021c7): its GPU counts in both modes and its NPU counts and rates at 176,
+# 128 and 256 values per row.
+GPU_PER_LANE = {'rq_rd': 102767, 'dt_rd': 201687, 'rq_wr': 32800, 'dt_wr': 131107}
+GPU_ONCE = {'rq_rd': 37219, 'dt_rd': 136118, 'rq_wr': 32797, 'dt_wr': 131096}
+NPU_CONTROLS = {'npu-w176': {'rq_wr': 2688, 'dt_wr': 32765, 'jobs_per_second': 10189},
+                'npu-w128': {'rq_wr': 2048, 'dt_wr': 20480, 'jobs_per_second': 14654},
+                'npu-w256': {'rq_wr': 4097, 'dt_wr': 40968, 'jobs_per_second': 8189}}
+# The job time of the relu, fitted to the four widths of that run (176, 128, 192 and 256; residuals within 2.5%):
+# 14.3 us plus 2.63 ns per write unit.
+NPU_JOB_US, NPU_US_PER_UNIT = 14.3, 0.00263
+ROWS = 1024
+# The three forms of the relu's writes at 144 values per row (288 bytes, 32 bytes off a multiple of 64):
+#   A: ceil(width / 64) requests per row, 10 units each (fits 128, 192 and 256; 176 measured 21 per 8 rows, A gives 24);
+#   B: the output in contiguous 64-value chunks, 10 units each (also fits 128, 192 and 256; gives 22 at 176);
+#   C: a row whose bytes are not a multiple of 64 writes one 512-byte unit, as 176 measured; requests not predicted.
+NPU_FORMS = {'A': {'rq_wr': ROWS * 3, 'dt_wr': ROWS * 30},
+             'B': {'rq_wr': ROWS * 144 // 64, 'dt_wr': ROWS * 144 // 64 * 10},
+             'C': {'rq_wr': None, 'dt_wr': ROWS * 32}}
 
 
-def npu_units(width, rule):
-    row = 2 * width
-    moved = 512 if rule == 'rows' else -(-row // 256) * 256
-    return 1024 * moved // DATA_UNIT
+def npu_jobs_per_second(units):
+    return 1e6 / (NPU_JOB_US + NPU_US_PER_UNIT * units)
+
+
+def npu_read_requests(width):
+    """Read requests per job: the output tiles across a row (127 values wide) plus floor(width / 32) / 4 per row, and 28
+    per job. The rule fits 128, 192 and 256 and gave 3.25 per row at 176 against 3.125 measured."""
+    return ROWS * (-(-width // 127) + (width // 32) / 4) + 28
+
+
+def near(value, wanted, fraction):
+    return value is not None and wanted is not None and abs(value - wanted) <= fraction * wanted
 
 
 def models(r):
-    """The two decisions of the run: the GPU's limit (mode 0 against mode 1) and the NPU's row rule (the write units of the
-    four widths)."""
+    """The decision of the run, in order: a control that misses voids it; then the write units at 144 values per row pick
+    form A, B or C within 1%; then the write requests confirm A or B within 1%."""
     p = {ph['name']: ph for ph in r['phases']}
     out = {}
     once, lane = (p.get(n, {}).get('counters', {}).get('per_job') for n in ('gpu-once', 'gpu-per-lane'))
     if once and lane:
-        ratio = round(once['jobs_per_second'] / lane['jobs_per_second'], 3)
-        out['gpu'] = {'jobs_per_second_ratio': ratio,
-                      'model': 'request rate' if ratio >= 1.5 else 'residency' if ratio <= 1.25 else 'undecided',
-                      'mode_0_read_requests_dropped': round(lane['rq_rd'] - once['rq_rd'], 1)}
-    rules = {}
-    for name, width in NPU_WIDTHS.items():
-        j = p.get(name, {}).get('counters', {}).get('per_job')
-        if not j:
-            continue
-        rules[name] = {'dt_wr': j['dt_wr'], 'rows': npu_units(width, 'rows'), 'bursts': npu_units(width, 'bursts'),
-                       'known': 1024 * 2 * width // DATA_UNIT}
-    def fits(rule):
-        return bool(rules) and all(abs(v['dt_wr'] - v[rule]) <= 0.01 * v[rule] for v in rules.values())
-    out['npu'] = {'widths': rules, 'rule': 'rows' if fits('rows') else 'bursts' if fits('bursts') else
-                  ('none' if len(rules) == len(NPU_WIDTHS) else None)}
+        out['gpu'] = {'jobs_per_second_ratio': round(once['jobs_per_second'] / lane['jobs_per_second'], 3)}
+    jobs = {name: p.get(name, {}).get('counters', {}).get('per_job') for name in NPU_WIDTHS}
+    controls = [name for name, wanted in NPU_CONTROLS.items()
+                if not (jobs[name] and near(jobs[name]['rq_wr'], wanted['rq_wr'], 0.01)
+                        and near(jobs[name]['dt_wr'], wanted['dt_wr'], 0.01)
+                        and near(jobs[name]['jobs_per_second'], wanted['jobs_per_second'], 0.05))]
+    for counts, wanted in ((lane, GPU_PER_LANE), (once, GPU_ONCE)):
+        if not counts or not all(near(counts[w], v, 0.02) for w, v in wanted.items()):
+            controls.append('gpu-per-lane' if wanted is GPU_PER_LANE else 'gpu-once')
+    j = jobs['npu-w144'] or {}
+    form = 'void' if controls else 'none'
+    if not controls and j:
+        units = [f for f, v in NPU_FORMS.items() if near(j['dt_wr'], v['dt_wr'], 0.01)]
+        if units and (units[0] == 'C' or near(j['rq_wr'], NPU_FORMS[units[0]]['rq_wr'], 0.01)):
+            form = units[0]
+    out['npu'] = {'form': form, 'controls_missed': controls,
+                  'w144': {w: j.get(w) for w in ('rq_wr', 'dt_wr', 'rq_rd', 'dt_rd', 'jobs_per_second')},
+                  'forms': {f: dict(v, jobs_per_second=round(npu_jobs_per_second(v['dt_wr']))) for f, v in NPU_FORMS.items()},
+                  'read_requests_predicted': npu_read_requests(144)}
     return out
 
 
 def counter_checks(r):
-    """The ranges of the counter-period hypothesis (docs/designs/concurrent-accel.md, "Arguments once per task")."""
+    """The ranges of the width-144 hypothesis (docs/designs/concurrent-accel.md, "Width 144")."""
     out = []
 
     def check(name, value, low=None, high=None):
@@ -444,28 +466,23 @@ def counter_checks(r):
         for port in COUNTER_PORTS:
             check('%s port %d data units, largest period' % (name, port),
                   max(q['dt_rd'] + q['dt_wr'] for q in c[name]['port_%d' % port]['periods']), 0, 9999)
-    # The bridge: mode 1 repeats the last run's width program within 2% per job and 10% in rate. A miss voids the ratio.
-    lane, once = c['gpu-per-lane']['per_job'] or {}, c['gpu-once']['per_job'] or {}
-    for w, v in GPU_PER_LANE.items():
-        check('gpu per-lane %s per job' % w, lane.get(w), round(v * 0.98), round(v * 1.02))
-    check('gpu per-lane jobs/s', lane.get('jobs_per_second'), round(GPU_PER_LANE_JOBS * 0.9), round(GPU_PER_LANE_JOBS * 1.1))
-    # The mechanism: mode 0 drops the 65,536 per-lane requests and their beats; its writes stay those of mode 1.
-    check('gpu once rq_rd per job', once.get('rq_rd'), 35000, 40000)
-    check('gpu once dt_rd per job', once.get('dt_rd'), round(GPU_ONCE['dt_rd'] * 0.98), round(GPU_ONCE['dt_rd'] * 1.03))
-    for w in ('rq_wr', 'dt_wr'):
-        check('gpu once %s per job' % w, once.get(w), round(GPU_ONCE[w] * 0.99), round(GPU_ONCE[w] * 1.01))
-    # The discriminator: the request-rate model gives at least 1.5x, the residency model at most 1.25x.
-    g = r['models'].get('gpu') or {}
-    check('gpu limit decided', g.get('model') in ('request rate', 'residency') or None)
-    # The NPU: each width's writes fit one row rule within 1%, and its reads are that rule's units plus the residual.
-    n = r['models']['npu']
-    check('npu row rule decided', n['rule'] in ('rows', 'bursts') or None)
-    for name, width in NPU_WIDTHS.items():
+    # Controls: both GPU modes repeat the last run's counts within 2%, and the NPU at 176, 128 and 256 repeats its write
+    # requests and units within 1% and its rate within 5%. A miss voids the decision.
+    for phase, wanted in (('gpu-per-lane', GPU_PER_LANE), ('gpu-once', GPU_ONCE)):
+        j = c[phase]['per_job'] or {}
+        for w, v in wanted.items():
+            check('%s %s per job' % (phase, w), j.get(w), round(v * 0.98), round(v * 1.02))
+    for name, wanted in NPU_CONTROLS.items():
         j = c[name]['per_job'] or {}
-        units = npu_units(width, n['rule'] if n['rule'] in ('rows', 'bursts') else 'rows')
-        check('%s dt_rd per job' % name, j.get('dt_rd'), round((units + NPU_READ_RESIDUAL['dt_rd']) * 0.97),
-              round((units + NPU_READ_RESIDUAL['dt_rd']) * 1.03))
-        check('%s jobs/s' % name, j.get('jobs_per_second'), 1000)
+        for w, v in wanted.items():
+            f = 0.05 if w == 'jobs_per_second' else 0.01
+            check('%s %s per job' % (name, w), j.get(w), round(v * (1 - f)), round(v * (1 + f)))
+    # The decision: one form at 144 values per row, and that form's rate within 5% of the job-time fit.
+    n = r['models']['npu']
+    check('npu w144 form decided', n['form'] in NPU_FORMS or None)
+    if n['form'] in NPU_FORMS:
+        rate = n['forms'][n['form']]['jobs_per_second']
+        check('npu-w144 jobs/s', (c['npu-w144']['per_job'] or {}).get('jobs_per_second'), round(rate * 0.95), round(rate * 1.05))
     check('gpu checked slot jobs', p[1]['slot_jobs'] + p[2]['slot_jobs'], 8, 8)
     check('core-2 stream sweeps', p[7]['stream_sweeps'], 1)
     check('mismatches', sum(ph[d]['mismatches'] for ph in p for d in ('gpu', 'npu')), 0, 0)

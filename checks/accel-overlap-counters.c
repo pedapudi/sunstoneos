@@ -3,8 +3,8 @@
  * written through the C layout so that checks/accel-overlap-counters.py can decode it with apps/accel-overlap/host.py.
  * Every phase latches like the board: period k's count appears at its end and holds until the next. Job counts follow a
  * steady rate while each period's traffic grows by 0.1%, so consecutive periods differ. argv[1] is the
- * output path, argv[2] the GPU mode-0 rate in jobs per second (the mode-1 rate is the last run's 673), argv[3] the NPU
- * row rule ("rows" or "bursts"). */
+ * output path, argv[2] the form of the writes at 144 values per row ("A", "B", "C", or "none" for counts that fit no
+ * form), argv[3] the factor on the 176 control's write units (1 repeats run 3bc9fbc0). */
 #include "result.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,22 +51,26 @@ static void phase(unsigned i, uint32_t devices, uint32_t stream, uint32_t mode, 
 int main(int argc, char **argv)
 {
     if (argc != 4) return 2;
-    const double once = atof(argv[2]);
-    const int rows = !strcmp(argv[3], "rows");
+    const char *form = argv[2];
+    const double control = atof(argv[3]);
     struct accel_overlap_large_result *g = &r.large;
     g->magic = ACCEL_OVERLAP_MAGIC; g->version = ACCEL_OVERLAP_COUNTERS_VERSION; g->bytes = sizeof(r);
     g->phases = ACCEL_OVERLAP_COUNTER_PHASES; g->initial_top = g->final_top = 1;
     g->gpu_elements = 262144; g->npu_tensor_bytes = 524288;
     phase(0, 0, 0, 0, 0, 0, (struct traffic){0});
-    /* Mode 1 per job: the last run's width program. Mode 0 drops the 65,536 per-lane argument requests and beats. */
-    phase(1, ACCEL_OVERLAP_GPU, 0, 1, 673.2, 0, (struct traffic){102859, 32833, 201867, 131235});
-    phase(2, ACCEL_OVERLAP_GPU, 0, 0, once, 0, (struct traffic){37323, 32833, 136331, 131235});
-    static const unsigned widths[4] = {176, 128, 192, 256};
-    for (unsigned w = 0; w < 4; ++w) {
-        const unsigned row = 2 * widths[w], moved = rows ? 512u : (row + 255u) / 256u * 256u;
-        const double units = 1024.0 * moved / 16.0;
-        phase(3 + w, ACCEL_OVERLAP_NPU, 0, w, 10184.7, 1, (struct traffic){units / 16 + 1182, units / 12, units + 3404, units});
-    }
+    /* Both GPU modes and the NPU at 176, 128 and 256 values per row repeat run 3bc9fbc0 per job. */
+    phase(1, ACCEL_OVERLAP_GPU, 0, 1, 699.9, 0, (struct traffic){102767, 32800, 201687, 131107});
+    phase(2, ACCEL_OVERLAP_GPU, 0, 0, 1080.2, 0, (struct traffic){37219, 32797, 136118, 131096});
+    phase(3, ACCEL_OVERLAP_NPU, 0, 0, 10189, 1, (struct traffic){3228, 2688, 36145, 32765 * control});
+    phase(4, ACCEL_OVERLAP_NPU, 0, 1, 14654, 1, (struct traffic){3100, 2048, 24884, 20480});
+    /* At 144: A writes 3 requests of 10 units per row, B one request of 10 units per 64 values, C 32 units per row;
+     * "none" scales the 176 counts by 144 / 176. The rate follows the job-time fit, 14.3 us + 2.63 ns per write unit. */
+    double rq = 2688.0 * 144 / 176, dt = 32765.0 * 144 / 176;
+    if (!strcmp(form, "A")) { rq = 3072; dt = 30720; }
+    else if (!strcmp(form, "B")) { rq = 2304; dt = 23040; }
+    else if (!strcmp(form, "C")) { rq = 2690; dt = 32768; }
+    phase(5, ACCEL_OVERLAP_NPU, 0, 2, 1e6 / (14.3 + 0.00263 * dt), 1, (struct traffic){3100, rq, 28000, dt});
+    phase(6, ACCEL_OVERLAP_NPU, 0, 3, 8189, 1, (struct traffic){5149, 4097, 45373, 40968});
     phase(7, ACCEL_OVERLAP_STREAM, 0x01, 0, 0, 0, (struct traffic){0});
     FILE *f = fopen(argv[1], "wb");
     if (!f || fwrite(&r, sizeof(r), 1, f) != 1 || fclose(f)) return 1;

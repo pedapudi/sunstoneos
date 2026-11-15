@@ -17,7 +17,7 @@
  *
  * Built with ACCEL_OVERLAP_COUNTERS (the GPU-width build on the inline-argument program, add4inline/, plus the NSI port 6
  * and 18 traffic counters), eight phases run: idle; the GPU with its arguments loaded by every lane (mode 1); the GPU with
- * its arguments in registers, once per task (mode 0); the NPU relu at widths 176, 128, 192 and 256; and the core-2 stream.
+ * its arguments in registers, once per task (mode 0); the NPU relu at widths 176, 128, 144 and 256; and the core-2 stream.
  * In each, the devices run for 20 ms, then the OS counter owner (include/a733_nsi_counters.h) begins both ports with a
  * 100 ms period. The counts latch at each period end, so both banks are sampled 3 ms before and 2 ms after each of five
  * period ends, with the jobs collected so far, and the devices stop after the last sample. */
@@ -109,7 +109,7 @@ static const uint32_t large_streams[SWEEP_PHASES] = {0, 0, 0, 0x01, 0x10, 0x07, 
 #endif
 static struct accel_overlap_large_result large_result;
 #ifdef ACCEL_OVERLAP_COUNTERS
-/* The counter periods: idle, the GPU in mode 1 and mode 0, the NPU relu at widths 176, 128, 192 and 256 (graphs 0 to 3 of
+/* The counter periods: idle, the GPU in mode 1 and mode 0, the NPU relu at widths 176, 128, 144 and 256 (graphs 0 to 3 of
  * the models region), the core-2 stream. A phase's devices stop after its last sample; PHASE_LIMIT only bounds it. */
 #define COUNTER_RUN_PHASES ACCEL_OVERLAP_COUNTER_PHASES
 #define COUNTER_PERIOD 60000000u         /* 100 ms at the 600 MHz NSI clock */
