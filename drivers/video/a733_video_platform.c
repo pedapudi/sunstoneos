@@ -264,7 +264,8 @@ static int prepare(struct a733_video_decoder *p,uint64_t token,const void *j,uin
     if(p->prepared)return 1;
     if(!p->version) {
         int r=lock(u);if(r!=1)return r;
-        if(!a733_video_unit_identity(u,&p->version))return fail(u);
+        /* An identity read completely but not listed releases the mutex. */
+        if(!a733_video_unit_identity(u,&p->version)){if(!u->failed)(void)unlock(u);return fail(u);}
         if(unlock(u)!=1)return -1;
         return 0;
     }
