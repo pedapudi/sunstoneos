@@ -20,6 +20,7 @@ A fact is one decoded field of one register. Its entry in the JSON file has thes
 | `status` | `measured` (read by the probe, and the view can see the field), `observed` (seen on a board before the probe), `raz-in-view` (the field reads 0 because the view cannot see it, so the 0 is not a measurement; `read_value` keeps the 0 and `note` gives the reason), `from-source` (set by our own monitor or installers, with the file and line in `source_ref`), `derived` (a rule applied to such a value), or `unmeasured`. |
 | `value`, `written` | The value, and for the write tests the value that was written. |
 | `queue_entry`, `image_sha256`, `port` | The board run that produced the value. |
+| `image_dependent` | Present on a measured fact whose register holds what the image wrote before the probe read it, so the value changes with the image: `rule`, `source_fact`, `source_ref` and `note`. The rule maps the source fact to the value and is the hardware fact. `checks/hw-facts.py` fails a value that disagrees with its source fact under its rule. |
 
 Each register is decoded by the layout of the view it was read in. The A733 probe reads the GIC at Non-secure EL1
 with two security states (`GICD_CTLR.DS` clear). `DS` is not visible to Non-secure software; that it is clear is
@@ -80,7 +81,7 @@ registers and makes these writes, each of a value that every image writes in the
 | --- | --- | --- |
 | `CSSELR_EL1` | 0 to 7 | Selects a cache for `CCSIDR_EL1`, as `ss_cpu_observation_capture` does; the entry value is restored. |
 | `ICC_PMR_EL1` | 0xff, then the API mask | The two values the FreeRTOS port writes; the entry value is restored and a mismatch sets the anomaly flag. |
-| `GICR_IPRIORITYR` for PPI 27 and PPI 30, core 0 | 0xd8 and the lowest usable priority | The cached platform writes these two bytes with these values next; the entry value is restored. |
+| `GICR_IPRIORITYR` for PPI 27 and PPI 30, core 0 | The API mask, 0xb0, for both (`platform/a733/hw_facts_a733.c:12-13`) | The cached platform writes these two bytes with this value next; the entry value is restored. |
 
 The image also installs, at EL3 and through the ordinary route installer, routes for INTID 71 (thermal) and
 for INTID 97, 143 and 95 with priority 0xd8 on core 0, with disabled stub handlers
@@ -126,8 +127,10 @@ python3 tools/hw_facts.py decode output.bin --merge docs/hardware/a733-facts.jso
   --queue-entry ENTRY_ID --image-sha256 SHA256 --port 3-3
 ```
 
-Merging replaces the unmeasured and observed entries of the facts the table covers, adds the queue entry to
-each, and refuses a table whose header names the virtual board. Record the run with
+Merging replaces the entry of every fact the run read with the new value and adds the queue entry to it. A
+slot the run skipped leaves the file's entry in place. The facts our own source sets are rebuilt, and no other entry
+changes, so merging the same table twice gives the same file. Merging refuses a table whose header names the virtual
+board. Record the run with
 `tools/evidence.py add ENTRY_ID --subsystem hardware-facts ...` afterwards.
 
 ## Measured on the board
@@ -141,7 +144,7 @@ the table. Every core reported; the values below hold on all eight cores unless 
 | `ICC_PMR_EL1` on entry, and after writing 0xff | 0xf0, and 0xf0 (the Non-secure view is the Secure value shifted left by one bit) |
 | `ICC_PMR_EL1` after writing the API mask 0xb0 | 0xb0 |
 | `ICC_RPR_EL1` with no interrupt active | 0xff |
-| PPI 27 priority byte: on entry, and after the image's write of 0xd8 | 0x00, and 0xd0 (the write takes effect; the Non-secure value is `((0xd8 >> 1) \| 0x80) & 0xf8`, shifted left) |
+| PPI 27 priority byte: on entry, and after the probe writes the byte the platform writes next | 0x00, and the write rule: a Non-secure write of v reads back `(((v >> 1) \| 0x80) & 0xf8) << 1`. This run wrote 0xd8, which read 0xd0. Image-dependent: since 1a1c6b061 the byte is the API mask 0xb0, which reads 0xb0 (entry `1794744873056408964-85d3ad7d`) |
 | INTID 97 priority, Non-secure view of the stored Secure route priority 0xd8 | 0xb0 |
 | `GICD_CTLR`, Non-secure view | 0x12: EnableGrp1A set and ARE_NS set; no other visible field set |
 | `CNTFRQ_EL0` | 24000000 on every core |
@@ -154,6 +157,20 @@ earlier acceptance of 0xb0 both differ from 0xd0). The `0xf8` read-back that an 
 an unmasked write is not reproduced here: this probe reads 0xf0 after the same write at
 the same level. That earlier value therefore came from another state of the interface (for example with tasks running) that the table does not
 yet cover. Merging the board table replaced that observation, as the merge replaces observed entries.
+
+Nine facts hold what the image wrote before the probe read them, and the file records them as image-dependent from
+entry `1794744873056408964-85d3ad7d` (port 3-1, image SHA-256 `d25c8278...6b7a`), the first run after 1a1c6b061 added
+the reschedule bands:
+
+- the priorities of SGIs 0 to 3 on every core, 0xb0, 0xe0, 0xd0 and 0xc0, the Non-secure views of the stored 0xd8,
+  0xf0, 0xe8 and 0xe0 that `platform/a733-smp-cached/continue.c:136` writes (`fc9d445f`, when only SGI 0 was written, read
+  0xe0, 0, 0 and 0);
+- `GICR_ISENABLER0` on every core, 0xf (SGI 0 and SGIs 1 to 3); `fc9d445f` read 0x1;
+- the PPI 27 and PPI 30 read-backs after the probe's writes, 0xb0 for the API mask (`fc9d445f` wrote 0xd8 and 0xe0,
+  which read 0xd0 and 0xe0);
+- the CCU fabric gate words `0x020025c0` and `0x020025e0`. Only the NPU gate bits (6 and 18) are fixed facts. The GPU0
+  gate bits (7 and 16), which the GPU driver sets when it opens the GPU, were set in `fc9d445f` and are clear in
+  `85d3ad7d`. Neither image opens the GPU, so the bits show the board's earlier state.
 
 `ICC_IGRPEN0_EL1` read at Non-secure EL1 traps to EL3 is recorded as a measured fact from entry
 `1793590176547518274-e819ce89`. `SCR_EL3.FIQ` is 1 from source, not from the trap.
@@ -172,7 +189,7 @@ measurement.
 
 | # | Value or behaviour | Code site | Host model site | Fact |
 | --- | --- | --- | --- | --- |
-| 1 | PPI 27 priority byte 0xd8 written, Non-secure read-back | `platform/a733-smp-cached/platform.c` (a733_smp_primary_el1), `apps/npu-finite/deadline.c` | `platform/qemu-os/platform.c` local_init, GIC models | `gic.redist.intid27.priority[_after_write]` |
+| 1 | PPI 27 priority byte written (the API mask since 1a1c6b061), Non-secure read-back | `platform/a733-smp-cached/platform.c` (a733_smp_primary_el1), `apps/npu-finite/deadline.c` | `platform/qemu-os/platform.c` local_init, GIC models | `gic.redist.intid27.priority[_after_write]` |
 | 2 | PPI 30 priority byte | `platform/a733-smp-cached/platform.c` | `platform/qemu-os/platform.c` | `gic.redist.intid30.priority[_after_write]` |
 | 3 | `ICC_PMR_EL1` unmasked read-back (0xf0 measured; an earlier run showed 0xf8) | `platform/a733/platform.c` configASSERT, `apps/os/cpu-return.c` core_can_schedule, `apps/os/cpu-return-el0.S` | `GicModel` in `tools/hw_facts.py`; the five Unicorn models | `gic.cpuif.icc_pmr_el1.readback_after_write_ff` |
 | 4 | `ICC_PMR_EL1` read-back of the API mask | `patches/freertos-smp-c.patch` (xPortStartScheduler) | same | `...readback_after_write_api_mask` |
@@ -185,7 +202,7 @@ measurement.
 | 11 | INTID 187 configuration and priority 0xb0 | `apps/board/host_irq.c` board_host_irq_bind | `checks/usb-host-irq.c` | `gic.dist.spi187.*` |
 | 12 | INTID 71 and 143 routes at priority 0xd8 | `tools/sunstone-manifest.py` route table, `apps/os/thermal.c`, `apps/os/audio.c` | `checks/a733-irq-table.c` | `gic.dist.spi71.*`, `spi143.*` |
 | 13 | Other device SPIs: 56 to 61, 67, 69, 70, 80, 81, 95, 149, 153, 161, 185, 200, 201, 228, 242 | `drivers/spi`, `include/a733_pwm.h`, `a733_lradc.h`, `a733_adc.h`, `a733_gpu_backend.h`, `a733_ce.h`, `drivers/rtc/a733_rtc_boot.c`, `apps/isp0/irq.h`, `apps/pcie-*/irq.c` | per-driver checks | `gic.dist.spiN.*` |
-| 14 | SGI 0 priority and group (Secure 0xf0, Non-secure view) | `platform/a733-smp-cached/continue.c`, port | no host check (evidence: docs/evidence/a733-facts-probe.jsonl a733-facts-probe-removed-host-check-results) | `gic.redist.intid0.priority` |
+| 14 | SGI 0 to 3 priorities and group (Secure 0xd8, 0xf0, 0xe8 and 0xe0 since 1a1c6b061; Non-secure view) | `platform/a733-smp-cached/continue.c`, port | `checks/hw-facts.py` (`test_image_state`) | `gic.redist.intid0.priority` to `intid3.priority` |
 | 15 | `GICR_TYPER`, `GICR_WAKER` words read at pre-release admission | `platform/a733-smp-cached/continue.c` | none | `gic.redist.gicr_typer`, `gicr_waker` |
 | 16 | Redistributor group, enable, pending, active words of SGI and PPI frames | `platform/a733-smp-cached/continue.c` | the Unicorn models (`0x10080`, `0x10100`) | `gic.redist.sgi_ppi.*` |
 | 17 | `CNTFRQ_EL0` is 24 MHz | `platform/a733/counter_clock.c`, `platform/a733-smp-cached/start.S` (writes it), `include/` conversions by 24 | `platform/qemu-os/platform.c` (declares 24 MHz), `checks/a733-smp-cached.py` | `cpu.cntfrq_el0` |

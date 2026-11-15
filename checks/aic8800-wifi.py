@@ -26,6 +26,14 @@ REFERENCES = {
 SOURCES = ["checks/aic8800-wifi.c", "drivers/net/aic8800_wifi.c", "drivers/net/aic8800_security.c", "drivers/net/aic8800_data.c", "drivers/net/aic8800_runtime.c",
            "drivers/net/aic8800_firmware.c", "drivers/net/aic8800_sdio_transport.c",
            "drivers/net/aic8800_sdio_codec.c", "drivers/storage/storage_digest.c", "drivers/storage/sunxi_sdio.c", "drivers/storage/sdio_card.c"]
+# Each mutant restores an exact-length rule the reference does not have; the check must refuse it. The board's
+# firmware sends MM_KEY_ADD_CFM as two bytes (run 6, entry 1794745255109339882-f869332f).
+MUTANTS = [
+    ("drivers/net/aic8800_security.c", "s->operation==AIC8800_SECURITY_ADD&&r->parameter_bytes<2)goto fail;",
+     "s->operation==AIC8800_SECURITY_ADD&&r->parameter_bytes!=4)goto fail;", "MM_KEY_ADD_CFM must be exactly 4 bytes"),
+    ("drivers/net/aic8800_wifi.c", "if(r->parameter_bytes<852)goto malformed;",
+     "if(r->parameter_bytes!=852)goto malformed;", "SM_CONNECT_IND must be exactly 852 bytes"),
+]
 HEADERS = ["include/aic8800_wifi.h", "include/aic8800_security.h", "include/aic8800_data.h", "include/aic8800_runtime.h", "include/aic8800_firmware.h",
            "include/aic8800_sdio_transport.h", "include/aic8800_sdio_codec.h", "include/sunxi_sdio.h",
            "include/sdio_card.h", "checks/aic8800-runtime.c", "checks/aic8800-sdio-transport.c", "checks/sdio-controller.c"]
@@ -138,7 +146,21 @@ def main():
         run = subprocess.run(run_cmd, capture_output=True, text=True)
         record.update(run_command=run_cmd, exit_code=run.returncode, stdout=run.stdout,
                       stderr=run.stderr, executable_sha256=digest(executable))
-    record["result"] = "passed" if not build.returncode and record.get("exit_code") == 0 else "failed"
+    refused = []
+    if not build.returncode and record.get("exit_code") == 0:
+        for index, (source, old, new, why) in enumerate(MUTANTS):
+            text = (ROOT / source).read_text()
+            assert text.count(old) == 1, (source, old)
+            directory = out / ("mutant-%d" % index); directory.mkdir(exist_ok=True)
+            mutated = directory / Path(source).name; mutated.write_text(text.replace(old, new, 1))
+            mutant_exe = directory / "aic8800-wifi-check"
+            mutant_cmd = [str(mutated) if part == str(ROOT / source) else part for part in cmd[:-1]] + [str(mutant_exe)]
+            subprocess.run(mutant_cmd, check=True, capture_output=True, text=True)
+            mutant_run = subprocess.run([str(mutant_exe)] + run_cmd[1:], capture_output=True, text=True)
+            refused.append({"mutant": why, "exit_code": mutant_run.returncode, "refused": mutant_run.returncode != 0})
+        record["mutants"] = refused
+    passed = not build.returncode and record.get("exit_code") == 0 and refused and all(m["refused"] for m in refused)
+    record["result"] = "passed" if passed else "failed"
     (out / "results.json").write_text(json.dumps(record, indent=2) + "\n")
     print(json.dumps({"result": record["result"], "stdout": record.get("stdout", ""),
                       "stderr": record.get("stderr", build.stderr), "evidence": str(out)}))

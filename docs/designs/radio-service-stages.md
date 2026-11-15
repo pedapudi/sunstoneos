@@ -217,6 +217,67 @@ key add's confirmation for a given time: at 5900 ms it is accepted and the
 authorized trace names it as the slowest, and at 6100 ms the stage stops with
 reason deadline.
 
+### Confirmations are read for the fields used
+
+The reference's command manager (`rwnx_cmds.c`, lines 475 to 482, and
+`aic_bsp_driver.c`, lines 161 to 168, for the firmware loader) copies a
+confirmation's parameters for the length the firmware sends, up to 1024 bytes
+(`IPC_E2A_MSG_SIZE_BASE` of 256 words, with `CONFIG_RWNX_TL4` off), and the
+handlers read only their fields. The indication handlers in `rwnx_msg_rx.c`
+read their fields the same way, with no length check. This driver does the
+same: each message is refused only when it is shorter than the bytes read, and
+a longer one is read for the same fields.
+
+| Message | Reference struct | Fields read | Shortest accepted |
+|---|---|---|---|
+| MM_SET_RF_CALIB_CFM | 16 bytes | the four gain table addresses | 16 |
+| MM_GET_MAC_ADDR_CFM | 6 bytes | `mac_addr` | 6 |
+| MM_VERSION_CFM | 28 bytes, the last one padding | the version words, `features`, `max_sta_nb`, `max_vif_nb` | 27 |
+| MM_ADD_IF_CFM | 2 bytes | `status`, `inst_nbr` | 2 |
+| SCANU_START_CFM | 3 bytes | `vif_idx`, `status`, `result_cnt` | 3 |
+| SM_CONNECT_CFM | 1 byte | `status` | 1 |
+| SM_CONNECT_IND | 852 bytes | every field through `ac_param` | 852 |
+| SM_DISCONNECT_IND | 6 bytes, the last one padding | `reason_code`, `vif_idx`, `ft_over_ds`, `reassoc` | 5 |
+| MM_KEY_ADD_CFM | 4 bytes, the last two alignment | `status`, `hw_key_idx` | 2 |
+| DBG_MEM_READ_CFM, DBG_MEM_WRITE_CFM | 8 bytes | `memaddr`, `memdata` | 8 |
+| the firmware loader's other confirmations | 4 bytes | the 32-bit status | 4 |
+| DBG_BINDING_CFM | 1 byte | the status | 1 |
+| DBG_BINDING_IND | 16 bytes | `enc_data` | 16 |
+
+Confirmations whose parameters are not read (MM_RESET_CFM, MM_START_CFM,
+ME_CONFIG_CFM, ME_CHAN_CONFIG_CFM, SCANU_START_CFM_ADDTIONAL,
+SM_DISCONNECT_CFM, MM_KEY_DEL_CFM and ME_SET_CONTROL_PORT_CFM) are accepted at
+any length. The codec refuses a message longer than 1024 bytes, the reference's
+bound. The security worker keeps the first 64 bytes of a confirmation for the
+record, and the station event keeps the first 852 bytes of an indication. A
+data confirmation (transport type 0x12, a 12-byte record) is not a message and
+is not covered here.
+
+`checks/aic8800-wifi.c` checks each management and key confirmation at its
+shortest accepted length and one byte shorter, and two mutants that restore an
+exact length (MM_KEY_ADD_CFM at 4 bytes, SM_CONNECT_IND at 852 bytes) must
+fail it. `checks/aic8800-firmware.c` runs the firmware load with every
+confirmation four bytes longer, and with the first one a byte short;
+`checks/aic8800-runtime.c`, `checks/aic8800-sdio-codec.c` and
+`checks/aic8800-dispatch.c` cover the binding messages, the memory
+confirmations and the dispatcher's matching rules.
+
+Three board runs reached the pairwise key add. In run 5 (entry
+1794738427185556712-c450b701) no confirmation came within the 1 s bound the
+image then had; that remains unexplained. In run 6 (entry
+1794745255109339882-f869332f) the confirmation came at once as two bytes with
+status 0, and the image refused it because it then required exactly 4 bytes.
+In run 7 (entry 1794751437798567373-be2dcf1b), with the lengths above, the
+stage ended authorized: connect 4.13 s after arming, both key adds and the port
+open confirmed, the link secured 0.42 s after connect, the orderly shutdown
+matched and the board returned 4.66 s after arming.
+
+The trace counts milliseconds from the transport's clock read at the start of
+each owner pass. A confirmation read in the same pass as its write completed
+reads 0 ms, as every confirmation did in run 7, so the trace resolves no
+latency below one pass and one millisecond. The 6000 ms command bound stays
+until a run measures a latency it can be tightened against.
+
 ## Entropy and credentials gate association only
 
 Enumeration, firmware loading and the scan need neither entropy qualification
