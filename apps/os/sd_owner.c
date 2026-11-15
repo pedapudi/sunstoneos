@@ -26,7 +26,6 @@
 
 #define OWNER_STACK_WORDS 2048u
 #define OWNER_PRIORITY (tskIDLE_PRIORITY + 2)
-#define READY_TIMEOUT_US 10000000u
 #include "sunstone_notify.h"
 #define WAIT_INDEX SS_NOTIFY_REQUEST_WAIT   /* notification index a caller sleeps on; index 0 is the owner's */
 
@@ -45,8 +44,11 @@ struct request {
 };
 static _Atomic(struct request *) loader_slot, writer_slot;
 static _Atomic(TaskHandle_t) owner;
-static _Atomic(TaskHandle_t) ready_waiter;
-static unsigned ready_index;       /* immutable while the owner publishes readiness */
+/* A task that waits for the card to open: an entry on its own stack, listed until the owner has taken its handle. The
+ * owner takes the whole list once, when it publishes the open's result, and leaves WAITERS_TAKEN in its place. */
+struct ready_waiter { struct ready_waiter *next; TaskHandle_t task; atomic_int released; };
+#define WAITERS_TAKEN ((struct ready_waiter *)1)
+static _Atomic(struct ready_waiter *) ready_waiters;
 static StaticTask_t owner_tcb;
 static StackType_t owner_stack[OWNER_STACK_WORDS];
 static const struct os_sd_hw *hw;
@@ -259,8 +261,7 @@ static int owner_quiesce_step(void)
     os_quiesce_complete(&storage_quiesce);return 1;
 }
 
-/* Registration may precede the first instruction of the lazy owner task.
- * A return in that interval prevents its first hardware access. */
+/* A CPU return requested before the first storage call's open prevents the open's first hardware access. */
 static int owner_open_allowed(void)
 {
     if(!os_cpu_return_requested())return 1;
@@ -268,11 +269,47 @@ static int owner_open_allowed(void)
     os_quiesce_complete(&storage_quiesce);return 0;
 }
 
+/* The open's result for every task that waits for it (start): ready first, then the list, so that a caller that finds the
+ * list taken also finds the result. Each entry's fields are read before it is released, since its task may then return. */
+static void publish_ready(int result)
+{
+    atomic_store(&ready, result);
+    struct ready_waiter *w = atomic_exchange(&ready_waiters, WAITERS_TAKEN);
+    while (w) {
+        struct ready_waiter *next = w->next;
+        TaskHandle_t task = w->task;
+        atomic_store_explicit(&w->released, 1, memory_order_release);
+        xTaskNotifyGiveIndexed(task, WAIT_INDEX);
+        w = next;
+    }
+}
+
+/* Open the card for the first storage call. The open's waits are bounded by the owner's own deadline slot
+ * (os_sd_open_owner registers it), so every caller of start hears the result. */
+static int open_card(void)
+{
+    if (!owner_open_allowed()) { publish_ready(-1); return 0; }
+    hw = os_sd_open_owner();
+    atomic_store_explicit(&storage_state,hw?SD_OPEN:SD_FAILED,memory_order_release);
+    atomic_store(&first_us, sunstone_deadline_now_us());
+    publish_ready(hw ? 1 : -1);
+    if (!hw) {
+        /* A failed open leaves the controller's state uncertain and the platform register lock retained, which the thermal service
+         * then reports as its own failure. Note the open's stage first so that the record names the SD0 binding (the diagnostic
+         * word: stage in bits 7:0, its detail above). */
+        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), diag_word(), SUNSTONE_CRUMB_HERE());
+        return 0;
+    }
+    return 1;
+}
+
 /* TTBR0 and the task tag as the owner's first instruction found them: the QEMU check requires the kernel's table, and the board report
  * carries both (ss_storage_owner_space). */
 static volatile uint64_t entry_ttbr0;
 static volatile uint8_t entry_seen, entry_tagged;
 uint64_t os_sd_owner_entry_ttbr(void) { return entry_ttbr0; }
+/* The owner exists from the OS start, but the card stays unpowered until the first storage call asks for it (start): the
+ * owner sleeps on its request notification and opens the card when it finds the state STARTING. */
 static void owner_main(void *unused)
 {
     uint64_t ttbr;
@@ -281,23 +318,15 @@ static void owner_main(void *unused)
     entry_tagged = xTaskGetApplicationTaskTag(NULL) != NULL;
     entry_seen = 1;
     (void)unused;
-    if(!owner_open_allowed())for(;;)vTaskSuspend(NULL);
-    hw = os_sd_open_owner();
-    atomic_store_explicit(&storage_state,hw?SD_OPEN:SD_FAILED,memory_order_release);
-    atomic_store(&first_us, sunstone_deadline_now_us());
-    atomic_store(&ready, hw ? 1 : -1);
-    TaskHandle_t waiter=atomic_load_explicit(&ready_waiter,memory_order_acquire);
-    if (waiter) xTaskNotifyGiveIndexed(waiter, ready_index);
-    if (!hw) {
-        /* A failed open leaves the controller's state uncertain and the platform register lock retained, which the thermal service
-         * then reports as its own failure. Note the open's stage first so that the record names the SD0 binding (the diagnostic
-         * word: stage in bits 7:0, its detail above). */
-        board_fail_note(SUNSTONE_CRUMB_FAIL_SITE(APPLICATION), diag_word(), SUNSTONE_CRUMB_HERE());
-        vTaskSuspend(NULL);
-    }
     for (;;) {
+        const int open = hw != NULL;
         uint64_t slept_from = sunstone_deadline_now_us();
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (!open) {
+            if (atomic_load_explicit(&storage_state, memory_order_acquire) != SD_STARTING) continue;
+            if (!open_card()) for (;;) vTaskSuspend(NULL);
+            continue;
+        }
         atomic_fetch_add(&idle_us, sunstone_deadline_now_us() - slept_from);
         atomic_fetch_add(&wake_count, 1);
         atomic_fetch_or(&owner_core_mask, 1u << portGET_CORE_ID());
@@ -331,50 +360,46 @@ static int post(_Atomic(struct request *) *slot, struct request *r, int wait)
     return atomic_load(&r->done) == 1;
 }
 
-/* The owner reads the CCU and drives SMHC0, so the scheduler creates it at EL1 (board_application_task_privileged). The first
- * caller is the application's EL0 task, which would otherwise pass its own level on to the task it creates. */
-int os_sd_owner_task_privileged(void (*entry)(void *), void *context) { (void)context; return entry == owner_main; }
-
-/* The owner task, once started: for the QEMU check that it holds no application tag. */
-TaskHandle_t os_sd_owner_task(void) { return owner; }
-
-/* Ready publication and the timer use the same task-specific notification index. */
-extern unsigned sunstone_deadline_notify_index(void);
-static int wait_ready(uint64_t until)
+/* The owner reads the CCU and drives SMHC0, so the scheduler creates it at EL1 (board_application_task_privileged). */
+int os_sd_task_privileged(void (*entry)(void *), void *context) { (void)context; return entry == owner_main; }
+/* The card's pins are the loader's binding's (os_large_sd_pins, apps/os/large_sd.c). */
+int os_sd_pins(struct a733_pin_handoff *pins) { return pins != NULL; }
+/* The start entry of a write-capable image (apps/os/os-services.h): the owner task, which opens nothing until a storage
+ * call asks. It is an OS service task and runs in the kernel's table from its first instruction (include/os_space.h). */
+int os_sd_start(void)
 {
-    while (!atomic_load_explicit(&ready,memory_order_acquire)) {
-        if (sunstone_deadline_now_us()>=until ||
-            sunstone_deadline_wait_until(until)==SUNSTONE_DEADLINE_ERROR) return 0;
-    }
-    return atomic_load_explicit(&ready,memory_order_acquire)==1;
+    owner = os_task_create_static(NULL, owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb);
+    return owner != NULL;
 }
 
-/* Start the owner task; the caller is told when the card is open (os_large_device) or has failed. */
+/* The owner task: for the QEMU check that it holds no application tag. */
+TaskHandle_t os_sd_owner_task(void) { return owner; }
+
+/* Wait for the open's result. The entry is listed before the result is read and the owner stores the result before it
+ * takes the list, so either the owner finds the entry or this task finds the list taken. A wake is only a hint: the wait
+ * ends when the owner has released the entry. No deadline slot is needed, because the owner's open is bounded. */
+static int wait_ready(void)
+{
+    struct ready_waiter self = {.task = xTaskGetCurrentTaskHandle()};
+    struct ready_waiter *head = atomic_load(&ready_waiters);
+    do {
+        if (head == WAITERS_TAKEN) return atomic_load(&ready) == 1;
+        self.next = head;
+    } while (!atomic_compare_exchange_weak(&ready_waiters, &head, &self));
+    while (!atomic_load_explicit(&self.released, memory_order_acquire)) ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, portMAX_DELAY);
+    return atomic_load(&ready) == 1;
+}
+
+/* The card for any task of the application or the loader: the first call asks the owner to open it, and every call made
+ * before the open has finished waits for its result. */
 static int start(void)
 {
-    if(os_cpu_return_requested())return 0;
-    if (owner) return atomic_load(&ready) == 1;
+    if(os_cpu_return_requested()||!owner)return 0;
     unsigned state=SD_UNOPENED;
-    if(!atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_STARTING,memory_order_acq_rel,memory_order_acquire))return 0;
-    if (!sunstone_deadline_register()) {
-        os_sd_diag[0]=9;atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release);return 0;
-    }
-    ready_index=sunstone_deadline_notify_index();
-    atomic_store_explicit(&ready_waiter,xTaskGetCurrentTaskHandle(),memory_order_release);
-    /* The caller is the application's task, which would pass its address space on to the task it creates; the owner is
-     * an OS service task and runs in the kernel's table from its first instruction (include/os_space.h). */
-    owner = os_task_create_static(NULL, owner_main, "sd-owner", OWNER_STACK_WORDS, NULL, OWNER_PRIORITY, owner_stack, &owner_tcb);
-    if (!owner) { os_sd_diag[0] = 10; atomic_store_explicit(&storage_state,SD_FAILED,memory_order_release); return 0; }
-    /* The owner gives the notification once the card is open or has failed. A wake is only a hint (any other notification would end a
-     * single wait early), so wait on the state, on the caller's own index, until a time bound measured in microseconds. */
-    uint64_t t0 = sunstone_deadline_now_us(), ticks0 = xTaskGetTickCount();
-    (void)wait_ready(t0+READY_TIMEOUT_US);
-    atomic_store_explicit(&ready_waiter,NULL,memory_order_release);
-    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) {                         /* no answer from the owner in time */
-        os_sd_diag[0] = 11; os_sd_diag[1] = sunstone_deadline_now_us() - t0;
-        os_sd_diag[2] = (uint64_t)atomic_load(&ready) & 0xffffffffu; os_sd_diag[3] = xTaskGetTickCount() - ticks0;
-    }
-    return atomic_load(&ready) == 1;
+    if(atomic_compare_exchange_strong_explicit(&storage_state,&state,SD_STARTING,memory_order_acq_rel,memory_order_acquire))
+        xTaskNotifyGive(owner);
+    else if(state!=SD_STARTING&&state!=SD_OPEN)return 0;
+    return wait_ready();
 }
 
 /* --- the loader's view -------------------------------------------------------------------------------------------- */

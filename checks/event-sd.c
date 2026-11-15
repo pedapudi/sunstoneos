@@ -13,19 +13,21 @@
 #define WAIT_INDEX SS_NOTIFY_REQUEST_WAIT
 #define REGISTER_RECHECK_US 100u
 static atomic_int ready;
-static _Atomic(TaskHandle_t) ready_waiter;
-static unsigned ready_index=SS_NOTIFY_DEADLINE;
 static TaskHandle_t owner_task, test_task;
 static _Atomic(TaskHandle_t) owner;
 static atomic_uint posting;
 static atomic_int closed;
 static _Atomic uint32_t caller_core_mask;
-static int os_cpu_return_requested(void){return 0;}
+static unsigned mode;
+/* The refused-open case (mode 14) requests the CPU return after the first storage call has passed its own check and
+ * before the owner's open: the first check answers no, every later one yes. */
+static unsigned return_checks;
+static int os_cpu_return_requested(void){return mode==14&&++return_checks>1;}
 static struct { struct { atomic_uint pmic_ready; } shared; } providers;
 static _Atomic(TaskHandle_t) pmic_waiter;
 static struct a733_mmc_platform platform;
 static uint64_t deadline;
-static unsigned mode,polls,retained,events,served;
+static unsigned polls,retained,events,served;
 static int completed;
 static uint64_t now_us(void){return host_time_us();}
 static int board_live(void *p){(void)p;return 1;}
@@ -53,12 +55,26 @@ static atomic_uint close_proven;
 static atomic_uint storage_state;
 static atomic_uint_fast64_t entry_ttbr0;
 static volatile uint8_t entry_seen, entry_tagged;      /* sd_owner.c: the owner's address space at its first instruction */
-#define SD_OPEN 2u
-#define SD_FAILED 4u
-static int owner_open_allowed(void){return 1;}
-static const struct os_sd_hw *os_sd_open_owner(void){return &hardware;}
+struct os_quiesce { int unused; };
+static struct os_quiesce storage_quiesce;
+static unsigned quiesce_completed,fail_notes;
+static void os_quiesce_complete(struct os_quiesce *q){assert(q==&storage_quiesce);++quiesce_completed;}
+static unsigned opens;
+/* The owner's open. In the concurrent-start and failed-open cases it registers the owner's own deadline slot and waits on
+ * it for 200 ms, as the real open's bounded waits do (apps/os/large_sd.c os_sd_open_owner); the failed open then returns
+ * no device. */
+static const struct os_sd_hw *os_sd_open_owner(void)
+{
+    ++opens;
+    if(mode==12||mode==13){
+        assert(sunstone_deadline_register());
+        uint64_t until=now_us()+200000u;
+        while(now_us()<until)assert(sunstone_deadline_wait_until(until)!=SUNSTONE_DEADLINE_ERROR);
+    }
+    return mode==13?NULL:&hardware;
+}
 static void board_fail_note(unsigned site,unsigned detail,const void *where)
-{(void)site;(void)detail;(void)where;assert(0);}
+{(void)site;(void)detail;(void)where;assert(mode==13);++fail_notes;}
 #define SUNSTONE_CRUMB_FAIL_SITE(group) 1u
 #define SUNSTONE_CRUMB_HERE() ((const void *)1)
 static unsigned diag_word(void){return 0;}
@@ -99,7 +115,7 @@ static void event(void *p)
 {
     ++events;
     BaseType_t woken=pdFALSE;
-    if(mode==1){atomic_store_explicit(&ready,1,memory_order_release);vTaskNotifyGiveIndexedFromISR(test_task,ready_index,&woken);}
+    if(mode==2)vTaskNotifyGiveIndexedFromISR(test_task,WAIT_INDEX,&woken);   /* a stray hint on the waiting index */
     else if(mode==3||mode==5){completed=1;vTaskNotifyGiveFromISR(owner_task,&woken);}
     else if(mode==6){atomic_store_explicit(&providers.shared.pmic_ready,1,memory_order_release);os_sd_pmic_ready();}
     else if(mode==10)completed=1;
@@ -117,25 +133,48 @@ static void worker(void *unused)
     assert(read_irq_recheck==(mode==4?1u:0u));
     xTaskNotifyGiveIndexed(test_task,SS_NOTIFY_DEADLINE);vTaskSuspend(NULL);
 }
+/* The owner's publication of the open's result, as a task at a scripted time (modes 1 and 2). */
+static void publisher(void *unused)
+{
+    (void)unused;
+    assert(sunstone_deadline_register());
+    assert(sunstone_deadline_wait_until(123456u)==SUNSTONE_DEADLINE_EXPIRED);
+    publish_ready(1);
+    vTaskSuspend(NULL);
+}
+/* Application tasks that hold no deadline slot and start storage (modes 12 to 14): a worker first, then a second task
+ * while the owner is still opening the card, then a third after the open's result. */
+static int started[3];
+static void storage_caller(void *which)
+{
+    unsigned i=(unsigned)(uintptr_t)which;
+    started[i]=start()+1;
+    xTaskNotifyGiveIndexed(test_task,SS_NOTIFY_DEADLINE);
+    vTaskSuspend(NULL);
+}
 static void test(void *unused)
 {
     (void)unused;test_task=xTaskGetCurrentTaskHandle();assert(sunstone_deadline_register());
     host_timer_handler(sunstone_deadline_irq);
     if(mode==0){
-        owner_task=host_task_create("sd-idle",owner_main,NULL,2);
+        owner=owner_task=host_task_create("sd-idle",owner_main,NULL,2);
+        /* Until a storage call asks, the owner leaves the card unopened. */
         assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_EXPIRED);
-        assert(wake_count==0&&served==0&&ready==1);
+        assert(!opens&&!hw&&ready==0);
+        assert(start()==1&&opens==1&&ready==1);
+        assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_EXPIRED);
+        assert(wake_count==0&&served==0);
         struct request r={0};atomic_store(&loader_slot,&r);xTaskNotifyGive(owner_task);
         assert(sunstone_deadline_wait_until(now_us()+1000u)==SUNSTONE_DEADLINE_NOTIFIED);
         assert(wake_count==1&&served==1&&r.done==1);
         printf("PASS idle SD owner: 0 unrequested wakes/s; one request causes one wake\n");
     } else if(mode==1||mode==2){
         uint64_t initial=host_switches();
-        if(mode==1)host_irq_at(now_us()+123456,event,NULL);
-        int result=wait_ready(now_us()+500000);
-        assert(result==(mode==1));assert(now_us()==(mode==1?123456u:500000u));
-        assert(host_switches()-initial<8); /* Finite tick waits exceed this without any publication. */
-        puts("PASS ready publication or single absolute startup expiry");
+        host_task_create("sd-publish",publisher,NULL,2);
+        if(mode==2)host_irq_at(now_us()+50000,event,NULL);
+        assert(wait_ready()==1);assert(now_us()==123456u);
+        assert(host_switches()-initial<10); /* Finite tick waits exceed this before the publication. */
+        puts(mode==1?"PASS ready publication wakes its waiter once":"PASS a stray hint on the waiting index leaves the wait for the open");
     } else if(mode==3||mode==4||mode==5||mode==10){
         owner_task=host_task_create("sd-read",worker,NULL,3);
         if(mode==10)host_irq_at(now_us()+250,event,NULL);
@@ -166,9 +205,46 @@ static void test(void *unused)
         platform.stage=READY;platform.core.state=SUNXI_MMC_READING;
         assert(controller(&platform)==A733_MMC_PENDING&&core_polls==1);
         puts("PASS platform stops its core batch at the IRQ wait hint");
+    } else if(mode==12){
+        owner=owner_task=host_task_create("sd-owner",owner_main,NULL,2);
+        host_task_create("worker",storage_caller,(void *)(uintptr_t)0,3);
+        assert(sunstone_deadline_wait_until(now_us()+1000u)==SUNSTONE_DEADLINE_EXPIRED);
+        assert(storage_state==SD_STARTING&&!started[0]);
+        host_task_create("second",storage_caller,(void *)(uintptr_t)1,3);
+        while(!started[0]||!started[1])
+            assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_NOTIFIED);
+        assert(started[0]==2&&started[1]==2&&opens==1&&ready==1&&now_us()==200000u);
+        puts("PASS a worker and a second task start storage together; each hears the one open");
+    } else if(mode==13){
+        owner=owner_task=host_task_create("sd-owner",owner_main,NULL,2);
+        host_task_create("worker",storage_caller,(void *)(uintptr_t)0,3);
+        assert(sunstone_deadline_wait_until(now_us()+1000u)==SUNSTONE_DEADLINE_EXPIRED);
+        assert(storage_state==SD_STARTING&&!started[0]);
+        host_task_create("second",storage_caller,(void *)(uintptr_t)1,3);
+        while(!started[0]||!started[1])
+            assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_NOTIFIED);
+        assert(started[0]==1&&started[1]==1&&opens==1&&ready==-1&&storage_state==SD_FAILED);
+        assert(now_us()==200000u);
+        /* The callers outrank the owner, so it notes the failure once they are done. */
+        assert(sunstone_deadline_wait_until(now_us()+1000u)==SUNSTONE_DEADLINE_EXPIRED&&fail_notes==1);
+        host_task_create("late",storage_caller,(void *)(uintptr_t)2,3);
+        assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_NOTIFIED);
+        assert(started[2]==1&&opens==1&&now_us()==201000u);
+        puts("PASS a failed open answers every waiting task and every later one");
+    } else if(mode==14){
+        owner=owner_task=host_task_create("sd-owner",owner_main,NULL,2);
+        host_task_create("worker",storage_caller,(void *)(uintptr_t)0,3);
+        while(!started[0])
+            assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_NOTIFIED);
+        assert(started[0]==1&&!opens&&ready==-1&&storage_state==SD_CLOSED&&quiesce_completed==1);
+        host_task_create("late",storage_caller,(void *)(uintptr_t)2,3);
+        assert(sunstone_deadline_wait_until(now_us()+1000000u)==SUNSTONE_DEADLINE_NOTIFIED);
+        assert(started[2]==1&&!opens&&now_us()==0u);
+        puts("PASS a CPU return before the open answers the waiting task without touching the card");
     } else if(mode==8){
         xTaskNotifyGive(test_task); /* The application's index zero remains owned by it. */
         owner=owner_task=host_task_create("sd-async",owner_main,NULL,2);
+        assert(start()==1);
         host_irq_at(now_us()+123456,event,NULL);
         loader_async.kind=K_ASYNC_READ;
         assert(post(&loader_slot,&loader_async,0));

@@ -45,9 +45,9 @@ def short_readiness_context(patch):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--case', action='append', choices=('production', 'idle-mutant', 'ready-mutant', 'manifest', 'platform', 'register', 'async', 'idle', 'patch', 'stats'))
+    parser.add_argument('--case', action='append', choices=('production', 'idle-mutant', 'ready-mutant', 'manifest', 'platform', 'register', 'async', 'idle', 'patch', 'stats', 'concurrent'))
     args = parser.parse_args()
-    selected=set(args.case or ('production','idle-mutant','ready-mutant','manifest','platform','register','patch','stats'))
+    selected=set(args.case or ('production','idle-mutant','ready-mutant','manifest','platform','register','patch','stats','concurrent'))
     args.output.mkdir(parents=True, exist_ok=True)
     owner = (ROOT/'apps/os/sd_owner.c').read_text()
     native = (ROOT/'apps/os/large_sd.c').read_text()
@@ -58,7 +58,15 @@ def main():
     assert entry.count(tag) == 1, 'owner_main no longer records its task tag'
     entry = entry.replace(tag, 'entry_tagged = 0;')    # the host kernel has no application task tags
     platform_source=(ROOT/'drivers/storage/a733_mmc_platform.c').read_text()
-    production = function(platform_source,'controller')+'\n'+waits+'\n'+function(owner, 'wait_ready')+'\n'+function(owner, 'proxy_poll')+'\n'+function(owner,'finish')+'\n'+function(owner,'post')+'\n'+entry+'\n'
+    # The storage states and the list of tasks that wait for the open, as sd_owner.c declares them.
+    a = owner.index('enum { SD_UNOPENED')
+    states = owner[a:owner.index(';', a) + 1]
+    a = owner.index('struct ready_waiter {')
+    waiters = owner[a:owner.index('static _Atomic(struct ready_waiter *) ready_waiters;', a)] + 'static _Atomic(struct ready_waiter *) ready_waiters;'
+    production = (states+'\n'+waiters+'\n'+function(platform_source,'controller')+'\n'+waits+'\n'+function(owner,'owner_open_allowed')+'\n'+
+                  function(owner,'publish_ready')+'\n'+
+                  function(owner,'open_card')+'\n'+entry+'\n'+function(owner,'wait_ready')+'\n'+function(owner,'start')+'\n'+
+                  function(owner,'proxy_poll')+'\n'+function(owner,'finish')+'\n'+function(owner,'post')+'\n')
     (args.output/'event-sd-production.h').write_text(production)
     sources = ['checks/event-sd.c', 'runtime/deadline.c']
     exe = host_rtos.build(args.output/'current', sources, 'event-sd', includes=[args.output], flags=['-Wno-unused-function'],defines=['SUNXI_MMC_READ_ONLY=1'])
@@ -68,9 +76,12 @@ def main():
         (args.output/f'case-{case}.log').write_text(run.stdout+run.stderr)
         assert not run.returncode, (case, run.stdout, run.stderr)
         logs.append(run.stdout.strip())
+    released = 'while (!atomic_load_explicit(&self.released, memory_order_acquire)) ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, portMAX_DELAY);'
+    assert production.count(released) == 1, 'wait_ready no longer waits for its entry to be released'
     mutants = {
         'idle-tick-poll': production.replace('ulTaskNotifyTake(pdTRUE, portMAX_DELAY);', 'ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));', 1),
-        'ready-tick-poll': production.replace(function(owner,'wait_ready'), function(owner,'wait_ready').replace('sunstone_deadline_wait_until(until)==SUNSTONE_DEADLINE_ERROR', 'ulTaskNotifyTakeIndexed(ready_index,pdTRUE,pdMS_TO_TICKS(50))==UINT32_MAX')),
+        # The wait ends at the first notification on its index, as the earlier single wait did.
+        'ready-ends-at-any-hint': production.replace(released, '(void)ulTaskNotifyTakeIndexed(WAIT_INDEX, pdTRUE, portMAX_DELAY);'),
     }
     for index, (name, text) in enumerate(mutants.items()):
         if ('idle-mutant' if index==0 else 'ready-mutant') not in selected:
@@ -79,7 +90,7 @@ def main():
         directory.mkdir(exist_ok=True)
         (directory/'event-sd-production.h').write_text(text)
         mutated = host_rtos.build(directory, sources, 'event-sd', includes=[directory], flags=['-Wno-unused-function'],defines=['SUNXI_MMC_READ_ONLY=1'])
-        case = '0' if index == 0 else '2'
+        case = '0' if index == 0 else '2'          # the idle owner; the stray hint before the open's result
         run = subprocess.run([str(mutated), case], capture_output=True, text=True, env=environment(), timeout=30)
         (directory/'result.log').write_text(run.stdout+run.stderr)
         assert run.returncode, name
@@ -117,6 +128,36 @@ def main():
         run=subprocess.run(command,capture_output=True,text=True)
         (args.output/'patch-mutant.log').write_text(run.stdout+run.stderr)
         assert run.returncode,'short readiness context must fail strict patch application'
+    if 'concurrent' in selected:
+        # Only the test task and the owner hold deadline slots, so a storage call that still registered its caller would take
+        # the owner's slot and the open would fail.
+        concurrent = host_rtos.build(args.output/'concurrent', sources, 'event-sd', includes=[args.output], flags=['-Wno-unused-function'],
+                                     defines=['SUNXI_MMC_READ_ONLY=1', 'SUNSTONE_DEADLINE_SLOTS=2u'])
+        for case in ('12', '13', '14'):          # both start; the open fails; a CPU return refuses the open
+            run=subprocess.run([str(concurrent),case],capture_output=True,text=True,env=environment(),timeout=30)
+            (args.output/f'case-{case}.log').write_text(run.stdout+run.stderr)
+            assert not run.returncode,run.stdout+run.stderr
+            logs.append(run.stdout.strip())
+        start = function(owner, 'start')
+        taken = 'struct ready_waiter *next = w->next;'
+        assert production.count(taken) == 1, 'publish_ready no longer walks the list of waiters'
+        refused = 'if (!owner_open_allowed()) { publish_ready(-1); return 0; }'
+        failed = 'publish_ready(hw ? 1 : -1);'
+        assert production.count(refused) == 1 and production.count(failed) == 1, 'open_card no longer publishes each result'
+        for name, text, case in (('one-waiter-woken', production.replace(taken, 'struct ready_waiter *next = NULL;'), '12'),
+                                 ('caller-registers', production.replace(start, start.replace('{', '{\n    if(!sunstone_deadline_register())return 0;', 1)), '12'),
+                                 # The open's failure, or its refusal, leaves its waiting tasks asleep.
+                                 ('failure-unpublished', production.replace(failed, 'if (hw) publish_ready(1);'), '13'),
+                                 ('refusal-unpublished', production.replace(refused, 'if (!owner_open_allowed()) return 0;'), '14')):
+            directory = args.output/name
+            directory.mkdir(exist_ok=True)
+            (directory/'event-sd-production.h').write_text(text)
+            mutated = host_rtos.build(directory, sources, 'event-sd', includes=[directory], flags=['-Wno-unused-function'],
+                                      defines=['SUNXI_MMC_READ_ONLY=1', 'SUNSTONE_DEADLINE_SLOTS=2u'])
+            run = subprocess.run([str(mutated), case], capture_output=True, text=True, env=environment(), timeout=30)
+            (directory/'result.log').write_text(run.stdout+run.stderr)
+            assert run.returncode, name
+            mutants[name] = text
     if 'stats' in selected:
         run=subprocess.run([str(exe),'11'],capture_output=True,text=True,env=environment(),timeout=30)
         (args.output/'case-11.log').write_text(run.stdout+run.stderr)
@@ -137,7 +178,7 @@ def main():
         print('PASS read-only card route; heap-only images retain conditional SD route')
     print('\n'.join(logs))
     (args.output/'result.json').write_text(json.dumps({'passed': True, 'physical_access': False,
-        'cases': 13, 'mutations_refused': [*mutants,'core-batch-poll','readiness-patch-short-context'], 'idle_owner_wakes_per_second': 0,
+        'cases': 16, 'mutations_refused': [*mutants,'core-batch-poll','readiness-patch-short-context'], 'idle_owner_wakes_per_second': 0,
         'baseline_idle_owner_wakes_per_second_source_counted': 0, 'baseline_startup_polls_per_second_source_counted': 20,
         'startup_periodic_polls_per_second': 0}, indent=2)+'\n')
     print('PASS SD owner event and deadline cases; hardware completion is modeled')

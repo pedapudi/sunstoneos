@@ -580,19 +580,13 @@ def reverted_services(work):
 
 
 def reverted_owner(work):
-    """apps/os/sd_owner.c as the fourth board submission had it: start() sleeps once on the caller's default notification index,
-    so any hint on that index ends the wait before the owner has opened the card."""
+    """apps/os/sd_owner.c with the wait of the fourth board submission: start() sleeps once on the caller's default notification
+    index and then reads the result, so any hint on that index ends the wait before the owner has opened the card."""
     source = (ROOT / 'apps/os/sd_owner.c').read_text()
-    begin = source.index('    /* The owner gives the notification once the card is open or has failed.')
-    end = source.index('    atomic_store_explicit(&ready_waiter,NULL,memory_order_release);')
-    old = ('    if (atomic_load(&ready) == 0) (void)ulTaskNotifyTake(pdTRUE, 8000u);\n')
-    source = source[:begin] + old + source[end:]
-    marker = '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) {'
-    stop = source.index('    return atomic_load(&ready) == 1;\n}', source.index(marker))
-    source = source[:source.index(marker)] + '    if (atomic_load(&ready) != 1 && !os_sd_diag[0]) os_sd_diag[0] = 11;\n' + source[stop:]
-    give = 'xTaskNotifyGiveIndexed(waiter, ready_index)'
-    assert source.count(give) == 1, 'apps/os/sd_owner.c no longer gives readiness on the caller index'
-    source = source.replace(give, 'xTaskNotifyGive(waiter)')
+    begin = source.index('static int wait_ready(void)\n{')
+    end = source.index('\n}\n', begin) + 3
+    source = (source[:begin] + 'static int wait_ready(void)\n{\n    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);\n'
+              '    return atomic_load(&ready) == 1;\n}\n' + source[end:])
     path = Path(work) / 'sd_owner_reverted.c'
     path.write_text(source)
     return path
@@ -1319,9 +1313,9 @@ def main():
     c.require(c.finished is not None, 'the application did not finish')
     d = decode_result(c)
     c.require(d['status'] == 0 and d['au_sectors'] == 8192, 'enable did not succeed: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
-    # The SD owner is started by the application's own call, from a task that has an address space: the owner is an OS task
-    # and must end up with no application tag, so that it runs in the kernel's space (include/os_space.h, traceTASK_CREATE
-    # gives a new task its creator's tag; apps/os/sd_owner.c clears it). The main task, by contrast, is tagged.
+    # The SD owner is created by the OS start list and opens the card for the application's first storage call, made from a
+    # task that has an address space: the owner is an OS task and must carry no application tag, so that it runs in the
+    # kernel's space (include/os_space.h). The main task, by contrast, is tagged.
     c = run_case('storage-write-owner-in-kernel-space', storage_write_space_elf, scenario(usb_ready_ms=usb_delay_ms), [blob, mode4], '4G',
                  [(RAMDISK_ADDRESS, card_image())])
     c.clean()
@@ -1331,10 +1325,10 @@ def main():
     c.require(len(space) == 1 and space[0].get('main') == '1' and space[0].get('sdowner') == '0' and space[0].get('sdentry') == '0',
               'the application main task must be tagged and the SD owner untagged, and in the kernel\'s table at its first instruction: %s' % (space,))
     c.require(space[0].get('sdowner_cores') == '1' and space[0].get('thermal_cores') == '1',
-              'an OS service that the application\'s call started may run outside the service core: %s' % (space,))
+              'the SD owner or the thermal service runs outside the service core: %s' % (space,))
     # A hint on the application's default notification index during the owner's open (a USB-change event, as application.c sends
-    # them) must not end the wait: enable succeeds. The owner as the fourth board submission had it (one sleep on that index)
-    # returns early with stage 11, which is the control.
+    # them) must not end the wait: enable succeeds. A wait as the fourth board submission had it (one sleep on that index)
+    # returns before the open's result, and the enable fails: the control.
     stray = scenario(usb_ready_ms=usb_delay_ms, fault=10)
     c = run_case('storage-write-enable-stray-notification', storage_write_elf, stray, [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
     c.clean()
@@ -1343,7 +1337,7 @@ def main():
     c = run_case('storage-write-enable-stray-reverted', reverted_owner_elf, stray, [blob, mode4], '512M', [(RAMDISK_ADDRESS, card_image())])
     c.clean()
     d = decode_result(c)
-    c.require(d['status'] == 1 and d['diag0'] == 11, 'the earlier owner wait survived the stray notification: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
+    c.require(d['status'] == 1, 'the earlier owner wait survived the stray notification: status %d, diagnostic %s' % (d['status'], [d['diag%d' % i] for i in range(4)]))
     # A retained platform register lock (what a failed controller transaction leaves): the thermal service cannot read its sensors
     # and, after the five seconds without a reading, ends the session as CRITICAL for lack of a reading, with the stale marker and
     # the channel in the record (nothing in the SD path is at fault in this record).

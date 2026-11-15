@@ -399,12 +399,17 @@ def main():
                     'session lifetime: the watchdog marker says %d s but the build compiled %d s' % (result['watchdog_seconds'], seconds)
         owner = subprocess.run([args.nm, '--defined-only', str(args.image)], capture_output=True, text=True).stdout
         if ' ss_storage_enable' in owner:
-            # The SD owner reads the CCU and drives SMHC0. The application's EL0 task creates it on first use, so the scheduler
-            # must be told to create it at EL1: board_application_task_privileged has to reach os_sd_owner_task_privileged.
+            # The SD owner reads the CCU and drives SMHC0, so the scheduler must create it at EL1: the start list's entry for it
+            # (apps/os/os-services.h) names os_sd_task_privileged, which board_application_task_privileged asks.
             # (The first board run faulted reading 0x02002500 at EL0 in the owner task.)
-            asm = subprocess.run(['llvm-objdump-21', '-d', '--disassemble-symbols=os_application_task_privileged', str(args.image)],
-                                 capture_output=True, text=True).stdout
-            assert 'os_sd_owner_task_privileged' in asm, 'the SD owner task is not created at EL1 (os_application_task_privileged does not reach os_sd_owner_task_privileged)'
+            elf = Elf(args.image.read_bytes())
+            named = {s['name']: s for s in elf.symbols}
+            assert 'os_sd_task_privileged' in named and 'os_applications' in named, \
+                'the image links the storage calls but no start entry creates the SD owner at EL1 (os_sd_task_privileged)'
+            table = elf.read(named['os_applications']['value'], named['os_applications']['size'])
+            entries = [struct.unpack_from('<4Q', table, offset) for offset in range(0, len(table), 32)]
+            assert any(e[1] == named['os_sd_task_privileged']['value'] for e in entries), \
+                'the SD owner task is not created at EL1 (no start entry names os_sd_task_privileged)'
         if args.application != 'none':
             result['symbol_boundary'] = application_symbols(Elf(args.image.read_bytes()),
                 args.application_objects, args.application_library, args.runtime_library,

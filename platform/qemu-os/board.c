@@ -247,9 +247,8 @@ static void monitor(void *unused)
             put(&l, "THROTTLE-CLEARED t_us="); put_dec(&l, t); flush(&l);
         }
         if (os_application_finished() && (cleared || t > s->limit_us) && t >= s->hold_us) {
-            {   /* The address space of the application's tasks and of the OS task that its call started: the main task
-                 * is tagged when the application has a space, the SD owner (created by the application's call, through
-                 * the creator's tag) is not. */
+            {   /* The address space of the application's tasks and of the OS task that serves its storage calls: the main
+                 * task is tagged when the application has a space, the SD owner (created by the OS start list) is not. */
                 struct line s = {.used = 0};
                 TaskHandle_t owner = os_sd_owner_task ? os_sd_owner_task() : 0;
                 put(&s, "TASK-SPACE main="); put_dec(&s, xTaskGetApplicationTaskTag(os_application_main_task()) != 0);

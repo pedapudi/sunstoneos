@@ -4,9 +4,9 @@
 Every task that calls sunstone_deadline_register takes one slot of a table that the image's own tables size by
 OS_DEADLINE_OWNERS (runtime/deadline.c, tools/sunstone-manifest.py). The bound is a sum of terms: the owners column of each
 linked start entry (OS_START_ROWS), less the DMA0 pool's two tasks when both the audio and the dma entries count them,
-plus the board's registering tasks, the application's, the large-region loader's, the SD0 owner's and the background
-load's. This check counts the registering tasks of each linked image and compares the count with the slot count that the
-image's tables store (sunstone_deadline_slot_count).
+plus the board's registering tasks, the application's, the large-region loader's and the background load's. This check
+counts the registering tasks of each linked image and compares the count with the slot count that the image's tables
+store (sunstone_deadline_slot_count).
 
 From the disassembly and symbol table of each image the check builds:
 - the direct call graph: bl and b to the first instruction of a function;
@@ -73,10 +73,9 @@ REGISTER = 'sunstone_deadline_register'
 # The roots of the terms outside the start list.
 APPLICATION_ROOT = 'os_application_prepare'
 BOARD_ROOT = 'a733_smp_diagnostic_start'
-# Creations that belong to a term of their own wherever they are reached: the SD0 owner, which the large-region loader or
-# the application's own storage call starts (apps/os/sd_owner.c start), and the large-region loader, which registers only
-# through the SD0 binding (apps/os/large_sd.c, OS_LARGE_SD_DEADLINES).
-SHARED_ENTRIES = {'sd_owner.c:owner_main': 'sd', 'large_load.c:loader': 'large-sd'}
+# Creations that belong to a term of their own wherever they are reached: the large-region loader, which registers only
+# through the read-only SD0 binding (apps/os/large_sd.c, OS_LARGE_SD_DEADLINES).
+SHARED_ENTRIES = {'large_load.c:loader': 'large-sd'}
 # Creations whose task can register but that the OS never creates, with the reason.
 EXCLUDED = {
     'sunstone_net.c:worker': 'the network service creates its own worker only in sunstone_net_init; the OS binds the '
