@@ -30,7 +30,7 @@ struct a733_radio_result_ap { uint8_t bssid[6], ssid_bytes; int8_t rssi_dbm; uin
 struct a733_radio_result_head {
     uint64_t magic;
     uint32_t version, bytes, head_bytes, ap_entry_bytes;
-    uint32_t stage, failed, failure_stage, flags; /* flags: bit0 guard asked, bit1 guard observed, bit2 BLDO5 needs power-on (the rails showed it off; the writes ran only once the stage reaches powered), bit3 shut down with every readback matched, bit4 BLDO5 was already on (guard
+    uint32_t stage, failed, failure_stage, flags; /* flags: bit0 guard asked, bit1 guard observed, bit2 BLDO5 needs power-on (the rails showed it off; the writes ran only once the stage reaches powered), bit3 the orderly shutdown reached down with every step read back (a failure runs the failure shutdown of bits 5 and 6 instead, so a failed run leaves it clear), bit4 BLDO5 was already on (guard
  * accepted it), bit5 the failure shutdown ran, bit6 every step of it that applied read back matched, bit7 the first-run guard refused before any write (fail_site then holds 0x400 | PG bits << 4 | unmet mask, shifted into the line field), bit9 an association tail follows the access point list (struct a733_radio_assoc), bit8 the failure left nothing powered (a refusal, or a failure shutdown that finished with every readback matched) and ended without a reset */
     uint32_t pad_power[4];                         /* GPIO_POW_MOD_SEL, GPIO_POW_VAL, SGPIO_POW_MOD_SEL, SGPIO_POW_VAL */
     struct a733_radio_result_rail rails[A733_RADIO_RESULT_RAILS];

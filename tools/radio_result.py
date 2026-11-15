@@ -70,8 +70,10 @@ def decode(data):
         # The rails showed BLDO5 off, so the power-on writes were needed; they ran only if the stage reached 'powered'.
         'bldo5_needs_power_on': bool(flags & 4),
         'clean_failure': bool(flags & 256),
-        'shutdown_readbacks_matched': bool(flags & 8),
         'bldo5_already_on': bool(flags & 16),
+        # Two shutdown paths: the orderly one reaches down with every step read back (bit 3); a failure runs the
+        # failure shutdown instead (bits 5 and 6), so a failed run's orderly shutdown is always false.
+        'orderly_shutdown': {'matched': bool(flags & 8)},
         'failure_shutdown': {'ran': bool(flags & 32), 'matched': bool(flags & 64)},
     }
     mod_g, val_g, mod_m, val_m = struct.unpack_from('<4I', data, 40)

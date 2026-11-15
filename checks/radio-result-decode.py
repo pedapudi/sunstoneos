@@ -26,6 +26,7 @@ def main():
     assert radio_result.record_length(RECORD[:radio_result.HEAD_BYTES]) == len(RECORD)
     r = radio_result.decode(RECORD)
     assert r['failed'] and r['failed_at'] == 'guard' and r['stage'] == 'rails-observed'
+    assert not r['orderly_shutdown']['matched']  # a failed run takes the failure shutdown path, never the orderly one
     assert r['guard'] == {'asked': True, 'observed': True, 'refused': True}
     # BLDO5 was off, so the power-on was needed; no write ran (stage never reached 'powered').
     assert r['bldo5_needs_power_on'] and not r['bldo5_already_on'] and not r['failure_shutdown']['ran']

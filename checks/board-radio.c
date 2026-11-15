@@ -119,7 +119,7 @@ static int test_parse_result;
 int aic8800_supplicant_rsn_parse(const uint8_t *element,size_t bytes)
 {assert(element&&bytes>=2);return test_parse_result;}
 /* Valid: a nonzero entropy callback and records, an element the parser accepts, and one that meets every RSN
- * condition of the PSK test. checks/aic8800-supplicant.c checks that the classifier agrees with the real test. */
+ * condition of the PSK test. checks/radio-rsn-summary.c checks that the classifier agrees with the real test. */
 int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *c)
 {
     struct a733_radio_rsn s;a733_radio_rsn_summarize(&s,c->ap_rsn,c->ap_rsn_bytes);
@@ -159,28 +159,100 @@ int a733_radio_session_take_scan(struct a733_radio_session *s,struct aic8800_wif
     if(!scan_finished)return 0;
     *out=(struct aic8800_wifi_scan_summary){.received=3,.reported_results=3,.accepted=1};return 1;
 }
+/* Scan events come from the real producers. Each sighting is a SCANU_RESULT_IND (0x1004) record as the firmware
+ * delivers it (struct scanu_result_ind of the vendor's lmac_msg.h: length, frame control, centre frequency, band,
+ * station index, interface, RSSI, then the beacon), placed in the transport's receive buffer. The real SDIO codec
+ * decodes it, the real Wi-Fi scan parser takes it, and the real dispatcher turns it into the event the application
+ * takes, so the event's metadata and payload are exactly what aic8800_dispatch.c builds. Only the transport around
+ * them is modelled: it holds one received aggregate and follows the runtime branch of the transport's parse(). */
+static struct sdio_card scan_card;
+static struct sunxi_sdio scan_host;
+static uint64_t scan_now=1000;
+static const struct aic8800_dispatch_event *last_event;
+int aic8800_transport_claim_receive(struct aic8800_sdio_transport *t,const void *owner,size_t bytes)
+{if(!t->initialized||t->receive_owner||!owner||!bytes)return 0;t->receive_owner=owner;t->receive_owner_bytes=bytes;return 1;}
+int aic8800_transport_receive_view(const struct aic8800_sdio_transport *t,const void *owner,const uint8_t **record,size_t *available)
+{if(t->receive_owner!=owner||t->held||t->cursor>=t->rx_bytes)return 0;*record=t->rx+t->cursor;*available=t->rx_bytes-t->cursor;return 1;}
+int aic8800_transport_retire_record(struct aic8800_sdio_transport *t,const void *owner,const uint8_t *record,size_t consumed)
+{if(t->receive_owner!=owner||t->held||record!=t->rx+t->cursor||consumed>t->rx_bytes-t->cursor)return 0;t->cursor+=consumed;return 1;}
+void aic8800_transport_poll_receive(struct aic8800_sdio_transport *t,const void *owner)
+{
+    if(t->receive_owner!=owner||t->held||t->cursor>=t->rx_bytes)return;
+    struct aic8800_sdio_response r;
+    enum aic8800_codec_result c=aic8800_sdio_decode_identity_response(t->rx+t->cursor,t->rx_bytes-t->cursor,AIC8800_IDENTITY_CHIP,&r);
+    if(c==AIC8800_CODEC_UNRELATED)c=aic8800_wifi_response(t->wifi,t,&r,++scan_now);
+    if(t->wifi->state==AIC8800_WIFI_FAULT){t->state=AIC8800_TRANSPORT_FAULT;return;}
+    if(c==AIC8800_CODEC_OK)t->cursor+=r.consumed;
+    else if(c==AIC8800_CODEC_UNRELATED){t->unrelated=r;t->held=1;}
+    else t->state=AIC8800_TRANSPORT_FAULT;
+}
+int aic8800_transport_peek(const struct aic8800_sdio_transport *t,struct aic8800_sdio_response *out)
+{if(!t->held)return 0;*out=t->unrelated;return 1;}
+int aic8800_transport_peek_data(const struct aic8800_sdio_transport *t,struct aic8800_data_frame *out){(void)t;(void)out;return 0;}
+int aic8800_transport_consume_receive(struct aic8800_sdio_transport *t,const void *owner)
+{
+    if(t->receive_owner!=owner||!t->held||t->state==AIC8800_TRANSPORT_FAULT)return 0;
+    aic8800_wifi_consumed(t->wifi,t,t->unrelated.record);t->cursor+=t->unrelated.consumed;t->held=0;return 1;
+}
+void aic8800_transport_fault_receive(struct aic8800_sdio_transport *t,const void *owner)
+{if(t->receive_owner==owner)t->state=AIC8800_TRANSPORT_FAULT;}
+/* The session's receive side after interface setup: the transport in its runtime state, the Wi-Fi worker waiting on
+ * a scan it started with the real request path, and the dispatcher owning receive. */
+static void scan_receive_start(struct a733_radio_session *s)
+{
+    memset(&s->transport,0,sizeof(s->transport));memset(&s->wifi,0,sizeof(s->wifi));memset(&s->dispatcher,0,sizeof(s->dispatcher));
+    scan_card.host=&scan_host;
+    struct aic8800_sdio_transport *t=&s->transport;
+    t->initialized=1;t->state=AIC8800_TRANSPORT_RUNTIME;t->card=&scan_card;t->wifi=&s->wifi;
+    struct aic8800_wifi_config c={.rf_profile_record=1,.channel_policy_record=1,.command_timeout=1000000,.profile=1,.channel_count=2,
+        .channels={{.frequency=2437,.band=0,.flags=1},{.frequency=5180,.band=1,.flags=1}}};
+    assert(aic8800_wifi_init(&s->wifi,&c)&&aic8800_wifi_claim(&s->wifi,t,scan_now,UINT64_MAX/2));
+    s->wifi.state=AIC8800_WIFI_READY;s->wifi.vif=0;s->wifi.max_vifs=1; /* interface added */
+    assert(aic8800_wifi_scan(&s->wifi,t,++scan_now,UINT64_MAX/2));
+    aic8800_wifi_step(&s->wifi,t,++scan_now);assert(s->wifi.state==AIC8800_WIFI_REQUEST);
+    assert(aic8800_wifi_sent(&s->wifi,t)&&s->wifi.state==AIC8800_WIFI_WAITING&&s->wifi.expected_cfm==0x1009);
+    assert(aic8800_dispatch_init(&s->dispatcher,t));
+}
+/* One SCANU_RESULT_IND aggregate: a 16-byte control header, the 12-byte indication head and a beacon with 36 bytes
+ * of header and fixed fields, an SSID element, any vendor element, then any RSN element. */
+static size_t scan_record(uint8_t *p,uint16_t frequency,uint8_t band,int8_t rssi,const uint8_t bssid[6],
+    const uint8_t *ssid,size_t ssid_bytes)
+{
+    uint8_t frame[160]={0x80,0};memset(frame+4,0xff,6);memcpy(frame+10,bssid,6);memcpy(frame+16,bssid,6);
+    frame[32]=100;frame[34]=0x11; /* beacon interval 100 TU, ESS and privacy */
+    size_t at=36;frame[at]=0;frame[at+1]=(uint8_t)ssid_bytes;memcpy(frame+at+2,ssid,ssid_bytes);at+=2+ssid_bytes;
+    if(test_vendor){memcpy(frame+at,test_vendor,test_vendor_bytes);at+=test_vendor_bytes;}
+    if(test_rsn){memcpy(frame+at,test_rsn,test_rsn_bytes);at+=test_rsn_bytes;}
+    assert(at<=sizeof(frame));
+    size_t parameters=12+at,length=12+parameters,total=4+((length+3)&~(size_t)3);
+    memset(p,0,total+4); /* a zero length word ends the aggregate */
+    p[0]=(uint8_t)length;p[1]=(uint8_t)(length>>8);p[2]=0x91;p[4]=0x04;p[5]=0x10;
+    p[10]=(uint8_t)parameters;p[11]=(uint8_t)(parameters>>8);
+    uint8_t *q=p+16;q[0]=(uint8_t)at;q[1]=(uint8_t)(at>>8);q[2]=0x80;q[4]=(uint8_t)frequency;q[5]=(uint8_t)(frequency>>8);
+    q[6]=band;q[7]=0xff;q[8]=0;q[9]=(uint8_t)rssi;memcpy(q+12,frame,at);
+    return total;
+}
 int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_dispatch_event *e)
 {
     assert(s==&app.session&&e==&app.startup_event);
     if(!staged)return 1;
     if(!scan_events_left)return 0;
+    if(s->dispatcher.transport!=&s->transport)scan_receive_start(s);
     unsigned n=scan_events_left--; /* 3, 2, 1: the third sighting repeats the first access point. */
-    memset(e,0,sizeof(*e));e->kind=AIC8800_DISPATCH_SCAN;
-    e->metadata.scan.frequency=n==2?5180:2437;e->metadata.scan.rssi_dbm=(int8_t)(-40-(int)n);
-    e->metadata.scan.has_ssid=1;
-    if(app.config.associate&&n!=2){e->metadata.scan.ssid_bytes=sizeof(cred_ssid);memcpy(e->metadata.scan.ssid,cred_ssid,sizeof(cred_ssid));}
-    else{e->metadata.scan.ssid_bytes=3;memcpy(e->metadata.scan.ssid,n==2?"b-5":"a-2",3);}
-    memcpy(e->metadata.scan.bssid,n==2?"\x02\x00\x00\x00\x00\x02":"\x02\x00\x00\x00\x00\x01",6);
-    if(app.config.associate){
-        /* A beacon: 36 bytes of header and fixed fields, an SSID element, any vendor element, then the RSN element. */
-        static uint8_t frame[160];
-        memset(frame,0,sizeof(frame));frame[36]=0;frame[37]=(uint8_t)e->metadata.scan.ssid_bytes;memcpy(frame+38,e->metadata.scan.ssid,e->metadata.scan.ssid_bytes);
-        size_t at=38+e->metadata.scan.ssid_bytes;
-        if(test_vendor){memcpy(frame+at,test_vendor,test_vendor_bytes);at+=test_vendor_bytes;}
-        if(test_rsn){memcpy(frame+at,test_rsn,test_rsn_bytes);at+=test_rsn_bytes;}
-        assert(at<=sizeof(frame));
-        e->metadata.scan.frame=frame;e->metadata.scan.frame_bytes=(uint16_t)at;
-    }
+    static const uint8_t other_2[3]={'a','-','2'},other_5[3]={'b','-','5'};
+    const uint8_t *ssid=n==2?other_5:other_2;size_t ssid_bytes=3;
+    if(app.config.associate&&n!=2){ssid=cred_ssid;ssid_bytes=sizeof(cred_ssid);}
+    struct aic8800_sdio_transport *t=&s->transport;
+    t->rx_bytes=scan_record(t->rx,n==2?5180:2437,n==2?1:0,(int8_t)(-40-(int)n),
+        (const uint8_t *)(n==2?"\x02\x00\x00\x00\x00\x02":"\x02\x00\x00\x00\x00\x01"),ssid,ssid_bytes);
+    t->cursor=0;
+    aic8800_dispatch_poll(&s->dispatcher);
+    assert(t->state==AIC8800_TRANSPORT_RUNTIME&&!s->dispatcher.faulted&&s->dispatcher.event_count==1&&!t->held);
+    assert(aic8800_dispatch_take_event(&s->dispatcher,e));
+    /* As aic8800_dispatch.c builds it: no frame pointer, the frame in the payload. */
+    assert(e->kind==AIC8800_DISPATCH_SCAN&&!e->metadata.scan.frame&&e->bytes==e->metadata.scan.frame_bytes&&
+        e->metadata.scan.has_ssid&&e->metadata.scan.ssid_bytes==ssid_bytes&&!memcmp(e->metadata.scan.ssid,ssid,ssid_bytes));
+    last_event=e;
     return 1;
 }
 /* A bump arena: the freestanding image headers used by sibling checks provide no malloc. */
@@ -405,6 +477,9 @@ int main(void)
         assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SCANNING&&entropy_begins==begins+1);
         scan_events_left=3;
         assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.assoc.candidates==2&&app.cand_found&&app.cand_frequency==2437);
+        /* The candidate's RSN element came from the event's payload: the dispatcher's event carries no frame pointer. */
+        assert(last_event&&!last_event->metadata.scan.frame&&app.cand_rsn_bytes==sizeof(rsn_psk_ccmp)&&
+            !memcmp(app.cand_rsn,rsn_psk_ccmp,sizeof(rsn_psk_ccmp)));
         scan_finished=1;
         assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==STARTING&&app.assoc.stage==1);
         assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==STARTING&&connects==conns&&entropy_begins==begins+1);
@@ -452,14 +527,14 @@ int main(void)
             static const uint8_t transition_required[]={48,24,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,4,2,0,0x00,0x0f,0xac,2,0x00,0x0f,0xac,8,0xc0,0};
             static const uint8_t sae_only[]={48,20,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,8,0x80,0};
             static const uint8_t sae_required[]={48,20,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,8,0xc0,0};
-            static const uint8_t short_count[]={48,10,1,0,0x00,0x0f,0xac,4,2,0,0x00,0x0f,0xac,4};
+            static const uint8_t short_count[]={48,12,1,0,0x00,0x0f,0xac,4,2,0,0x00,0x0f,0xac,4};
             const struct {const uint8_t *rsn;size_t bytes;const uint8_t *vendor;int parse;unsigned check,group,pairwise,akm,caps;} cases[]={
                 {mixed,sizeof(mixed),wpa1,-1,A733_RADIO_RSN_GROUP_NOT_CCMP,2,1u<<4|1u<<2,1u<<2,0},  /* WPA/WPA2 mixed: group TKIP */
                 {tkip_pairwise,sizeof(tkip_pairwise),NULL,0,A733_RADIO_RSN_PAIRWISE_NO_CCMP,4,1u<<2,1u<<2,0},
                 {transition_required,sizeof(transition_required),NULL,0,A733_RADIO_RSN_MFP_REQUIRED,4,1u<<4,1u<<2|1u<<8,0xc0},
                 {sae_required,sizeof(sae_required),NULL,0,A733_RADIO_RSN_MFP_REQUIRED,4,1u<<4,1u<<8,0xc0},
                 {sae_only,sizeof(sae_only),NULL,0,A733_RADIO_RSN_NO_PSK,4,1u<<4,1u<<8,0x80},
-                {short_count,sizeof(short_count),NULL,-2,A733_RADIO_RSN_MALFORMED,4,0,0,0},
+                {short_count,sizeof(short_count),NULL,-4,A733_RADIO_RSN_MALFORMED,4,0,0,0},
                 {rsn_psk_ccmp,sizeof(rsn_psk_ccmp),NULL,-10,A733_RADIO_RSN_OTHER,4,1u<<4,1u<<2,0}, /* the parser refuses */
                 {NULL,0,NULL,0,A733_RADIO_RSN_NO_ELEMENT,A733_RADIO_RSN_SUITE_ABSENT,0,0,0},
             };
