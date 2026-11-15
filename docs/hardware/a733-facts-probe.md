@@ -41,18 +41,21 @@ therefore names its view. Facts read on the virtual board (`checks/qemu-os-boot.
 
 `apps/hw-facts` is an OS application of the returning lifetime. The OS configuration is
 `SUNSTONE_A733_CPU_TOPOLOGY` and `SUNSTONE_A733_HW_FACTS`, with `SUNSTONE_APPLICATION=hw-facts`. Every core calls `hwf_capture`
-(`platform/a733/hw_facts.c`) from `ss_cpu_observe_boot`, at EL1, before the scheduler starts. The application waits for all eight cores, then returns the 9792-byte table with
+(`platform/a733/hw_facts.c`) from `ss_cpu_observe_boot`, at EL1, before the scheduler starts. The application waits for all eight cores, then returns the 9,504-byte table with
 `ss_finish`. The returned table has this layout (`include/a733_hw_facts.h`, little-endian).
 
 | Offset | Content |
 | --- | --- |
 | 0 | 64-byte header: magic `A733HWF1`, version, size, platform, core count, slot counts and offsets, mask of finished cores. |
-| 64 | 96 shared slots of 16 bytes, written by core 0. |
-| 1600 | Eight blocks of 64 core slots, one block per core. |
+| 64 | 158 shared slots of 16 bytes, written by core 0. |
+| 2592 | Eight blocks of 54 core slots, one block per core. |
 
 A slot holds the fact identifier (16 bits), the core, flags (read, skipped, anomaly), an auxiliary 32-bit
 value and a 64-bit value. The slot order comes from `tools/hw_facts.py`, which writes
-`include/a733_hw_facts_table.inc`; `checks/hw-facts.py` compares the two.
+`include/a733_hw_facts_table.inc`; `checks/hw-facts.py` compares the two. The slot counts are not constants: the
+decoder takes them from the catalogue, `include/a733_hw_facts.h` counts the entries of the generated slot table, and
+the check compiles the header and compares its counts and size with the decoder's. A catalogue change therefore resizes
+the table on both sides; only the manifest's `output_limit` is written by hand, and the check compares it with the size.
 
 ### What the probe measures
 
@@ -65,10 +68,13 @@ value and a 64-bit value. The slot order comes from `tools/hw_facts.py`, which w
 | Core 0, SPIs | For INTID 56 to 61, 67, 69, 70, 71, 80, 81, 95, 97, 143, 149, 153, 161, 185, 187, 200, 201, 228 and 242: priority, group, group modifier, enable, pending, active, configuration and route, with the route the image requested, so that the configured Secure value and the Non-secure read-back sit side by side. |
 | Core 0, PPI writes | The priority byte of PPI 27 and PPI 30 read back after writing the value the platform writes next. |
 | Core 0, device words | The NPU admission words `0x070101ac`, `0x020025c0`, `0x020025e0`, `0x07064000`, `0x07064008`. The two PPU words are read only after the three gates are open, as the runner requires; otherwise the slot is marked skipped. |
+| Core 0, CPU memory path | In this order: the CCU's DRAM0 clock `0x02002c00`, its bus gate and reset `0x02002c0c`, PLL_DDR `0x02002020` and its pattern words `0x02002028` and `0x0200202c`; the CPU path select `CPU_DA_DDR_CTRL_REG` `0x08000200`; the two AXI2HIF bridges at `0x0a030000` and `0x0a040000`, offsets `+0x00` to `+0x6c` of each, then their counters `+0x80` to `+0x94`. The bridge words are read only when the DRAM0 clock (bit 31), its bus gate (bit 0) and reset (bit 16) are open and the path select is nonzero, the test the vendor NSI driver makes; otherwise their slots are marked skipped. The virtual board skips the group. [Concurrent accelerators](../designs/concurrent-accel.md#the-axi2hif-limiter-in-the-vendor-driver) explains what the words mean. |
 
 ### What the probe writes
 
-The probe changes no clock, voltage, reset or power domain and runs at the boot operating point. It reads
+The probe changes no clock, voltage, reset or power domain. A returning session must carry the CPU clock grant
+(`os_session_valid`, `apps/os/admission.c`), so the manifest declares `cpu.clock_grants` and the session is built with
+`tools/session.py build --clock-grant`; the OS may then run the clusters at the approved points. The probe reads
 registers and makes these writes, each of a value that every image writes in the same boot, and each restored.
 
 | Register | Value | Why it is allowed |

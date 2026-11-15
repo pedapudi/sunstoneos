@@ -56,9 +56,6 @@ static int decoder_init(struct a733_video_decoder *p,const struct a733_video_pla
     (void)a733_video_unit_native_map();
     return 1;
 }
-int a733_video_decoder_init(struct a733_video_decoder *p,const struct a733_video_platform_config *c,
-    const struct a733_video_unit_ops *o,void *cookie)
-{return p&&o&&decoder_init(p,c,o,cookie,0,0,0);}
 /* NS_BROM at0x17000, published sun60iw2p1 revision. These instruction
  * observations bind the literal to the FEL identity constructor. Never execute
  * ROM code or accept caller-provided bytes as native identity evidence. */
@@ -264,14 +261,24 @@ int a733_video_decoder_open(struct a733_video_decoder *p,uint64_t d)
 {
     if(!p)return A733_VIDEO_OPEN_REFUSED;
     struct a733_video_unit *u=&p->unit;
-    if(p->admit||!u->initialized||u->failed||p->quiesced||!d||(u->deadline&&u->deadline!=d))return A733_VIDEO_OPEN_REFUSED;
+    if(!u->initialized||u->failed||p->quiesced||!d||(u->deadline&&u->deadline!=d))return A733_VIDEO_OPEN_REFUSED;
     u->deadline=d;
     int r=timely(u)?1:fail(u);
+    /* A codec binding's decoder is admitted before its start, with no job, as its acquire would admit it. A refused or
+     * pending admission has written nothing. */
+    if(r==1&&p->admit&&!p->admitted) {
+        const uint64_t previous=u->token;
+        r=p->admit(p->context,&p->config,0,d,&u->token);
+        if(!u->token||(previous&&previous!=u->token)||(r!=0&&r!=1)||!timely(u))r=fail(u);
+        else if(r==1)p->admitted=1;
+    }
     if(r==1&&!p->checked&&(r=start(p))==1)p->checked=1;
     if(r==1&&!p->version) {
         /* The identity block, readable once the decoder is started. */
         if((r=lock(u))==1)r=a733_video_unit_identity(u,&p->version)?unlock(u):a733_video_unit_refuse_held(u);
     }
+    /* An open that ends drops its deadline: the codec run that follows passes its own. */
+    if(r==1)u->deadline=0;
     if(r>=0)return r;
     return written(p)?A733_VIDEO_OPEN_FAULT:refused(p);
 }
