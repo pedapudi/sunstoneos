@@ -445,14 +445,14 @@ fixture. PCK domain 2 exists only in the owner model. The cases cover:
 - the vendor point from the FEL words and fifteen other PLL entry and lock
   states, and the CCU words a hold-B fault left (module gate and bus gate open,
   reset released), refused at entry with no write;
-- domain 2 left ON (adopted with no PCK write), policy and status disagreeing
-  (refused by the owner with no decoder write), reset released at entry
-  (refused with no request), either master gate clear after ON (refused at A1
+- reset released at entry (refused with no request), either master gate clear after ON (refused at A1
   after the `0x5e4` open), `0x5e4` key bits that read zero, and `0x5e4` already
   open;
 - two lifetimes: the first from 0/0 ends in the quiesce, and the second starts
   from its words, once with the CCU as the quiesce left it and once at the FEL
-  words. Domain 2 stays 8/8 and is adopted;
+  words. Domain 2 stays 8/8 and is adopted. The owner's own domain-2 cases,
+  adoption and policy and status disagreeing among them, are
+  checks/power-domains-owner.py's;
 - the VCU pulse when its bits read zero and when they stay set; both start, and
   an exact readback (the stage-1 board image's code) fails the first;
 - faults after the first write and the fault close: INTID 81 pending once the

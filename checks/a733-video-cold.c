@@ -490,7 +490,7 @@ int main(int argc,char **argv)
             /* ON from 0/0 by the owner (delay row and one command), then one
              * open of 0x5e4, reset, bus gate, module gate and the VCU pulse. */
             assert(o.result==1&&vm->drain==2&&vm->trigger&&!vm->lock&&c.cold_pulse==2);
-            assert(o.owner_ppu_writes==6&&o.owner_commands==1&&o.decoder_pck_reads==2);
+            assert(o.owner_commands==1&&o.decoder_pck_reads==2);
             assert(vm->events[0].address==CCU+0x5e4&&vm->events[0].value==0x40306);
             assert(vm->events[1].address==CCU+0xa8c&&vm->events[1].value==0x40000);
             assert(vm->events[2].address==CCU+0xa8c&&vm->events[2].value==0x40004);
@@ -569,12 +569,10 @@ int main(int argc,char **argv)
             vendor_cases[row].name,o.result,o.writes,c.pll_writes,c.pll_reads,vm->ccu[0x220/4],vm->ccu[0xa88/4],
             o.rec.lock_reads);
     }
-    /* Domain-2 and gate cases at the vendor point from the FEL words. */
+    /* The decoder's gate and entry cases at the vendor point from the FEL words. The owner's own domain-2 cases
+     * (adoption, a transition in progress) are checks/power-domains-owner.py's. */
     static const struct {uint32_t policy,status;void (*edit)(struct model *);unsigned key_zero;int ok;const char *name;}
     domain_cases[]={
-        {8,8,0,0,1,"domain left ON (FEL gates, AHB gate open): adopted, no PCK write"},
-        {8,0,0,0,0,"power-on in progress: refused by the owner, no decoder write"},
-        {0,8,0,0,0,"power-off in progress: refused by the owner, no decoder write"},
         {8,8,reset_released,0,0,"ON with reset released: entry refused, no request"},
         {8,8,mbus_clear,0,0,"MBUS master gate clear after ON: refused at A1 after the 0x5e4 open"},
         {0,0,ahb_clear,0,0,"AHB gate clear after ON: refused at A1 after the 0x5e4 open"},
@@ -587,17 +585,14 @@ int main(int argc,char **argv)
         const struct outcome o=lifetime(&c,&l,0,0,0);
         if(domain_cases[k].ok) {
             assert(o.result==1&&vm->trigger&&c.cold_pulse==2&&o.row==A733_POWER_ROW_ON);
-            if(domain_cases[k].policy==8)assert(!o.owner_ppu_writes&&!o.owner_commands);
             if(domain_cases[k].key_zero)assert(o.rec.mclk_written==0x40306&&o.rec.mclk_readback==0x40004);
             if(domain_cases[k].edit==mclk_open)assert(vm->events[0].address!=CCU+0x5e4&&!o.rec.mclk_written);
         }else {
             assert(o.result==-1&&!vm->trigger&&!vm->vereads&&!vm->lock);
-            if(k==1||k==2)assert(!vm->writes&&o.row==A733_POWER_ROW_REFUSED&&!o.owner_ppu_writes);
-            if(k==3)assert(!vm->writes&&o.row==A733_POWER_ROW_IDLE);
-            if(k==4||k==5)assert(vm->writes==1&&vm->events[0].address==CCU+0x5e4&&!(vm->ccu[0xa8c/4]&(1u<<18)));
+            if(domain_cases[k].edit==reset_released)assert(!vm->writes&&o.row==A733_POWER_ROW_IDLE);
+            else assert(vm->writes==1&&vm->events[0].address==CCU+0x5e4&&!(vm->ccu[0xa8c/4]&(1u<<18)));
         }
-        printf("domain%u %s: result%d writes%u owner_ppu_writes%u\n",k,domain_cases[k].name,o.result,o.writes,
-            o.owner_ppu_writes);
+        printf("domain%u %s: result%d writes%u\n",k,domain_cases[k].name,o.result,o.writes);
     }
     /* The VCU pulse as the vendor writes it, with no readback check, under
      * two readbacks no source documents: the pulse bits read zero, or stay
