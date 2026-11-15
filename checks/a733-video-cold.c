@@ -279,7 +279,7 @@ struct lifetime {
     void (*edit)(struct model *);
     unsigned service; /* the OS service's open (apps/os/video_decode.c) instead of the JPEG job */
     unsigned vcu,irq_pending,stuck; /* struct cold_model */
-    unsigned fault_close; /* after a refused start, the service's fault close (a733_video_decoder_fault_close) */
+    unsigned fault_close; /* after a refused start, the service's fault close (a733_video_decoder_close, faulted) */
 };
 struct outcome {
     int result;unsigned writes,owner_ppu_writes,owner_commands,decoder_pck_reads,polls_after_on;
@@ -306,19 +306,22 @@ static void fel_words(struct cold_model *c,const struct lifetime *l)
 /* One power lifetime: a fresh owner and decoder. ccu_in, when given,
  * replaces the CCU words (a later lifetime); ppu_in the domain-2 nibbles.
  * Runs the JPEG job and, when it completes and quiesce is set, the quiesce. */
-/* The OS service's open (apps/os/video_decode.c, do_open): acquire with an empty job until started, the three
- * identity words through the codec read call, then prepare's identity admission, which returns 0 with the version
- * set and the register lock released. One deadline for every call. */
+/* The OS service's open (apps/os/video_decode.c, do_open): the decoder's own open, called until it ends, on a
+ * decoder with no codec binding. Open, it has read the identity block and released the register lock. One deadline
+ * for every call. */
 static const struct a733_video_jpeg_job no_job;
-static int service_open(struct a733_video_platform *p,uint64_t d)
+static int service_open(struct a733_video_decoder *p,uint64_t d)
 {
-    const struct a733_video_jpeg_ops *o=a733_video_platform_jpeg_ops();uint64_t t=0;uint32_t w[3];
-    const int r=o->acquire(p,&no_job,d,&t);
-    if(r!=1)return r;
-    assert(o->read(p,t,0xf0,&w[0],d)==1&&o->read(p,t,0xe0,&w[1],d)==1&&o->read(p,t,0xe4,&w[2],d)==1);
-    assert(((uint64_t)(w[1]&0xfffff)<<32|(w[2]&0xfffff))==version);
-    assert(o->prepare(p,t,&no_job,NULL,0,0,d)==0&&p->decoder.version==version&&!p->decoder.unit.locked);
-    return 1;
+    const int r=a733_video_decoder_open(p,d);
+    if(r==1)assert(p->version==version&&!p->unit.locked&&
+        ((uint64_t)(p->unit.identity[1]&0xfffff)<<32|(p->unit.identity[2]&0xfffff))==version);
+    return r;
+}
+/* A closed decoder's next open or acquire: refused. */
+static int reopen(struct a733_video_platform *p,struct a733_video_decoder *dec,uint64_t d)
+{
+    uint64_t t=0;
+    return dec==&p->decoder?a733_video_platform_jpeg_ops()->acquire(p,&no_job,d,&t):a733_video_decoder_open(dec,d);
 }
 static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,const uint32_t *ccu_in,
     const uint32_t *ppu_in,unsigned quiesce)
@@ -365,13 +368,18 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
         bad.row=0;assert(!a733_video_platform_init(&q,&bad,&ops,c));
     }
     struct a733_video_platform p={0};assert(a733_video_platform_init(&p,&config,&ops,c));
+    /* The service's decoder has no codec binding: the unit's operations alone. */
+    static struct a733_video_decoder service;service=(struct a733_video_decoder){0};
+    const struct a733_video_unit_ops unit_ops={cold_now,cold_enter,cold_leave,cold_read,cold_codec_write,cold_now};
+    if(l->service)assert(a733_video_decoder_init(&service,&config,&unit_ops,c));
+    struct a733_video_decoder *const dec=l->service?&service:&p.decoder;
     struct a733_video_jpeg_job job={jpeg_bytes,jpeg_n,0x81000000,65536,0x82000000,2048,0x83000000,1024};
     struct a733_video_jpeg_run run={0};assert(a733_video_jpeg_begin(&run,a733_video_platform_jpeg_ops(),&p,&job,100000));
     const unsigned ppu_writes=d.ppu_writes;
     int result=0;unsigned polls=0,on_poll=0,checked_poll=0;
     while(!result&&++polls<20000) {
-        result=l->service?service_open(&p,run.deadline):a733_video_jpeg_poll(&run);
-        if(!checked_poll&&p.decoder.checked)checked_poll=polls;
+        result=l->service?service_open(dec,run.deadline):a733_video_jpeg_poll(&run);
+        if(!checked_poll&&dec->checked)checked_poll=polls;
         /* The service answers the row; the decoder's owner task blocks on
          * the row's wake meanwhile. */
         if(!result&&a733_power_domain_state(&c->row)==A733_POWER_ROW_PENDING) {
@@ -384,32 +392,30 @@ static struct outcome lifetime(struct cold_model *c,const struct lifetime *l,con
     struct outcome o={.result=result,.writes=m->writes,.owner_ppu_writes=d.ppu_writes-ppu_writes,
         .owner_commands=d.owner.transition[3].commands,.decoder_pck_reads=c->pck_reads,
         .polls_after_on=checked_poll&&on_poll?checked_poll-on_poll:0,.row=a733_power_domain_state(&c->row),
-        .rec=p.decoder.cold};
+        .rec=dec->cold};
     /* The decoder's row is answered ON before its first write. Adopted ON,
      * the first poll's request is answered at once. */
     if(checked_poll&&on_poll)assert(o.polls_after_on==1);
-    if(result==-1&&l->fault_close) {
-        o.last_address=(uint32_t)p.decoder.unit.last_address;o.last_word=p.decoder.unit.last_word;
-        o.uncertain=p.decoder.unit.uncertain;
+    if(result<0&&l->fault_close) {
+        o.last_address=(uint32_t)dec->unit.last_address;o.last_word=dec->unit.last_word;
+        o.uncertain=dec->unit.uncertain;
         const unsigned accesses=m->reads+m->writes;c->quiesced=1;c->stopping=1;c->pll_seq=0;
-        o.closed=a733_video_decoder_fault_close(&p.decoder,run.deadline+200000);
+        o.closed=a733_video_decoder_close(dec,run.deadline+200000,1);
         o.close_accesses=m->reads+m->writes-accesses;
         if(o.closed==1) {
             /* Closed for the rest of the power lifetime: a later open is refused with no access. */
-            const unsigned after=m->reads+m->writes;uint64_t t=0;
-            assert(a733_video_platform_jpeg_ops()->acquire(&p,&no_job,run.deadline+200000,&t)==-1&&
-                m->reads+m->writes==after&&!m->lock&&p.decoder.quiesced);
+            const unsigned after=m->reads+m->writes;
+            assert(reopen(&p,dec,run.deadline+200000)==-1&&m->reads+m->writes==after&&!m->lock&&dec->quiesced);
         }
     }
     if(result==1&&quiesce) {
         const unsigned before=m->writes;c->quiesced=1;c->stopping=1;c->pll_seq=0;
-        assert(a733_video_decoder_quiesce(&p.decoder,run.deadline+200000)==1);
+        assert(a733_video_decoder_close(dec,run.deadline+200000,0)==1);
         assert(!m->lock&&m->writes>before);
         /* Closed for the rest of the power lifetime: a later open is refused with no access. */
         {
-            const unsigned accesses=m->reads+m->writes;uint64_t t=0;
-            assert(a733_video_platform_jpeg_ops()->acquire(&p,&no_job,run.deadline+200000,&t)==-1&&
-                m->reads+m->writes==accesses&&!p.decoder.unit.failed&&!m->lock);
+            const unsigned accesses=m->reads+m->writes;
+            assert(reopen(&p,dec,run.deadline+200000)==-1&&m->reads+m->writes==accesses&&!dec->unit.failed&&!m->lock);
         }
         /* The quiesce leaves the entry state and domain 2 ON. */
         assert(!(m->ccu[0xa88/4]&0x80000000)&&!(m->ccu[0xa8c/4]&0x40004)&&domain_on());

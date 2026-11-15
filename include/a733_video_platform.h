@@ -111,26 +111,30 @@ struct a733_video_platform {
     struct a733_video_platform_ops ops;
     void *cookie;
 };
-/* Quiesce after a cold start, under one register-lock hold, in the vendor's
- * order (cedar_ve.c disable_cedar_hw_clk_module and disable_cedar_hw_clk_reset,
- * ccu_gate.c ccu_pll_gate_helper_disable): module gate off, bus gate off,
- * reset asserted, then PLL_VE0's output gate, lock enable, enable and LDO
- * cleared. Every write is a read-modify-write with readback. Domain 2 stays
- * ON and the critical gates stay as they are. The caller ensures no job is
- * outstanding. d is a new deadline for this call. 1 done, 0 effect-free busy
- * lock, -1 refused or uncertain (a failed unit is never touched). A quiesced
- * decoder is closed for the rest of its power lifetime: every later acquire
- * returns -1 with no register access. */
-int a733_video_decoder_quiesce(struct a733_video_decoder *,uint64_t d);
-/* After a fault in a cold start or a later call: the same close, in the same
- * order with each write read back, on a unit that failed on a value it read
- * completely or on a deadline. A unit whose failure was uncertain (an access
- * or mutex operation with an unknown effect) is never touched: -1 with no
- * access. A late failure inside a hold closes in that hold; otherwise the
- * mutex is taken first. d is a new deadline. 1 closed (the decoder stays
- * closed for the power lifetime and failed), 0 effect-free busy lock (call
- * again), -1 refused: a close step whose readback differs fails the unit. */
-int a733_video_decoder_fault_close(struct a733_video_decoder *,uint64_t d);
+/* A decoder with no codec binding, for a service that only opens and closes it (apps/os/video_decode.c): the
+ * configuration rules of a733_video_platform_init, the unit's operations, no job callbacks. 1 initialized. */
+int a733_video_decoder_init(struct a733_video_decoder *,const struct a733_video_platform_config *,
+    const struct a733_video_unit_ops *,void *cookie);
+/* Open such a decoder: the start (the cold start, or the inherited baseline), then the identity block read under one
+ * hold, which sets version. d is the deadline of every call until the open ends. 1 open; 0 pending: the row has not
+ * answered or the register lock was busy, so call again after the row's wake or a short block;
+ * A733_VIDEO_OPEN_REFUSED: refused with no register written and the register lock free, so the decoder is as it was
+ * and needs no close; A733_VIDEO_OPEN_FAULT: failed after the first write, so a733_video_decoder_close(..., 1) must
+ * close it. */
+enum { A733_VIDEO_OPEN_REFUSED = -1, A733_VIDEO_OPEN_FAULT = -2 };
+int a733_video_decoder_open(struct a733_video_decoder *,uint64_t d);
+/* The close of a started decoder (faulted 0) or of one that failed (faulted 1), under one register-lock hold, in the
+ * vendor's order (cedar_ve.c disable_cedar_hw_clk_module and disable_cedar_hw_clk_reset, ccu_gate.c
+ * ccu_pll_gate_helper_disable): module gate off, bus gate off, reset asserted, then PLL_VE0's output gate, lock
+ * enable, enable and LDO cleared. Every write is a read-modify-write with readback. Domain 2 stays ON and the critical
+ * gates stay as they are. The caller ensures no job is outstanding. d is a new deadline for this call.
+ * faulted 0 refuses a failed unit or a held lock with no access. faulted 1 closes a unit that failed on a value it
+ * read completely or on a deadline; one whose failure was uncertain (an access or mutex operation with an unknown
+ * effect) is never touched, and a late failure inside a hold closes in that hold. 1 closed: the decoder is closed for
+ * the rest of its power lifetime, every later acquire or open returns -1 with no register access, and after a fault
+ * the unit stays failed; 0 effect-free busy lock, call again; -1 refused: a close step whose readback differs fails
+ * the unit. */
+int a733_video_decoder_close(struct a733_video_decoder *,uint64_t d,unsigned faulted);
 /* Pure scope derivation; requires the exclusive scopes below and the exact
  * shared result.
  * Preparation never releases, powers down, or claims physical qualification.

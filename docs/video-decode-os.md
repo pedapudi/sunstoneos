@@ -27,7 +27,7 @@ The open adds checks that the vendor driver does not make, each read before the 
 The service follows the rule in [the failure-return audit](designs/failure-return-audit.md#a-faulted-device-service-closes-before-it-reports): a faulted device service closes before it reports.
 
 1. A failure after the first write puts the service in FAULT. The open returns -1, and `ss_video_decode_fault` gives the step and value. The service keeps its tokens and gates and starts nothing new.
-2. The application's close, or the session quiesce if it comes first, runs the close once. This is the binding's `a733_video_decoder_fault_close`, in the vendor order of the table above, with each write read back. The close writes only CCU words, so it touches no decoder register whatever state the fault left. Steps that find their gate or PLL field already closed rewrite it unchanged.
+2. The application's close, or the session quiesce if it comes first, runs the close once. This is the binding's `a733_video_decoder_close` with `faulted` set, in the vendor order of the table above, with each write read back. The close writes only CCU words, so it touches no decoder register whatever state the fault left. Steps that find their gate or PLL field already closed rewrite it unchanged.
 3. When every step reads back, the service is CLOSED and stays closed for the power lifetime. The close answers -1, the fault stays in `ss_video_decode_fault`, and the quiesce reports DONE. The session therefore ends with a normal return and its result record.
 4. Two cases make the service stay FAULT, and the quiesce then reports fault site `0x941`, with the failing step in bits 31:24 and its value in bits 23:0:
    - a close step whose readback differs;

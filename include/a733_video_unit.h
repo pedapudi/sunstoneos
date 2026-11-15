@@ -79,6 +79,7 @@ struct a733_video_unit {
     unsigned uncertain,late;
     uintptr_t last_address;
     uint32_t last_word;
+    uint32_t identity[3]; /* the identity block's +0xf0, +0xe0 and +0xe4 words as last read */
     /* PLL programming: the entry state, bit 24 as read, progress, and the
      * lock wait's PLL reads. */
     uint32_t pll_inherited;
@@ -159,7 +160,8 @@ int a733_video_unit_baseline(struct a733_video_unit *);
 /* GIC distributor idle, interrupt masked, not pending or active, level. */
 int a733_video_unit_irq_quiet(struct a733_video_unit *);
 /* Read the identity block; returns 1 for an accepted feature word and listed
- * compound version, which is stored through the pointer in either case. */
+ * compound version, which is stored through the pointer in either case. The
+ * words read are kept in identity. */
 int a733_video_unit_identity(struct a733_video_unit *,uint64_t *);
 /* Lowest native access for one allowlisted physical address: identity-mapped
  * Device-nGnRnE translation, DSB SY before and after, volatile access. A

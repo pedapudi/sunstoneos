@@ -348,9 +348,10 @@ int a733_video_unit_baseline(struct a733_video_unit *u)
 }
 int a733_video_unit_identity(struct a733_video_unit *u,uint64_t *version)
 {
-    const struct a733_video_unit_desc *d=u->desc;uintptr_t base=d->ve+d->identity;uint32_t f,h,l;
-    if(a733_video_unit_read(u,base+0xf0,&f)!=1||(f!=d->feature[0]&&f!=d->feature[1])||
-       a733_video_unit_read(u,base+0xe0,&h)!=1||a733_video_unit_read(u,base+0xe4,&l)!=1)return 0;
+    const struct a733_video_unit_desc *d=u->desc;uintptr_t base=d->ve+d->identity;uint32_t *w=u->identity;
+    if(a733_video_unit_read(u,base+0xf0,&w[0])!=1||(w[0]!=d->feature[0]&&w[0]!=d->feature[1])||
+       a733_video_unit_read(u,base+0xe0,&w[1])!=1||a733_video_unit_read(u,base+0xe4,&w[2])!=1)return 0;
+    const uint32_t h=w[1],l=w[2];
     *version=((uint64_t)(h&0xfffff)<<32)|(l&0xfffff);
     for(unsigned i=0;i<d->version_count;++i)if(*version==d->versions[i])return 1;
     return 0;

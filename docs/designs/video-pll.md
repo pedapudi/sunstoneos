@@ -115,7 +115,7 @@ the decoder programs a PLL, so the code names PLL_VE0 and nothing else.
 - **Faults.** A refused step, a missing LOCK or a deadline fails the unit and
   retains every token. PLL_VE0 then stays enabled with its output closed and
   the module gate stays closed; the next start admits that state.
-- **Quiesce** (`a733_video_decoder_quiesce`), with the module gate already
+- **Quiesce** (`a733_video_decoder_close`), with the module gate already
   closed in the same hold: output gate, lock enable, enable, then LDO
   cleared, as `ccu_pll_gate_helper_disable` (`ccu_gate.c` lines 40-69) does.
   The word ends at `0x01204d00` with the board's bit 24, a disabled entry

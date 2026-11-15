@@ -370,7 +370,7 @@ unchanged, and the binding records the written and read words. A word that
 already holds the whole key is not written. This is the binding's only gate
 write; it never writes `0x5c0` or `0x5e0`.
 
-**Quiesce.** `a733_video_decoder_quiesce` runs under one lock hold, in the
+**Quiesce.** `a733_video_decoder_close(p, d, 0)` runs under one lock hold, in the
 vendor's order (`cedar_ve.c` `disable_cedar_hw_clk_module` and
 `disable_cedar_hw_clk_reset`, `ccu_gate.c` `ccu_pll_gate_helper_disable`):
 module gate off, bus gate off, reset asserted, then PLL_VE0's output gate,
@@ -396,7 +396,7 @@ records why it failed: `uncertain` for an access or lock operation that did not
 return exactly 1, `late` for a deadline found passed. It also keeps the address
 and word of its latest access.
 
-**Fault close.** `a733_video_decoder_fault_close` runs the quiesce's close
+**Fault close.** `a733_video_decoder_close(p, d, 1)` runs the quiesce's close
 steps, in the same order with each write read back, on a unit that failed on a
 value or a deadline. A late failure inside a hold closes in that hold;
 otherwise the close takes the lock first. A unit whose failure was uncertain is

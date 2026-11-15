@@ -1,9 +1,9 @@
 /* Video decoder service (SS_DEVICE_VIDEO_DECODE, include/sunstone_video_decode.h, docs/video-decode-os.md). One owner
  * task, priority 3 pinned to CPU 4, does every register access through the decoder platform binding
- * (drivers/video/a733_video_platform.c). Open requests PCK600 domain 2 through the shared power-domain owner, then the
- * binding's cold start opens the decoder's MBUS clock gate, releases reset, opens the bus gate, programs PLL_VE0 to
- * 624 MHz and opens the module gate; open then reads the decoder identity. Close is the binding's quiesce: module gate,
- * bus gate, reset, then PLL_VE0 disabled; domain 2 stays ON. Stage 1 runs no job, so INTID 81 stays disabled and its
+ * (drivers/video/a733_video_platform.c). Open is the binding's a733_video_decoder_open: it requests PCK600 domain 2
+ * through the shared power-domain owner, and its cold start opens the decoder's MBUS clock gate, releases reset, opens
+ * the bus gate, programs PLL_VE0 to 624 MHz and opens the module gate; it then reads the decoder identity. Close is the
+ * binding's a733_video_decoder_close: module gate, bus gate, reset, then PLL_VE0 disabled; domain 2 stays ON. Stage 1 runs no job, so INTID 81 stays disabled and its
  * handler touches no register. */
 #include "os.h"
 #include "application.h"
@@ -32,7 +32,6 @@
 #define GICD UINT32_C(0x03400000)
 #define VD_INTID 81u
 #define VD_OWNER UINT64_C(0x5645440000000001) /* "VED", lease owner of the rail, clocks and domain row */
-#define VD_TOKEN UINT64_C(0x5645440000000002) /* the binding's admission token */
 #define VD_MODULE UINT32_C(0x81000000)         /* CCU 0xa88: gate, mux 1 (PLL_VE0), divider 1 */
 #define VD_MODULE_HZ UINT32_C(624000000)       /* the vendor point, A733_VIDEO_VENDOR_HZ */
 #define VD_CPU 4u                              /* an A55 core: not core 0 (tick, SPIs, PMIC task), not 6 or 7 */
@@ -50,14 +49,14 @@ enum {POSTED=1,DONE=2};
 enum {
     VD_STEP_NONE, VD_STEP_RAIL, VD_STEP_CLOCK, VD_STEP_PCK, VD_STEP_SUPPLY, VD_STEP_CONFIG, VD_STEP_ENTRY_WORDS,
     VD_STEP_ENTRY, VD_STEP_ROW, VD_STEP_ROW_TIMEOUT, VD_STEP_WRITES=16, VD_STEP_COLD, VD_STEP_STARTED_WORDS,
-    VD_STEP_IDENTITY, VD_STEP_CLOSE=32, VD_STEP_CLOSED_WORDS
+    VD_STEP_CLOSE=32, VD_STEP_CLOSED_WORDS
 };
 static struct {
     struct a733_power_domain_row row;
     struct a733_rail_token rail;
     struct a733_video_platform_config config;
-    struct a733_video_platform platform;
-    uint64_t pck_token,token;
+    struct a733_video_decoder decoder;
+    uint64_t pck_token;
     unsigned pck_client,initialized,closed; /* closed: the decoder is closed for this power lifetime */
     RECORD(struct vdec_check_record info;)
     atomic_uint phase,request,quiesce_wanted,quiesced;
@@ -70,7 +69,6 @@ static struct {
 static TaskHandle_t owner;
 static StaticTask_t owner_tcb;
 static StackType_t owner_stack[2048];
-static const struct a733_video_jpeg_job no_job;
 
 static uint64_t now_us(void){return sunstone_deadline_now_us();}
 static uint64_t lease_now(void){uint64_t t=0;return a733_counter_clock_now(&providers.shared.counter,&t)==1?t:0;}
@@ -91,20 +89,6 @@ static int op_now(void *cookie,uint64_t *out){(void)cookie;*out=lease_now();retu
 /* The PLL lock-wait gaps: this core's counter, read without the shared clock's compare-and-swap. The task is pinned
  * to one core, so the reads are monotonic. */
 static int op_spin_now(void *cookie,uint64_t *out){(void)cookie;*out=now_us();return 1;}
-/* The cold start's authority: the session granted the device to this owner. The supply is the power-domain owner's:
- * it answers the domain-2 row ON only with DCDC2 verified at 800 mV and this task's rail token pinned. The decoder
- * masters touch no memory in this stage, so no memory authority is given. */
-static int op_admit(void *cookie,const struct a733_video_platform_config *c,const struct a733_video_jpeg_job *j,
-    uint64_t d,uint64_t *token)
-{
-    (void)cookie;(void)j;(void)d;
-    *token=VD_TOKEN;
-    return c==&vd.platform.decoder.config&&c->owner==VD_OWNER?1:-1;
-}
-static int op_memory(void *cookie,uint64_t t,const struct a733_video_jpeg_job *j,const struct a733_video_jpeg *p,
-    uint32_t stride,uint32_t rows,uint64_t d)
-{(void)cookie;(void)t;(void)j;(void)p;(void)stride;(void)rows;(void)d;return -1;}
-static int op_drain(void *cookie,uint64_t t,uint64_t d){(void)cookie;(void)t;(void)d;return -1;}
 static int op_enter(void *cookie,uint64_t d)
 {(void)cookie;return a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,d)==1?1:0;}
 static int op_leave(void *cookie){(void)cookie;a733_platform_lock_leave(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);return 1;}
@@ -185,9 +169,12 @@ static int tokens(void)
     c->pck=(struct a733_gpu_resource_lease){vd.pck_token,A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK,
         A733_GPU_RESOURCE_STABLE};
     if(!vd.initialized){
-        static const struct a733_video_platform_ops ops={op_now,op_admit,op_memory,op_drain,op_enter,op_leave,
-            a733_video_platform_native_read,a733_video_platform_native_write,op_spin_now};
-        if(!a733_video_platform_init(&vd.platform,c,&ops,NULL))return refuse(VD_STEP_CONFIG,2);
+        /* The decoder's authority is the session's grant of the device to this owner. The supply is the power-domain
+         * owner's: it answers the domain-2 row ON only with DCDC2 verified at 800 mV and this task's rail token
+         * pinned. The decoder masters touch no memory in this stage. */
+        static const struct a733_video_unit_ops ops={op_now,op_enter,op_leave,a733_video_platform_native_read,
+            a733_video_platform_native_write,op_spin_now};
+        if(!a733_video_decoder_init(&vd.decoder,c,&ops,NULL))return refuse(VD_STEP_CONFIG,2);
         vd.initialized=1;
     }
     return 1;
@@ -197,13 +184,14 @@ static int tokens(void)
 static void copy_record(void)
 {
 #ifdef SUNSTONE_VIDEO_DECODE_MEASURE
-    const struct a733_video_decoder *p=&vd.platform.decoder;
+    const struct a733_video_decoder *p=&vd.decoder;
     const struct a733_video_cold_record *r=&p->cold;
     struct vdec_check_record *i=&vd.info;
     for(unsigned k=0;k<3;++k){i->gates_entry[k]=r->entry_gates[k];i->gates_a1[k]=r->gates[k];}
     i->mclk_written=r->mclk_written;i->mclk_readback=r->mclk_readback;i->lock_reads=r->lock_reads;
     i->entry_at=r->entry_at;i->entered_at=r->entered_at;i->on_at=r->on_at;i->hold_a_at=r->hold_a_at;
     i->locked_at=r->locked_at;i->hold_b_at=r->hold_b_at;
+    i->feature=p->unit.identity[0];i->identity_high=p->unit.identity[1];i->identity_low=p->unit.identity[2];
     i->version_high=(uint32_t)(p->version>>32);i->version_low=(uint32_t)p->version;
     i->cold_phase=p->cold_step;
     i->failed=p->unit.failed|p->unit.locked<<1|p->unit.uncertain<<2|p->unit.late<<3;
@@ -223,7 +211,7 @@ static void copy_record(void)
  * the application or the quiesce, then runs once (do_close). */
 static int fault(unsigned step,uint32_t value)
 {
-    RECORD(const struct a733_video_unit *u=&vd.platform.decoder.unit;
+    RECORD(const struct a733_video_unit *u=&vd.decoder.unit;
         vd.info.refused_address=(uint32_t)u->last_address;vd.info.refused_word=u->last_word;)
     copy_record();
     return fail(step,value);
@@ -240,30 +228,25 @@ static int do_open(void)
     if(tokens()<0)goto refused;
     RECORD(if(!read_words(vd.info.entry)){refuse(VD_STEP_ENTRY_WORDS,0);goto refused;})
     /* The binding's entry hold, its row request, then hold A, the lock wait and hold B in one call after the ON
-     * answer. The owner answers on the row's wake, which notifies this task; the wait blocks until that or the bound. */
-    const struct a733_video_jpeg_ops *ops=a733_video_platform_jpeg_ops();
+     * answer, then the identity. The owner answers on the row's wake, which notifies this task; the wait blocks until
+     * that or the bound. At the binding's deadline, vd.limit, its next call fails the open. */
     RECORD(vd.info.row_request_us=owner_us();)
     uint64_t row_limit=0;
     for(;;){
-        const int r=ops->acquire(&vd.platform,&no_job,vd.limit,&vd.token);
-        const struct a733_video_decoder *p=&vd.platform.decoder;
+        const int r=a733_video_decoder_open(&vd.decoder,vd.limit);
+        const struct a733_video_decoder *p=&vd.decoder;
         const enum a733_power_row_state s=a733_power_domain_state(&vd.row);
-        RECORD(if(p->requested&&s!=A733_POWER_ROW_PENDING&&!vd.info.row_state){
+        RECORD(if(s!=A733_POWER_ROW_IDLE&&s!=A733_POWER_ROW_PENDING&&!vd.info.row_state){
             vd.info.row_state=s;vd.info.row_on_us=owner_us();
             vd.info.authority=a733_power_authority_load(&providers.shared.rails.authority);
         })
         if(r==1)break;
-        if(r<0){
-            copy_record();
-            /* Nothing written before hold A: a refusal there leaves the decoder as it was. */
-            if(p->cold_step<2u){refuse(p->requested?VD_STEP_ROW:VD_STEP_ENTRY,p->cold_step|s<<8);goto refused;}
-            return fault(VD_STEP_COLD,p->cold_step|s<<8);
+        if(r==A733_VIDEO_OPEN_REFUSED){
+            /* Nothing written: the decoder is as it was. */
+            copy_record();refuse(s!=A733_POWER_ROW_IDLE?VD_STEP_ROW:VD_STEP_ENTRY,p->cold_step|s<<8);goto refused;
         }
-        if(!timely()){
-            if(p->cold_step>=2u)return fault(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);
-            copy_record();return fail(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);
-        }
-        if(s==A733_POWER_ROW_PENDING&&p->requested){
+        if(r<0)return fault(VD_STEP_COLD,p->cold_step|s<<8);
+        if(s==A733_POWER_ROW_PENDING){
             if(!row_limit)row_limit=now_us()+A733_POWER_PCK_BOUND_US+4000;
             if(now_us()>=row_limit){copy_record();return fail(VD_STEP_ROW_TIMEOUT,p->cold_step|s<<8);}
             (void)sunstone_deadline_wait_until(row_limit);
@@ -274,13 +257,6 @@ static int do_open(void)
     }
     RECORD(vd.info.started_ticks=ss_counter_ticks();
         if(!read_words(vd.info.started))return fault(VD_STEP_STARTED_WORDS,0);)
-    /* The identity words through the binding's read call, then its identity admission (prepare's first call). */
-    uint32_t id[3];
-    if(ops->read(&vd.platform,vd.token,0xf0,&id[0],vd.limit)!=1||ops->read(&vd.platform,vd.token,0xe0,&id[1],vd.limit)!=1||
-       ops->read(&vd.platform,vd.token,0xe4,&id[2],vd.limit)!=1)return fault(VD_STEP_IDENTITY,1);
-    RECORD(vd.info.feature=id[0];vd.info.identity_high=id[1];vd.info.identity_low=id[2];)
-    if(ops->prepare(&vd.platform,vd.token,&no_job,NULL,0,0,vd.limit)!=0||!vd.platform.decoder.version)
-        return fault(VD_STEP_IDENTITY,2);
     copy_record();
     atomic_store(&vd.phase,OPEN);
     return 1;
@@ -304,8 +280,7 @@ static int do_close(void)
     if(vd.limit>session_deadline())vd.limit=session_deadline();
     RECORD(const uint32_t at_fault=vd.info.failed;)
     for(;;){
-        const int r=faulted?a733_video_decoder_fault_close(&vd.platform.decoder,vd.limit):
-            a733_video_decoder_quiesce(&vd.platform.decoder,vd.limit);
+        const int r=a733_video_decoder_close(&vd.decoder,vd.limit,faulted);
         if(r==1)break;
         if(r<0||!timely()){
             copy_record();RECORD(if(faulted)vd.info.failed=at_fault;)

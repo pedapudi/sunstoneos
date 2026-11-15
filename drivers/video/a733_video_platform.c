@@ -53,6 +53,9 @@ static int decoder_init(struct a733_video_decoder *p,const struct a733_video_pla
     p->cold=(struct a733_video_cold_record){0};
     return 1;
 }
+int a733_video_decoder_init(struct a733_video_decoder *p,const struct a733_video_platform_config *c,
+    const struct a733_video_unit_ops *o,void *cookie)
+{return p&&o&&decoder_init(p,c,o,cookie,0,0,0);}
 /* NS_BROM at0x17000, published sun60iw2p1 revision. These instruction
  * observations bind the literal to the FEL identity constructor. Never execute
  * ROM code or accept caller-provided bytes as native identity evidence. */
@@ -192,6 +195,15 @@ static int cold(struct a733_video_decoder *p)
         if(r!=1)return r;
     }
 }
+/* The start: the cold start, or the inherited powered baseline under one hold. */
+static int start(struct a733_video_decoder *p)
+{
+    struct a733_video_unit *u=&p->unit;
+    if(p->config.start==A733_VIDEO_COLD_NS_ROM)return cold(p);
+    int r=lock(u);if(r!=1)return r;
+    if(!a733_video_unit_baseline(u))return a733_video_unit_refuse_held(u);
+    return unlock(u);
+}
 static int acquire(struct a733_video_decoder *p,const void *j,uint64_t d,uint64_t *token)
 {
     struct a733_video_unit *u=&p->unit;
@@ -209,14 +221,26 @@ static int acquire(struct a733_video_decoder *p,const void *j,uint64_t d,uint64_
     }
     *token=u->token;
     if(p->checked)return 1;
-    if(p->config.start==A733_VIDEO_COLD_NS_ROM) {
-        int r=cold(p);if(r!=1)return r;
-    }else {
-        int r=lock(u);if(r!=1)return r;
-        if(!a733_video_unit_baseline(u))return a733_video_unit_refuse_held(u);
-        if(unlock(u)!=1)return -1;
-    }
+    int r=start(p);if(r!=1)return r;
     p->checked=1;return 1;
+}
+/* A failed start wrote a register: only a close ends it. */
+static int written(const struct a733_video_decoder *p)
+{return p->config.start==A733_VIDEO_COLD_NS_ROM&&p->cold_step>=COLD_HOLD_A;}
+int a733_video_decoder_open(struct a733_video_decoder *p,uint64_t d)
+{
+    if(!p)return A733_VIDEO_OPEN_REFUSED;
+    struct a733_video_unit *u=&p->unit;
+    if(p->admit||!u->initialized||u->failed||p->quiesced||!d||(u->deadline&&u->deadline!=d))return A733_VIDEO_OPEN_REFUSED;
+    u->deadline=d;
+    int r=timely(u)?1:fail(u);
+    if(r==1&&!p->checked&&(r=start(p))==1)p->checked=1;
+    if(r==1&&!p->version) {
+        /* The identity block, readable once the decoder is started. */
+        if((r=lock(u))==1)r=a733_video_unit_identity(u,&p->version)?unlock(u):a733_video_unit_refuse_held(u);
+    }
+    if(r>=0)return r;
+    return written(p)?A733_VIDEO_OPEN_FAULT:A733_VIDEO_OPEN_REFUSED;
 }
 /* The close in the vendor order, under the held mutex, each write read back. */
 static int close_steps(struct a733_video_unit *u)
@@ -224,33 +248,23 @@ static int close_steps(struct a733_video_unit *u)
     return update(u,CCU+0xa88,BIT(31),0)&&update(u,CCU+0xa8c,BIT(2),0)&&update(u,CCU+0xa8c,BIT(18),0)&&
         a733_video_unit_pll_stop(u);
 }
-int a733_video_decoder_quiesce(struct a733_video_decoder *p,uint64_t d)
+int a733_video_decoder_close(struct a733_video_decoder *p,uint64_t d,unsigned faulted)
 {
-    if(!p)return -1;
+    if(!p||faulted>1)return -1;
     struct a733_video_unit *u=&p->unit;
-    if(!u->initialized||u->failed||u->locked||!d)return -1;
+    if(!u->initialized||!d||p->quiesced||(faulted?u->uncertain:u->failed||u->locked))return -1;
+    /* After a fault: a refusal released the mutex; a late access or check kept it, and the close continues in that
+     * hold. */
+    const unsigned held_on=faulted&&u->locked;
+    if(faulted){u->failed=0;u->late=0;}
     u->deadline=d;
-    int r=lock(u);if(r!=1)return r;
-    if(!close_steps(u))return a733_video_unit_refuse_held(u);
-    if(unlock(u)!=1)return -1;
-    p->checked=p->prepared=0;p->quiesced=1;
-    return 1;
-}
-int a733_video_decoder_fault_close(struct a733_video_decoder *p,uint64_t d)
-{
-    if(!p)return -1;
-    struct a733_video_unit *u=&p->unit;
-    if(!u->initialized||u->uncertain||p->quiesced||!d)return -1;
-    /* A refusal released the mutex; a late access or check kept it, and the close continues in that hold. */
-    const unsigned held_on=u->locked;
-    u->failed=0;u->late=0;u->deadline=d;
     if(!held_on) {
         int r=lock(u);
-        if(r!=1){if(!r)u->failed=1;return r;}
+        if(r!=1){if(!r&&faulted)u->failed=1;return r;}
     }
     if(!close_steps(u))return a733_video_unit_refuse_held(u);
     if(unlock(u)!=1)return -1;
-    p->checked=p->prepared=0;p->quiesced=1;u->failed=1;
+    p->checked=p->prepared=0;p->quiesced=1;u->failed=faulted;
     return 1;
 }
 /* VeReset policy45/52 delegates external reset; policy51 uses top+4 bit16.

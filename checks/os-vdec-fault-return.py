@@ -4,7 +4,7 @@ registry.
 
 The image's own os_quiesce_register, os_quiesce_step, decoder quiesce step, owner task and decoder platform binding run
 under AArch64 emulation, with the owner task run between supervisor passes as its task would be. The binding is
-initialized by its own a733_video_platform_init from a configuration at the vendor point; the decoder is then left as
+initialized by its own a733_video_decoder_init from a configuration at the vendor point; the decoder is then left as
 the stage-1 board run 1794712072331160946-bd447f26 left it, refused in hold B (cold step 4) with PLL_VE0 running and
 open, the module gate open, and reset and bus gate released. The CCU, RTC, R_CCU, GIC, PCK and decoder pages are
 plain registers, and every register access passes the image's own Device-mapping check. The clock and PCK lease
@@ -55,7 +55,7 @@ PLL_INHERITED = 1 << 24
 # the module gate open at mux 1, reset and bus gate released, the MBUS clock gate opened with its key.
 HOLD_B = {0x220: 0xf9204d00, 0xa88: 0x81000000, 0xa8c: 0x00040004, 0x5e4: 0x00040306, 0x5c0: 0x1101037f,
           0x5e0: 0xf1045803, 0x1b10: 0x00020000, 0x1918: 0x00030003, 0x1998: 0x00030000}
-LAYOUTS = {'board_application', 'a733_board_session', 'a733_video_platform', 'a733_video_decoder', 'a733_video_unit',
+LAYOUTS = {'board_application', 'a733_board_session', 'a733_video_decoder', 'a733_video_unit',
            'a733_video_platform_config', 'a733_clock_token', 'a733_gpu_resource_lease', 'a733_power_domain_row',
            'vdec_check_record'}
 
@@ -117,8 +117,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     def put(address, value, n=4): uc.mem_write(address, int(value).to_bytes(n, 'little'))
     def get(address, n=4): return int.from_bytes(uc.mem_read(address, n), 'little')
     config = vd + layout['config']
-    platform = vd + layout['platform']
-    decoder = platform + L['a733_video_platform']['decoder']
+    decoder = vd + layout['decoder']
     unit = decoder + L['a733_video_decoder']['unit']
     def unit_field(field): return unit + L['a733_video_unit'][field]
     def config_field(field): return config + L['a733_video_platform_config'][field]
@@ -208,7 +207,7 @@ def run_case(image, parts, layout, enums, name, stuck=None, uncertain=False, app
     put(clock + token['shared'], shared, 16); put(clock + token['exclusive'], exclusive, 16)
     lease, pck_layout = config_field('pck'), L['a733_gpu_resource_lease']
     put(lease + pck_layout['token'], 1, 8); put(lease + pck_layout['mask'], OSC_PCK); put(lease + pck_layout['mode'], STABLE)
-    assert call(image.address('a733_video_platform_init'), platform, config, image.address('ops', UNIT), 0) == 1, \
+    assert call(image.address('a733_video_decoder_init'), decoder, config, image.address('ops', UNIT), 0) == 1, \
         (name, 'the binding refused its configuration')
     # The decoder as hold B's refusal left it.
     put(unit_field('failed'), 1)
