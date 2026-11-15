@@ -370,8 +370,9 @@ static void transition_delays(void)
 
 /* The register accesses of domains 1, 4 and 5 for an ON from OFF, an
  * adoption, the read-only check and (domain 5) an OFF, one "write address
- * value" line each. checks/power-domains-owner.py compares this output from
- * the current owner with the output built from the merge base's owner. */
+ * value" line each. checks/power-domains-owner.py compares this output with
+ * checks/data/power-domains-traces.txt, made from the owner before domain 2
+ * was added. */
 static void print_trace(const char *what,unsigned id,unsigned from)
 {
     for(unsigned i=from;i<d.trace_n;++i)
@@ -401,7 +402,6 @@ static void domain_traces(void)
     }
 }
 
-#ifndef OWNER_BASELINE
 /* Domain 2 (VE_DEC). Its master gates are critical clocks that the decoder
  * handles, so the owner reads none of them; its supply is DCDC2. */
 static unsigned gate_reads_since(unsigned from)
@@ -429,8 +429,9 @@ static void domain2_cases(void)
      * no gate read, the delay row and one ON command, a slow acknowledgement
      * past the spin, and the transition record. */
     d2_setup(0,0,0);d.ccu_5c0=d.ccu_5e0=0;d.ppu[2][0]|=0x100;d.ppu[2][2]|=0x100;d.ack_us=120;
+    /* The read-only check leaves domain 2 out and makes no access. */
     unsigned from=d.trace_n;
-    assert(a733_power_domain_check(&d.owner,2,NULL)==1 && !gate_reads_since(from) && !writes_since(from));
+    assert(a733_power_domain_check(&d.owner,2,NULL)==0 && d.trace_n==from);
     from=d.trace_n;
     assert(a733_power_domain_request(&d2_row,1));service_step();
     assert(a733_power_domain_state(&d2_row)==A733_POWER_ROW_PENDING);
@@ -483,8 +484,7 @@ static void domain2_cases(void)
 
     /* Adopted ON, gates closed: no write, no gate read, no command. */
     d2_setup(8,8,0);d.ccu_5c0=d.ccu_5e0=0;d.ppu[2][2]|=0x100;
-    from=d.trace_n;unsigned state=99;
-    assert(a733_power_domain_check(&d.owner,2,&state)==1 && state==8);
+    from=d.trace_n;
     assert(a733_power_domain_request(&d2_row,1));service_step();
     assert(a733_power_domain_state(&d2_row)==A733_POWER_ROW_ON && !writes_since(from) && !gate_reads_since(from));
     r=d2_record();
@@ -530,7 +530,6 @@ static void domain2_cases(void)
     puts("PASS domain 2: no gate read, delay row and ON command, adoption, refusals with bit 14 alone, "
          "timeout retention, no power-off, transition record, back-to-back measurement");
 }
-#endif
 int main(int argc,char **argv)
 {
     assert(argc<=3);
@@ -543,9 +542,7 @@ int main(int argc,char **argv)
     npu_transition_failures();puts("PASS power-domain transition deadline boundaries and retained pins");return 0;
     }
     if(argc==2 && !strcmp(argv[1],"--domain-traces")){domain_traces();return 0;}
-#ifndef OWNER_BASELINE
     if(argc==2 && !strcmp(argv[1],"--domain2")){domain2_cases();return 0;}
-#endif
     if(argc==2)gpu_trace_run(argv[1]);
     /* An image with no row verifies nothing and reads no PMIC register. */
     setup();domains_boot();

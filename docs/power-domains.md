@@ -65,7 +65,9 @@ Admission of an ON request, in order:
    profile, CCU `0x5c0` and `0x5e0` bits 5 and 11, 6 and 18, 7 and 16 for
    domains 1, 4 and 5. Domain 2 has no gates in its profile: its gates
    (`0x5c0` bit 0, `0x5e0` bit 14, and `0x5e4` bit 18) are `CLK_IS_CRITICAL`
-   (ccu-sun60iw2.c lines 622, 663 and 689), and the decoder handles them. A
+   (ccu-sun60iw2.c lines 622, 663 and 689), and the decoder handles them. The
+   read-only check `a733_power_domain_check` refuses domain 2 with no
+   access: the decoder writes nothing before its row request. A
    domain whose profile sets `gates_after_on`, domain 5 alone, reads the PPU
    clock alone for an ON from OFF: a TOP5 OFF
    closed the GPU AHB master gate on a board, and the GPU controller
@@ -337,7 +339,7 @@ the actual owner.
 
 ## Measurements
 
-The host models, the merge-base comparison and the commands are recorded in
+The host models, the trace comparison and the commands are recorded in
 the design document's implementation section
 ([docs/designs/power-domains.md](designs/power-domains.md)). The figures are
 modeled, except the service steps of the read-only board runs.
@@ -358,11 +360,12 @@ the cost model.
 ## Checks
 
 - `checks/power-domains-owner.py` builds and runs the two models below with
-  sanitizers. It also compares the owner's accesses to domains 1, 4 and 5 with
-  those of the owner at the merge base with bringup (`--domain-traces`), and
-  requires the domain-2 delay row and ON command to equal the
-  `SUN60IW2_PCK_VE_DEC` row of the hash-pinned `pck600_domains.c`. Ten owner
-  mutants must each fail a model run.
+  sanitizers. It also requires the owner's accesses to domains 1, 4 and 5
+  (`--domain-traces`) to equal `checks/data/power-domains-traces.txt`, the
+  same output from the owner at bringup 3ab4c296d before domain 2 was added,
+  and the domain-2 delay row and ON command to equal the
+  `SUN60IW2_PCK_VE_DEC` row of the hash-pinned `pck600_domains.c`. Eleven
+  owner mutants must each fail a model run.
 - `checks/power-domains-pck.c` composes the actual provider, ledger and owner
   over modeled PPU, CCU and R_CCU words: the delay row and command, adoption,
   incoherent and domain-level refusals, verified supplies, the verification
@@ -375,7 +378,7 @@ the cost model.
   inherited OFF/ON and repeated transitions, exact first-OFF write/readback order,
   18 initialization failures with retained pins, and preservation of an untouched
   domain-4 register block. `--domain2` selects domain 2: no gate read, the
-  delay row and command, adoption, refusals that set bit 14 alone, timeout
+  read-only check refused with no access, the delay row and command, adoption, refusals that set bit 14 alone, timeout
   retention with domain 4 still admitted, no power-off, the transition record
   and the back-to-back measurement. With an output
   path it writes the GPU power-on and

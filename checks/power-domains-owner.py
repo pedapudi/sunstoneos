@@ -5,10 +5,12 @@ checks/power-domains-pck.c composes drivers/power/a733_power_domains.c with the 
 supply verification over modeled PCK600, CCU and R_CCU registers (checks/power-domains-model.h). This check runs:
 
 - the whole model, which covers domains 1, 4 and 5;
-- its domain-2 cases (--domain2): no master-gate read, the delay row and ON command, adoption, refusals that set
-  only bit 14, timeout retention, no power-off, the transition record and the back-to-back measurement mode;
-- its access traces of domains 1, 4 and 5 (--domain-traces), built once from this tree and once from the owner at
-  the merge base with bringup, which must be equal: adding domain 2 changes no access of the other domains;
+- its domain-2 cases (--domain2): no master-gate read, the read-only check refused with no access, the delay row
+  and ON command, adoption, refusals that set only bit 14, timeout retention, no power-off, the transition record
+  and the back-to-back measurement mode;
+- its access traces of domains 1, 4 and 5 (--domain-traces), which must equal checks/data/power-domains-traces.txt.
+  That file is the same output from the owner at bringup 3ab4c296d, before domain 2 was added, so adding domain 2
+  changes no access of the other domains;
 - checks/power-domains-service.c, the service task's PMIC and step bounds.
 
 The five delay words and the policy nibble that the owner writes to domain 2 must equal the SUN60IW2_PCK_VE_DEC row
@@ -32,7 +34,6 @@ VENDOR = CACHE / 'sources/gpu-power/drivers/pm_domain/pck600_domains.c'
 VENDOR_SHA256 = '2d9c2b60b3b264d1732538815d12570e45386d30b280a1d0b4f5b9780bdc49ee'
 BINDING = CACHE / 'sources/gpu-power/include/dt-bindings/power/sun60iw2-power.h'
 BINDING_SHA256 = 'f5da443de3a15290511f60c5a8697bc01ec714985eb876108e1da9db76fadbe7'
-OWNER = ['drivers/power/a733_power_domains.c', 'include/a733_power_domains.h']
 UNITS = ['drivers/power/a733_pmic.c', 'drivers/power/a733_rail_leases.c', 'drivers/clock/a733_clock_leases.c',
          'drivers/gpu/a733_gpu_resources.c', 'drivers/pinctrl/a733_pins.c', 'drivers/pinctrl/a733_pin_tables.c',
          'drivers/power/a733_pmic_consumer.c', 'drivers/gpu/a733_gpu_power.c']
@@ -40,7 +41,9 @@ CHECK_INPUTS = ['drivers/power/a733_power_domains.c', 'include/a733_power_domain
                 'drivers/power/a733_pmic.c', 'drivers/power/a733_rail_leases.c', 'drivers/clock/a733_clock_leases.c',
                 'drivers/gpu/a733_gpu_resources.c', 'drivers/pinctrl/a733_pins.c', 'drivers/pinctrl/a733_pin_tables.c',
                 'drivers/power/a733_pmic_consumer.c', 'drivers/gpu/a733_gpu_power.c', 'checks/power-domains-pck.c',
-                'checks/power-domains-service.c', 'checks/power-domains-model.h', 'checks/a733-pmic.c']
+                'checks/power-domains-service.c', 'checks/power-domains-model.h', 'checks/a733-pmic.c',
+                'checks/data/power-domains-traces.txt']
+TRACES = ROOT / 'checks/data/power-domains-traces.txt'
 OWNER_SOURCE = 'drivers/power/a733_power_domains.c'
 MUTANTS = [
     ('{2,0,0,A733_RAIL_DCDC2', '{2,BIT(0),BIT(14),A733_RAIL_DCDC2', 'domain 2 requires the critical VE gates'),
@@ -58,6 +61,7 @@ MUTANTS = [
      'measurement mode ignored'),
     ('{return id==1 ? 0 : id==4 ? 1 : id==5 ? 2 : id==2 ? 3 : -1;}', '{return id==1 ? 0 : id==4 ? 1 : id==5 ? 2 : -1;}',
      'domain 2 without a slot'),
+    ('slot(domain)<0 || domain==2)return 0;', 'slot(domain)<0)return 0;', 'read-only check admits domain 2'),
 ]
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -69,10 +73,10 @@ runtime = {**environment(), 'UBSAN_OPTIONS': 'halt_on_error=1', 'ASAN_OPTIONS': 
 flags = ['-std=c11', '-Wall', '-Wextra', '-O1', '-g', *SANITIZE]
 
 
-def build(model, binary, owner_root=ROOT, defines=(), strict=True):
-    """owner_root supplies the owner's source and header (a mutant tree or the merge base)."""
+def build(model, binary, owner_root=ROOT, strict=True):
+    """owner_root supplies the owner's source and header (a mutant tree)."""
     units = [ROOT / u for u in UNITS] + [owner_root / OWNER_SOURCE]
-    command = [CLANG, *flags, *(['-Werror'] if strict else []), *defines, '-I', owner_root / 'include',
+    command = [CLANG, *flags, *(['-Werror'] if strict else []), '-I', owner_root / 'include',
                '-I', ROOT / 'include', '-I', ROOT / 'checks', ROOT / 'checks' / model, *units, '-o', binary]
     result = subprocess.run(list(map(str, command)), capture_output=True, text=True, env=runtime)
     binary.with_suffix('.build.log').write_text(result.stdout + result.stderr)
@@ -121,19 +125,11 @@ assert policy[0] & ~status_mask == 0xa5a50100, 'the ON command must keep the pol
 record = json.loads(next(line for line in lines if line.startswith('domain2-record ')).split(' ', 1)[1])
 measured = json.loads(next(line for line in lines if line.startswith('domain2-measured ')).split(' ', 1)[1])
 
-# The other domains' accesses against the owner at the merge base with bringup.
-base_ref = subprocess.run(['git', 'merge-base', 'HEAD', 'bringup'], cwd=ROOT, capture_output=True, text=True,
-                          check=True).stdout.strip()
-base = out / 'merge-base'
-for path in OWNER:
-    (base / path).parent.mkdir(parents=True, exist_ok=True)
-    (base / path).write_bytes(subprocess.run(['git', 'show', f'{base_ref}:{path}'], cwd=ROOT, capture_output=True,
-                                             check=True).stdout)
-build('power-domains-pck.c', out / 'pck-base', owner_root=base, defines=['-DOWNER_BASELINE'])
-traces = [run(b, '--domain-traces') for b in (binary, out / 'pck-base')]
-assert all(t.returncode == 0 for t in traces), [t.stderr[-2000:] for t in traces]
-assert traces[0].stdout == traces[1].stdout, 'domain 1, 4 or 5 accesses differ from the merge base'
-trace_lines = len(traces[0].stdout.splitlines())
+# The other domains' accesses against the committed traces from the owner before domain 2.
+traces = run(binary, '--domain-traces')
+assert traces.returncode == 0, traces.stderr[-2000:]
+assert traces.stdout == TRACES.read_text(), 'domain 1, 4 or 5 accesses differ from checks/data/power-domains-traces.txt'
+trace_lines = len(traces.stdout.splitlines())
 assert trace_lines > 100
 
 service = out / 'service'
@@ -157,10 +153,10 @@ for i, (old, new, name) in enumerate(MUTANTS):
     assert failed, ('mutant survived', name)
     refused.append(dict(mutant=name, failed=[' '.join(m) or 'whole model' for m in failed]))
 
-summary = dict(vendor_sha256=VENDOR_SHA256, merge_base=base_ref, domain2_delay_row=[f'{a:#x}={v:#x}' for a, v in written],
+summary = dict(vendor_sha256=VENDOR_SHA256, domain2_delay_row=[f'{a:#x}={v:#x}' for a, v in written],
                domain2_policy=f'{policy[0]:#010x}', slow_record=record, measured_record=measured,
                unchanged_trace_lines=trace_lines, mutants_refused=refused,
                inputs={name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in CHECK_INPUTS})
 (out / 'result.json').write_text(json.dumps(summary, indent=1) + '\n')
-print(f'PASS power-domain owner models: domains 1, 4 and 5 with {trace_lines} accesses unchanged from {base_ref[:12]}, '
+print(f'PASS power-domain owner models: domains 1, 4 and 5 with {trace_lines} accesses as committed, '
       f'domain 2 programmed as the vendor VE_DEC row, the service task, {len(refused)} mutants refused')

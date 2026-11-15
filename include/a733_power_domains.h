@@ -167,11 +167,11 @@ int a733_power_service_idle(const struct a733_power_domains *);
  * 0 before. One acquire load; any task. */
 int a733_power_service_ready(const struct a733_power_domains *);
 /* Read-only domain-level check for a consumer that must write its own resets
- * and clocks before its row request (the NPU): the domain's MBUS gates (none
- * for domain 2, whose gates are critical clocks that its consumer handles),
+ * and clocks before its row request (the NPU): the domain's MBUS gates,
  * the PPU clock, and command and status both OFF or both ON. 1 consistent,
  * 0 refused. When state is not NULL and the check passes, it receives the
- * status read, 0 for OFF or 8 for ON. Any task; no write. Domains 1, 2, 4
- * and 5. */
+ * status read, 0 for OFF or 8 for ON. Any task; no write. Domains 1, 4 and
+ * 5; domain 2 is refused with no access, since its consumer writes nothing
+ * before its row request. */
 int a733_power_domain_check(struct a733_power_domains *, unsigned domain, unsigned *state);
 #endif
