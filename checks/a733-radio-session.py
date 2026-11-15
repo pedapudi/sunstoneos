@@ -25,7 +25,7 @@ def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for name in ["tcp","rsn","kernel","tinyusb","headers","linker","qemu","reference-dir","evidence"]:p.add_argument("--"+name,type=Path,required=True)
- p.add_argument("--cases",nargs="+",choices=["session","stop-start","stop-setup","stop-upload","stop-runtime","stop-held","stop-deadline"],default=["session","stop-start","stop-setup","stop-upload","stop-runtime","stop-held","stop-deadline"])
+ p.add_argument("--cases",nargs="+",choices=["session","stop-start","stop-setup","stop-upload","stop-runtime","stop-held","stop-deadline","retain-runtime"],default=["session","stop-start","stop-setup","stop-upload","stop-runtime","stop-held","stop-deadline","retain-runtime"])
  p.add_argument("--build-only",action="store_true");p.add_argument("--firmware",type=Path,required=True);a=p.parse_args()
  out=a.evidence.resolve();out.mkdir(parents=True,exist_ok=True);source=out/"project";source.mkdir(exist_ok=True)
  for name,h in REFERENCES.items():assert sha(a.reference_dir/name)==h,name
