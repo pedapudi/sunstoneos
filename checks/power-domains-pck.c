@@ -113,6 +113,46 @@ static enum a733_power_row_state settle(struct a733_power_domain_row *r,unsigned
     return a733_power_domain_state(r);
 }
 static void setup(void){domains_model_setup(0x28,23);}
+/* verified_at: written once, with the owner's clock at the step that first
+ * publishes DCDC2 as verified. A settled supply publishes DCDC2 at its own
+ * result, before DCDC4; otherwise both rails publish with the done bit. The
+ * value is set before the bit is seen and never changes in later steps. */
+static void supply_time_case(unsigned settled)
+{
+    setup();
+    struct a733_rail_token t={0};struct a733_power_domain_row r={0};
+    assert(a733_power_domain_row_init(&r,&d.owner,1,59,&t));
+    if(settled)assert(a733_power_domains_settled_supply(&d.owner));
+    uint64_t first=0,start=0,end=0,seen=0,first_step=0;unsigned dcdc4_after=0;
+    d.wake_at=0;
+    for(unsigned i=0;i<100000 && !(a733_power_authority_load(&m.rails.authority)&A733_POWER_SUPPLY_DONE);++i) {
+        if(d.wake_at!=UINT64_MAX && d.wake_at>m.now)m.now=d.wake_at;
+        const uint64_t before=m.now;const uint64_t held=d.owner.verified_at;
+        service_step();
+        /* started_at: the owner's clock at its first step, kept for every later step. */
+        if(!i)first_step=before;
+        assert(d.owner.started_at>=first_step && d.owner.started_at<=(i?d.owner.started_at:m.now));
+        if(!i)first_step=d.owner.started_at;else assert(d.owner.started_at==first_step);
+        const unsigned w=a733_power_authority_load(&m.rails.authority);
+        if(!(w&A733_POWER_DCDC2_VERIFIED)) {
+            assert(!d.owner.verified_at);
+            continue;
+        }
+        if(!seen){seen=1;first=d.owner.verified_at;start=before;end=m.now;dcdc4_after=!(w&A733_POWER_DCDC4_VERIFIED);}
+        else assert(d.owner.verified_at==held && held==first);
+    }
+    assert(seen && first>=start && first<=end && first);
+    /* Settled: DCDC2 publishes alone, before DCDC4 and the done bit. */
+    assert(dcdc4_after==settled);
+    for(unsigned i=0;i<20;++i){m.now+=TICK_US;service_step();}
+    assert(d.owner.verified_at==first);
+    const unsigned w=a733_power_authority_load(&m.rails.authority);
+    assert((w&(A733_POWER_SUPPLY_DONE|A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED))==
+        (A733_POWER_SUPPLY_DONE|A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED));
+    if(!settled)assert(first>=first_step+A733_POWER_SUPPLY_SETTLE_US);
+    printf("verified-at %s %llu step %llu..%llu, first step %llu\n",settled ? "settled" : "boot",
+           (unsigned long long)first,(unsigned long long)start,(unsigned long long)end,(unsigned long long)first_step);
+}
 /* Holds the rail ledger busy from the first time read after the verification
  * request is queued until the provider expires it, so the request cannot be
  * activated: 1 armed, 2 holding, 3 released after the expiry. */
@@ -367,6 +407,176 @@ static void transition_delays(void)
     puts("delay initialization: an ON after a domain-5 OFF admits 0xc10 bits 23:16");
 }
 
+
+/* The register accesses of domains 1, 4 and 5 for an ON from OFF, an
+ * adoption, the read-only check and (domain 5) an OFF, one "write address
+ * value" line each. checks/power-domains-owner.py compares this output with
+ * checks/data/power-domains-traces.txt, made from the owner before domain 2
+ * was added. */
+static void print_trace(const char *what,unsigned id,unsigned from)
+{
+    for(unsigned i=from;i<d.trace_n;++i)
+        printf("%s %u %u 0x%08lx 0x%08x\n",what,id,d.trace[i].write,(unsigned long)d.trace[i].address,d.trace[i].value);
+}
+static void domain_traces(void)
+{
+    const unsigned ids[]={1,4,5};
+    for(unsigned k=0;k<3;++k)for(unsigned adopted=0;adopted<2;++adopted) {
+        const unsigned id=ids[k];
+        setup();d.ack_us=0;
+        if(adopted){d.ppu[id][0]|=8;d.ppu[id][2]|=8;}
+        struct a733_rail_token t={0};struct a733_power_domain_row row={0};
+        assert(a733_power_domain_row_init(&row,&d.owner,id,60,&t));
+        domains_boot();t=domains_rail(60,id==5 ? A733_RAIL_DCDC4 : A733_RAIL_DCDC2);
+        unsigned from=d.trace_n;
+        assert(a733_power_domain_check(&d.owner,id,NULL)==1);
+        print_trace(adopted ? "check-on" : "check-off",id,from);
+        from=d.trace_n;assert(a733_power_domain_request(&row,1));service_step();
+        assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON);
+        print_trace(adopted ? "adopt" : "on",id,from);
+        if(id==5) {
+            from=d.trace_n;assert(a733_power_domain_request(&row,0));service_step();
+            assert(a733_power_domain_state(&row)==A733_POWER_ROW_OFF);
+            print_trace(adopted ? "off-adopted" : "off",id,from);
+        }
+    }
+}
+
+/* Domain 2 (VE_DEC). Its master gates are critical clocks that the decoder
+ * handles, so the owner reads none of them; its supply is DCDC2. */
+static unsigned gate_reads_since(unsigned from)
+{
+    unsigned n=0;
+    for(unsigned i=from;i<d.trace_n;++i)
+        n+=!d.trace[i].write && (d.trace[i].address==CCU_BASE+0x5c0 || d.trace[i].address==CCU_BASE+0x5e0);
+    return n;
+}
+static struct a733_power_domain_row d2_row;
+static struct a733_rail_token d2_token;
+static void d2_setup(uint32_t policy,uint32_t status,unsigned measure)
+{
+    setup();
+    d.ppu[2][0]=(d.ppu[2][0]&~15u)|policy;d.ppu[2][2]=(d.ppu[2][2]&~15u)|status;
+    d2_row=(struct a733_power_domain_row){0};d2_token=(struct a733_rail_token){0};
+    assert(a733_power_domain_row_init(&d2_row,&d.owner,2,80,&d2_token));
+    if(measure)assert(a733_power_domains_measure_transitions(&d.owner));
+    domains_boot();d2_token=domains_rail(80,A733_RAIL_DCDC2);
+}
+/* The record a consumer reads is the row's copy, which the owner publishes with each answer: it must equal the
+ * owner's own record of domain 2, field by field. */
+static const struct a733_power_transition *d2_record(void)
+{
+    const struct a733_power_transition *r=&d2_row.transition,*o=&d.owner.transition[3];
+    assert(r->policy_before==o->policy_before && r->status_before==o->status_before &&
+           r->policy_written==o->policy_written && r->first_word==o->first_word && r->pending_word==o->pending_word &&
+           r->reached_word==o->reached_word && r->all_and==o->all_and && r->all_or==o->all_or && r->reads==o->reads &&
+           r->spin_reads==o->spin_reads && r->commands==o->commands && r->command_at==o->command_at &&
+           r->first_at==o->first_at && r->pending_at==o->pending_at && r->reached_at==o->reached_at);
+    return r;
+}
+static void domain2_cases(void)
+{
+    /* OFF to ON with every VE gate closed and bit 8 set in policy and status:
+     * no gate read, the delay row and one ON command, a slow acknowledgement
+     * past the spin, and the transition record. */
+    d2_setup(0,0,0);d.ccu_5c0=d.ccu_5e0=0;d.ppu[2][0]|=0x100;d.ppu[2][2]|=0x100;d.ack_us=120;
+    unsigned from=d.trace_n;
+    assert(a733_power_domain_request(&d2_row,1));service_step();
+    assert(a733_power_domain_state(&d2_row)==A733_POWER_ROW_PENDING);
+    assert(settle(&d2_row,NULL)==A733_POWER_ROW_ON && (d.ppu[2][0]&15)==8);
+    assert(!gate_reads_since(from));
+    const uintptr_t base=A733_POWER_PCK_DOMAIN(2);
+    unsigned n=0;
+    for(unsigned i=from;i<d.trace_n;++i)if(d.trace[i].write) {
+        if(n<5)printf("domain2-delay 0x%03lx 0x%08x\n",(unsigned long)(d.trace[i].address-base),d.trace[i].value);
+        else {
+            assert(n==5 && d.trace[i].address==base && d.trace[i].value==0xa5a50108); /* bits other than 3:0 kept */
+            printf("domain2-policy 0x%08x\n",d.trace[i].value);
+        }
+        ++n;
+    }
+    assert(n==6);
+    const struct a733_power_transition *r=d2_record();
+    assert(r->commands==1 && r->policy_before==0xa5a50100 && (r->status_before&0x10f)==0x100);
+    assert(r->policy_written==0xa5a50108 && r->reads>=3 && r->spin_reads>=1 && r->spin_reads<r->reads);
+    assert((r->first_word&15)==0 && (r->pending_word&15)==0 && (r->reached_word&15)==8);
+    assert(r->first_at>=r->command_at && r->pending_at>=r->first_at && r->reached_at>r->pending_at);
+    assert(r->reached_at-r->command_at>=110 && r->pending_at-r->command_at<120);
+    assert((r->all_and&0x100) && (r->all_or&0x100) && (r->all_or&15)==8 && !(r->all_and&15));
+    printf("domain2-record {\"reads\":%u,\"spin_reads\":%u,\"to_target_us\":%llu,\"last_pending_us\":%llu}\n",
+        r->reads,r->spin_reads,(unsigned long long)(r->reached_at-r->command_at),
+        (unsigned long long)(r->pending_at-r->command_at));
+    /* Domain 2 does not power off. */
+    assert(!a733_power_domain_request(&d2_row,0) && d2_row.counted);
+    assert(a733_rail_release(&m.rails,&d2_token,m.now+1000)==A733_RAIL_BUSY);
+
+    /* The same acknowledgement with measure_transitions: status read back to
+     * back from the command to the target within one service step. */
+    d2_setup(0,0,1);d.ack_us=3000;
+    assert(a733_power_domain_request(&d2_row,1));service_step();
+    assert(a733_power_domain_state(&d2_row)==A733_POWER_ROW_ON);
+    r=d2_record();
+    assert(r->commands==1 && r->spin_reads==r->reads && r->reads>=100);
+    /* The model acknowledges ack_us after the write; command_at follows the
+     * write by the clock reads in between. */
+    assert(r->reached_at-r->command_at>=2990 && r->reached_at-r->command_at<=3010 && r->reached_at-r->pending_at<=10);
+    printf("domain2-measured {\"reads\":%u,\"to_target_us\":%llu,\"bracket_us\":%llu}\n",r->reads,
+        (unsigned long long)(r->reached_at-r->command_at),(unsigned long long)(r->reached_at-r->pending_at));
+    /* Measured, but never acknowledged: back to back until the bound, then FAILED. */
+    d2_setup(0,0,1);d.stall[2]=1;
+    assert(a733_power_domain_request(&d2_row,1));service_step();
+    assert(a733_power_domain_state(&d2_row)==A733_POWER_ROW_FAILED && d2_row.counted);
+    r=d2_record();
+    assert(r->reads==r->spin_reads && !r->reached_at && !r->reached_word);
+    assert(r->pending_at-r->command_at<A733_POWER_PCK_BOUND_US && r->pending_at-r->command_at>=A733_POWER_PCK_BOUND_US-10);
+
+    /* Adopted ON, gates closed: no write, no gate read, no command. */
+    d2_setup(8,8,0);d.ccu_5c0=d.ccu_5e0=0;d.ppu[2][2]|=0x100;
+    from=d.trace_n;
+    assert(a733_power_domain_request(&d2_row,1));service_step();
+    assert(a733_power_domain_state(&d2_row)==A733_POWER_ROW_ON && !writes_since(from) && !gate_reads_since(from));
+    r=d2_record();
+    assert(!r->commands && !r->reads && (r->policy_before&15)==8 && r->status_before==(d.ppu[2][2]));
+
+    /* Incoherent or unknown: refused with no write and only bit 14 set; a
+     * domain-1 row is still admitted afterwards. */
+    const uint32_t bad[][2]={{8,0},{0,8},{4,4}};
+    for(unsigned k=0;k<3;++k) {
+        setup();d.ppu[2][0]|=bad[k][0];d.ppu[2][2]|=bad[k][1];d.ack_us=0;
+        d2_row=(struct a733_power_domain_row){0};d2_token=(struct a733_rail_token){0};
+        struct a733_power_domain_row de={0};struct a733_rail_token de_token={0};
+        assert(a733_power_domain_row_init(&d2_row,&d.owner,2,81,&d2_token));
+        assert(a733_power_domain_row_init(&de,&d.owner,1,82,&de_token));
+        domains_boot();d2_token=domains_rail(81,A733_RAIL_DCDC2);de_token=domains_rail(82,A733_RAIL_DCDC2);
+        from=d.trace_n;assert(a733_power_domain_request(&d2_row,1));service_step();
+        assert(a733_power_domain_state(&d2_row)==A733_POWER_ROW_REFUSED && !writes_since(from));
+        const unsigned w=a733_power_authority_load(&m.rails.authority);
+        assert((w&(A733_POWER_DOMAIN1_FAULT|A733_POWER_DOMAIN2_FAULT|A733_POWER_DOMAIN4_FAULT|A733_POWER_DOMAIN5_FAULT))==
+            A733_POWER_DOMAIN2_FAULT);
+        assert(a733_power_domain_request(&de,1));service_step();
+        assert(a733_power_domain_state(&de)==A733_POWER_ROW_ON);
+    }
+
+    /* A domain-2 power-on that times out: FAILED with only bit 14, the row
+     * and its pin retained, and a domain-4 row still admitted. */
+    struct a733_power_domain_row npu={0};struct a733_rail_token npu_token={0};
+    /* Rows register before the service runs: start again with both. */
+    setup();d.stall[2]=1;
+    d2_row=(struct a733_power_domain_row){0};d2_token=(struct a733_rail_token){0};
+    assert(a733_power_domain_row_init(&d2_row,&d.owner,2,83,&d2_token));
+    assert(a733_power_domain_row_init(&npu,&d.owner,4,84,&npu_token));
+    domains_boot();d2_token=domains_rail(83,A733_RAIL_DCDC2);npu_token=domains_rail(84,A733_RAIL_DCDC2);
+    assert(a733_power_domain_request(&d2_row,1));
+    service_until(m.now+A733_POWER_PCK_BOUND_US+2*TICK_US); /* per-tick reads to the bound */
+    assert(a733_power_domain_state(&d2_row)==A733_POWER_ROW_FAILED && d2_row.counted);
+    assert((a733_power_authority_load(&m.rails.authority)&(A733_POWER_DOMAIN2_FAULT|A733_POWER_DOMAIN4_FAULT))==
+        A733_POWER_DOMAIN2_FAULT);
+    assert(a733_rail_release(&m.rails,&d2_token,m.now+1000)==A733_RAIL_BUSY);
+    d.ack_us=0;assert(a733_power_domain_request(&npu,1));
+    service_step();assert(a733_power_domain_state(&npu)==A733_POWER_ROW_ON);
+    puts("PASS domain 2: no gate read, delay row and ON command, adoption, refusals with bit 14 alone, "
+         "timeout retention, no power-off, transition record, back-to-back measurement");
+}
 int main(int argc,char **argv)
 {
     assert(argc<=3);
@@ -378,11 +588,14 @@ int main(int argc,char **argv)
         transition_deadlines();
     npu_transition_failures();puts("PASS power-domain transition deadline boundaries and retained pins");return 0;
     }
+    if(argc==2 && !strcmp(argv[1],"--domain-traces")){domain_traces();return 0;}
+    if(argc==2 && !strcmp(argv[1],"--domain2")){domain2_cases();return 0;}
     if(argc==2)gpu_trace_run(argv[1]);
     /* An image with no row verifies nothing and reads no PMIC register. */
     setup();domains_boot();
     assert(!(a733_power_authority_load(&m.rails.authority)&(A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED)));
     assert(!m.trace_count && d.steps==1);
+    supply_time_case(0);supply_time_case(1);
     /* Boot verification: 12 single-register transactions, both rails verified,
      * and the verification token released afterwards. */
     setup();
@@ -501,6 +714,7 @@ int main(int argc,char **argv)
         domains_boot();
         const unsigned verified=a733_power_authority_load(&m.rails.authority)&
             (A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED);
+        assert(rail ? !d.owner.verified_at : d.owner.verified_at!=0);
         assert(rail ? verified==A733_POWER_DCDC4_VERIFIED :
                verified==(A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED) &&
                d.owner.dcdc4.programmed_uv==A733_GPU_SUPPLY_UV);
@@ -644,7 +858,7 @@ int main(int argc,char **argv)
     unsigned seen=99;from=d.trace_n;assert(a733_power_domain_check(&d.owner,4,&seen)==1 && seen==0 && !writes_since(from));
     d.ccu_5e0&=~(1u<<18);assert(a733_power_domain_check(&d.owner,4,NULL)==0);d.ccu_5e0|=1u<<18;
     d.ppu[4][2]|=8;assert(a733_power_domain_check(&d.owner,4,NULL)==0);d.ppu[4][2]&=~8u;
-    assert(!writes_since(from) && a733_power_domain_check(&d.owner,2,NULL)==0);
+    assert(!writes_since(from) && a733_power_domain_check(&d.owner,3,NULL)==0);
     n2=domains_rail(72,A733_RAIL_DCDC2);assert(a733_power_domain_request(&npu,1));
     service_step();assert(a733_power_domain_state(&npu)==A733_POWER_ROW_ON && (d.ppu[4][0]&15)==8);
     const unsigned request=atomic_load(&npu.request),pins=m.rails.pins[n2.id&(A733_RAIL_CLIENTS-1)];

@@ -320,6 +320,31 @@ that meets the planted sequence error now reports it when it happens (`ss_latenc
 the check accepts a non-zero exit without the PASS line and either that report or the ping assertion. A run that ends at the budget failure
 without either is repeated, up to three times, in both halves.
 
+### One tree, one build id
+
+An image's build id hashes its inputs in list order, and the lists come from globs, which sort by absolute path. Two checkouts of one tree
+at different depths or names put the same headers in different places beside the files of other roots, so one tree gave different build ids
+at different checkout paths (found in the stage-1 decoder image check), and `build-id-inputs.txt` showed a block of
+`kernel/scheduler/*.h` moved. The identities now sort their inputs by portable path (`src/...`, `build/...`, `cache/...`:
+`sunstone_sort_inputs` in `cmake/aarch64-clang.cmake`, applied before every digest loop and inside `sunstone_identity_digests`), and the
+gpu-application and cached-devices identities pass the text of their compile options, definitions and link options through
+`sunstone_portable_text`, which the other identities already did. `checks/build-id-checkout-path.py` copies the tree to two paths of
+different depth and name, configures both, and requires the same eleven `build-id.txt` files with the same ids; on bringup before the change
+eight of the eleven differed. A copy with one source byte changed must change the OS image id.
+
+The board record's `git_revision` is the revision of the source the image was built from, read from the image. Every image carries the
+48-byte object `a733_source_revision`: `SRV1`, the 40 hex digits of HEAD, a flag that the revision was known and a flag for uncommitted
+changes to tracked files. `cmake/source-revision-write.cmake` writes it at every build (a custom target, not at configure, so a commit between
+configure and build cannot leave a stale one), `cmake/sunstone-source-revision.cmake` adds it to every executable that carries a build-id
+object (deferred until the tree is configured, and listed in `source-revision-targets.txt` of the build directory), and the revision is not
+part of the build id. The runner reads it with `board_images.embedded_source_revision`. A worker can commit after building or build from a
+dirty tree, so the record names the host tree's HEAD at run time separately, as `host_tree_git_revision`, and
+`git_revision_host_tree_mismatch` is true when it differs from the image's revision (null without a host tree or an embedded revision).
+`git_revision_source` is `image`, or `host-tree` / `daemon-checkout` for an image built before images carried the object or outside a git
+checkout, and `git_revision_dirty` is the image's flag. The daemon's own revision is `daemon_git_revision`. The stage-1 decoder record said
+`4f4d44e73`, the daemon's HEAD, for an image built from `6fef74d18`. `checks/image-source-revision.py` builds the object as the images do,
+commits to the tree afterwards and checks the record; `checks/board-runner.py` covers the fallback fields.
+
 ### A run the host stops
 
 A guest run or a threaded host model can end without saying anything about the claim of the check that started it, because of the host and

@@ -74,7 +74,7 @@ MODEL_UNSANITIZED static int ppu_block(uintptr_t a,unsigned *id,unsigned *offset
 {
     if(a<UINT32_C(0x07061000) || a>=UINT32_C(0x07066000))return 0;
     *id=(unsigned)((a-UINT32_C(0x07060000))>>12);*offset=(unsigned)(a&0xfff);
-    return *id==1 || *id==4 || *id==5;
+    return *id==1 || *id==2 || *id==4 || *id==5;
 }
 MODEL_UNSANITIZED static int owner_read(void *v,uintptr_t a,uint32_t *out)
 {

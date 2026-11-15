@@ -19,6 +19,7 @@ target_compile_definitions(sunstone-a733-emmc-read PRIVATE SUNSTONE_EMMC_READ=1
  A733_SMP_CONTRACT_MAGIC=0x4153373345524331ULL A733_SMP_RESULT_MAGIC=0x4153373352445231ULL)
 set(emmc_inputs ${sdsc_inputs} "${CMAKE_CURRENT_LIST_FILE}" "${SUNSTONE_SOURCE_ROOT}/apps/emmc-read/CMakeLists.txt")
 set(emmc_identity "emmc-read;explicit-controller;single-boot-cpu;retained;${CMAKE_C_COMPILER_VERSION}")
+sunstone_sort_inputs(emmc_inputs)
 foreach(input IN LISTS emmc_inputs)
  file(SHA256 "${input}" emmc_hash)
  string(APPEND emmc_identity "${emmc_hash}")

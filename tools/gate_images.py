@@ -15,6 +15,11 @@ FIXTURES = {
 }
 
 IMAGES = {
+    # the returning video decoder check image (apps/vdec-check, docs/video-decode-os.md), whose fault return
+    # checks/os-vdec-fault-return.py runs
+    'ret-vdec': {'configure': [
+        '-DSUNSTONE_APPLICATION=vdec-check',
+    ], 'target': 'sunstone-a733-os-vdec-check', 'elf': 'sunstone-a733-os-vdec-check.elf'},
     'os-usb-ledger': {'configure': [
         '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=hello-compute',
         '-DSUNSTONE_A733_OS_USB_CLASSES=ON', '-DSUNSTONE_BOARD_USB2_IRQ=ON',

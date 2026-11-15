@@ -281,6 +281,18 @@ static void stop_request_case(void)
 {
     if(!stop_case||stop_started)return;
     struct aic8800_sdio_transport *t=&session.transport;
+    if(stop_case==7){
+        /* An outside retain with the dispatcher running, as the board owner's association miss makes one: it is not a
+         * session failure site, and failing the receive stops the started firmware engine with the transport error. */
+        if(t->state!=AIC8800_TRANSPORT_RUNTIME||!session.dispatcher.initialized)return;
+        stop_started=1;
+        assert(session.firmware.state==AIC8800_FW_START_CONFIRMED&&!session.fail_line);
+        assert(a733_radio_session_retain(&session)==A733_SESSION_RETAINED);
+        assert(!session.fail_line&&session.fault&&t->state==AIC8800_TRANSPORT_FAULT&&t->error==AIC8800_TRANSPORT_MESSAGE_ERROR);
+        assert(session.firmware.state==AIC8800_FW_FAULT&&session.firmware.error==AIC8800_FW_TRANSPORT_ERROR);
+        platform_puts("PASS outside retain at runtime: no session site; the firmware engine stops with the transport error\n");
+        platform_exit(0);
+    }
     int ready=stop_case==1?r.radio.stage==RSTAGE_PREPARING:
         stop_case==2?t->state==AIC8800_TRANSPORT_SETUP&&t->pending:
         stop_case==3?t->state==AIC8800_TRANSPORT_FIRMWARE&&session.firmware.hash_offset>=64:
@@ -433,8 +445,8 @@ void kernel_main(void)
     char command[128]={0};uint64_t block[2]={(uintptr_t)command,sizeof(command)};
     register uint64_t operation __asm__("x0")=0x15;register uint64_t *arg __asm__("x1")=block;
     __asm__ volatile("hlt #0xf000":"+r"(operation):"r"(arg):"memory");
-    const char *names[]={"stop-start","stop-setup","stop-upload","stop-runtime","stop-held","stop-deadline"};
-    if(operation==0)for(unsigned n=0;n<6;++n)for(unsigned i=0;i+strlen(names[n])<sizeof(command);++i)
+    const char *names[]={"stop-start","stop-setup","stop-upload","stop-runtime","stop-held","stop-deadline","retain-runtime"};
+    if(operation==0)for(unsigned n=0;n<7;++n)for(unsigned i=0;i+strlen(names[n])<sizeof(command);++i)
         if(!memcmp(command+i,names[n],strlen(names[n])))stop_case=n+1;
     if(stop_case==5)add_unrelated=1;
     session_task=xTaskCreateStatic(session_worker,"radio-session",8192,NULL,4,session_stack,&session_task_storage);assert(session_task);

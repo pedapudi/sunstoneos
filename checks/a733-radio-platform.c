@@ -40,15 +40,15 @@ static void emit_result(const char *name,const struct a733_radio_platform *p,uns
     if(scan){
         static const uint8_t bssid_a[6]={0x02,0x11,0x22,0x33,0x44,0x55},bssid_b[6]={0x02,0xaa,0xbb,0xcc,0xdd,0xee};
         a733_radio_report_firmware(&report);a733_radio_report_identity(&report,0x00080001,0x20);
-        a733_radio_report_ap(&report,bssid_a,(const uint8_t *)"lab",3,2437,-61);
-        a733_radio_report_ap(&report,bssid_b,(const uint8_t *)"guest",5,5180,-48);
-        a733_radio_report_ap(&report,bssid_a,(const uint8_t *)"lab",3,2437,-55);
+        a733_radio_report_ap(&report,bssid_a,2437,-61);
+        a733_radio_report_ap(&report,bssid_b,5180,-48);
+        a733_radio_report_ap(&report,bssid_a,2437,-55);
         a733_radio_report_scan_done(&report,3);
     }
     if(scan==2){ /* Far more access points than any fixed list: 300, then the record is longer than its head. */
         for(unsigned i=0;i<300;++i){
-            uint8_t bssid[6]={2,0,0,0,(uint8_t)(i>>8),(uint8_t)i};char ssid[8];ssid[0]='n';ssid[1]=(char)('0'+i%10);ssid[2]=0;
-            a733_radio_report_ap(&report,bssid,(const uint8_t *)ssid,2,(uint16_t)(2412+5*(i%11)),(int8_t)(-30-(int)(i%60)));
+            uint8_t bssid[6]={2,0,0,0,(uint8_t)(i>>8),(uint8_t)i};
+            a733_radio_report_ap(&report,bssid,(uint16_t)(2412+5*(i%11)),(int8_t)(-30-(int)(i%60)));
         }
         a733_radio_report_scan_done(&report,303);
     }

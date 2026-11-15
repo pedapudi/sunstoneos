@@ -104,7 +104,7 @@ The power-authority state word is one 64-byte line embedded in the
 [a733_power_authority.h](../include/a733_power_authority.h). Its bits are PMIC
 provider READY and fault bits for the provider, the clock registry and the rail
 ledger. The power-domain owner adds a supply-verification done bit, verified
-bits for DCDC2 and DCDC4, and fault bits for domains 1, 4 and 5
+bits for DCDC2 and DCDC4, and fault bits for domains 1, 2, 4 and 5
 ([a733_power_domains.h](../include/a733_power_domains.h)). Every bit is set
 once per boot with an atomic OR and never cleared, so READY cannot overwrite a
 fault that another core set during startup. A reader makes one acquire load
