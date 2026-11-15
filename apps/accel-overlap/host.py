@@ -313,6 +313,8 @@ def large_decision(r):
             verdict = 'lever'
         elif abs(now - before) <= 15:
             verdict = 'not a lever'
+        elif now > before:
+            verdict = 'worse'  # larger jobs lose more than the small ones: not a lever
         else:
             verdict = 'partial'
         out[d] = {'confounded': together is None or together < 80, 'stage_1c_loss': now, 'stage_1b_loss': before,
