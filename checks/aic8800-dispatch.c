@@ -122,6 +122,9 @@ static void scan_application(void)
     }
     assert(!bootstrap_dispatch.faulted&&bootstrap_dispatch.event_count==4&&wifi.held&&transport.held);
     assert(!aic8800_transport_consume(&transport));
+    /* A held record reports no transport work at any time; only the consumer's drain can publish the pass that
+     * places it (apps/board/radio.c, board run 1794712987077481541-5b26ea3e). */
+    assert(!aic8800_transport_event_work(&transport,UINT64_MAX));
     if(mode==2){
         while(!bootstrap_dispatch.faulted)dispatcher_step();
         assert(transport.state==AIC8800_TRANSPORT_FAULT&&transport.held&&!wifi.summary.accepted);

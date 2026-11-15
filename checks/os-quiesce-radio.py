@@ -37,9 +37,15 @@ enum a733_radio_session_result {A733_SESSION_PENDING,A733_SESSION_BUSY,A733_SESS
 enum board_radio_result {BOARD_RADIO_DOWN,BOARD_RADIO_RETAINED,BOARD_RADIO_INVALID};
 struct board_radio {
     struct {unsigned scan_only,associate,entropy_only;} config;
-    struct {unsigned fail_line,fail_stage;} platform;
+    struct {unsigned fail_line,fail_stage,aborting,abort_done;} platform;
     struct {unsigned fail_line,fail_stage,stop_requested;} session;
+    atomic_uint failed;
 };
+/* The failure shutdown: each external-failure pass on the owner task advances it; it ends clean or not. */
+static unsigned clean,abort_passes,abort_left;
+static int a733_radio_platform_clean(const void *p){(void)p;return clean;}
+static enum board_radio_result board_radio_external_failure(struct board_radio *r)
+{++abort_passes;if(abort_left&&!--abort_left){r->platform.aborting=0;r->platform.abort_done=1;}return BOARD_RADIO_RETAINED;}
 static struct os_session {unsigned granted;struct {unsigned workload;} board;} session;
 static const struct os_session *os_session_admitted(void){return &session;}
 static unsigned stop_calls,release_calls,poll_calls,retain_calls,wiped,wipe_polls,stop_accept=1,release_accept=1,peer;
@@ -74,7 +80,7 @@ static void reset(void)
     shutdown_started=module_notified=stop_calls=release_calls=poll_calls=retain_calls=0;
     down_calls=down_proved=peer=wiped=wipe_polls=headset=ce_calls=0;ce_retire=1;ce_deadline=0;
     stop_accept=release_accept=1;release_ready=0;failing=1;deadline=2500000;
-    session_result=A733_SESSION_PENDING;
+    session_result=A733_SESSION_PENDING;clean=abort_passes=abort_left=0;
 }
 int main(void)
 {
@@ -122,6 +128,28 @@ int main(void)
     r.config.scan_only=1;
     reset();r.config.associate=0;r.config.entropy_only=1;
     assert(os_radio_quiesce_poll(&r,0)==2&&radio_quiesce.value==0x905&&!stop_calls);
+    /* A failed scan station closes before it reports (docs/designs/failure-return-audit.md). Board run
+     * 1794712987077481541-5b26ea3e failed in MANAGEMENT and its quiesce kept FAULT until the 3 s bound (0x742). */
+    reset();r.config.scan_only=1;r.config.associate=0;r.config.entropy_only=0;atomic_store(&r.failed,1);
+    r.platform.fail_line=0;r.session.fail_line=328;r.session.fail_stage=9;
+    r.platform.aborting=1;r.platform.abort_done=0;abort_left=2;clean=1;
+    assert(os_radio_quiesce_poll(&r,0)==1&&abort_passes==1&&!stop_calls); /* the shutdown continues on this task */
+    assert(os_radio_quiesce_poll(&r,0)==1&&abort_passes==2&&r.platform.abort_done&&!wipe_polls);
+    assert(os_radio_quiesce_poll(&r,0)==1&&abort_passes==2&&wipe_polls==1&&!stop_calls&&!poll_calls);
+    assert(os_quiesce_result(&radio_quiesce)==OS_QUIESCE_PENDING);
+    wiped=1;assert(os_radio_quiesce_poll(&r,0)==2&&os_quiesce_result(&radio_quiesce)==OS_QUIESCE_DONE&&!fatal);
+    /* Association: the closed station still retires its CE before the return completes. */
+    reset();r.config.associate=1;r.platform.aborting=0;r.platform.abort_done=1;clean=1;ce_retire=0;wiped=1;
+    assert(os_radio_quiesce_poll(&r,0)==1&&ce_calls==1&&os_quiesce_result(&radio_quiesce)==OS_QUIESCE_PENDING);
+    ce_retire=1;assert(os_radio_quiesce_poll(&r,0)==2&&os_quiesce_result(&radio_quiesce)==OS_QUIESCE_DONE);
+    /* A shutdown step that failed to read back keeps FAULT with the session's site. */
+    reset();r.config.associate=0;r.platform.abort_done=1;clean=0;
+    assert(os_radio_quiesce_poll(&r,0)==2&&radio_quiesce.value==(328u<<16|0x100u|9u));
+    assert(os_quiesce_result(&radio_quiesce)==OS_QUIESCE_FAULT&&!stop_calls&&!fatal);
+    /* A Bluetooth client shared the module, which the shutdown powered off under it: FAULT stays. */
+    reset();headset=1;clean=1;
+    assert(os_radio_quiesce_poll(&r,0)==2&&os_quiesce_result(&radio_quiesce)==OS_QUIESCE_FAULT);
+    atomic_store(&r.failed,0);r.session.fail_line=0;r.session.fail_stage=0;headset=0;
     reset();r.config.entropy_only=0;failing=0;session_result=A733_SESSION_RETAINED;
     assert(os_radio_quiesce_poll(&r,0)==2&&os_quiesce_result(&radio_quiesce)==OS_QUIESCE_FAULT&&!fatal);
     atomic_store(&radio_quiesce.requested,0);radio_quiesce_refuse(1);assert(fatal==1);
@@ -212,6 +240,8 @@ static int os_radio_quiesce_fault(uint32_t value,const void *caller){(void)calle
 static void board_fail_note(uint32_t site,uint32_t value,const void *caller){(void)site;(void)caller;fault_value=value;++noted;}
 static unsigned wakes;
 static void os_application_wake_main(void){++wakes;}
+static unsigned closed;
+static int os_radio_failure_closed(const struct board_radio *r){(void)r;return closed;}
 ''' + publisher + body + r'''
 int main(void)
 {
@@ -228,6 +258,11 @@ int main(void)
     struct board_radio a={.config.associate=1,.assoc={.stage=5,.link=0,.status=17,.eapol_rx=1,.eapol_tx=1}};
     requested=0;atomic_store(&state,RUNNING);os_radio_scan_step(&a,BOARD_RADIO_RETAINED);
     assert(atomic_load(&state)==FAILED&&fault_value==(17u<<16|0x8000u|1u<<8|1u<<4|5u));
+    /* A failure whose shutdown closed the station publishes FAILED and the record, and no fault. */
+    struct board_radio c={.session={.fail_line=328,.fail_stage=9}};
+    closed=1;fault_value=0;noted=0;unsigned before=published;atomic_store(&state,RUNNING);
+    os_radio_scan_step(&c,BOARD_RADIO_RETAINED);
+    assert(atomic_load(&state)==FAILED&&!fault_value&&!noted&&published==before+1);
     return 0;
 }
 ''')
@@ -356,7 +391,7 @@ def main():
                 'removed-registration': body.replace('os_quiesce_register(&radio_quiesce)', '1'),
                 'exit-in-window': body.replace(marker, marker + '\n    platform_exit(6);'),
                 'association-without-ce-retirement': body.replace(retire, 'int ce=1;')}
-    assert body.count('os_quiesce_register(&radio_quiesce)') == 1 and body.count(marker) == 1 and body.count(retire) == 1
+    assert body.count('os_quiesce_register(&radio_quiesce)') == 1 and body.count(marker) == 1 and body.count(retire) == 2
     compiler = shutil.which('clang-21') or shutil.which('clang')
     results = []
     for name, variant in variants.items():

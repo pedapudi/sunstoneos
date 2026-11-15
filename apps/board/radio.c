@@ -538,8 +538,10 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
          * event queue and stop receive parsing. A staged owner records every
          * scan result as it arrives: the queue holds one result at a time and
          * applies backpressure, so none is lost. */
+        unsigned taken=0;
         while((r->stage!=ONLINE||r->recovering)&&
             a733_radio_session_take_event(&r->session,&r->startup_event)){
+            taken=1;
             if(r->stage!=ONLINE&&r->startup_events!=UINT64_MAX)++r->startup_events;
             if(r->startup_event.kind==AIC8800_DISPATCH_SCAN&&r->config.report_memory.allocate){
                 /* The record names no SSID in any stage: a scan hears the user's network among its neighbours, and
@@ -550,6 +552,14 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
             }
             if(!r->config.report_memory.allocate)break; /* One event per pass, as before. */
         }
+#ifdef SUNSTONE_A733_RADIO_IRQ
+        /* A full queue leaves the next event record held in the transport. A held transport reports no work, and its
+         * function interrupt stays masked while its receive drains. Taking an event frees the slot that record waits
+         * for, so the pass publishes ready work; without it the owner sleeps to the scan's command deadline. */
+        if(taken&&r->session.transport.held)r->event_ready=1;
+#else
+        (void)taken;
+#endif
         if(a733_radio_session_take_record(&r->session,&r->diagnostic)&&
             r->diagnostic_records!=UINT64_MAX)++r->diagnostic_records;
     }

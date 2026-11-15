@@ -56,13 +56,11 @@ struct a733_iommu_owner {
     uint16_t attached, translated;             /* master bits */
     uint16_t touched;                          /* masters whose micro registers this lifetime wrote; the last detach
                                                 * flushes them all */
-    uint32_t prefetch;                         /* the banks' prefetch word, set by the first attach */
     enum a733_iommu_owner_state state;
     unsigned tables, entries;                  /* second-level tables allocated, leaf entries present */
     uint32_t fault_step, fault_word;           /* the first failure: step and the register offset or word */
     uint32_t fault_read;                       /* for a readback mismatch, the value read */
-    uint32_t refused_word;                     /* last attach refusal with no change: 1 clock lease, 2 entry state,
-                                                * 3 a later master whose prefetch word differs from the banks' */
+    uint32_t refused_word;                     /* last attach refusal with no change: 1 clock lease, 2 entry state */
     struct a733_iommu_owner_entry entry;
     struct a733_iommu_owner_fault faults[A733_IOMMU_OWNER_MASTERS];
     uint16_t faulted;                          /* masters whose fault record is set */

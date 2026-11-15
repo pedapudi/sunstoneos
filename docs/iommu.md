@@ -47,7 +47,16 @@ prefetch value `0x3007f`, and range-invalidation mode 1 for both caches.
 The effective vendor parser zero-initializes its platform data and never reads
 the prefetch property. Its setup therefore writes zero to both prefetch controls.
 The recorded ISP profile, which translates CSI master 1 and ISP master 2,
-uses that effective zero value. Other SunstoneOS profiles retain `0x3007f`.
+uses that effective zero value. Other profiles of drivers/iommu/a733_iommu.c
+retain `0x3007f`; the OS-image owner's words are described below.
+
+Each bank has its own prefetch control at offset `0x2c` (bank 1's at
+`0x1002c`). Bits 0-6 enable prefetch for one master each, numbered by the
+master's local ID in its bank; bits 16 and 17 are mode bits for the whole bank.
+The vendor's older platform tables show the per-master bits: sun8iw20 uses
+`0x30016` and sun8iw21 uses `0x30077`, and each clears exactly the bits of the
+masters whose prefetch it disables, such as G2D. The vendor writes one value to
+both banks; no vendor code writes them differently.
 The source is `a733-iommu-v2-c` in [the source lock](../sources.lock.json),
 functions `__init_plat_data_from_ofnode()` and `sunxi_iommu_hw_init()`.
 The version value comes from source configuration, not a physical register read.
@@ -242,12 +251,15 @@ OS-image wiring serializes them.
   range invalidation modes, interrupt enables (0), bypass (0 for the new
   masters, 1 for USB), a flush held for 10 microseconds, automatic clock
   gating, and enable. Every write except the flush requests is read back.
-- **Prefetch.** The prefetch word is shared by every master of a bank. Each
-  master needs one value: `0x3007f` (the A733 platform data's `tlb_prefetch`)
-  for most masters, and 0 for the CSI and ISP masters (1 and 2), whose vendor
-  setup leaves it zero. The first attach writes the value its masters need (0
-  if any of them needs 0). A later master that needs a different value is
-  refused with no register access.
+- **Prefetch.** The first attach writes bank 0's prefetch control `0x30079`,
+  which is `0x3007f` with the CSI and ISP bits (1 and 2) clear, and bank 1's
+  `0x3007f`, the value G2D (bank 1, local ID 4) passed its board runs with. It
+  then reads bank 0's word again, so a board where the two offsets name one
+  register fails the attach at that readback. No later attach writes either
+  word, so G2D and the camera masters attach in either order. The CSI and ISP
+  masters run without prefetch, as in the recorded ISP profile. That profile
+  also had bank 0's mode bits clear, which only affect masters whose prefetch
+  is enabled.
 - **USB stays bypassed.** The device tree lists USB as an IOMMU master with no
   power domain, and the Linux setup writes its bypass to 1. The OS image's USB
   controllers run DMA throughout a session, so the first attach sets USB's
@@ -308,8 +320,9 @@ register that reads back a different value, which records the readback step,
 offset and value and still detaches cleanly. It also checks that the last detach
 flushes a master detached earlier, that a detach records the master's fault words
 first, that a later attach failing among its micro writes leaves every master
-detachable, that an ISP first attach writes prefetch 0 and refuses a later master
-that needs `0x3007f`, and that a link of the owner with drivers/iommu/a733_iommu.c
+detachable, that G2D and the camera masters attach in either order with the same
+two prefetch words written once, that a model whose two prefetch offsets name one
+register fails the first attach at bank 0's second readback, and that a link of the owner with drivers/iommu/a733_iommu.c
 fails. A
 mutant that installs a second directory for the decoder's attach fails the
 test, because G2D's pages no longer walk from bank 1. No board run has used the
