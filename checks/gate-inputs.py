@@ -33,7 +33,7 @@ CHECK_INPUTS = ['tools/integration-gate.py', 'tools/gate_images.py', 'checks/har
 IMAGE_EXECUTING = ('fault-capture os-gpu-return os-gpu-quiesce os-gpu-untouched os-gpu-unconstructed os-gpu-wait-linked '
                    'os-image-audio os-image-headset os-image-identity os-image-radio os-audio-replay '
                    'os-cpu-return-rails os-cpu-return-thermal os-cpu-clock-native os-npu-start '
-                   'latency-startup os-g2d-fault-return os-rtc-fault-return').split()
+                   'latency-startup os-g2d-fault-return os-g2d-operation os-rtc-fault-return').split()
 
 
 def load(name, path):
