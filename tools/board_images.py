@@ -11,6 +11,7 @@ import shutil
 import struct
 import subprocess
 from typing import NamedTuple
+from elftools.common.exceptions import ELFError
 from elftools.elf.elffile import ELFFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -282,6 +283,32 @@ def finite_npu_info(image, host, finite, manifest):
     require(layout[:3] == (456, 224, 232), 'NPU development session layout differs.')
     return {'watchdog': watchdog, 'geometry': geometry, 'session_layout': list(layout),
             'execution_profile': profile, 'image_sha256': sha(image), 'build_id': build.hex()}
+
+
+SOURCE_REVISION_SYMBOL = 'a733_source_revision'
+
+
+def embedded_source_revision(image):
+    """The source revision an image carries (cmake/source-revision-write.cmake), or None.
+
+    The object is 48 bytes: "SRV1", the 40 hex digits of HEAD at the build, '1' when that revision was known and '0' when not, and '1'
+    when tracked files had uncommitted changes. None for a file that is not an ELF, an image built before images carried it, and an
+    object that is not in this layout. 'known' is false when the build was not in a git checkout; its revision is then zeros."""
+    try:
+        with Path(image).open('rb') as stream:
+            elf = ELFFile(stream)
+            table = elf.get_section_by_name('.symtab')
+            found = [s for s in table.iter_symbols() if s.name == SOURCE_REVISION_SYMBOL and s['st_shndx'] != 'SHN_UNDEF'] if table else []
+            if len(found) != 1 or int(found[0]['st_size']) != 48:
+                return None
+            section = elf.get_section(found[0]['st_shndx'])
+            offset = int(found[0]['st_value']) - section['sh_addr']
+            data = section.data()[offset:offset + 48]
+    except (OSError, ValueError, ELFError):
+        return None
+    if data[:4] != b'SRV1' or not re.fullmatch(rb'[0-9a-f]{40}[01][01]\x00\x00', data[4:]):
+        return None
+    return {'revision': data[4:44].decode(), 'known': data[44:45] == b'1', 'dirty': data[45:46] == b'1'}
 
 
 def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
