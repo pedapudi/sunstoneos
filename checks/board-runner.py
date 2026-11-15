@@ -2396,6 +2396,21 @@ def removed_cases(out):
     assert not (Path(result['evidence_path'])/'expect.json').exists()
     assert result['git_revision']
     passed('no-expectation-option-file-or-outcome')
+    # The record names the revision of the source the image ran from and, apart from it, the daemon's own.
+    daemon=subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'],capture_output=True,text=True).stdout.strip()
+    assert result['daemon_git_revision']==daemon and result['git_revision']==daemon and result['git_revision_source']=='daemon-checkout',result
+    tree=out/'image-source-tree'
+    tree.mkdir()
+    for step in (['init','-q'],['config','user.email','x@example.invalid'],['config','user.name','x'],['commit','-q','--allow-empty','-m','image source']):
+        subprocess.run(['git','-C',str(tree),*step],check=True,capture_output=True)
+    image_head=subprocess.run(['git','-C',str(tree),'rev-parse','HEAD'],capture_output=True,text=True,check=True).stdout.strip()
+    assert image_head!=daemon
+    from_tree=board.source_revisions(tree)
+    assert from_tree=={'git_revision':image_head,'git_revision_source':'host-tree','git_revision_dirty':False,'daemon_git_revision':daemon},from_tree
+    (tree/'tracked').write_text('x\n')
+    subprocess.run(['git','-C',str(tree),'add','tracked'],check=True,capture_output=True)
+    assert board.source_revisions(tree)['git_revision_dirty'] is True
+    passed('record-names-the-image-source-revision-and-the-daemon-revision')
 
 
 def daemon_code_cases(out):

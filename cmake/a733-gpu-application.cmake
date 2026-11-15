@@ -119,7 +119,12 @@ get_target_property(gpu_app_definitions sunstone-a733-gpu-render COMPILE_DEFINIT
 get_target_property(gpu_app_links sunstone-a733-gpu-render LINK_OPTIONS)
 file(SHA256 "${CMAKE_C_COMPILER}" gpu_app_cc_hash)
 file(SHA256 "${SUNSTONE_LLD}" gpu_app_ld_hash)
+# Checkout and build paths are fixed names in the identity, so that one tree gives one build id wherever it is checked out.
+foreach(gpu_app_text gpu_app_options gpu_app_definitions gpu_app_links)
+  sunstone_portable_text(${gpu_app_text} "${${gpu_app_text}}")
+endforeach()
 set(gpu_app_identity "native-gpu-application;${SUNSTONE_GPU_COMPUTE_APPLICATION};${gpu_app_cc_hash};${gpu_app_ld_hash};${gpu_app_options};${gpu_app_definitions};${gpu_app_links};${CMAKE_C_FLAGS};${CMAKE_ASM_FLAGS};${CMAKE_BUILD_TYPE}")
+sunstone_sort_inputs(gpu_app_inputs)
 foreach(input IN LISTS gpu_app_inputs)
   file(SHA256 "${input}" digest)
   string(APPEND gpu_app_identity "${digest}")
