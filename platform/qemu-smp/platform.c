@@ -41,6 +41,15 @@ extern void ss_kernel_local_timer_irq(void);
 #ifdef SS_STORM
 #error "the storm interrupt uses CNTV, which precise deadlines own"
 #endif
+#elif defined(SUNSTONE_LATENCY_NPU)
+/* The latency diagnostic's stand-in NPU (apps/latency/npu.c) completes its jobs on the same timer and core, as the board's
+ * NPU interrupt reaches CPU0 in that image. */
+#include "npu.h"
+#define DEADLINE_IRQ 27U
+#define DEADLINE_BIT(c) ((c) ? 0 : 1U << DEADLINE_IRQ)
+#ifdef SS_STORM
+#error "the storm interrupt uses CNTV, which the stand-in NPU owns"
+#endif
 #else
 #define DEADLINE_BIT(c) 0U
 #endif
@@ -119,7 +128,7 @@ static void local_init(void) {
     *(volatile uint8_t *)(s + 0x400) = SS_BAND_COMMAND_PRIORITY;
     for (unsigned b = 1; b <= SS_BANDS; ++b) *(volatile uint8_t *)(s + 0x400 + b) = SS_BAND_SGI_PRIORITY(b);
     *(volatile uint8_t *)(s + 0x400 + TIMER_IRQ) = SS_BAND_COMMAND_PRIORITY;
-#ifdef SUNSTONE_TASK_DEADLINES
+#if defined(SUNSTONE_TASK_DEADLINES) || defined(SUNSTONE_LATENCY_NPU)
     *(volatile uint8_t *)(s + 0x400 + DEADLINE_IRQ) = SS_BAND_COMMAND_PRIORITY;
 #endif
     if (core()) __asm__ volatile("msr cntp_ctl_el0, xzr\n isb" ::: "memory");
@@ -128,10 +137,14 @@ static void local_init(void) {
     uint8_t priority = portLOWEST_USABLE_INTERRUPT_PRIORITY << portPRIORITY_SHIFT;
     *(volatile uint8_t *)(s + 0x400) = priority;
     *(volatile uint8_t *)(s + 0x400 + TIMER_IRQ) = priority;
-#ifdef SUNSTONE_TASK_DEADLINES
+#if defined(SUNSTONE_TASK_DEADLINES) || defined(SUNSTONE_LATENCY_NPU)
     *(volatile uint8_t *)(s + 0x400 + DEADLINE_IRQ) = priority;
 #endif
     write32(s + 0x100, 1 | LOCAL_TIMER_BIT(core()) | DEADLINE_BIT(core()));
+#endif
+#ifdef SUNSTONE_LATENCY_NPU
+    /* The stand-in NPU's producer programs CNTV from EL0 on CPU0 (CNTKCTL_EL1.EL0VTEN), as the board's producer rings the NPU ring's doorbell. */
+    if (!core()) { uint64_t k; __asm__ volatile("mrs %0, cntkctl_el1\n orr %0, %0, #(1 << 8)\n msr cntkctl_el1, %0\n isb" : "=r"(k) :: "memory"); }
 #endif
     wait_clear(r, 8);
     uint64_t value = 1;
@@ -290,6 +303,8 @@ void vApplicationIRQHandler(uint64_t interrupt) {
     if (interrupt == TIMER_IRQ) FreeRTOS_Tick_Handler();
 #ifdef SUNSTONE_TASK_DEADLINES
     else if (interrupt == DEADLINE_IRQ && !core()) sunstone_deadline_irq();
+#elif defined(SUNSTONE_LATENCY_NPU)
+    else if (interrupt == DEADLINE_IRQ && !core()) latency_npu_model_irq();
 #endif
     else if (interrupt <= 3) { /* SGI 0 and the band SGIs (kernel/scheduler/bands.h) */
 #if configSS_BAND_SGIS

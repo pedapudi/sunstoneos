@@ -207,6 +207,12 @@ elseif(SUNSTONE_APPLICATION MATCHES "^latency(-dma)?$")
   endif()
   include("${SUNSTONE_SOURCE_ROOT}/apps/latency/cmake/application.cmake")
   add_sunstone_image(sunstone-a733-os-${SUNSTONE_APPLICATION} LIFETIME ${os_lifetime} APPLICATION ${SUNSTONE_APPLICATION})
+  if(SUNSTONE_LATENCY_NPU)
+    # The NPU's interrupt (the route table in the image's manifest source), its owner tasks and the EL0 ring's producer
+    # on CPU0, the service core, so that cores 1-7 keep only their wake tasks and streams (apps/os/npu.h).
+    target_compile_definitions(sunstone-a733-os-core PRIVATE OS_NPU_CORE=0u)
+    target_compile_definitions(sunstone-a733-os-${SUNSTONE_APPLICATION} PRIVATE OS_NPU_CORE=0u)
+  endif()
 elseif(SUNSTONE_APPLICATION MATCHES "^(cpu-capacity|cpu-split)$")
   if(NOT SUNSTONE_A733_CPU_TOPOLOGY)
     message(FATAL_ERROR "CPU capacity observations require SUNSTONE_A733_CPU_TOPOLOGY=ON")

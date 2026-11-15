@@ -92,6 +92,11 @@ function(sunstone_latency_partitioned_model target metric)
     target_sources(${target} PRIVATE "${latency_root}/runtime/deadline.c" "${latency_root}/platform/qemu-smp/deadline.c")
     target_compile_definitions(${target} PRIVATE SUNSTONE_TASK_DEADLINES=1 configTASK_NOTIFICATION_ARRAY_ENTRIES=2)
   endif()
+  if(SUNSTONE_LATENCY_NPU AND NOT metric)
+    # The stage 3b NPU load against the stand-in device, whose jobs complete on CPU0's virtual timer (apps/latency/npu.c).
+    target_sources(${target} PRIVATE "${latency_root}/apps/latency/npu.c")
+    target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_NPU=1)
+  endif()
   if(SUNSTONE_LATENCY_CAUSE AND NOT metric)
     target_sources(${target} PRIVATE "${latency_root}/apps/latency/cause-ping.c")
     target_compile_definitions(${target} PRIVATE SUNSTONE_LATENCY_CAUSE=1

@@ -39,6 +39,16 @@ BAND_PROBES = 2
 BAND_BINS = 8
 WAKE_MAGIC = 0x5353574b53454731
 WAKE_FOOTER_MAGIC = 0x5353574b53454631
+NPU_MAGIC = 0x5353414c4e505531  # stage 3b NPU load section (apps/latency/npu.h)
+NPU_FOOTER_MAGIC = 0x5353464c4e505531
+NPU_HEADER = '<3Q8I3Q4I'
+NPU_WINDOW = '<4Q8Q8Q4I'
+NPU_RUN = '<7Q2I'
+NPU_SUBPHASES = 4
+NPU_RUNS = 2
+NPU_BYTES = struct.calcsize(NPU_HEADER) + (1 + NPU_SUBPHASES) * struct.calcsize(NPU_WINDOW) + NPU_RUNS * struct.calcsize(NPU_RUN)
+NPU_DECLARED = {'subphase_wakes': 32, 'on_mask': 0x6, 'in_flight': 8, 'alone_ms': 200, 'warm_jobs': 64, 'core': 0}
+NPU_SWEEP_BYTES = 2 * 1048576  # each sweep reads and rewrites 1 MiB, as the traffic words count it
 WAKE_POINTS = ('irq_entry', 'wrapper_return', 'exit_start', 'work_start', 'work_done', 'mask_restored',
                'switch_begin', 'switch_end', 'running')
 WAKE_SEGMENTS = tuple(f'{a}_to_{b}' for a, b in zip(WAKE_POINTS, WAKE_POINTS[1:]))
@@ -1060,15 +1070,132 @@ def service_quantile(bins, count, fraction):
     raise ValueError('service cycle bins hold fewer spans than the count')
 
 
-def peel_wake_segments(payload):
-    """Split the wake segment section, which comes last, from the result."""
+def peel_wake_segments(payload, result_size=None):
+    """Split the wake segment section, which comes last unless the NPU section follows it, from the result. Its footer
+    records the whole result's size."""
     if len(payload) < 64 or struct.unpack_from('<Q', payload, len(payload) - 64)[0] != WAKE_FOOTER_MAGIC:
         return payload, b''
     _, version, size, at, length, *rest = struct.unpack_from('<8Q', payload, len(payload) - 64)
-    if (version != 1 or size != len(payload) or length not in WAKE_BYTES_BY_VERSION.values() or at % 64 or
+    if (version != 1 or size != (len(payload) if result_size is None else result_size) or
+            length not in WAKE_BYTES_BY_VERSION.values() or at % 64 or
             at + length > len(payload) - 64 or any(rest) or any(payload[at + length:-64])):
         raise ValueError('wake segment footer offsets, padding or report size are invalid')
     return payload[:at], payload[at:at + length]
+
+
+def peel_npu(payload):
+    """Split the stage 3b NPU section, which comes last, from the result."""
+    if len(payload) < 64 or struct.unpack_from('<Q', payload, len(payload) - 64)[0] != NPU_FOOTER_MAGIC:
+        return payload, b''
+    _, version, size, at, length, *rest = struct.unpack_from('<8Q', payload, len(payload) - 64)
+    if (version != 1 or size != len(payload) or length != NPU_BYTES or at % 64 or
+            at + length > len(payload) - 64 or any(rest) or any(payload[at + length:-64])):
+        raise ValueError('NPU footer offsets, padding or report size are invalid')
+    return payload[:at], payload[at:at + length]
+
+
+def decode_npu(payload, frequency, stream_mask):
+    """The NPU load of stage 3b: the NPU-alone window, the four busy sub-phases (off, on, on, off) and the two runs of jobs,
+    with each window's job and stream rates and the NPU's loss under the streams (docs/designs/concurrent-accel.md)."""
+    words = struct.unpack_from(NPU_HEADER, payload)
+    magic, version, size = words[:3]
+    subphase_wakes, on_mask, in_flight, alone_ms, warm_jobs, core, producer_core, complete = words[3:11]
+    open_ticks, register_ticks, close_ticks = words[11:14]
+    input_bytes, reference_bytes, model, reserved = words[14:18]
+    if (magic, version, size) != (NPU_MAGIC, 1, NPU_BYTES) or reserved or model not in (0, 1):
+        raise ValueError('NPU section header is invalid')
+    declared = dict(zip(('subphase_wakes', 'on_mask', 'in_flight', 'alone_ms', 'warm_jobs', 'core'),
+                        (subphase_wakes, on_mask, in_flight, alone_ms, warm_jobs, core)))
+    if declared != NPU_DECLARED or subphase_wakes * NPU_SUBPHASES != 128:
+        raise ValueError('NPU section names other sub-phases, depth or core than stage 3b: %s' % declared)
+    if complete != 1 or producer_core != core or not input_bytes or reference_bytes != input_bytes:
+        raise ValueError('NPU run is incomplete, its producer ran off the NPU core, or its graph tensors differ')
+    at = struct.calcsize(NPU_HEADER)
+
+    def window(name):
+        nonlocal at
+        values = struct.unpack_from(NPU_WINDOW, payload, at)
+        at += struct.calcsize(NPU_WINDOW)
+        start, end, jobs_start, jobs_end = values[:4]
+        before, after = values[4:12], values[12:20]
+        in_flight_start, in_flight_end, run_start, run_end = values[20:24]
+        if (not start or end <= start or jobs_end < jobs_start or any(b > a for b, a in zip(before, after)) or
+                run_start > 1 or run_end > 1 or in_flight_start > in_flight or in_flight_end > in_flight):
+            raise ValueError('NPU %s window stamps, job or sweep counts are out of order' % name)
+        seconds = (end - start) / frequency
+        sweeps = [a - b for b, a in zip(before, after)]
+        if any(sweeps[c] for c in range(8) if not stream_mask >> c & 1):
+            raise ValueError('a core outside the streaming mask swept in the NPU %s window' % name)
+        jobs = jobs_end - jobs_start
+        return {'start': start, 'end': end, 'seconds': seconds, 'jobs': jobs, 'jobs_per_second': jobs / seconds,
+                'jobs_start': jobs_start, 'jobs_end': jobs_end, 'in_flight': [in_flight_start, in_flight_end],
+                'running': [bool(run_start), bool(run_end)], 'sweeps': sweeps,
+                'gb_per_second': sum(sweeps) * NPU_SWEEP_BYTES / seconds / 1e9}
+    alone = window('alone')
+    sub = [window('sub-phase %d' % k) for k in range(NPU_SUBPHASES)]
+    runs = []
+    for index in range(NPU_RUNS):
+        values = struct.unpack_from(NPU_RUN, payload, at)
+        at += struct.calcsize(NPU_RUN)
+        requested, warm, stop_requested, drained, jobs_before, submitted, completed, compared, mismatches = values
+        if not requested < warm <= stop_requested <= drained or completed != submitted or completed < warm_jobs:
+            raise ValueError('NPU run %d stamps or job counts are out of order' % index)
+        if compared != 1 or mismatches:
+            raise ValueError('NPU run %d did not compare its last output with the reference, or it differed' % index)
+        runs.append({'requested': requested, 'warm': warm, 'stop_requested': stop_requested, 'drained': drained,
+                     'jobs_before': jobs_before, 'jobs': completed, 'warm_us': (warm - requested) * 1e6 / frequency,
+                     'drain_us': (drained - stop_requested) * 1e6 / frequency, 'compared': compared})
+    on = [bool(on_mask >> k & 1) for k in range(NPU_SUBPHASES)]
+    if alone['sweeps'] != [0] * 8 or alone['running'] != [True, True]:
+        raise ValueError('the NPU-alone window ran with the streams or without the NPU')
+    if not runs[0]['warm'] <= alone['start'] < alone['end'] <= runs[0]['stop_requested'] or runs[0]['drained'] > sub[0]['start']:
+        raise ValueError('the NPU-alone window is not enclosed by its run, or the run outlasted it')
+    if any(sub[k]['start'] < sub[k - 1]['end'] for k in range(1, NPU_SUBPHASES)) or sub[0]['start'] < alone['end']:
+        raise ValueError('NPU sub-phases overlap the NPU-alone window or each other')
+    first, last = on.index(True), len(on) - 1 - on[::-1].index(True)
+    if not (sub[first - 1]['end'] <= runs[1]['requested'] and runs[1]['warm'] <= sub[first]['start'] and
+            sub[last]['end'] <= runs[1]['stop_requested'] and runs[1]['drained'] <= sub[last + 1]['start']):
+        raise ValueError('the busy run is not enclosed by the off sub-phases around its on sub-phases')
+    for k in range(NPU_SUBPHASES):
+        w = sub[k]
+        if on[k] and (w['running'] != [True, True] or not w['jobs']):
+            raise ValueError('NPU on sub-phase %d ran no jobs' % k)
+        if not on[k] and (any(w['running']) or w['jobs'] or any(w['in_flight'])):
+            raise ValueError('NPU off sub-phase %d ran jobs' % k)
+    if runs[1]['jobs_before'] != runs[0]['jobs_before'] + runs[0]['jobs'] or alone['jobs_start'] < runs[0]['jobs_before']:
+        raise ValueError('NPU job counts between the runs differ')
+    on_jobs = sum(sub[k]['jobs'] for k in range(NPU_SUBPHASES) if on[k])
+    on_seconds = sum(sub[k]['seconds'] for k in range(NPU_SUBPHASES) if on[k])
+    loaded = on_jobs / on_seconds
+    return {'model': bool(model), 'core': core, 'in_flight': in_flight, 'subphase_wakes': subphase_wakes, 'on': on,
+            'graph_bytes': input_bytes, 'open_us': open_ticks * 1e6 / frequency, 'register_us': register_ticks * 1e6 / frequency,
+            'close_us': close_ticks * 1e6 / frequency, 'alone': alone, 'subphases': sub, 'runs': runs,
+            'loaded_jobs_per_second': loaded, 'loss': 1 - loaded / alone['jobs_per_second']}
+
+
+def npu_subphase_wakes(cores, npu, frequency):
+    """Each core's busy wakes by sub-phase. The quota steps put busy wakes 32k to 32k + 31 in sub-phase k, each opened by
+    its own wake 0. A wake whose ready stamp precedes the NPU state change that opened its sub-phase (the busy run's warm-up
+    for the first on sub-phase, its drain for the off sub-phase after) is counted as early."""
+    k_on = npu['on'].index(True)
+    opened = [None] * NPU_SUBPHASES
+    opened[k_on] = npu['runs'][1]['warm']
+    opened[k_on + npu['on'][k_on:].count(True)] = npu['runs'][1]['drained']
+    out = []
+    for core in cores:
+        busy = [w for w in core['raw_wakes'] if w['metric'] == 'wake_busy']
+        if len(busy) != npu['subphase_wakes'] * NPU_SUBPHASES:
+            raise ValueError('core %d busy wakes do not fill the NPU sub-phases' % core['core'])
+        rows = []
+        for k in range(NPU_SUBPHASES):
+            part = busy[k * npu['subphase_wakes']:(k + 1) * npu['subphase_wakes']]
+            us = [(w['running'] - w['ready']) * 1e6 / frequency for w in part]
+            rows.append({'on': npu['on'][k], 'wake0_us': us[0], 'max_us': max(us), 'max_after_wake0_us': max(us[1:]),
+                         'mean_us': sum(us) / len(us), 'mean_after_wake0_us': sum(us[1:]) / (len(us) - 1),
+                         'early': sum(1 for w in part if opened[k] is not None and w['ready'] < opened[k]),
+                         'us': us, 'ready': [w['ready'] for w in part]})
+        out.append(rows)
+    return out
 
 
 def decode_wake_segments(payload, frequency):
@@ -1367,7 +1494,8 @@ def decode(payload, dma=False):
     if len(payload) < RESULT_BYTES:
         raise ValueError(f'latency result must contain {RESULT_BYTES} bytes')
     result_size = len(payload)
-    payload, wake_tail = peel_wake_segments(payload)
+    payload, npu_tail = peel_npu(payload)
+    payload, wake_tail = peel_wake_segments(payload, result_size)
     payload, band_tail = peel_bands(payload, result_size)
     payload, service_tail = peel_service_cycles(payload, result_size)
     payload, cause_tail, ping_tail, stream_mask = peel_latency_cause(payload, result_size)
@@ -1597,4 +1725,9 @@ def decode(payload, dma=False):
         if not cause_tail:
             raise ValueError('wake segment report requires the cause profile')
         result['wake_segments'] = decode_wake_segments(wake_tail, frequency)
+    if npu_tail:
+        if not cause_tail or not scheduler_tail:
+            raise ValueError('NPU load report requires the traced cause profile')
+        result['npu'] = decode_npu(npu_tail, frequency, stream_mask)
+        result['npu']['wakes'] = npu_subphase_wakes(result['cores'], result['npu'], frequency)
     return result

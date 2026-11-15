@@ -106,6 +106,22 @@ IMAGES = {
         '-DSUNSTONE_SCHED_LATENCY_TRACE=ON',
         '-DSUNSTONE_LATENCY_PRECISE=ON',
     ], 'target': 'sunstone-a733-os-latency', 'elf': 'sunstone-a733-os-latency.elf'},
+    # the bar image with the stage 3b NPU load (apps/latency/npu.h): stage 1b's relu at eight jobs in flight, alone before the
+    # streams and in the middle two of four busy sub-phases, with the NPU's owner, interrupt and producer on CPU0; the manifest
+    # is apps/latency/manifest-npu.json, whose input regions checks/latency-npu.py rebuilds from the npu-graphs fixture
+    'ret-latency-npu': {'configure': [
+        '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
+        '-DSUNSTONE_LATENCY=ON',
+        '-DSUNSTONE_APPLICATION=latency',
+        '-DSUNSTONE_LATENCY_CAUSE=ON',
+        '-DSUNSTONE_LATENCY_L3_PARTITION=ON',
+        '-DSUNSTONE_LATENCY_RELEASE_MASK=0x21',
+        '-DSUNSTONE_LATENCY_RESTORE_SPANS=ON',
+        '-DSUNSTONE_LATENCY_STREAM_MASK=0xf0',
+        '-DSUNSTONE_LATENCY_WAKE_SEGMENTS=ON',
+        '-DSUNSTONE_SCHED_LATENCY_TRACE=ON',
+        '-DSUNSTONE_LATENCY_NPU=ON',
+    ], 'target': 'sunstone-a733-os-latency', 'elf': 'sunstone-a733-os-latency.elf'},
     # the supervised SD0 read image (apps/storage-read); the host session is modeled by checks/storage-read-fixture.py (tools/gate_session.py), at profile 2, or the profile in the image name (storage-read-p1: profile 1)
     'storage-read': {'configure': [
         '-DSUNSTONE_IRQ_FP_UNSAVED=ON',
@@ -171,6 +187,14 @@ IMAGES = {
         '-DSUNSTONE_SCHED_LATENCY_TRACE=ON', '-DSUNSTONE_LATENCY_CAUSE=ON',
         '-DSUNSTONE_LATENCY_WAKE_SEGMENTS=ON', '-DSUNSTONE_LATENCY_STREAM_MASK=0xf0',
         '-DSUNSTONE_LATENCY_RELEASE_MASK=0x21', '-DSUNSTONE_LATENCY_PRECISE=ON',
+    ], 'target': 'latency-partitioned-pmu-model', 'elf': 'latency-partitioned-pmu-model.elf'},
+    # the latency-local-model with the stage 3b NPU load against the stand-in device on CPU0's virtual timer
+    # (apps/latency/npu.c), as the board's ret-latency-npu image runs it
+    'latency-npu-model': {'configure': [
+        '-DSUNSTONE_PARTITIONED_SCHEDULER=ON', '-DSUNSTONE_LATENCY=ON',
+        '-DSUNSTONE_SCHED_LATENCY_TRACE=ON', '-DSUNSTONE_LATENCY_CAUSE=ON',
+        '-DSUNSTONE_LATENCY_WAKE_SEGMENTS=ON', '-DSUNSTONE_LATENCY_STREAM_MASK=0xf0',
+        '-DSUNSTONE_LATENCY_RELEASE_MASK=0x21', '-DSUNSTONE_LATENCY_NPU=ON',
     ], 'target': 'latency-partitioned-pmu-model', 'elf': 'latency-partitioned-pmu-model.elf'},
     # the other host model images that link the latency workloads (cmake/latency.cmake); one configure builds them all, so the
     # images that checks/latency-control-integration.py runs and these are built by the same recipe options

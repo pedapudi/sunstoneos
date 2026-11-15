@@ -40,6 +40,15 @@ _Static_assert(SUNSTONE_LATENCY_RELEASE_MASK <= 0xff, "a core mask");
  * the same wait but serves the main application task only
  * (include/sunstone_app.h), so these tasks register and wait through the
  * diagnostic's own calls (include/sunstone_latency.h). */
+#ifdef SUNSTONE_LATENCY_NPU
+/* Stage 3b splits the busy phase into sub-phases of LATENCY_NPU_SUBPHASE_WAKES samples per core (npu.h). Each core stops
+ * at the current quota, so the NPU starts and stops only while every core is between samples. */
+_Static_assert(LATENCY_NPU_SUBPHASES * LATENCY_NPU_SUBPHASE_WAKES == LATENCY_BUSY_SAMPLES, "the sub-phases fill the busy phase");
+static atomic_uint busy_quota;
+#define LATENCY_BUSY_LIMIT() (LATENCY_IDLE_SAMPLES + atomic_load_explicit(&busy_quota, memory_order_acquire))
+#else
+#define LATENCY_BUSY_LIMIT() (LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES)
+#endif
 enum phase { QUIET, IDLE, BUSY, STOP };
 /* One line per core: only that core and CPU0's tick share it. The core
  * also publishes here the task it last switched to, so that CPU0's release
@@ -294,7 +303,7 @@ static void wait_own(unsigned c)
     for (;;) {
         unsigned p = atomic_load_explicit(&phase, memory_order_acquire);
         if (p == STOP) return;
-        unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : p == BUSY ? LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES : 0;
+        unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : p == BUSY ? LATENCY_BUSY_LIMIT() : 0;
         if (atomic_load_explicit(&wake[c].completed, memory_order_acquire) < limit) {
             wake[c].metric = SS_LAT_METRICS;
 #ifdef SUNSTONE_LATENCY_PRECISE
@@ -372,7 +381,7 @@ void ss_latency_tick_hook(uint64_t due)
      * releases rather than masking this diagnostic's whole eight-task loop. */
     __asm__ volatile("msr daifclr, #2" ::: "memory");
 #endif
-    unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES;
+    unsigned limit = p == IDLE ? LATENCY_IDLE_SAMPLES : LATENCY_BUSY_LIMIT();
     BaseType_t woken = pdFALSE;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
 #ifdef SUNSTONE_LATENCY_MODEL
@@ -570,6 +579,54 @@ static void wait_samples(unsigned expected)
         while (atomic_load_explicit(&wake[c].completed, memory_order_acquire) < expected ||
                atomic_load_explicit(&wake[c].pending, memory_order_acquire)) wait_tick();
 }
+#ifdef SUNSTONE_LATENCY_NPU
+static struct latency_npu_report npu_report;
+static uint64_t npu_ticks(uint64_t us) { return ss_latency_counter_frequency() / 1000000u * us; }
+static void npu_snapshot(uint64_t *at, uint64_t *jobs, uint64_t sweeps[LATENCY_CORES], uint32_t *in_flight, uint32_t *run)
+{
+    *at = ss_latency_now();
+    *jobs = latency_npu_jobs();
+    *in_flight = latency_npu_in_flight();
+    *run = (uint32_t)latency_npu_running();
+    for (unsigned c = 0; c < LATENCY_CORES; ++c) sweeps[c] = atomic_load_explicit(&load[c].sweeps, memory_order_acquire);
+}
+static void npu_window_start(struct latency_npu_window *w)
+{ npu_snapshot(&w->start, &w->jobs_start, w->sweeps_start, &w->in_flight_start, &w->run_start); }
+static void npu_window_end(struct latency_npu_window *w)
+{ npu_snapshot(&w->end, &w->jobs_end, w->sweeps_end, &w->in_flight_end, &w->run_end); }
+/* Start a run and wait until it has completed LATENCY_NPU_WARM_JOBS, so that a window opens on jobs in steady flow. */
+static void npu_on(struct latency_npu_run *run)
+{
+    const uint64_t base = latency_npu_jobs(), began = ss_latency_now();
+    latency_npu_start(run);
+    while (latency_npu_jobs() - base < LATENCY_NPU_WARM_JOBS) {
+        if (ss_latency_now() - began > npu_ticks(LATENCY_NPU_WARM_US))
+            latency_npu_fail(LATENCY_NPU_FAIL_WARM, (uint32_t)(latency_npu_jobs() - base));
+        wait_tick();
+    }
+    run->warm = ss_latency_now();
+}
+/* Stop the run and wait until its jobs have completed and its last output has been compared. */
+static void npu_off(struct latency_npu_run *run)
+{
+    latency_npu_stop(run);
+    const uint64_t began = ss_latency_now();
+    while (!latency_npu_drained()) {
+        if (ss_latency_now() - began > npu_ticks(LATENCY_NPU_DRAIN_US)) latency_npu_fail(LATENCY_NPU_FAIL_DRAIN, latency_npu_in_flight());
+        wait_tick();
+    }
+}
+/* wait_samples with the sub-phase deadline. */
+static void npu_wait_subphase(unsigned expected, uint64_t start, unsigned subphase)
+{
+    for (unsigned c = 0; c < LATENCY_CORES; ++c)
+        while (atomic_load_explicit(&wake[c].completed, memory_order_acquire) < expected ||
+               atomic_load_explicit(&wake[c].pending, memory_order_acquire)) {
+            if (ss_latency_now() - start > npu_ticks(LATENCY_NPU_SUBPHASE_US)) latency_npu_fail(LATENCY_NPU_FAIL_SUBPHASE, subphase);
+            wait_tick();
+        }
+}
+#endif
 void latency_workload_init(void)
 {
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
@@ -581,6 +638,9 @@ void latency_workload_init(void)
     }
 #ifdef SUNSTONE_LATENCY_CAUSE
     latency_cause_ping_init();
+#endif
+#ifdef SUNSTONE_LATENCY_NPU
+    latency_npu_init();
 #endif
 #ifdef SUNSTONE_LATENCY_BAND_SWITCH
     for (unsigned i = 0; i < LATENCY_BAND_PROBES; ++i) {
@@ -599,20 +659,54 @@ void latency_workload_run(struct latency_result *out)
     while (atomic_load_explicit(&ready_mask, memory_order_acquire) != 0xff) wait_tick();
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (!atomic_load_explicit(&load[c].ready, memory_order_acquire)) wait_tick();
+#ifdef SUNSTONE_LATENCY_NPU
+    /* The queue opens and the graph registers before the first measured window. */
+    {
+        const uint64_t opening = ss_latency_now();
+        while (!latency_npu_ready()) {
+            if (ss_latency_now() - opening > npu_ticks(LATENCY_NPU_OPEN_US)) latency_npu_fail(LATENCY_NPU_FAIL_READY, 0);
+            wait_tick();
+        }
+    }
+#endif
     ss_latency_phase_set(SS_LAT_IDLE);
     atomic_store_explicit(&phase, IDLE, memory_order_release);
     start_own();
     wait_samples(LATENCY_IDLE_SAMPLES);
     atomic_store_explicit(&phase, QUIET, memory_order_release);
     ss_latency_phase_set(SS_LAT_PHASE_NONE);
+#ifdef SUNSTONE_LATENCY_NPU
+    /* The NPU alone, before the streams start: its job rate without CPU traffic. */
+    npu_on(&npu_report.runs[0]);
+    npu_window_start(&npu_report.alone);
+    while (ss_latency_now() - npu_report.alone.start < npu_ticks(LATENCY_NPU_ALONE_MS * 1000u)) wait_tick();
+    npu_window_end(&npu_report.alone);
+    npu_off(&npu_report.runs[0]);
+#endif
     for (unsigned c = 0; c < LATENCY_CORES; ++c) xTaskNotifyGive(load_task[c]);
     /* Require a full sweep on every core before taking loaded samples. */
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (LATENCY_STREAMS(c) && !atomic_load_explicit(&load[c].sweeps, memory_order_acquire)) wait_tick();
     latency_dma_model_start();
     ss_latency_phase_set(SS_LAT_BUSY);
+#ifdef SUNSTONE_LATENCY_NPU
+    /* Off, on, on, off: one run spans the two on sub-phases, warmed before the first and drained after the second. */
+    for (unsigned k = 0; k < LATENCY_NPU_SUBPHASES; ++k) {
+        const bool on = (LATENCY_NPU_ON_MASK >> k) & 1u, next_on = (LATENCY_NPU_ON_MASK >> (k + 1u)) & 1u;
+        if (on && !latency_npu_running()) npu_on(&npu_report.runs[1]);
+        struct latency_npu_window *window = &npu_report.sub[k];
+        npu_window_start(window);
+        atomic_store_explicit(&busy_quota, LATENCY_NPU_SUBPHASE_WAKES * (k + 1u), memory_order_release);
+        if (!k) atomic_store_explicit(&phase, BUSY, memory_order_release);
+        start_own();
+        npu_wait_subphase(LATENCY_IDLE_SAMPLES + LATENCY_NPU_SUBPHASE_WAKES * (k + 1u), window->start, k);
+        npu_window_end(window);
+        if (on && !next_on) npu_off(&npu_report.runs[1]);
+    }
+#else
     atomic_store_explicit(&phase, BUSY, memory_order_release);
     start_own();
+#endif
     wait_samples(LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES);
 #ifdef SUNSTONE_LATENCY_CONTROL
     atomic_store_explicit(&phase, QUIET, memory_order_release);
@@ -631,6 +725,17 @@ void latency_workload_run(struct latency_result *out)
         while (!ss_latency_task_suspended(load_task[c])) wait_tick();
 #endif
     out->dma_jobs = latency_dma_model_stop();
+#ifdef SUNSTONE_LATENCY_NPU
+    /* The queue closes after the last measured window. */
+    {
+        latency_npu_close();
+        const uint64_t closing = ss_latency_now();
+        while (!latency_npu_closed()) {
+            if (ss_latency_now() - closing > npu_ticks(LATENCY_NPU_CLOSE_US)) latency_npu_fail(LATENCY_NPU_FAIL_CLOSE, 0);
+            wait_tick();
+        }
+    }
+#endif
 #ifdef SUNSTONE_LATENCY_TLBI
     configASSERT(atomic_load_explicit(&tlbi_issued, memory_order_relaxed) >= LATENCY_IDLE_SAMPLES);
     out->dma_jobs = (uint32_t)atomic_load_explicit(&tlbi_issue_max, memory_order_relaxed);
@@ -728,5 +833,21 @@ void latency_workload_run(struct latency_result *out)
     const uint64_t wake_footer[8] = {SS_WAKE_SEG_FOOTER_MAGIC, 1, sizeof(*out),
         offsetof(struct latency_result, wake_segments), sizeof(out->wake_segments), 0, 0, 0};
     for (unsigned word = 0; word < 8; ++word) out->wake_footer[word] = wake_footer[word];
+#endif
+#ifdef SUNSTONE_LATENCY_NPU
+    /* Last, after every other section. */
+    npu_report.magic = LATENCY_NPU_MAGIC; npu_report.version = LATENCY_NPU_VERSION; npu_report.bytes = sizeof(npu_report);
+    npu_report.subphase_wakes = LATENCY_NPU_SUBPHASE_WAKES; npu_report.on_mask = LATENCY_NPU_ON_MASK;
+    npu_report.in_flight = LATENCY_NPU_IN_FLIGHT; npu_report.alone_ms = LATENCY_NPU_ALONE_MS;
+    npu_report.warm_jobs = LATENCY_NPU_WARM_JOBS; npu_report.core = LATENCY_NPU_CORE;
+#ifdef SUNSTONE_LATENCY_MODEL
+    npu_report.model = 1;
+#endif
+    latency_npu_setup(&npu_report);
+    npu_report.complete = 1;
+    out->npu = npu_report;
+    const uint64_t npu_footer[8] = {LATENCY_NPU_FOOTER_MAGIC, LATENCY_NPU_VERSION, sizeof(*out),
+        offsetof(struct latency_result, npu), sizeof(out->npu), 0, 0, 0};
+    for (unsigned word = 0; word < 8; ++word) out->npu_footer[word] = npu_footer[word];
 #endif
 }

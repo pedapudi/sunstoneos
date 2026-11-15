@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "workload.h"
 #include "sunstone_app.h"
+#include <stdbool.h>
 
 /* The QEMU models have no OS and no address spaces; the kit's task creation is the direct FreeRTOS call. */
 void *ss_task_create_static_affinity_set(void (*entry)(void *), const char *name, uint32_t stack_words, void *arg,
@@ -164,6 +165,38 @@ static void controller(void *argument)
         configASSERT(total == pmu->completed);
     }
     platform_puts("PASS scheduler PMU model: eight frozen writers and coherent sample totals; functional evidence only\n");
+#endif
+#ifdef SUNSTONE_LATENCY_NPU
+    /* Stage 3b: the stand-in NPU ran alone, then in the two on sub-phases of the busy phase, and was idle in the others. */
+    {
+        const struct latency_npu_report *n = &result.npu;
+        configASSERT(n->magic == LATENCY_NPU_MAGIC && n->complete && result.npu_footer[0] == LATENCY_NPU_FOOTER_MAGIC);
+        configASSERT(n->model == 1 && n->producer_core == LATENCY_NPU_CORE);
+        configASSERT(n->alone.run_start && n->alone.run_end && n->alone.jobs_end > n->alone.jobs_start);
+        for (unsigned c = 0; c < LATENCY_CORES; ++c) configASSERT(n->alone.sweeps_end[c] == n->alone.sweeps_start[c]);
+        for (unsigned r = 0; r < LATENCY_NPU_RUNS; ++r) {
+            const struct latency_npu_run *run = &n->runs[r];
+            configASSERT(run->requested < run->warm && run->warm <= run->stop_requested && run->stop_requested <= run->drained);
+            configASSERT(run->completed == run->submitted && run->completed >= LATENCY_NPU_WARM_JOBS);
+            configASSERT(run->compared == 1 && !run->mismatches);
+        }
+        for (unsigned k = 0; k < LATENCY_NPU_SUBPHASES; ++k) {
+            const struct latency_npu_window *w = &n->sub[k];
+            const bool on = (LATENCY_NPU_ON_MASK >> k) & 1u;
+            number("npu subphase=", k);
+            number(" on=", on);
+            number(" ticks=", w->end - w->start);
+            number(" jobs=", w->jobs_end - w->jobs_start);
+            platform_puts("\n");
+            configASSERT(w->start < w->end && (!k || n->sub[k - 1].end <= w->start));
+            if (on) configASSERT(w->run_start && w->run_end && w->jobs_end > w->jobs_start);
+            else configASSERT(!w->run_start && !w->run_end && w->jobs_end == w->jobs_start && !w->in_flight_start && !w->in_flight_end);
+        }
+        number("npu alone jobs=", n->alone.jobs_end - n->alone.jobs_start);
+        number(" ticks=", n->alone.end - n->alone.start);
+        platform_puts("\n");
+        platform_puts("PASS latency npu model: the stand-in NPU ran alone and in the on sub-phases only, on CPU0's interrupt; functional evidence only\n");
+    }
 #endif
 #ifdef SUNSTONE_LATENCY_CONTROL
     configASSERT(result.control.magic == LATENCY_CONTROL_MAGIC);
@@ -419,6 +452,26 @@ static void controller(void *argument)
     configASSERT(result.core[0].metric[SS_LAT_IRQ].count);
 #ifndef SUNSTONE_LATENCY_CPU_ONLY
     configASSERT(result.core[0].metric[SS_LAT_DMA].count);
+#endif
+#ifdef SUNSTONE_LATENCY_NPU
+    /* The whole result, for the board image's decoder (checks/latency-npu.py decodes it with apps/latency/host.py). */
+    {
+        static const char digits[] = "0123456789abcdef";
+        const uint8_t *bytes = (const uint8_t *)&result;
+        char line[2 * 64 + 2];
+        number("latency result bytes=", sizeof(result));
+        platform_puts("\n");
+        for (size_t at = 0; at < sizeof(result); at += 64) {
+            for (unsigned i = 0; i < 64; ++i) {
+                line[2 * i] = digits[bytes[at + i] >> 4];
+                line[2 * i + 1] = digits[bytes[at + i] & 15u];
+            }
+            line[128] = '\n'; line[129] = 0;
+            platform_puts("R ");
+            platform_puts(line);
+        }
+        platform_puts("latency result end\n");
+    }
 #endif
     platform_puts("PASS latency model: 64 idle and 128 loaded wake samples on each of eight cores; sequential 1 MiB/core traffic and real DMA service with modeled completion\n");
     platform_exit(0);

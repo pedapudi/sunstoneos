@@ -13,6 +13,12 @@
 #ifdef SUNSTONE_SCHED_PMU
 #include "latency_pmu.h"
 #endif
+#ifdef SUNSTONE_LATENCY_NPU
+#include "npu.h"
+#define LATENCY_NPU_LIMIT 4096U
+#else
+#define LATENCY_NPU_LIMIT 0U
+#endif
 #ifdef SUNSTONE_LATENCY_CAUSE
 #include "latency_cause.h"
 #include "cause-ping.h"
@@ -23,7 +29,7 @@
 /* The manifest's output_limit (apps/latency/cmake/application.cmake): traced
  * and control profiles declare 131072 bytes and the cause profile 147456.
  * Each cause section adds its own allowance: service cycles 32768, band
- * probes 4096 and wake segments 32768. */
+ * probes 4096, wake segments 65536 and the NPU load 4096. */
 #ifdef SUNSTONE_LATENCY_CAUSE
 #ifdef SUNSTONE_LATENCY_SERVICE_CYCLES
 #define LATENCY_SERVICE_LIMIT 32768U
@@ -40,7 +46,7 @@
 #else
 #define LATENCY_WAKE_LIMIT 0U
 #endif
-#define LATENCY_RESULT_LIMIT (147456U + LATENCY_SERVICE_LIMIT + LATENCY_BAND_LIMIT + LATENCY_WAKE_LIMIT)
+#define LATENCY_RESULT_LIMIT (147456U + LATENCY_SERVICE_LIMIT + LATENCY_BAND_LIMIT + LATENCY_WAKE_LIMIT + LATENCY_NPU_LIMIT)
 #else
 #define LATENCY_RESULT_LIMIT 131072U
 #endif
@@ -151,6 +157,11 @@ struct latency_result {
     struct ss_wake_seg_report wake_segments __attribute__((aligned(64)));
     uint64_t wake_footer[8] __attribute__((aligned(64)));
 #endif
+#ifdef SUNSTONE_LATENCY_NPU
+    /* The stage 3b NPU section, after every other, with its own footer. */
+    struct latency_npu_report npu __attribute__((aligned(64)));
+    uint64_t npu_footer[8] __attribute__((aligned(64)));
+#endif
 };
 _Static_assert(offsetof(struct latency_result, core) == 320 &&
     offsetof(struct latency_result, phases) == 5440 &&
@@ -211,7 +222,13 @@ _Static_assert(offsetof(struct latency_result, wake_segments) == LATENCY_BAND_EN
 #else
 #define LATENCY_WAKE_END LATENCY_BAND_END
 #endif
-_Static_assert(LATENCY_WAKE_END == sizeof(struct latency_result) && sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT,
+#ifdef SUNSTONE_LATENCY_NPU
+_Static_assert(offsetof(struct latency_result, npu) == LATENCY_WAKE_END, "NPU section follows the footer before it");
+#define LATENCY_NPU_END (offsetof(struct latency_result, npu_footer) + 64)
+#else
+#define LATENCY_NPU_END LATENCY_WAKE_END
+#endif
+_Static_assert(LATENCY_NPU_END == sizeof(struct latency_result) && sizeof(struct latency_result) <= LATENCY_RESULT_LIMIT,
     "the cause sections end the result and fit the declared result region");
 #endif
 
