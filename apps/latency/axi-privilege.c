@@ -6,9 +6,10 @@
  *   reached, so a failure in a capped sub-phase cannot leave the cap set. Two plain stores between DSBs, with no gate
  *   read: DRAM0's clock and bus gate are open whenever code runs from DRAM, and no code in this image changes the path
  *   select. The stores sit in front of the two exits:
- *   - a733_qualification_worker_done, which each core's terminal calls for a clean return and for every failure
- *     return the OS claims (ss_fail, EL0 faults, panics in a context that can schedule), and the start sequence
- *     calls for a failure before the scheduler;
+ *   - the EL1 side of the success terminal (apps/latency/axi-exit.S), which every clean return and every failure
+ *     return the OS claims reaches through SVC #0x735. The terminal tasks call a733_qualification_worker_done at
+ *     EL0, so no store can sit there; a first board run that read CurrentEL there faulted at EL0
+ *     (entry 1794750406816673707-79429d7a);
  *   - a733_storage_maintenance_stop, which a733_smp_exit_privileged calls at EL1 with interrupts masked for every
  *     other exit (the SVC exit of platform_exit and platform_panic, the deadline and unexpected-interrupt exits).
  *   The EL3 fault path calls the second hook too; at EL3 the stores are skipped.
@@ -35,10 +36,4 @@ void __wrap_a733_storage_maintenance_stop(unsigned status)
 {
     clear_cap();
     __real_a733_storage_maintenance_stop(status);
-}
-extern _Noreturn void __real_a733_qualification_worker_done(unsigned core);
-_Noreturn void __wrap_a733_qualification_worker_done(unsigned core)
-{
-    clear_cap();
-    __real_a733_qualification_worker_done(core);
 }
