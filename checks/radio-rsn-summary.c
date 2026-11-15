@@ -20,7 +20,7 @@ static const uint8_t sae_only[]={48,20,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,4
 static const uint8_t sae_required[]={48,20,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,8,0xc0,0};
 static const uint8_t psk_sha256[]={48,20,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,6,0,0};
 static const uint8_t version_only[]={48,2,1,0};
-static const uint8_t short_count[]={48,10,1,0,0x00,0x0f,0xac,4,2,0,0x00,0x0f,0xac,4};
+static const uint8_t short_count[]={48,12,1,0,0x00,0x0f,0xac,4,2,0,0x00,0x0f,0xac,4};
 static const uint8_t group_gcmp[]={48,20,1,0,0x00,0x0f,0xac,8,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,2,0,0};
 static const uint8_t pmf_mgmt_group[]={48,26,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,4,1,0,0x00,0x0f,0xac,2,0x80,0,0,0,
     0x00,0x0f,0xac,6};
@@ -35,7 +35,7 @@ static const struct { const char *name; const uint8_t *e; size_t n; unsigned che
     {"WPA3 SAE only, MFP required",sae_required,sizeof(sae_required),A733_RADIO_RSN_MFP_REQUIRED,0},
     {"PSK-SHA256 only",psk_sha256,sizeof(psk_sha256),A733_RADIO_RSN_NO_PSK,0},
     {"version only (CCMP and 802.1X by default)",version_only,sizeof(version_only),A733_RADIO_RSN_NO_PSK,0},
-    {"pairwise count past the end",short_count,sizeof(short_count),A733_RADIO_RSN_MALFORMED,-2},
+    {"pairwise count past the end",short_count,sizeof(short_count),A733_RADIO_RSN_MALFORMED,-4},
     {"GCMP group",group_gcmp,sizeof(group_gcmp),A733_RADIO_RSN_GROUP_NOT_CCMP,0},
     {"PSK with BIP-CMAC management group",pmf_mgmt_group,sizeof(pmf_mgmt_group),A733_RADIO_RSN_PASSED,0},
 };

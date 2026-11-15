@@ -77,6 +77,7 @@ struct aic8800_sdio_transport {
     const void *receive_owner;
     size_t receive_owner_bytes;
     uint8_t data_tx, security_tx;
+    uint16_t fail_site; /* AIC8800_SITE of the first fault, for the record */
     uint8_t initialized, entered, pending, phase, expected, have[2], held, setup_confirmed,irq_wait;
     uint8_t prior_enable, prior_irq, prior_function_irq, raw_rx_status, byte_length;
     uint8_t tx[AIC8800_TRANSPORT_TX_BYTES], rx[AIC8800_TRANSPORT_RX_BYTES];

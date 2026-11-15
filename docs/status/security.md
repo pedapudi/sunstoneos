@@ -38,6 +38,8 @@ CE cryptographic and entropy operations have no physical qualification; read-onl
 
 Association follows once step 3 passes.
 
+4. **CE bring-up failure, unexplained.** One association run on 2026-11-14 failed the CE bring-up after its writes, at the last line of the then single bring-up condition in `drivers/crypto/a733_ce_clock.c`. The clock stayed retained with the register lock, the session was fatal and the board returned through the watchdog. The FEL words matched the passing runs. The only other linked writer of CCU `0x5e4`, the DMA startup, writes bit 0 only and takes the same platform register lock, so a race between them is excluded. Two earlier association runs and the next one stepped the bring-up without a failure. The cause is open. Each bring-up step now has its own source line, and a failure after admission writes a first failure record of group CE (`0xd`): the line, the last `CE_CLK` and `CE_BGR` reads, the `0x5e4` word at entry and at the last read, and whether the last write was refused. `tools/a733-crumbs.py` decodes that group (`checks/ce-clock.py`).
+
 See [engine inventory](../security-engines.md), [entropy](../entropy.md), [identity](../board-application.md) and [source provenance](../../apps/crypto/security-sources.json).
 
 ## Evidence
