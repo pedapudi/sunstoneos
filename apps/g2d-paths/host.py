@@ -130,7 +130,7 @@ def predicted(seed=SEED):
 
 
 def decode(payload):
-    """A dict of the stage-1 record; ValueError if the payload is malformed."""
+    """A dict of the g2d-paths record; ValueError if the payload is malformed."""
     if len(payload) != SIZE:
         raise ValueError(f'g2d-paths result is {len(payload)} bytes, not {SIZE}.')
     magic, stage, status, open_result, close_result, fault_step, fault_value, reserved = HEAD.unpack_from(payload)
@@ -201,8 +201,9 @@ def runs(payload, at):
         result, path, sx, sy, dx, dy, w, h, rect_crc, alpha_0, alpha_ff, partial = r[:12]
         sample = r[12:16]
         signed = result - (1 << 32) if result & 0x80000000 else result
-        name = PATHS[path] if path < len(PATHS) else path
-        o = {'result': signed, 'path': name,
+        # A copy after the first failure is not run and its record stays zero, path word included.
+        name = (PATHS[path] if path < len(PATHS) else path) if result else None
+        o = {'result': signed, 'run': bool(result), 'path': name,
              'plan_matches': (path, sx, sy, dx, dy, w, h) == (k, SX, SY, DX, DY + k * STEP, W, H) or not result,
              'picks': {'alpha_0': alpha_0, 'alpha_ff': alpha_ff, 'partial': partial,
                        'match': [alpha_0, alpha_ff, partial] == [0xffffffff if i is None else i for i in index]},
@@ -228,7 +229,7 @@ def runs(payload, at):
            'crc': {'output': f'0x{output_crc:08x}', 'source': f'0x{source_crc:08x}',
                    'output_before': f'0x{output_before:08x}', 'source_before': f'0x{source_before:08x}',
                    'before_match': output_before == zlib.crc32(bytes(background)) and source_before == zlib.crc32(source),
-                   'source_unchanged': done and source_crc == zlib.crc32(source),
+                   'source_unchanged': source_crc == zlib.crc32(source) if done else None,
                    'rectangle_models': {m: f'0x{c:08x}' for m, c in crcs.items()}}}
     if done and None not in models:
         out['crc']['expected_output'] = f'0x{zlib.crc32(output(seed, models)[1]):08x}'

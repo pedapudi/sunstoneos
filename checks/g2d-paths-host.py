@@ -69,7 +69,8 @@ def main():
     failed = host.decode(build_and_run(a.output, 'rop-timeout', ['-DFAIL_PATH=3']))
     fops = failed['ops']
     if failed['status'] != 'run failed' or failed['fault_step'] != 62 or (fops[3]['result'], fops[3]['path']) != (-1, 'rop_copy') \
-            or [o.get('model') for o in fops[:3]] != ['zeroed', 'fill_marker', 'exact'] or any(o['result'] for o in fops[4:]):
+            or [o.get('model') for o in fops[:3]] != ['zeroed', 'fill_marker', 'exact'] or any(o['result'] or o['run'] or o['path'] is not None for o in fops[4:]) \
+            or failed['crc']['source_unchanged'] is not None:
         problems.append(f'the timed-out ROP copy was not named: {failed["status"]}, {failed["fault_step"]}, '
                         f'{[(o["result"], o["path"], o.get("model")) for o in fops]}')
     (a.output / 'result.json').write_text(json.dumps({'passed': not problems, 'problems': problems, 'record': record,
