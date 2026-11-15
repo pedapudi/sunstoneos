@@ -295,9 +295,11 @@ def window_model(samples, window_ticks):
     changes = [i for i in range(1, len(v)) if v[i] != v[i - 1]]
     spacing = lambda idx: sorted(t[b] - t[a] for a, b in zip(idx, idx[1:]))
     median = lambda xs: xs[len(xs) // 2] if xs else None
-    # A latched count changes only at period ends, a few times in the probe, and may rise or fall at each change; a
-    # restarting count changes at almost every sample and falls at each period end.
-    if len(changes) <= len(v) // 4:
+    # A latched count changes only at period ends, a few times in the probe and several samples apart, and may rise or
+    # fall at each change; a restarting count changes at almost every sample and falls at each period end; a stopped
+    # count changes at consecutive samples and then not at all.
+    sample_gap = median(sorted(b - a for a, b in zip(t, t[1:])))
+    if len(changes) <= len(v) // 4 and (len(changes) < 2 or median(spacing(changes)) >= 4 * sample_gap):
         out['model'] = 'latched'
         gaps = spacing(changes)
         ends = changes

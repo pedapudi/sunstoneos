@@ -915,6 +915,7 @@ void accel_overlap_main(const struct ss_grant *grant)
         struct accel_overlap_counter_probe *q =
             k ? NULL : &counter_result.probe[phase_index - ACCEL_OVERLAP_COUNTER_PHASES];
         gpu_completions = 0;
+        atomic_store_explicit(&npu_completions, 0, memory_order_relaxed);   /* before the probe's first sample */
 #else
         l->stream_mode = large_streams[phase_index];
         const uint32_t devices = large_devices[phase_index], mode = l->stream_mode;
