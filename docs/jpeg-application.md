@@ -230,4 +230,32 @@ rounding conformance. No board, USB device, test queue or persistent storage was
 accessed for runtime-input integration. Physical execution, copied-pixel
 correctness, confinement and recovery remain outstanding.
 
+## The 48-by-32 nonconstant fixture has one correct output
+
+The fixture from `apps/jpeg/fixture.py` (`nonconstant`, 520 bytes, SHA-256
+`d31a7036…c8e4`) codes, in each 8-by-8 block, only the DC coefficient and the
+three coefficients at horizontal and vertical frequencies 0 and 4. At
+frequency 4 the cosine basis has the same magnitude, √2/2, at every sample, so
+with the chosen coefficients every inverse-transform sample is an exact
+integer that needs no clipping.
+A correct baseline decoder therefore gives the same samples whatever its IDCT
+precision.
+
+`tools/jpeg-pixel-reference.py reference` checks this. It decodes the fixture
+with libjpeg's raw-data path (`tools/jpeg-raw-decode.c`: no upsampling and no
+colour conversion) using each of its three IDCTs. It also decodes it with
+FFmpeg's MJPEG decoder using five IDCTs. It accepts the reference only when
+all eight outputs equal the analytic oracle `nonconstant_reference()`. The
+host check used libjpeg-turbo 2.1.5 and FFmpeg 8.0.1; all eight outputs were
+identical to the oracle. The reference is 2,304 bytes of packed active YU12
+(48-by-32 Y, then 24-by-16 Cb, then 24-by-16 Cr, the order that the OS decoder
+copies), SHA-256 `eada6821…8296`, CRC-32 `f4533814`. The `compare` command
+reports equality and the per-plane differences of a copied board frame. The
+report records the hashes of the fixture, every output, both decoders and the
+raw decoder's source.
+
+The installed library has no headers; the tool takes the include directory of
+the matching development package, which `apt-get download libjpeg-turbo8-dev`
+and `dpkg-deb -x` provide without installation.
+
 Results of host checks that no longer exist are kept in the evidence record [jpeg-application.jsonl](evidence/jpeg-application.jsonl).

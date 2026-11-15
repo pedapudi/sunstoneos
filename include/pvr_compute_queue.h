@@ -27,13 +27,14 @@ struct pvr_gpu_service_config;
 /* The job page (GPU-read-only, in the PDS heap):
  * - 0-127: PDS data, written at creation; the binding-0 address and the
  *   group counts are rewritten only when they differ from the previous job,
- *   and the counts only for a program that reads them;
+ *   and the counts only for a program that reads them. A GRID_INLINE
+ *   program's argument block is rewritten at bytes 80 and 112 every job;
  * - 128-191: PDS dispatch program, written at creation;
  * - 192-255: fence PDS program, written at creation;
  * - 256-315: CDM stream, per job;
  * - 320-: argument block, per job (8 bytes for each binding after the first,
  *   then at most GPU_QUEUE_ARGUMENT_BYTES argument bytes; the slot ends at
- *   PVR_COMPUTE_FAST_STRIDE).
+ *   PVR_COMPUTE_FAST_STRIDE). Unused by a GRID_INLINE program.
  * One clean from byte 256 to the end of the argument block covers each job:
  * 2 lines for a 32-byte block, at most 3. Changed PDS lines add maintenance. */
 #define PVR_COMPUTE_QUEUE_PDS_DATA 0u
@@ -95,6 +96,7 @@ struct pvr_compute_queue {
     struct gpu_queue_lease_info lease[GPU_QUEUE_LEASES];
     uint32_t lease_count, coefficients, phase, error, sequence, owed, held, priority, payload_cache;
     uint32_t common_words; /* immutable admitted system values plus local words */
+    uint32_t abi;          /* the program's GPU_QUEUE_ABI_*, fixed at creation */
     /* Worker-owned: one terminal breadcrumb before publishing a job record. */
     unsigned crumb_pending;
     uint64_t job_us, deadline, kicked;
