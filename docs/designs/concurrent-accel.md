@@ -60,7 +60,8 @@ close, which is the transition stage 1 measures.
 
 ## The manual warns against PLL transitions during use
 
-The A733 User Manual V1.00, section 4.1.4.1, "PLL Disable" (page 26), states:
+The A733 User Manual V1.00, section 4.1.4.1 "Generic PLL Frequency Modulation", under its sub-heading "PLL Disable"
+(page 26), states:
 
 > It is not suggested to enable or disable the PLLs during usage, as the PLL enable/disable will lead to the disturbance
 > among PLLs, which will cause system instability. When the clock is not required, it is recommended to set the
@@ -100,9 +101,10 @@ stamps are `gpu_queue_last_irq_counter` and `gpu_queue_last_wake_counter`; the N
 image built with `SUNSTONE_NPU_WAKE_TIMING`. Each distribution is a histogram of 2-tick buckets up to 1.365 ms, with the
 count above it and the true maximum kept separately.
 
-Each phase must end within 3 s and the run within its 25 s `run_us`, with a 5 s return reserve inside the 60 s returning
-lifetime. The run stops at the first output mismatch, PLL difference, thermal throttle, phase overrun, or fewer than 1,000
-NPU completions while a GPU job was in flight in the two overlap phases together.
+The run ends within its 25 s `run_us`, with a 5 s return reserve inside the 60 s returning lifetime. The application
+stops at the first output mismatch, PLL_NPU difference or lock loss, or thermal throttle. The decoder checks the other
+limits from the result: each phase within 3 s, at least 1,000 NPU completions while a GPU job was in flight in the two
+overlap phases together, the PLL write counts, wake sample counts and the top CPU point at the start and end.
 
 ### Stage 1 predictions
 
@@ -117,7 +119,9 @@ Wake latency, from the interrupt handler's entry to the waiting task running:
 
 Throughput with both devices and streaming, against each device's own phase alone: the GPU 0–15% lower, the NPU relu jobs
 5–30% lower. The PLL watch sees 42 to 52 PLL_GPU0 writes (14 for each of three cycles, plus the first power-on when the ring
-opened before it), at least 21 of them with an NPU job in flight, and no change in PLL_NPU. The decoder
+opened before it), at least 21 of them with an NPU job in flight, and no change in PLL_NPU. At least 95% of the serial GPU jobs
+and at least half of the serial NPU jobs give a wake sample: a relu job takes about 5.5 µs and can finish before the
+producer blocks, and such a job has no wake to measure. The decoder
 ([host.py](../../apps/accel-overlap/host.py)) compares every value with these ranges.
 
 ## Stage 2: DMA completion timing

@@ -94,6 +94,14 @@ def checks(r):
         base, both = p[alone][d]['jobs_per_second'], p[3][d]['jobs_per_second']
         loss = None if not base or both is None else round(100 * (1 - both / base), 2)
         check('%s throughput streaming loss percent' % d, loss, low, high)
+    # Wake samples: a GPU job (tens of microseconds) outlasts the step from submission to the blocking wait, so nearly every
+    # serial GPU job blocks; a relu job (about 5.5 us) can finish before the producer blocks, so fewer NPU jobs give a sample.
+    for i in range(4):
+        for d, share in (('gpu', 0.95), ('npu', 0.5)):
+            if p[i]['devices'] & (1 if d == 'gpu' else 2):
+                check('%s wake samples %s' % (d, p[i]['name']), p[i][d]['wake']['count'],
+                      int(share * p[i][d]['serial_jobs']), p[i][d]['serial_jobs'])
+    check('phase longest ms', max(ph['ms'] for ph in p), None, 3000)
     check('npu completions with a gpu job in flight', p[2]['overlap'] + p[3]['overlap'], 1000)
     check('mismatches', sum(ph[d]['mismatches'] for ph in p for d in ('gpu', 'npu')) + r['pll']['cycle_mismatches'], 0, 0)
     check('pll cycles', r['pll']['cycles'], 3, 3)
