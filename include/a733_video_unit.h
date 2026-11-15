@@ -114,7 +114,8 @@ int a733_video_unit_unlock(struct a733_video_unit *);
  * uncertain access, which the core has already marked failed, retains it.
  * Every failure inside a hold goes through here. */
 int a733_video_unit_refuse_held(struct a733_video_unit *);
-/* Accesses require the held mutex and fail the unit on any uncertainty. */
+/* Accesses require the held mutex and fail the unit on any uncertainty. They do not read the clock: lock and
+ * unlock check the deadline once per hold. */
 int a733_video_unit_read(struct a733_video_unit *,uintptr_t,uint32_t *);
 int a733_video_unit_write(struct a733_video_unit *,uintptr_t,unsigned,uint32_t);
 int a733_video_unit_check(struct a733_video_unit *,uintptr_t,uint32_t mask,uint32_t expected);
@@ -163,10 +164,14 @@ int a733_video_unit_irq_quiet(struct a733_video_unit *);
  * compound version, which is stored through the pointer in either case. The
  * words read are kept in identity. */
 int a733_video_unit_identity(struct a733_video_unit *,uint64_t *);
-/* Lowest native access for one allowlisted physical address: identity-mapped
- * Device-nGnRnE translation, DSB SY before and after, volatile access. A
- * nonzero owned mask refuses a write that changes any bit outside it. Callers
- * apply their allowlists first. Non-AArch64 builds refuse. */
+/* Check once that every page a video binding accesses is identity-mapped Device-nGnRnE: 1 when it is. The first
+ * native access makes the check when no caller has; an image calls this from its init so that the page walks fall
+ * outside every hold. Non-AArch64 builds return 0. */
+int a733_video_unit_native_map(void);
+/* Lowest native access for one allowlisted physical address on a checked
+ * page: DSB SY before and after, volatile access. A nonzero owned mask
+ * refuses a write that changes any bit outside it. Callers apply their
+ * allowlists first. Non-AArch64 builds refuse. */
 int a733_video_unit_native_read(uintptr_t,uint32_t *);
 int a733_video_unit_native_write(uintptr_t,unsigned,uint32_t owned,uint32_t);
 #endif

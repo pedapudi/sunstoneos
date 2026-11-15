@@ -69,8 +69,24 @@ static const struct {uint32_t address,word;} rom_identity[]={
     {0x19c98,0x58454642},{0x19ca0,0x00190300},
     {0x19ca4,0x000ee800}
 };
+/* The ROM identity, before the entry hold and outside the register lock:
+ * the boot ROM is immutable, so its fifteen words need no mutex. The
+ * deadline is checked once, before the reads. A word that differs refuses
+ * the start; a read the native allowlist or mapping refuses is uncertain,
+ * as in a hold. */
+static int rom_matches(struct a733_video_decoder *p)
+{
+    struct a733_video_unit *u=&p->unit;
+    if(u->failed||u->locked||!a733_video_unit_timely(u))return 0;
+    for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i) {
+        uint32_t w;
+        if(u->ops.read(u->cookie,rom_identity[i].address,&w)!=1){u->uncertain=1;u->last_address=rom_identity[i].address;return 0;}
+        if(w!=rom_identity[i].word)return 0;
+    }
+    return 1;
+}
 /* Entry, under one register-lock hold, before the domain-2 row request:
- * the ROM identity, the fabric and parent clocks, reset asserted, bus and
+ * the fabric and parent clocks, reset asserted, bus and
  * module gates closed, IRQ81 quiet, and CM_VE_DEC_CFG (0x1b10) with its
  * module mode disabled (bit 0) and its status field (bits 17:16) at 0b10,
  * POWER_ON (U-Boot plat-sun60iw2p1/clock_autogen.h lines 4760-4768). Both
@@ -82,8 +98,6 @@ static const uint32_t gate[3]={0x5c0,0x5e0,0x5e4},bit[3]={BIT(0),BIT(14),BIT(18)
 static int cold_entry(struct a733_video_decoder *p)
 {
     struct a733_video_unit *u=&p->unit;
-    for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)
-        if(!check(u,rom_identity[i].address,UINT32_MAX,rom_identity[i].word))return 0;
     for(unsigned i=0;i<3;++i)if(rd(u,CCU+gate[i],&p->cold.entry_gates[i])!=1)return 0;
     /* A programmed PLL_VE0 may be disabled, and the module selector and
      * divider are then written later; the module gate must be closed. */
@@ -173,7 +187,9 @@ static int cold(struct a733_video_decoder *p)
     for(;;) {
         int r=1;
         switch(p->cold_step) {
-        case COLD_ENTRY:r=held_phase(p,cold_entry,&p->cold.entered_at);break;
+        case COLD_ENTRY:
+            if(!p->rom_checked){if(!rom_matches(p))return fail(u);p->rom_checked=1;}
+            r=held_phase(p,cold_entry,&p->cold.entered_at);break;
         case COLD_POWER: {
             if(!p->requested) {
                 if(!a733_power_domain_request(p->config.row,1))return fail(u);

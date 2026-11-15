@@ -152,7 +152,7 @@ static int cold_read(void *v,uintptr_t a,uint32_t *out)
     if(c->late&&!c->late_done&&((c->late==LATE_ENTRY&&a==CCU+0x5c0&&!m->writes)||
        (c->late==LATE_HOLD_B&&a==GIC+0x208&&(m->ccu[0xa88/4]&0x80000000)))){c->late_done=1;m->now=LATE_AT;}
     if(a>=0x17000&&a<0x22000) {
-        assert(m->lock&&!m->writes);++c->rom_reads;
+        assert(!m->lock&&!m->writes);++c->rom_reads;
         memcpy(out,c->rom+(a-0x17000),4);return 1;
     }
     if(a==CCU+0x220&&c->pll){++m->reads;return pll_read(c,out);}

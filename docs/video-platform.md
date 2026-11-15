@@ -194,9 +194,11 @@ inherited transaction drain. Hardware reset does not supply that proof.
 
 The native read and write functions use explicit physical-address allowlists,
 volatile 32-bit accesses, the JPEG byte-write locations, and AArch64 `DSB SY`
-barriers. Before each access they translate the address at EL1 and refuse it
-unless the page is an identity-mapped Device-nGnRnE page, as the encoder's
-native functions do.
+barriers. They refuse an address outside the pages that
+`a733_video_unit_native_map` checked once: every page the video bindings
+access, identity-mapped Device-nGnRnE. The OS image's decoder calls it from its
+initialization, so the page walks fall outside every hold; another image's
+first native access makes the check. The encoder shares these functions.
 Non-AArch64 builds refuse these native functions; host models use explicit
 substitute callbacks. The CCU write path permits decoder reset and bus bits,
 module enable and the three decoder-local gates listed below. Every other field
@@ -254,15 +256,17 @@ SHA256 manifests; see [the evidence file](evidence/video-platform.jsonl).
 ## Register-lock holds bound band-2 waits
 
 The counts come from the composed model (`checks/video-cold.py`, its `holds`
-lines) at the vendor point from the FEL words. A native access adds a mapping
-check of its page and a `DSB SY` before and after. A write adds the native
+lines) at the vendor point from the FEL words. A native access adds a `DSB SY`
+before and after. The core reads the clock when a hold starts and when it ends,
+not on each access. A write adds the native
 writer's read of the old word, and the write policy's reads: three for each
 PLL_VE0 write (the three consumer module words) and up to two for a `0xa88`
 write with bit 31 clear.
 
 | Phase | Model accesses (writes) | Native accesses | Lock |
 | --- | --- | --- | --- |
-| Entry | 37 (0) | 37 | held |
+| ROM identity, before the entry hold | 15 (0) | 15 | none |
+| Entry | 22 (0) | 22 | held |
 | Row request and answer | 0 | 0 in the decoder; 6 PPU writes and their reads in the owner if the domain is OFF | none |
 | Hold A | 22 (7) | 40: 22, plus 7 old-word reads, 9 PLL policy reads and 2 `0xa88` policy reads | held |
 | PLL lock wait | 4 to 100 PLL reads | same | none |
@@ -340,11 +344,12 @@ The cold start needs the consumer's domain-2 row
 ([power-domains.md](power-domains.md)); `a733_video_platform_init` refuses a
 cold configuration without one. The binding writes no PCK600 register: the
 power-domain owner programs the vendor delay row and the ON command, or adopts
-a domain already ON. The sequence has five phases.
+a domain already ON. The sequence has six phases.
 
 | Phase | Register-lock hold | Accesses |
 | --- | --- | --- |
-| Entry, before the row request | yes | The 15 ROM words; fabric and parent clocks; reset asserted (`0xa8c` bit 18 clear), bus gate and module gate closed; `0x1b10 & 0x30001 == 0x20000`; INTID 81 quiet. `0x5c0`, `0x5e0` and `0x5e4` are read and recorded in any state. No PCK600 read. |
+| ROM identity, before the entry hold | no | The 15 ROM words, once. The boot ROM is immutable, so the reads take no register lock. |
+| Entry, before the row request | yes | Fabric and parent clocks; reset asserted (`0xa8c` bit 18 clear), bus gate and module gate closed; `0x1b10 & 0x30001 == 0x20000`; INTID 81 quiet. `0x5c0`, `0x5e0` and `0x5e4` are read and recorded in any state. No PCK600 read. |
 | Row request and wait | no | `a733_power_domain_request(row, 1)` once; the binding returns pending until the owner answers. REFUSED or FAILED fails the unit with nothing written. |
 | Hold A | yes | Open `0x5e4` bit 18 (below); A1 reads the three critical gates and refuses unless `0x5c0` bit 0, `0x5e0` bit 14 and `0x5e4` bit 18 are set; release reset (`0xa8c` bit 18); open the bus gate (`0xa8c` bit 2); the module selector and divider and the PLL_VE0 table up to lock enable ([video-pll.md](designs/video-pll.md)). |
 | PLL lock wait | no | At most about 420 µs. |

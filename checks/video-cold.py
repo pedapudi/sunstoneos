@@ -70,8 +70,8 @@ MUTANTS = [
     ('drivers/video/a733_video_platform.c', '        case COLD_WAIT:\n            if(!a733_video_unit_pll_wait(u))',
      '        case COLD_WAIT:\n            if(lock(u)!=1||!a733_video_unit_pll_wait(u))', 'lock wait under the register mutex'),
     # Domain 2 through the owner's row, and the critical gates.
-    ('drivers/video/a733_video_platform.c', '        case COLD_ENTRY:r=held_phase(p,cold_entry,&p->cold.entered_at);break;',
-     '        case COLD_ENTRY:++p->cold_step;break;', 'no read-only entry before the row request'),
+    ('drivers/video/a733_video_platform.c', '            r=held_phase(p,cold_entry,&p->cold.entered_at);break;',
+     '            ++p->cold_step;break;', 'no read-only entry before the row request'),
     ('drivers/video/a733_video_platform.c', '            if(s==A733_POWER_ROW_PENDING)return 0;\n            if(s!=A733_POWER_ROW_ON)return fail(u);',
      '            if(s==A733_POWER_ROW_PENDING&&0)return 0;\n            if(s!=A733_POWER_ROW_ON&&s!=A733_POWER_ROW_PENDING)return fail(u);',
      'writes before the ON answer'),
@@ -107,8 +107,11 @@ MUTANTS = [
      'bus gate close not read back'),
     ('drivers/video/a733_video_platform.c', '    if(!close_steps(u))return a733_video_unit_refuse_held(u);',
      '    if(!faulted&&!close_steps(u))return a733_video_unit_refuse_held(u);', 'fault close writes nothing'),
-    ('drivers/video/a733_video_unit.c', '    u->last_word=*v;\n    return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);',
-     '    return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);', 'failing word not kept'),
+    ('drivers/video/a733_video_unit.c', '    u->last_word=*v;\n    return 1;', '    return 1;', 'failing word not kept'),
+    ('drivers/video/a733_video_platform.c', '    for(unsigned i=0;i<3;++i)if(rd(u,CCU+gate[i],&p->cold.entry_gates[i])!=1)return 0;\n',
+     '    for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)\n'
+     '        if(!check(u,rom_identity[i].address,UINT32_MAX,rom_identity[i].word))return 0;\n'
+     '    for(unsigned i=0;i<3;++i)if(rd(u,CCU+gate[i],&p->cold.entry_gates[i])!=1)return 0;\n', 'ROM identity read under the lock'),
 ]
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

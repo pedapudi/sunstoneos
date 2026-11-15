@@ -102,7 +102,7 @@ struct a733_video_decoder {
     int (*memory)(void *,uint64_t,const void *,uint64_t);
     void *context;
     uint64_t version,reset_until;
-    unsigned admitted,checked,mapped,prepared,step,cold_step,requested,quiesced;
+    unsigned admitted,checked,mapped,prepared,step,cold_step,requested,quiesced,rom_checked;
     struct a733_video_cold_record cold;
 };
 /* JPEG binding. */

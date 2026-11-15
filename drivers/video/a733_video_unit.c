@@ -129,19 +129,21 @@ int a733_video_unit_refuse_held(struct a733_video_unit *u)
     if(!u->failed)(void)a733_video_unit_unlock(u);
     return a733_video_unit_fail(u);
 }
+/* The deadline is checked when a hold starts and when it ends (lock and unlock), not on each access: a hold is a
+ * bounded run of accesses, and an overrun inside it fails the unlock with the mutex held. */
 int a733_video_unit_read(struct a733_video_unit *u,uintptr_t a,uint32_t *v)
 {
-    if(!u->locked||!a733_video_unit_timely(u))return a733_video_unit_fail(u);
+    if(u->failed||!u->locked)return a733_video_unit_fail(u);
     u->last_address=a;
     if(u->ops.read(u->cookie,a,v)!=1){u->uncertain=1;return a733_video_unit_fail(u);}
     u->last_word=*v;
-    return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);
+    return 1;
 }
 int a733_video_unit_write(struct a733_video_unit *u,uintptr_t a,unsigned width,uint32_t v)
 {
-    if(!u->locked||!a733_video_unit_timely(u))return a733_video_unit_fail(u);
+    if(u->failed||!u->locked)return a733_video_unit_fail(u);
     if(u->ops.write(u->cookie,a,width,v)!=1){u->uncertain=1;u->last_address=a;return a733_video_unit_fail(u);}
-    return a733_video_unit_timely(u)?1:a733_video_unit_fail(u);
+    return 1;
 }
 int a733_video_unit_check(struct a733_video_unit *u,uintptr_t a,uint32_t mask,uint32_t expected)
 {uint32_t v;return a733_video_unit_read(u,a,&v)==1&&(v&mask)==expected;}
@@ -359,11 +361,31 @@ int a733_video_unit_identity(struct a733_video_unit *u,uint64_t *version)
 #ifdef __aarch64__
 #include "a733_mapping_check.h"
 #include "a733_mmio.h"
-static int device(uintptr_t a)
+/* Every 4 KiB page a video binding accesses: VE, the two CCU pages, the GIC distributor, R_CCU, PCK600, the RTC
+ * page and the boot ROM page that holds the identity words. */
+static const uintptr_t pages[]={0x01c0e000,0x02002000,0x02003000,0x03400000,0x07010000,0x07062000,0x07090000,
+    0x00019000};
+/* 0 not checked, 1 every page identity-mapped Device-nGnRnE outer shareable, -1 one is not. */
+static int mapped;
+int a733_video_unit_native_map(void)
 {
     static const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
-    return a733_mapping_check(aarch64_device_translate,a,a,&rule);
+    int state=__atomic_load_n(&mapped,__ATOMIC_ACQUIRE);
+    if(state)return state==1;
+    state=1;
+    for(unsigned i=0;i<sizeof(pages)/sizeof(*pages);++i)
+        if(!a733_mapping_check(aarch64_device_translate,pages[i],pages[i],&rule))state=-1;
+    __atomic_store_n(&mapped,state,__ATOMIC_RELEASE);
+    return state==1;
 }
+static int device(uintptr_t a)
+{
+    if(!a733_video_unit_native_map())return 0;
+    for(unsigned i=0;i<sizeof(pages)/sizeof(*pages);++i)if((a&~(uintptr_t)0xfff)==pages[i])return 1;
+    return 0;
+}
+#else
+int a733_video_unit_native_map(void){return 0;}
 #endif
 int a733_video_unit_native_read(uintptr_t a,uint32_t *out)
 {
