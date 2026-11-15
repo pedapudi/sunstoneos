@@ -32,9 +32,10 @@ Designs: [command span validation](../designs/display-command-admission.md) (`do
 Board results are records in `docs/evidence/display-g2d.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-display-g2d-20261101.md).
 
 <!-- evidence-table:begin -->
-1 records in `docs/evidence/display-g2d.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+2 records in `docs/evidence/display-g2d.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
+| `1794711214889069759-0a9ae5d4` | 2026-11-14 | 3-1 | `46ba128398d1` | watchdog-reset | failed | run_total 22.425 s, run_total 22.42 s |
 | `1794705812820143004-c987f8e7` | 2026-11-15 | 3-1 | `6708922d8244` | returned | passed | run_total 46.225 s, version 0 x10112114raw, open_time 7945 us, row_request_to_on 39 us, close_after_open 133 us, status_reads 2, pck_command 0 us, run_total 46.2 s |
 <!-- evidence-table:end -->

@@ -459,9 +459,12 @@ static int do_run(void)
     /* The fill reads no source; the layer's address names the output, which is mapped. */
     if(!a733_g2d_commands_at(g2d.rcq,G2D_RCQ_BYTES,c,(uint32_t)output_iova,(uint32_t)output_iova,(uint32_t)g2d.rcq_iova))
         return fail(G2D_STEP_RUN_GEOMETRY,1);
-    /* The surface's lines leave the CPU caches before the engine writes it; the command page is non-cacheable. */
-    const uintptr_t at=(uintptr_t)(l->base+j->output.offset);
-    const size_t bytes=(size_t)j->output.stride*j->output.height;
+    /* The surface's lines leave the CPU caches before the engine writes it; the command page is non-cacheable. The
+     * maintenance takes whole 64-byte lines, so the range is widened to the lines the surface touches; they lie in
+     * the page-aligned region, and the rows' padding is the application's own memory. */
+    const uintptr_t first=(uintptr_t)(l->base+j->output.offset);
+    const uintptr_t at=first&~(uintptr_t)63;
+    const size_t bytes=((first+(size_t)j->output.stride*j->output.height+63)&~(uintptr_t)63)-at;
     if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,bytes))return fail(G2D_STEP_RUN_CACHE,0);
     __asm__ volatile("dsb sy":::"memory");
     uint32_t v;
