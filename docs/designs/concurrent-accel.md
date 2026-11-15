@@ -1038,6 +1038,12 @@ CPUs 4-7 stream, the cause, wake-segment and scheduler traces) with `SUNSTONE_LA
 - **Placement.** The option compiles the OS with `OS_NPU_CORE=0` (`cmake/a733-os.cmake`). The route table then sends
   INTID 97 to CPU0, and the NPU's boot, client and runtime tasks take the interrupt core's affinity
   (`apps/os/npu.c`). Without the option the core stays 1 and the OS object code is unchanged except for line numbers.
+  The definition goes to three targets: the OS core, the application and `sunstone-a733-os-npu`, the object library
+  that builds `apps/os/npu*.c`. The first board run of the image (queue entry `1794766775350069931-da297888`) left out
+  the third. The route table sent INTID 97 to CPU0 while the owner tasks ran on CPU1, and `os_npu_irq_bind` refused
+  at startup (value `0xb09`, wrong route); the board returned through the failure return. `checks/latency-npu.py` now
+  reads, from the linked image, the affinity that `os_npu_start` passes and the route that `os_npu_irq_bind` requires,
+  and refuses a mutant relinked without that definition.
 - **Graph.** Stage 1b's relu: 16 rows of 176 int16 values (`tools/npu-fixtures.json`), 5,632 bytes in and out per job, eight jobs in flight. The input
   regions are those of the stage 1b run, byte for byte; `apps/latency/manifest-npu.json` pins their addresses and
   SHA-256 digests, and `checks/latency-npu.py` repacks them from the `npu-graphs` fixture and compares.
