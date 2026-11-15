@@ -354,3 +354,18 @@ The scaler model of the second stage truncated each output pixel's position (x t
 The application counts each conversion's exact-region mismatches against two rules, luma kept (the prediction) and luma raised to 16, and stops before the next operation when a conversion does not follow the first. For each scale the flat region must equal the flat colour, every row the middle row, the ramp must not decrease, and the middle row must equal the scaler model. After the engine is closed, one A76 core at 2002 MHz converts the luma-sweep frame with the BT.709 full table three times in scalar C, as in the earlier stages.
 
 [The decoder](../apps/g2d-convert/host.py) names each conversion's rule and the model its rectangle equals: the derived table or the vendor's block, with luma kept or raised. It reproduces the second stage's records: the vendor's BT.709 full block with luma raised gives 0x5551ee74, the vendor page's CRC-32, and with luma kept 0xb9c1df94, the csc0 variant's. [g2d-convert-host.py](../checks/g2d-convert-host.py) builds the application on the host with the engine model and checks the decoder against it and seven mutant engines: luma raised to 16, no lower clamp, no upper clamp, uninterpolated chroma, a truncated scaler phase, a missed conversion and a failed scale.
+
+Run `1794754244027087094-2256ed85` (port 3-1, image 5157921030ce, built at f2bc019e4) matched every prediction:
+
+| Operation | Rule | Rectangle CRC-32 | Exact-region CRC-32 | Launch to interrupt |
+| --- | --- | --- | --- | --- |
+| BT.709 full | luma kept | 0x687fdce1 | 0xc78e6d00 | 1050.5 µs |
+| BT.601 full | luma kept | 0xa7108f8a | 0x0757b166 | 1049.1 µs |
+| BT.709 limited | luma kept | 0xd1891536 | 0xc53940bf | 1049.0 µs |
+| BT.601 limited | luma kept | 0x3d553270 | 0xf54a807c | 1049.0 µs |
+| 320 by 240 scale | middle row 0xfcf93c8e | flat 0xffdf894f | | 1039.6 µs |
+| 224 by 224 scale | middle row 0xd8e3bcdb | flat 0xffdf894f | | 1037.9 µs |
+
+Each conversion followed luma kept at all 145,920 exact-region pixels and differed from luma raised at 9,078. Every rectangle word had alpha 0xff, the padding and the source were unchanged, and the sampled rows matched the half-phase chroma model. Both scales' middle rows equal the scaler model with phase rounding, every row equals the middle row, and no ramp channel decreases.
+
+The engine converted 640 by 480 pixels in 1049 to 1051 µs, 292 Mpixel/s at a module clock of 300 MHz, with every table. One A76 core at 2002 MHz took 2478, 2493 and 2486 µs (124 Mpixel/s) in scalar C without NEON, and its output equalled the BT.709 full conversion. That is a lower bound on the CPU's rate: the engine is 2.4 times faster than scalar C. The open and the close returned 1, the close gated the engine, and the session returned normally in 28.6 s.
