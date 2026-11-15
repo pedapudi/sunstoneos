@@ -557,15 +557,6 @@ static void counters_end(struct accel_overlap_counter_phase *p)
         memcpy(p->held[b], c.held, sizeof(p->held[b]));
     }
 }
-/* A phase with no accelerator job: the main task waits out the phase, sampling at its half. */
-static void counters_idle(void)
-{
-    while (now() < atomic_load_explicit(&pipeline_end, memory_order_acquire)) {
-        live();
-        counters_poll();
-        vTaskDelay(1);
-    }
-}
 #endif
 
 static void gpu_inputs(uint32_t rotation)
@@ -645,6 +636,18 @@ static void live_paced(void)
     const uint64_t t = now();
     if (t - last_live >= 2400000u) { live(); last_live = t; }
 }
+#ifdef ACCEL_OVERLAP_COUNTERS
+/* A phase with no accelerator job: the main task waits out the phase, sampling at its half. */
+static void counters_idle(void)
+{
+    last_live = now();
+    while (now() < atomic_load_explicit(&pipeline_end, memory_order_acquire)) {
+        live_paced();
+        counters_poll();
+        vTaskDelay(1);
+    }
+}
+#endif
 #ifdef ACCEL_OVERLAP_LARGE
 static struct accel_overlap_large_phase *large_phase;
 /* After the pipelined second, each slot runs a serial job with a one-line sync range (plain), then one with the whole slot
