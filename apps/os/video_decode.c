@@ -263,7 +263,7 @@ static int do_open(void)
         const struct a733_video_decoder *p=&vd.decoder;
         const enum a733_power_row_state s=a733_power_domain_state(&vd.row);
         RECORD(if(s!=A733_POWER_ROW_IDLE&&s!=A733_POWER_ROW_PENDING&&!vd.info.row_state){
-            vd.info.row_state=s;vd.info.row_on_us=owner_us();
+            vd.info.row_state=s;vd.info.row_seen_us=owner_us();
             vd.info.authority=a733_power_authority_load(&providers.shared.rails.authority);
         })
         if(r==1)break;

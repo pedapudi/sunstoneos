@@ -50,8 +50,10 @@ struct vdec_check_record {
      * failed (bit 0), mutex held (1), uncertain (2) and late (3) flags at the fault. fault_closed is 1 when the
      * binding then closed the decoder, and closed[] holds the words after that close. */
     uint32_t fault_step, fault_value, refused_address, refused_word;
-    /* Owner clock (microseconds): the first acquire call and the row's ON answer as the decoder task saw them. */
-    uint64_t row_request_us, row_on_us;
+    /* Owner clock (microseconds): before the first open call, and at the end of the first call that saw the row
+     * answered. That call runs holds A and B after the answer, so the row's own wait is the cold record's entered_at
+     * to on_at (binding clock) and the transition's command_at to reached_at (owner clock), not these two. */
+    uint64_t row_request_us, row_seen_us;
     /* Owner clock (microseconds): the power-domain owner's first step and the step that published DCDC2 verified
      * (struct a733_power_domains, started_at and verified_at); both zero until DCDC2 is verified. */
     uint64_t owner_started_us, owner_verified_us;

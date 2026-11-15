@@ -37,7 +37,7 @@ RECORD = (('magic', 'I', 1), ('bytes', 'I', 1), ('entry', 'I', 20), ('started', 
           ('version_high', 'I', 1), ('version_low', 'I', 1), ('cold_phase', 'I', 1), ('failed', 'I', 1),
           ('row_state', 'I', 1), ('authority', 'I', 1), ('measured', 'I', 1), ('fault_closed', 'I', 1),
           ('fault_step', 'I', 1), ('fault_value', 'I', 1), ('refused_address', 'I', 1), ('refused_word', 'I', 1),
-          ('row_request_us', 'Q', 1), ('row_on_us', 'Q', 1), ('owner_started_us', 'Q', 1),
+          ('row_request_us', 'Q', 1), ('row_seen_us', 'Q', 1), ('owner_started_us', 'Q', 1),
           ('owner_verified_us', 'Q', 1), ('requested_ticks', 'Q', 1),
           ('started_ticks', 'Q', 1), ('closed_ticks', 'Q', 1), ('transition', TRANSITION, 1))
 
@@ -111,7 +111,7 @@ def decode(payload):
     out['failed_flags'] = [name for k, name in enumerate(FAILED_FLAGS) if out['failed'] >> k & 1]
     times = {k: c[k] for k in ('entry_at', 'entered_at', 'on_at', 'hold_a_at', 'locked_at', 'hold_b_at', 'close_at',
                                'closed_at')}
-    times.update({k: r[k] for k in ('row_request_us', 'row_on_us', 'owner_started_us', 'owner_verified_us',
+    times.update({k: r[k] for k in ('row_request_us', 'row_seen_us', 'owner_started_us', 'owner_verified_us',
                                     'requested_ticks', 'started_ticks', 'closed_ticks')})
     out['times'] = times
     out['transition'] = r['transition']
@@ -121,7 +121,6 @@ def decode(payload):
         'entry_hold': span('entry_at', 'entered_at'), 'row_wait': span('entered_at', 'on_at'),
         'hold_a': span('on_at', 'hold_a_at'), 'lock_wait': span('hold_a_at', 'locked_at'),
         'hold_b': span('locked_at', 'hold_b_at'), 'close_hold': span('close_at', 'closed_at'),
-        'owner_row_wait': span('row_request_us', 'row_on_us'),
         'owner_verify': span('owner_started_us', 'owner_verified_us'),
         'request_after_owner_start': span('owner_started_us', 'row_request_us'),
         'open': (times['started_ticks'] - times['requested_ticks']) / TICKS_PER_US if times['started_ticks'] else None,
