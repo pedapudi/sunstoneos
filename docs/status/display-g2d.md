@@ -33,7 +33,7 @@ Designs: [command span validation](../designs/display-command-admission.md) (`do
 Board results are records in `docs/evidence/display-g2d.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-display-g2d-20261101.md).
 
 <!-- evidence-table:begin -->
-4 records in `docs/evidence/display-g2d.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+5 records in `docs/evidence/display-g2d.jsonl`; run `tools/evidence.py sync` to regenerate this table.
 
 | Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -41,4 +41,5 @@ Board results are records in `docs/evidence/display-g2d.jsonl`; add one with `to
 | `1794705812820143004-c987f8e7` | 2026-11-15 | 3-1 | `6708922d8244` | returned | passed | run_total 46.225 s, version 0 x10112114raw, open_time 7945 us, row_request_to_on 39 us, close_after_open 133 us, status_reads 2, pck_command 0 us, run_total 46.2 s |
 | `1794714427314630502-a44050c7` | 2026-11-15 | 3-1 | `4bc97e09e7b6` | returned | passed | run_total 22.072 s, open_time 212 us, attach 197 us, submit_to_launch 688 us, launch_to_irq 11.5 us, irq_to_done 116 us, submit_to_done 815 us |
 | `1794722460072814405-2b77c3eb` | 2026-11-15 | 3-1 | `b660bab97963` | returned | failed | run_total 22.382 s, attach 332 us, launch_to_irq 130.2 us, submit_to_done 1112.4 us |
+| `1794723622887180087-445859c1` | 2026-11-15 | 3-1 | `58fa4183c75c` | returned | failed | run_total 22.545 s, attach 332 us, launch_to_irq 129.9 us, submit_to_done 1112.4 us |
 <!-- evidence-table:end -->

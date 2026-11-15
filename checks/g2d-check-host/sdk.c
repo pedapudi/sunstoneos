@@ -1,7 +1,9 @@
 /* A host SDK for apps/g2d-check/main.c (checks/g2d-check-host.py). The large regions are host buffers, and ss_g2d_run
- * performs the copy on the CPU: ARGB8888 to ARGB8888 or BGRA8888, a byte reverse of each 32-bit word. Built with
- * -DNO_CONVERT, the copy ignores the output format, as an engine that converts nothing would. ss_finish writes the
- * result to the file named by the first argument. */
+ * performs the copy on the CPU: ARGB8888 to ARGB8888 or BGRA8888, a byte reverse of each 32-bit word, with a source
+ * pixel whose alpha byte is 0 written as 0x00000000, as board run 1794723622887180087-445859c1 measured
+ * (apps/g2d-check/host.py). Built with -DNO_CONVERT, the copy ignores the output format, as an engine that converts
+ * nothing would. Built with -DEXACT_TRANSPARENT, it copies alpha-0 pixels like any other. ss_finish writes the result
+ * to the file named by the first argument. */
 #include "g2d_check-app.h"
 #include "sunstone_g2d.h"
 #include <stdio.h>
@@ -35,6 +37,9 @@ int ss_g2d_close(struct ss_g2d_closed *closed) { memset(closed, 0, sizeof(*close
 int ss_g2d_fault(uint32_t *step, uint32_t *value) { *step = 0; *value = 0; return 1; }
 static uint32_t convert(uint32_t w, uint32_t from, uint32_t to)
 {
+#ifndef EXACT_TRANSPARENT
+    if(!(w >> 24)) return 0;
+#endif
 #ifdef NO_CONVERT
     (void)from; (void)to;
     return w;

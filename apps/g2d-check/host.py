@@ -9,9 +9,20 @@ background, then operation 1 (ARGB8888 to BGRA8888) and operation 2 (ARGB8888 un
 no input beyond the seed compiled into main.c.
 
 Converting ARGB8888 to BGRA8888 reverses the bytes of each 32-bit word: both names list channels from the most
-significant byte. The decoder also reports whether the board's output CRC-32 equals the output with both copies
-unconverted, which identifies a conversion that did not happen, or the output with every copied pixel's alpha byte
-0xff, which identifies a copy that forces alpha.
+significant byte. A copied pixel whose source alpha byte is 0 is written as 0x00000000. Board run
+1794723622887180087-445859c1 (port 3-1) measured that: its output CRC-32 was 0x50879a4a, which only the model with
+that rule gives, and all pixels with any other alpha were copied exactly. The native copy, like the vendor's
+g2d_bsp_bitblt, enables pipe 0's fill colour (blender 0x00 bit 0, set by every bld_in_set call, g2d_bld.c 97) over a
+fill colour of 0 (blender 0x10, zeroed memory in both), with straight alpha throughout (layer premultiply 0, blender
+premultiply 0, output premul_en 0). The vendor's copy therefore programs the same alpha path.
+
+The decoder also reports whether the board's output CRC-32 equals one of three alternatives:
+- both copies unconverted, which identifies a conversion that did not happen;
+- every copied pixel's alpha byte 0xff, which identifies a copy that forces alpha;
+- transparent pixels copied exactly, which identifies a copy that does not apply the rule.
+
+Each operation also samples the output at the first source pixel whose alpha is 0 and the first whose alpha is 0xff,
+so the samples alone show whether the rule held.
 """
 import struct
 import zlib
@@ -26,7 +37,7 @@ HEAD = struct.Struct('<8I')
 INFO = struct.Struct(f'<4I{len(PLATFORM)}I{len(PLATFORM)}I{len(LOCAL)}I4x3Q3Q2I{SAMPLES}I{SAMPLES}I2Q2I')
 CLOSED = struct.Struct('<6IQ')
 PLAN = struct.Struct('<8I')
-OP = struct.Struct('<16I')
+OP = struct.Struct('<18I')
 DONE = struct.Struct('<9I8I2I10I5I6I7Q')
 OPS = 2
 SIZE = HEAD.size + INFO.size + CLOSED.size + PLAN.size + OPS * (OP.size + DONE.size)
@@ -81,16 +92,19 @@ def surfaces(seed):
     return p, bytes(out[0]), out[1]
 
 
-def convert(word, source_format, output_format, converted=True, opaque=False):
+def convert(word, source_format, output_format, converted=True, opaque=False, exact=False):
     """One pixel from the source format to the output format. Only ARGB8888 (0) to ARGB8888 or BGRA8888 (3) is
-    modeled; with converted False the word is copied as it is, and with opaque the output's alpha byte is 0xff."""
+    modeled. A source pixel with alpha 0 becomes 0x00000000 unless exact is set (run 445859c1); with converted False
+    the word is copied as it is, and with opaque the output's alpha byte is 0xff."""
     assert source_format == 0 and output_format in (0, 3)
+    if not word >> 24 and not exact and not opaque:
+        return 0
     if output_format == 0 or not converted:
         return word | (0xff000000 if opaque else 0)
     return int.from_bytes(word.to_bytes(4, 'little'), 'big') | (0xff if opaque else 0)
 
 
-def expected(seed, converted=True, count=OPS, opaque=False):
+def expected(seed, converted=True, count=OPS, opaque=False, exact=False):
     """The plan, the source bytes, and the output bytes after the first count operations."""
     p, source, out = surfaces(seed)
     s = p['stride']
@@ -98,8 +112,17 @@ def expected(seed, converted=True, count=OPS, opaque=False):
         for y in range(op['h']):
             row = struct.unpack_from(f'<{op["w"]}I', source, (op['sy'] + y) * s + op['sx'] * 4)
             struct.pack_into(f'<{op["w"]}I', out, (op['dy'] + y) * s + op['dx'] * 4,
-                             *(convert(w, op['format'], op['output_format'], converted, opaque) for w in row))
+                             *(convert(w, op['format'], op['output_format'], converted, opaque, exact) for w in row))
     return p, source, bytes(out)
+
+
+def alpha_index(source, stride, op, alpha):
+    """The row-order index within op's source rectangle of the first pixel whose alpha byte is alpha, as main.c's
+    find_alpha; None when there is none."""
+    for i in range(op['w'] * op['h']):
+        if struct.unpack_from('<I', source, (op['sy'] + i // op['w']) * stride + (op['sx'] + i % op['w']) * 4)[0] >> 24 == alpha:
+            return i
+    return None
 
 
 def decode(payload):
@@ -167,12 +190,14 @@ def runs(payload, at):
     p, source, reference = expected(seed)
     _, _, unconverted = expected(seed, converted=False)
     _, _, opaque = expected(seed, opaque=True)
+    _, _, exact = expected(seed, exact=True)
     _, _, background = surfaces(seed)
     out = {'plan': {'seed': f'0x{seed:08x}', 'width': width, 'height': height, 'stride': stride,
                     'matches_seed': (width, height, stride) == (p['width'], p['height'], p['stride'])},
            'crc': {'output': f'0x{output_crc:08x}', 'expected_output': f'0x{zlib.crc32(reference):08x}',
                    'unconverted_output': f'0x{zlib.crc32(unconverted):08x}',
                    'opaque_output': f'0x{zlib.crc32(opaque):08x}',
+                   'exact_transparent_output': f'0x{zlib.crc32(exact):08x}',
                    'source': f'0x{source_crc:08x}', 'expected_source': f'0x{zlib.crc32(source):08x}',
                    'output_before': f'0x{output_before:08x}', 'expected_output_before': f'0x{zlib.crc32(bytes(background)):08x}',
                    'source_before': f'0x{source_before:08x}'}}
@@ -185,6 +210,7 @@ def runs(payload, at):
     out['crc']['output_matches'] = done and output_crc == zlib.crc32(reference)
     out['crc']['output_unconverted'] = done and output_crc == zlib.crc32(unconverted)
     out['crc']['output_opaque'] = done and output_crc == zlib.crc32(opaque)
+    out['crc']['output_exact_transparent'] = done and output_crc == zlib.crc32(exact)
     out['crc']['source_unchanged'] = done and source_crc == zlib.crc32(source) == source_before
     out['crc']['before_match'] = output_before == zlib.crc32(bytes(background)) and source_before == zlib.crc32(source)
     out['plan']['matches_seed'] = out['plan']['matches_seed'] and all(o['plan_matches_seed'] for o in ops)
@@ -195,8 +221,8 @@ def operation(payload, at, seed, p, k):
     """Operation k's record: its plan against the seed's, its samples against the output after operations 1 to k + 1
     (main.c reads them right after the operation), and its completion record."""
     r = OP.unpack_from(payload, at)
-    result, sx, sy, dx, dy, w, h, fmt, output_format = r[:9]
-    sample = r[12:16]
+    result, sx, sy, dx, dy, w, h, fmt, output_format, transparent, opaque, reserved = r[:12]
+    sample = r[12:18]
     signed = result - (1 << 32) if result & 0x80000000 else result
     want = p['ops'][k]
     board = {'w': w, 'h': h, 'sx': sx, 'sy': sy, 'dx': dx, 'dy': dy, 'format': fmt, 'output_format': output_format}
@@ -207,10 +233,18 @@ def operation(payload, at, seed, p, k):
     last = (want['dy'] + want['h'] - 1) * s + (want['dx'] + want['w'] - 1) * 4
     before = first - 4 if want['dx'] else want['dy'] * s + s - 4
     pad = want['dy'] * s + p['width'] * 4
+    source = surfaces(seed)[1]
+    picks = [alpha_index(source, s, want, a) for a in (0, 0xff)]
+    at_pick = [want['dy'] * s + want['dx'] * 4 + (i // want['w']) * s + (i % want['w']) * 4 for i in picks]
     expect = [struct.unpack_from('<I', reference, a)[0] for a in (first, last, before, pad)]
+    expect += [struct.unpack_from('<I', reference, a)[0] if i is not None else 0 for i, a in zip(picks, at_pick)]
     out['samples'] = {name: {'board': f'0x{got:08x}', 'expected': f'0x{exp:08x}'}
-                      for name, got, exp in zip(('first', 'last', 'before', 'padding'), sample, expect)}
-    out['samples_match'] = signed == 1 and list(sample) == expect
+                      for name, got, exp in zip(('first', 'last', 'before', 'padding', 'alpha_0', 'alpha_ff'),
+                                                sample, expect)}
+    want_picks = [0xffffffff if i is None else i for i in picks]
+    out['alpha_pixels'] = {'alpha_0': transparent, 'alpha_ff': opaque, 'expected': want_picks}
+    out['samples_match'] = signed == 1 and list(sample) == expect and [transparent, opaque] == want_picks \
+        and not reserved
     out['done'] = done_record(payload, at + OP.size)
     return out
 

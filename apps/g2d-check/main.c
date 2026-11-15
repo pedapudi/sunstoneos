@@ -14,12 +14,14 @@
 #define G2D_CHECK_OPS 2u
 enum {G2D_CHECK_OPENED = 1, G2D_CHECK_REFUSED = 2, G2D_CHECK_CLOSE_FAILED = 3, G2D_CHECK_RUN_FAILED = 4,
       G2D_CHECK_NO_SURFACE = 5};
-/* One operation: its rectangle and formats, its result, and four output words after it: the rectangle's first and
- * last pixels, the pixel before the first (or the row's last padding word when the rectangle starts at x 0), and the
- * first row's padding word after the last pixel. */
+/* One operation: its rectangle and formats, its result, and six output words after it: the rectangle's first and
+ * last pixels, the pixel before the first (or the row's last padding word when the rectangle starts at x 0), the
+ * first row's padding word after the last pixel, and the output at the first source pixel (in row order within the
+ * rectangle) whose alpha byte is 0 and at the first whose alpha byte is 0xff. transparent and opaque are those two
+ * pixels' indices within the rectangle, all ones when the rectangle has none. */
 struct g2d_check_op {
-    uint32_t result, sx, sy, dx, dy, w, h, format, output_format, reserved[3];
-    uint32_t sample[4];
+    uint32_t result, sx, sy, dx, dy, w, h, format, output_format, transparent, opaque, reserved;
+    uint32_t sample[6];
     struct ss_g2d_done done;
 };
 struct g2d_check_plan {
@@ -89,6 +91,17 @@ static void plan(struct g2d_check_result *r, uint32_t *x)
         o->output_format = k == 0 ? 3 : 0;
     }
 }
+/* The index, in row order within the copy's source rectangle, of the first ARGB8888 pixel whose alpha byte is alpha;
+ * all ones when there is none. */
+static uint32_t find_alpha(const uint8_t *source, uint32_t stride, const struct g2d_check_op *o, uint32_t alpha)
+{
+    for (uint32_t i = 0; i < o->w * o->h; ++i) {
+        uint32_t v;
+        memcpy(&v, source + (size_t)(o->sy + i / o->w) * stride + (size_t)(o->sx + i % o->w) * 4, 4);
+        if (v >> 24 == alpha) return i;
+    }
+    return UINT32_MAX;
+}
 static uint8_t *region(unsigned index, size_t bytes)
 {
     int ready;
@@ -154,6 +167,13 @@ void g2d_check_main(const struct ss_grant *grant)
         memcpy(&o->sample[1], surface + last, 4);
         memcpy(&o->sample[2], surface + (o->dx ? first - 4 : (size_t)o->dy * stride + stride - 4), 4);
         memcpy(&o->sample[3], surface + pad, 4);
+        o->transparent = find_alpha(source, stride, o, 0);
+        o->opaque = find_alpha(source, stride, o, 0xff);
+        const uint32_t pick[2] = {o->transparent, o->opaque};
+        for (unsigned n = 0; n < 2; ++n)
+            if (pick[n] != UINT32_MAX)
+                memcpy(&o->sample[4 + n], surface + (size_t)(o->dy + pick[n] / o->w) * stride +
+                       (size_t)(o->dx + pick[n] % o->w) * 4, 4);
     }
     if (!failed) {
         result.plan.output_crc = crc32(surface, bytes);
