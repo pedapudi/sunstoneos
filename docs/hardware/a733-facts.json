@@ -3998,9 +3998,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 2147483651,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x02002c0c",
@@ -4010,9 +4013,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 65537,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x02002020",
@@ -4022,9 +4028,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 4177548288,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x02002028",
@@ -4034,9 +4043,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0200202c",
@@ -4046,9 +4058,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 805306368,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x08000200",
@@ -4058,9 +4073,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030000",
@@ -4070,9 +4088,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030004",
@@ -4082,9 +4103,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 539100176,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030008",
@@ -4094,9 +4118,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 2,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a03000c",
@@ -4106,9 +4133,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030010",
@@ -4118,9 +4148,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 1052688,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030014",
@@ -4130,9 +4163,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 16,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030018",
@@ -4142,9 +4178,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 32770,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a03001c",
@@ -4154,9 +4193,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 3,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030020",
@@ -4166,9 +4208,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030024",
@@ -4178,9 +4223,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030028",
@@ -4190,9 +4238,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a03002c",
@@ -4202,9 +4253,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030030",
@@ -4214,9 +4268,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030034",
@@ -4226,9 +4283,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030038",
@@ -4238,9 +4298,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a03003c",
@@ -4250,9 +4313,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 4,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030040",
@@ -4262,9 +4328,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 8,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030044",
@@ -4274,9 +4343,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 12,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030048",
@@ -4286,9 +4358,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a03004c",
@@ -4298,9 +4373,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030050",
@@ -4310,9 +4388,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030054",
@@ -4322,9 +4403,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030058",
@@ -4334,9 +4418,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a03005c",
@@ -4346,9 +4433,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030060",
@@ -4358,9 +4448,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030064",
@@ -4370,9 +4463,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030068",
@@ -4382,9 +4478,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 4294967295,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a03006c",
@@ -4394,9 +4493,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040000",
@@ -4406,9 +4508,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040004",
@@ -4418,9 +4523,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 539100176,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040008",
@@ -4430,9 +4538,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 2,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a04000c",
@@ -4442,9 +4553,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040010",
@@ -4454,9 +4568,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 1052688,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040014",
@@ -4466,9 +4583,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 16,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040018",
@@ -4478,9 +4598,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 32770,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a04001c",
@@ -4490,9 +4613,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 3,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040020",
@@ -4502,9 +4628,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040024",
@@ -4514,9 +4643,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040028",
@@ -4526,9 +4658,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a04002c",
@@ -4538,9 +4673,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040030",
@@ -4550,9 +4688,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040034",
@@ -4562,9 +4703,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040038",
@@ -4574,9 +4718,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a04003c",
@@ -4586,9 +4733,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 4,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040040",
@@ -4598,9 +4748,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 8,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040044",
@@ -4610,9 +4763,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 12,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040048",
@@ -4622,9 +4778,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a04004c",
@@ -4634,9 +4793,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040050",
@@ -4646,9 +4808,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040054",
@@ -4658,9 +4823,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040058",
@@ -4670,9 +4838,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a04005c",
@@ -4682,9 +4853,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040060",
@@ -4694,9 +4868,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040064",
@@ -4706,9 +4883,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040068",
@@ -4718,9 +4898,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 4294967295,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a04006c",
@@ -4730,9 +4913,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030080",
@@ -4742,9 +4928,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030084",
@@ -4754,9 +4943,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030088",
@@ -4766,9 +4958,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a03008c",
@@ -4778,9 +4973,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030090",
@@ -4790,9 +4988,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a030094",
@@ -4802,9 +5003,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040080",
@@ -4814,9 +5018,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040084",
@@ -4826,9 +5033,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040088",
@@ -4838,9 +5048,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a04008c",
@@ -4850,9 +5063,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040090",
@@ -4862,9 +5078,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "mmio.0x0a040094",
@@ -4874,9 +5093,12 @@
     "security": "non-secure",
     "interface": "device-memory"
    },
-   "core": null,
-   "status": "unmeasured",
-   "value": null
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
   },
   {
    "name": "cpu.mpidr_el1",

@@ -193,8 +193,10 @@ larger transfers keep more requests in flight. Stage 1c measured larger jobs and
 
 ### Hardware features that could bound CPU bandwidth
 
-No register named here has been read on the board, and none may be written without a hypothesis that the coordinator
-approves.
+None of these registers may be written without a hypothesis that the coordinator approves. The DRAM training capture
+read AXI2HIF bridge 0 at +0x00 to +0x6c on port 3-1 in two lifetimes (`board-session-20261025-26`, `dc-capture-1` and `-2`),
+from boot0's Secure context, with identical words; +0x30 and +0x48 to +0x5c read 0. Both bridges, the path select and
+the DRAM0 clock have since been read at EL1 ([the AXI2HIF limiter](#the-axi2hif-limiter-in-the-vendor-driver)).
 
 - **AXI2HIF bandwidth limiter**, at 0x0a030000 and 0x0a040000. +0x30 enables the limiter (bit 0) and each limit (bit
   16+p). +0x48 and +0x4c hold the bandwidth and saturation for the total, +0x50 and +0x54 for reads, +0x58 and +0x5c for
@@ -357,8 +359,8 @@ Each bridge has the same words (`sunxi-nsi.h` lines 394-420):
 
 The counting clock is the device tree's `cpu_direct` clock, `CLK_DRAM0` (CCU 0x0c00). Every rate computation in the
 driver prefers it (`sunxi-nsi.c` lines 442-447, 647-652 and 1694-1699). DRAM0 runs at PLL_DDR ÷ 4 (CCU word
-0x80000003). PLL_DDR is 24 MHz × (N+1)/(M+1), with its VCO at most 2.52 GHz, and boot0 reports a 2,040 MHz DRAM clock,
-so DRAM0 is predicted at 510 MHz. No run has read PLL_DDR yet.
+0x80000003). PLL_DDR is PLL_REF × (N+1)/(M+1), with its VCO at most 2.52 GHz (`ccu-sun60iw2.c`, `pll_ddr_clk`). With
+PLL_REF at 24 MHz, boot0's reported 2,040 MHz DRAM clock puts DRAM0 at 510 MHz, which the EL1 read below confirms.
 
 The vendor's arithmetic (`sunxi-nsi.c` lines 251-262 and 401-488), which the vendor never ran on the A733, at
 f = 510 MHz:
@@ -396,11 +398,30 @@ The shipped kernel (`CONFIG_AW_NSI=y`) does reach the bridges from Non-secure EL
 0x08000200 at probe (line 1304), maps both bridges (line 1326), writes +0x20 to +0x28 when a user sets the counter
 period (lines 626-709) and reads +0x80 to +0x94 in its bandwidth, latency and request reports (`sunxi-nsi-bw.c`).
 
-### Reading the bridges at EL1
+### Both bridges read at EL1 match boot0's values, with the limiter off
 
 The hardware facts probe ([facts probe](../hardware/a733-facts-probe.md)) reads the DRAM0 clock words, PLL_DDR, the
-path select and both bridges at EL1 on core 0, reads only, before any limiter write is proposed. Its result gives the
-reset values that a limiter owner restores and the clock that sets the units.
+path select and both bridges at EL1 on core 0 and writes nothing. One returning run on port 3-1 (queue entry
+`1794744873056408964-85d3ad7d`, image `d25c82783579`) returned normally, and the facts file holds every word.
+
+- **Gates.** DRAM0_CLK `0x02002c00` reads 0x80000003 (gate open, source PLL_DDR, divider 4), DRAM0_BGR `0x02002c0c`
+  reads 0x00010001 (bus gate open, reset deasserted) and the path select `0x08000200` reads 0x1. All three opened,
+  so CPU traffic takes the bridges and the probe read every bridge word.
+- **Bridges.** All 34 words of bridge 1 equal those of bridge 0, and bridge 0's +0x00 to +0x6c equal the Secure-context
+  capture word for word: +0x00 0x1, +0x04 0x20220410, +0x08 0x2, +0x10 0x101010, +0x14 0x10, +0x18 0x8002, +0x1c 0x3,
+  +0x2c 0x1, +0x38 0x1, +0x3c 0x4, +0x40 0x8, +0x44 0xc, +0x64 0x1 and +0x68 0xffffffff; every other word reads 0. The
+  limiter words read 0: +0x30 and +0x48 to +0x5c on both bridges. The counters +0x80 to +0x94 read 0, with the period words
+  +0x20 to +0x28 at 0.
+- **Clock.** PLL_DDR_CTRL `0x02002020` reads 0xf9005400. Enable, LDO, lock enable, lock and output gate (bits 31 to
+  27) are set, N = 0x54 and the output divider (bits 22 to 20) is 0. Bit 24, which the hypothesis did not predict, is
+  PLL_FREF_SEL (U-Boot's `clock_autogen.h` for sun60iw2p1): set, the PLL takes PLL_REF rather than the crystal, as the
+  kernel's clock tree also says. No run has read PLL_REF; at the 24 MHz that boot0's DRAM report implies, PLL_DDR =
+  24 × 85 = 2,040 MHz. The pattern words read 0 and 0x30000000; pattern 0's enable bit (31) is clear, so the PLL runs
+  without sigma-delta modulation. DRAM0, and with it the limiter's counting clock, runs at 2,040 ÷ 4 = 510 MHz, the
+  rate the units above assume.
+
+Non-secure EL1 therefore sees both bridges, which hold boot0's values with every limit disabled. These words are the
+reset values that a limiter owner restores.
 
 ## The GPU add waits on memory four times per task
 
@@ -539,9 +560,10 @@ The NPU relu (1,024 rows of 176 16-bit values) writes 32,768 units, 512 bytes pe
 reads are those units plus a residual of 3,404 units in 1,182 requests. Its write requests (2,690) fit neither 16-beat
 bursts (2,048) nor splits at 256-byte boundaries (2,944).
 
-The two CPU bridges (AXI2HIF, 0x0a030000 and 0x0a040000) have counters too. The vendor driver accesses them behind
-a clock (`cpu_direct`, CCU 0x0c00 and 0x0c0c) and a selector bit (0x08000200) that no capture from port 3-1 has read.
-They are left to a later stage.
+The two CPU bridges (AXI2HIF, 0x0a030000 and 0x0a040000) have counters too, at +0x80 to +0x94. Their clock
+(`cpu_direct`, DRAM0 at 510 MHz) and the path select read open at EL1, and the counters read 0 while disabled
+([both bridges read at EL1](#both-bridges-read-at-el1-match-boot0s-values-with-the-limiter-off)). Enabling them needs
+writes to +0x20 to +0x28, which no run has made.
 
 ### Arguments once per task
 
