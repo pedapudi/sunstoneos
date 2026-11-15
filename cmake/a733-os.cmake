@@ -41,7 +41,7 @@ elseif(SUNSTONE_APPLICATION STREQUAL "vdec-check")
   add_sunstone_application(vdec-check
     SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/vdec-check/main.c"
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/vdec-check/manifest.json")
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_VIDEO_DECODE_MEASURE=1)
+  target_compile_definitions(sunstone-a733-os-video-decode PRIVATE SUNSTONE_VIDEO_DECODE_MEASURE=1)
   add_sunstone_image(sunstone-a733-os-vdec-check LIFETIME ${os_lifetime} APPLICATION vdec-check)
 elseif(SUNSTONE_APPLICATION STREQUAL "i2c-scan")
   add_sunstone_application(i2c-scan
