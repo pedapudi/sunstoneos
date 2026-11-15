@@ -103,7 +103,8 @@ static int security_write(void *ctx,uint32_t off,uint32_t value)
             if(id==36) {
                 assert(p[14]==44&&p[20]==16&&p[56]==2&&p[57]==1);
                 unsigned which=p[59]?1:(p[16]==1?2:3);assert(!memcmp(p+24,vectors[which],16));
-                ++key_adds;uint8_t cfm[]={reject_key?7:0,(uint8_t)(10+which),0xa5,0x5a};control_reply(37,cfm,4);
+                /* MM_KEY_ADD_CFM as the board's firmware sends it: status and hw_key_idx, two bytes (run 6). */
+                ++key_adds;uint8_t cfm[]={reject_key?7:0,(uint8_t)(10+which)};control_reply(37,cfm,2);
                 if(drop_key_reply){memset(receive,0,sizeof(receive));m.card[1][4]=0;}
                 if(key_delay&&key_adds==1){
                     memcpy(delayed,receive,sizeof(delayed));memset(receive,0,sizeof(receive));m.card[1][4]=0;
@@ -111,7 +112,7 @@ static int security_write(void *ctx,uint32_t off,uint32_t value)
                 }
                 if(key_variant&&key_adds==1){
                     memset(receive,0,sizeof(receive));m.card[1][4]=0;
-                    if(key_variant==2)control_reply(37,cfm,4);
+                    if(key_variant==2)control_reply(37,cfm,2);
                     else if(key_variant==3){const uint8_t credits[4]={3,0,8,0};message(receive,0x140b,credits,4);m.card[1][4]=1;}
                 }
             } else if(id==38) {
@@ -400,7 +401,7 @@ int main(int argc,char **argv)
             site.transport_site,site.transport_error,site.data,site.security,site.slot,site.expected_cfm,site.cfm_bytes,
             site.cfm_status,site.supplicant,site.actions,site.stop_site,supplicant.rsn_state,eapol_tx);
         assert((site.slot>>4)==AIC8800_SECURITY_STOP_COMPLETION&&(site.security&15u)==AIC8800_SECURITY_DONE&&
-            site.cfm_bytes==4&&!site.cfm_status&&supplicant.rsn_state==9&&eapol_tx==2);
+            site.cfm_bytes==2&&!site.cfm_status&&supplicant.rsn_state==9&&eapol_tx==2);
         printf("fault site: a late observation of a confirmed key add names the completion\n");
     }
     if(!strcmp(argv[2],"key-timeout")||!strcmp(argv[2],"key-failure")||!strcmp(argv[2],"key-link")) {
@@ -412,7 +413,7 @@ int main(int argc,char **argv)
         assert((site.security&15u)==AIC8800_SECURITY_WAITING&&(site.security&16u)&&
             (site.security>>5)==AIC8800_SECURITY_ADD&&site.expected_cfm==37&&(site.slot&7u)==0&&
             (site.slot>>4)==(refused?AIC8800_SECURITY_STOP_CONFIRMATION:link?AIC8800_SECURITY_STOP_LINK:AIC8800_SECURITY_STOP_DEADLINE));
-        assert(refused?site.cfm_bytes==4&&site.cfm_status==7:!site.cfm_bytes&&!site.cfm_status);
+        assert(refused?site.cfm_bytes==2&&site.cfm_status==7:!site.cfm_bytes&&!site.cfm_status);
         assert((site.supplicant&15u)==AIC8800_SUPPLICANT_FAULT&&(site.actions&1u)&&(site.actions&2u)&&(site.actions&8u));
         /* The security worker stopped first; the transport's fault then stopped the supplicant. */
         assert((site.stop_site>>12)==4u);
