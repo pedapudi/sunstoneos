@@ -48,5 +48,28 @@ int main(void)
     app.stage=ONLINE;app.platform.stop_requested=0;app.platform.aborting=1;atomic_store(&app.failed,1);
     app.session.sockets.initialized=app.session.sockets.event_bound=1;app.session.sockets.requests=(QueueHandle_t)(uintptr_t)1;
     before=time_us;assert(board_radio_owner_wait(&app,0)==1&&blocks==2&&time_us==before+50);
+    /* Board run 1794712987077481541-5b26ea3e: a scan burst fills the dispatcher's four-event queue, so the next
+     * scan record stays held in the transport, which then reports no work while its function interrupt stays
+     * masked. The pass that drains the queue must publish ready work; otherwise the owner sleeps to the scan's
+     * command deadline and the transport faults (a733_radio_session.c line 328, stage MANAGEMENT). */
+    memset(&app,0,sizeof(app));atomic_store(&recovery_state,1);blocks=0;
+    time_us=100;app.self=&app;app.constructed=1;app.config.shared=&shared;app.config.recovery_state=&recovery_state;
+    app.config.session.owner_task=task;app.config.scan_only=1;
+    app.config.startup_deadline_us=8000;app.platform.config.lifetime_deadline_us=10000;
+    app.platform.stage=RSTAGE_READY;app.platform.host.state=SUNXI_SDIO_READY;
+    app.session.deadline=9000;app.session.transport.initialized=1;app.session.dispatcher.initialized=1;
+    app.stage=SCANNING;app.scan_started=1;app.operation_deadline=8000;
+    scan_finished=0;session_result=A733_SESSION_MANAGEMENT;staged=0; /* each pass takes one queued event */
+    app.session.transport.held=1;
+    assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SCANNING&&app.event_ready);
+    assert(board_radio_owner_wait(&app,0)==1&&!blocks&&time_us==100);
+    /* With no event taken the held transport is waiting on its consumer; the owner sleeps. */
+    staged=1;scan_events_left=0;
+    assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&!app.event_ready);
+    assert(board_radio_owner_wait(&app,0)==1&&blocks==1);
+    /* A drained queue with nothing held publishes nothing either. */
+    staged=0;app.session.transport.held=0;
+    assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&!app.event_ready);
     puts("PASS actual board poll preserves scan/budget ready work and retires inactive protocol timers");
+    puts("PASS draining a full event queue while the transport holds the next record publishes ready work");
 }
