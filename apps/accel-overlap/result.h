@@ -97,6 +97,7 @@ _Static_assert(sizeof(struct accel_overlap_sweep) == 56 && sizeof(struct accel_o
 #define ACCEL_OVERLAP_COUNTER_PHASES 8u
 #define ACCEL_OVERLAP_PERIODS 5u
 #define ACCEL_OVERLAP_NPU_GRAPHS 4u
+#define ACCEL_OVERLAP_ROW_PADDING 0xa5   /* the byte a padded output row holds past its values (tools/npu-row-stride.py) */
 #define ACCEL_OVERLAP_INTERLEAVED 0x100u
 struct accel_overlap_large_phase {
     struct accel_overlap_phase run;

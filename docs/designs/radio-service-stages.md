@@ -36,7 +36,7 @@ a 232-byte head that gives the total length and the access point count, then one
 44-byte entry per access point, then the 16-byte scan counts when head flags
 bit 10 is set, then the 48-byte association tail when bit 9 is set, then the
 16-byte RSN summary when bit 11 is set, then the 16-byte fault site when bit 12
-is set. The head carries the record version
+is set, then the 28-byte transport trace when bit 13 is set. The head carries the record version
 (3 since the scan counts and the RSN summary). The image exports the version it
 writes as `os_radio_result_version`, and admission refuses an image whose
 version the runner's `tools/radio_result.py` does not read, naming both
@@ -102,8 +102,15 @@ device is touched. The sequence after the passive 2.4 GHz scan is:
    stage.
 
 Time budget, against the 50 s startup deadline (firmware confirmed near 16.7 s of session time): scan 10 s, authentication
-and association 8 s, four-way handshake 8 s, supplicant command 1 s. A normal run should need about 3 s of scan, well under
-1 s to join, and tens of milliseconds per handshake message. Each bound also stops at the session deadline.
+and association 8 s, the security stage 14 s, each supplicant command 6 s. A normal run should need about 3 s of scan, well
+under 1 s to join, and tens of milliseconds per handshake message. Each bound also stops at the session deadline.
+
+The command bound is the reference's: `RWNX_80211_CMD_TIMEOUT_MS` is 6000 ms for SDIO (`aic8800_fdrv/rwnx_cmds.h`),
+multiplied by the command manager's queue size, which is 1 while one command is outstanding, as it always is here. The
+bounds nest so that a full wait ends at the security worker's own deadline: the security stage holds a handshake of up to
+8 s and then the pairwise key add's 6 s, and the runtime lease renews 7 s before its end, so no lease end falls inside a
+command's wait. `checks/radio-stage-limit.py` checks these relations on the prepared profile, and the `key-bound` case of
+`checks/aic8800-supplicant.py` accepts a confirmation 5.9 s after the write and stops at the deadline for one at 6.1 s.
 
 Credential residue. The runner backs up image RAM before it delivers the credential, so the backups hold none. After the
 return it reads only named blocks: the return report, the output record, the radio descriptor and the record it names, and
@@ -178,6 +185,37 @@ while waiting, with no matched confirmation; a refused key add records the
 confirmation's length and status. `checks/aic8800-supplicant.py` covers both
 cases (`key-timeout` and `key-failure`), and `checks/radio-result-decode.py`
 covers the decoding.
+
+The transport trace (`struct aic8800_transport_trace`) records what the bus
+did after the last command write, so an unanswered confirmation says whether
+anything came back. The image writes it with the fault site, and also alone
+when the security stage ends authorized, so a slow confirmation that still
+arrived in time leaves its latency in the record. It holds:
+
+- the command's message id, whether its CMD53 write was submitted and
+  completed, and the flow-control value that admitted it;
+- the time from that write to the transport's last clock read;
+- since that write: receive records by transport type, receive reads,
+  function 1 status reads, and the id of the last command response;
+- whether the transport waits for the function interrupt, the last function 1
+  status value and the transport's phase;
+- the SD controller's SDIO interrupt latch and mask, read once at capture
+  (`a733_radio_platform_sdio_irq_view`, a register read that changes nothing),
+  whether the host saw the latch, and the radio's GIC interrupts and owner
+  wakes since the write;
+- the dispatcher's queued events and diagnostic records by kind, the held
+  record's transport type, and the status of the last data confirmation;
+- the request id of the slowest security command that was confirmed, and the
+  time from its write to its confirmation in milliseconds.
+
+The `window:events` variants of `checks/aic8800-supplicant.py` give three
+distinct traces for a key add: `silent` (nothing came: no records, latch
+clear), `unserviced` (the reply sits in the card behind a raised interrupt the
+owner never serviced: no records, latch set) and `other` (another message came:
+records counted, the last response id named). The `key-bound` case holds the
+key add's confirmation for a given time: at 5900 ms it is accepted and the
+authorized trace names it as the slowest, and at 6100 ms the stage stops with
+reason deadline.
 
 ## Entropy and credentials gate association only
 

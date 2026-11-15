@@ -3,7 +3,8 @@
  *
  * Every core runs hwf_capture at EL1 before the scheduler starts and records
  * its own registers. Core 0 also records the distributor, the shared peripheral interrupts and the
- * NPU admission words. The capture changes no clock, voltage or power domain. It reads registers and
+ * NPU admission words and the CPU memory path words (DRAM0 clock, PLL_DDR, the CPU path select and the AXI2HIF bridges).
+ * The capture changes no clock, voltage or power domain. It reads registers and
  * makes exactly these writes, each of a value that every image writes in the same boot:
  *   CSSELR_EL1      selects a cache for CCSIDR_EL1; the value on entry is restored.
  *   ICC_PMR_EL1     0xff and the FreeRTOS API mask, the two values the port writes; the value on entry
@@ -32,7 +33,7 @@ static const struct spec core_specs[] = {
 #undef HWF_CORE
 };
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
-_Static_assert(COUNT(shared_specs) <= HWF_SHARED_SLOTS && COUNT(core_specs) <= HWF_CORE_SLOTS, "slot count");
+_Static_assert(COUNT(shared_specs) == HWF_SHARED_SLOTS && COUNT(core_specs) == HWF_CORE_SLOTS, "slot count");
 
 #define MRS(name) ({ uint64_t v_; __asm__ volatile("mrs %0, " #name : "=r"(v_) :: "memory"); v_; })
 static inline uint32_t r32(uintptr_t a) { return *(volatile const uint32_t *)a; }
@@ -137,6 +138,7 @@ static void capture_shared(unsigned core)
     const unsigned lines = ((r32(d + 4) & 31u) + 1u) * 32u;
     const uint32_t gates[3] = {hwf_platform.read32(0x070101ac), hwf_platform.read32(0x020025c0), hwf_platform.read32(0x020025e0)};
     const int ppu_open = (gates[0] & 1u) && (gates[1] & (1u << 6)) && (gates[2] & (1u << 18));
+    uint32_t dram0_clock = 0, dram0_bgr = 0, path_select = 0;   /* filled by the 0x0131 slots that precede the bridges */
     for (unsigned i = 0; i < COUNT(shared_specs); ++i) {
         const unsigned id = shared_specs[i].id, aux = shared_specs[i].aux;
         struct hwf_slot *slot = &hwf_table.shared[i];
@@ -164,6 +166,20 @@ static void capture_shared(unsigned core)
         case 0x0130:
             if ((aux == 0x07064000 || aux == 0x07064008) && !ppu_open) { flags = HWF_SKIPPED; break; }
             v = hwf_platform.read32(aux); break;
+        case 0x0131:
+            /* The CPU memory path (tools/hw_facts.py ID_MEMPATH_WORD). The slot order puts the DRAM0 clock, its
+             * gate and reset and the path select before any AXI2HIF word. A bridge word is read only when all three
+             * are open, as the vendor driver tests the select (sunxi-nsi.c:1304) and clocks the bridges from DRAM0. */
+            if (hwf_platform.platform != HWF_PLATFORM_A733) { flags = HWF_SKIPPED; break; }
+            if (aux >= 0x0a030000u && aux < 0x0a050000u &&
+                !((dram0_clock >> 31) & 1u && (dram0_bgr & 0x00010001u) == 0x00010001u && path_select)) {
+                flags = HWF_SKIPPED; break;
+            }
+            v = hwf_platform.read32(aux);
+            if (aux == 0x02002c00u) dram0_clock = (uint32_t)v;
+            else if (aux == 0x02002c0cu) dram0_bgr = (uint32_t)v;
+            else if (aux == 0x08000200u) path_select = (uint32_t)v;
+            break;
         case 0x0140: {
             /* The priority byte of a PPI on this core: read, write the value the platform writes next,
              * read back, restore. */
