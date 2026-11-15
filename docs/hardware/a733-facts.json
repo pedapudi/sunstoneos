@@ -3991,6 +3991,1116 @@
    "port": "3-1"
   },
   {
+   "name": "mmio.0x02002c00",
+   "source": "CCU DRAM0_CLK (0x0c00): gate 31, source 26:24, divider M 4:0 (ccu-sun60iw2.c dram0_clk); the AXI2HIF clock",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 2147483651,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x02002c0c",
+   "source": "CCU DRAM0_BGR (0x0c0c): bus gate 0, reset 16 (ccu-sun60iw2.c dram0_bus_clk, RST_BUS_DRAM0)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 65537,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x02002020",
+   "source": "CCU PLL_DDR_CTRL (0x0020): enable 31, lock 28, output divider M 22:20, N 15:8; 24 MHz x (N+1)/(M+1)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 4177548288,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x02002028",
+   "source": "CCU PLL_DDR_PAT0 (0x0028)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0200202c",
+   "source": "CCU PLL_DDR_PAT1 (0x002c)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 805306368,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x08000200",
+   "source": "CPU_DA_DDR_CTRL_REG: bit 0 sends CPU traffic through the AXI2HIF bridges",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030000",
+   "source": "AXI2HIF0 +0x00",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030004",
+   "source": "AXI2HIF0 +0x04",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 539100176,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030008",
+   "source": "AXI2HIF0 +0x08",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 2,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a03000c",
+   "source": "AXI2HIF0 +0x0c",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030010",
+   "source": "AXI2HIF0 +0x10",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 1052688,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030014",
+   "source": "AXI2HIF0 +0x14",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 16,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030018",
+   "source": "AXI2HIF0 +0x18",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 32770,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a03001c",
+   "source": "AXI2HIF0 +0x1c",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 3,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030020",
+   "source": "AXI2HIF0 +0x20 PMU_EN (vendor sunxi-nsi.h CPU_PMU_EN)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030024",
+   "source": "AXI2HIF0 +0x24 PMU_CLR (vendor sunxi-nsi.h CPU_PMU_CLR)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030028",
+   "source": "AXI2HIF0 +0x28 PMU_PER (vendor sunxi-nsi.h CPU_PMU_PER)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a03002c",
+   "source": "AXI2HIF0 +0x2c QOS_CFG (vendor sunxi-nsi.h CPU_QOS_CFG)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030030",
+   "source": "AXI2HIF0 +0x30 IAG_MODE (vendor sunxi-nsi.h CPU_IAG_MODE)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030034",
+   "source": "AXI2HIF0 +0x34 PRI_CFG (vendor sunxi-nsi.h CPU_PRI_CFG)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030038",
+   "source": "AXI2HIF0 +0x38 INPUT_OUTPUT_CFG (vendor sunxi-nsi.h CPU_INPUT_OUTPUT_CFG)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a03003c",
+   "source": "AXI2HIF0 +0x3c",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 4,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030040",
+   "source": "AXI2HIF0 +0x40",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 8,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030044",
+   "source": "AXI2HIF0 +0x44",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 12,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030048",
+   "source": "AXI2HIF0 +0x48 BAND_WIDTH_LIMIT(total) (vendor sunxi-nsi.h CPU_BAND_WIDTH_LIMIT(total))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a03004c",
+   "source": "AXI2HIF0 +0x4c SATURATION_LIMIT(total) (vendor sunxi-nsi.h CPU_SATURATION_LIMIT(total))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030050",
+   "source": "AXI2HIF0 +0x50 BAND_WIDTH_LIMIT(read) (vendor sunxi-nsi.h CPU_BAND_WIDTH_LIMIT(read))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030054",
+   "source": "AXI2HIF0 +0x54 SATURATION_LIMIT(read) (vendor sunxi-nsi.h CPU_SATURATION_LIMIT(read))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030058",
+   "source": "AXI2HIF0 +0x58 BAND_WIDTH_LIMIT(write) (vendor sunxi-nsi.h CPU_BAND_WIDTH_LIMIT(write))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a03005c",
+   "source": "AXI2HIF0 +0x5c SATURATION_LIMIT(write) (vendor sunxi-nsi.h CPU_SATURATION_LIMIT(write))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030060",
+   "source": "AXI2HIF0 +0x60",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030064",
+   "source": "AXI2HIF0 +0x64",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030068",
+   "source": "AXI2HIF0 +0x68",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 4294967295,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a03006c",
+   "source": "AXI2HIF0 +0x6c",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040000",
+   "source": "AXI2HIF1 +0x00",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040004",
+   "source": "AXI2HIF1 +0x04",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 539100176,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040008",
+   "source": "AXI2HIF1 +0x08",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 2,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a04000c",
+   "source": "AXI2HIF1 +0x0c",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040010",
+   "source": "AXI2HIF1 +0x10",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 1052688,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040014",
+   "source": "AXI2HIF1 +0x14",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 16,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040018",
+   "source": "AXI2HIF1 +0x18",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 32770,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a04001c",
+   "source": "AXI2HIF1 +0x1c",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 3,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040020",
+   "source": "AXI2HIF1 +0x20 PMU_EN (vendor sunxi-nsi.h CPU_PMU_EN)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040024",
+   "source": "AXI2HIF1 +0x24 PMU_CLR (vendor sunxi-nsi.h CPU_PMU_CLR)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040028",
+   "source": "AXI2HIF1 +0x28 PMU_PER (vendor sunxi-nsi.h CPU_PMU_PER)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a04002c",
+   "source": "AXI2HIF1 +0x2c QOS_CFG (vendor sunxi-nsi.h CPU_QOS_CFG)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040030",
+   "source": "AXI2HIF1 +0x30 IAG_MODE (vendor sunxi-nsi.h CPU_IAG_MODE)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040034",
+   "source": "AXI2HIF1 +0x34 PRI_CFG (vendor sunxi-nsi.h CPU_PRI_CFG)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040038",
+   "source": "AXI2HIF1 +0x38 INPUT_OUTPUT_CFG (vendor sunxi-nsi.h CPU_INPUT_OUTPUT_CFG)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a04003c",
+   "source": "AXI2HIF1 +0x3c",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 4,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040040",
+   "source": "AXI2HIF1 +0x40",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 8,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040044",
+   "source": "AXI2HIF1 +0x44",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 12,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040048",
+   "source": "AXI2HIF1 +0x48 BAND_WIDTH_LIMIT(total) (vendor sunxi-nsi.h CPU_BAND_WIDTH_LIMIT(total))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a04004c",
+   "source": "AXI2HIF1 +0x4c SATURATION_LIMIT(total) (vendor sunxi-nsi.h CPU_SATURATION_LIMIT(total))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040050",
+   "source": "AXI2HIF1 +0x50 BAND_WIDTH_LIMIT(read) (vendor sunxi-nsi.h CPU_BAND_WIDTH_LIMIT(read))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040054",
+   "source": "AXI2HIF1 +0x54 SATURATION_LIMIT(read) (vendor sunxi-nsi.h CPU_SATURATION_LIMIT(read))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040058",
+   "source": "AXI2HIF1 +0x58 BAND_WIDTH_LIMIT(write) (vendor sunxi-nsi.h CPU_BAND_WIDTH_LIMIT(write))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a04005c",
+   "source": "AXI2HIF1 +0x5c SATURATION_LIMIT(write) (vendor sunxi-nsi.h CPU_SATURATION_LIMIT(write))",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040060",
+   "source": "AXI2HIF1 +0x60",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040064",
+   "source": "AXI2HIF1 +0x64",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 1,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040068",
+   "source": "AXI2HIF1 +0x68",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 4294967295,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a04006c",
+   "source": "AXI2HIF1 +0x6c",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030080",
+   "source": "AXI2HIF0 +0x80 CHL0_PMU_REQ_R (vendor sunxi-nsi.h CPU_CHL0_PMU_REQ_R)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030084",
+   "source": "AXI2HIF0 +0x84 CHL0_PMU_REQ_W (vendor sunxi-nsi.h CPU_CHL0_PMU_REQ_W)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030088",
+   "source": "AXI2HIF0 +0x88 CHL0_PMU_DATA_R (vendor sunxi-nsi.h CPU_CHL0_PMU_DATA_R)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a03008c",
+   "source": "AXI2HIF0 +0x8c CHL0_PMU_DATA_W (vendor sunxi-nsi.h CPU_CHL0_PMU_DATA_W)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030090",
+   "source": "AXI2HIF0 +0x90 CHL0_PMU_LAT_R (vendor sunxi-nsi.h CPU_CHL0_PMU_LAT_R)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a030094",
+   "source": "AXI2HIF0 +0x94 CHL0_PMU_LAT_W (vendor sunxi-nsi.h CPU_CHL0_PMU_LAT_W)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040080",
+   "source": "AXI2HIF1 +0x80 CHL0_PMU_REQ_R (vendor sunxi-nsi.h CPU_CHL0_PMU_REQ_R)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040084",
+   "source": "AXI2HIF1 +0x84 CHL0_PMU_REQ_W (vendor sunxi-nsi.h CPU_CHL0_PMU_REQ_W)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040088",
+   "source": "AXI2HIF1 +0x88 CHL0_PMU_DATA_R (vendor sunxi-nsi.h CPU_CHL0_PMU_DATA_R)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a04008c",
+   "source": "AXI2HIF1 +0x8c CHL0_PMU_DATA_W (vendor sunxi-nsi.h CPU_CHL0_PMU_DATA_W)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040090",
+   "source": "AXI2HIF1 +0x90 CHL0_PMU_LAT_R (vendor sunxi-nsi.h CPU_CHL0_PMU_LAT_R)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
+   "name": "mmio.0x0a040094",
+   "source": "AXI2HIF1 +0x94 CHL0_PMU_LAT_W (vendor sunxi-nsi.h CPU_CHL0_PMU_LAT_W)",
+   "view": {
+    "el": 1,
+    "security": "non-secure",
+    "interface": "device-memory"
+   },
+   "core": 0,
+   "status": "measured",
+   "value": 0,
+   "queue_entry": "1794744873056408964-85d3ad7d",
+   "image_sha256": "d25c82783579e5d20e3a2524c04fe288eea4197066547d09d8fcf206543a6b7a",
+   "port": "3-1"
+  },
+  {
    "name": "cpu.mpidr_el1",
    "source": "MPIDR_EL1",
    "view": {

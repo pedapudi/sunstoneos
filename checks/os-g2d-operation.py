@@ -47,6 +47,29 @@ Cases:
   (04f243dbf) fails both cases at the second copy's launch, step 61 with value 4, as on the board.
 - fills-update-sticks: two stage-2 fills in one session with an engine that leaves 0x28 bit 0 set after a job. Both
   must complete. The stage-2 image fails the second at step 60 (RUN_BUSY), because it reads 0x28 before writing it.
+- The rotate module (docs/g2d-os.md#rotate-module), at G2D + 0x28000. The model's ROT_INT keeps its finish status in
+  bit 0, cleared by writing one, and its enable in bit 16; a write of ROT_CTL with bit 31 sets the status. The shared
+  line is high while the mixer's task end has its enable (0x20 bit 4) or the rotator's status has its enable, and the
+  owner's wait enters the image's handler while it is high; more than 64 entries is a storm. All rotates use a
+  256 by 160 ARGB8888 surface at stride 1088 in both regions and a 96 by 40 source rectangle at (12, 8).
+  - rotate-degrees: 0, 180, 90 and 270 degrees into disjoint rectangles, as the first rotate board stage draws them.
+    rotate-flips: each flip setting at a degree. Each rotate must complete with one handler entry; its rotate-module
+    writes must be the status clear (ROT_INT = 1), then exactly the vendor's words for the job at the service's
+    device addresses (vendor_words of checks/g2d-rotate-words.py), then the handler's write-back of the finish word;
+    it must write no mixer register (no reset pulse, no 0x24 write); its record must hold ROT_CTL, the finish word
+    and ROT_INT reading only the enable after the handler.
+  - rotate-mixed: a fill, a rotate, a blit and a rotate in one session, each completing.
+  - rotate-mixer-stray: the mixer raises task end with its enable during each rotate, and the rotator finishes after
+    it. fill-rotator-stray: the rotator raises its finish during a fill. The stray must be masked at its block (0x20
+    bit 4 off, or ROT_INT written without its enable and status bits), counted once with its word, and the operation
+    must complete on its own finish in a second entry. An image that leaves the stray's enable on fails both by storm;
+    one that does not write the rotator's finish back fails every rotate at step 64 (RUN_FINISH); one that arms a
+    rotate as a mixer operation fails every rotate.
+  - rotate-timeout-close: the rotator never finishes. The operation fails at step 62 with the ROT_INT word (enable
+    only), and the close, whose reset pulse clears the rotate module, returns 1.
+  - Refusals: degrees on a fill, a flip on a blit, a rotate that changes format, has a colour, a degree other than
+    0, 90, 180 and 270 or a flip above 3, and a rotate whose rotated rectangle leaves the output. Each fails with its
+    step and value and touches no register, mapping or cache line.
 
 Usage: os-g2d-operation.py --image ELF --output DIR"""
 import argparse
@@ -79,6 +102,9 @@ CACHE_CLEAN, CACHE_CLEAN_INVALIDATE = 0, 1     # enum aarch64_cache_op
 IOMMU_READ, IOMMU_WRITE = 1, 2
 PREFETCH = [0x30079, 0x3007f]   # the owner's bank words (docs/iommu.md)
 CCU, PCK1, G2D = 0x02002000, 0x07061000, 0x05440000
+# The rotate module (include/a733_g2d_rotate.h), at G2D + 0x28000.
+ROT_CTL, ROT_INT, ROT_TIMEOUT, ROT_START, ROT_INT_ENABLE = 0x28000, 0x28004, 0x28008, 1 << 31, 0x10000
+STORM = 64      # handler entries in one wait that count as an interrupt storm
 IOMMU_OWNER_FAULT, G2D_MASTER = 2, 10
 # The CCU words of an open engine: module clock on, bus gate open and G2D reset deasserted, DE_SYS reset deasserted;
 # the DE and DI gates closed, so the close also asserts the DE_SYS reset.
@@ -98,6 +124,30 @@ QUALIFIED_PAGES = {'blit1': '9199b2f7878a615c78fc40cbc61fb8adc76fc10861aff902e26
                    'fill': 'e4ed360e8c298dbd9977aa45d92a9298a8ad6092ddeb5e3d8c38051942fd94ce'}
 STAGE3_OPS = [dict(w=282, h=114, sx=108, sy=13, dx=8, dy=44, format=0, output_format=3),
               dict(w=172, h=48, sx=222, sy=206, dx=108, dy=131, format=0, output_format=0)]
+# The rotate plan: one ARGB8888 surface shape for both regions, 256 by 160 at stride 1088 (a multiple of 8, as the
+# rotate module's output pitch must be), and a 96 by 40 source rectangle at (12, 8) rotated by 0, 180, 90 and 270
+# degrees into disjoint output rectangles, as the first rotate board stage draws it (apps/g2d-rotate). The flip
+# session takes each flip setting at a degree.
+ROTATE_SURFACE = (256, 160, 1088)
+ROTATE_OPS = [dict(sx=12, sy=8, w=96, h=40, dx=0, dy=0, degrees=0),
+              dict(sx=12, sy=8, w=96, h=40, dx=100, dy=0, degrees=180),
+              dict(sx=12, sy=8, w=96, h=40, dx=0, dy=48, degrees=90),
+              dict(sx=12, sy=8, w=96, h=40, dx=48, dy=48, degrees=270)]
+FLIP_OPS = [dict(sx=12, sy=8, w=96, h=40, dx=0, dy=0, degrees=0, flip=1),
+            dict(sx=12, sy=8, w=96, h=40, dx=100, dy=0, degrees=180, flip=2),
+            dict(sx=12, sy=8, w=96, h=40, dx=0, dy=48, degrees=90, flip=3),
+            dict(sx=12, sy=8, w=96, h=40, dx=48, dy=48, degrees=270, flip=1)]
+FILL_OP = dict(op='fill', dx=200, dy=100, w=40, h=40, color=0x83b0ce22)
+BLIT_OP = dict(op='blit', sx=0, sy=100, dx=150, dy=120, w=64, h=32)
+
+
+def rotate_vendor():
+    """vendor_words and vendor_inputs of checks/g2d-rotate-words.py, the transcription of g2d_rotate_set_para."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('g2d_rotate_words', Path(__file__).with_name('g2d-rotate-words.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def stage2():
@@ -133,10 +183,36 @@ class G2d:
     the mixer AHB reset (0x08 bit 0) is asserted, or for good when the engine is stuck. A write of one to 0x24 clears
     task end (bit 0) and leaves cfg_finish (bit 2) set, as board run 1794722460072814405-2b77c3eb measured. A stuck
     0x24 bit (launch_fault) never clears."""
-    def __init__(self, completes, stuck=False, status_stuck=0, update_sticks=False):
-        self.regs = {0x08: 3, 0x20: 0, 0x24: status_stuck, 0x28: 0, 0x100: 0}
+    def __init__(self, completes, stuck=False, status_stuck=0, update_sticks=False, stray=None):
+        self.regs = {0x08: 3, 0x20: 0, 0x24: status_stuck, 0x28: 0, 0x100: 0, ROT_CTL: 0, ROT_INT: 0, ROT_TIMEOUT: 0}
         self.writes, self.completes, self.launched, self.interrupts = [], completes, False, 0
         self.stuck, self.status_stuck, self.running, self.update_sticks = stuck, status_stuck, False, update_sticks
+        # stray names the block that raises its finish at the launch of the other block's operation, with its enable
+        # on; the launched operation's own finish then waits for the next wait with the line low (deferred).
+        self.stray, self.deferred = stray, []
+
+    def line(self):
+        """The shared interrupt line (INTID 83): the mixer's task end with its enable, or the rotator's finish with
+        its enable (docs/g2d-os.md#rotate-module)."""
+        mixer = self.regs[0x24] & 1 and self.regs[0x20] & 0x10
+        rotate = self.regs[ROT_INT] & 1 and self.regs[ROT_INT] & ROT_INT_ENABLE
+        return bool(mixer or rotate)
+
+    def raise_stray(self, block):
+        if block == 'mixer':
+            self.regs[0x24] |= 5; self.regs[0x20] |= 0x10
+        else:
+            self.regs[ROT_INT] |= 1 | ROT_INT_ENABLE
+
+    def launch(self, block, complete):
+        """A launch of block: its finish now, or after the stray of the other block when one is modeled."""
+        other = 'rotate' if block == 'mixer' else 'mixer'
+        if self.stray == other:
+            self.raise_stray(other)
+            if complete:
+                self.deferred.append(complete)
+        elif complete:
+            complete()
 
     def read(self, off):
         return self.regs.get(off, 0)
@@ -147,19 +223,36 @@ class G2d:
             # Task end is write-one-to-clear; cfg_finish stays set (board run 1794722460072814405-2b77c3eb).
             self.regs[0x24] = (self.regs[0x24] & ~(value & 1) & 0xffffffff) | self.status_stuck
             return
+        if off == ROT_INT:
+            # The finish status (bit 0) is write-one-to-clear; the enable (bit 16) is written (g2d_rotate.c 327, and
+            # the vendor handler's write-back of the word it read, g2d.c 802-832).
+            self.regs[ROT_INT] = (value & ~1 & 0xffffffff) | (self.regs[ROT_INT] & 1 & ~value)
+            return
         self.regs[off] = value
+        if off == ROT_CTL and value & ROT_START:
+            self.launched = True
+            def complete():
+                self.regs[ROT_INT] |= 1
+                self.regs[ROT_CTL] &= ~ROT_START & 0xffffffff
+            self.launch('rotate', complete if self.completes else None)
         if off == 0x28 and value & 1:
             self.launched = True
             if self.completes:
-                self.regs[0x24] |= 5                   # task end and cfg_finish
-                if not self.update_sticks:
-                    self.regs[0x28] = 0
+                def complete():
+                    self.regs[0x24] |= 5               # task end and cfg_finish
+                    if not self.update_sticks:
+                        self.regs[0x28] = 0
+                self.launch('mixer', complete)
             else:
                 self.running = True
                 self.regs[0x100] = 0x80000000
+                self.launch('mixer', None)
         if off == 0x08 and not value & 1 and self.running and not self.stuck:
             self.running = False                       # the mixer reset stops the engine and clears its registers
             self.regs[0x100] = 0
+        if off == 0x08 and not value & 2:
+            self.regs[ROT_CTL] = self.regs[ROT_INT] = 0      # the rotate module's reset clears its registers
+            self.deferred.clear()
 
 
 class Registers:
@@ -177,7 +270,7 @@ class Registers:
 
 def run_case(image, parts, fields, name, width, height, stride, offset, refuse_cache=False, completes=True,
              stuck=False, launch_fault=False, attach_fault=False, close=False, blits=(), update_sticks=False,
-             fills=1):
+             fills=1, rotates=(), stray=None):
     uc = harness_machine()
     low = min(a for a, _, _ in parts) & ~0xfff
     high = (max(a + n for a, _, n in parts) + 0xfff) & ~0xfff
@@ -187,7 +280,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
     uc.mem_map(SURFACE, 2 * REGION_BYTES)
     uc.mem_map(RCQ, 0x300000)
     skip_crumbs(uc, image)
-    engine = G2d(completes, stuck, 1 if launch_fault else 0, update_sticks)
+    engine = G2d(completes, stuck, 1 if launch_fault else 0, update_sticks, stray)
     ccu, pck = Registers(CCU, OPENED_CCU), Registers(PCK1, {0x8: 8})
     state = {'time': 1000, 'ticks': 24000, 'iova': IOVA_BASE, 'cache': [], 'stopped': False, 'irq_entered': 0,
              'unmapped': None, 'detach': [], 'events': [], 'attach': [], 'map': [], 'unmap': [], 'prefetch': 0}
@@ -220,7 +313,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
 
     def post_blit(op):
         # A blit from region 1 (the source) to region 0 (the output), both of the shape's geometry.
-        uc.mem_write(job, bytes(jl['reserved'] + 8))
+        uc.mem_write(job, bytes(jl['flip'] + 4))
         put(job + jl['op'], 2)
         for surface, region, fmt in ((job + jl['source'], 1, op['format']), (job + jl['output'], 0, op['output_format'])):
             put(surface + sl['region'], region); put(surface + sl['format'], fmt); put(surface + sl['offset'], offset, 8)
@@ -230,6 +323,24 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         put(field('request'), 0); put(field('op'), RUN_OP); put(field('request'), POSTED)
     if blits:
         post_blit(blits[0])
+
+    def post_rotate(op):
+        # A job of the ROTATE plan (see ROTATE_SURFACE): op names its kind ('fill', 'blit' or 'rotate') and fields.
+        uc.mem_write(job, bytes(jl['flip'] + 4))
+        kind = op.get('op', 'rotate')
+        put(job + jl['op'], {'fill': 1, 'blit': 2, 'rotate': 3}[kind])
+        rw, rh, rs = ROTATE_SURFACE
+        surfaces = [(job + jl['output'], 0, op.get('output_format', op.get('format', 0)))]
+        if kind != 'fill':
+            surfaces.append((job + jl['source'], 1, op.get('format', 0)))
+        for surface, region, fmt in surfaces:
+            put(surface + sl['region'], region); put(surface + sl['format'], fmt); put(surface + sl['offset'], 0, 8)
+            put(surface + sl['width'], rw); put(surface + sl['height'], rh); put(surface + sl['stride'], rs)
+        for k in ('sx', 'sy', 'dx', 'dy', 'w', 'h', 'degrees', 'flip', 'color'):
+            put(job + jl[k], op.get(k, 0))
+        put(field('request'), 0); put(field('op'), RUN_OP); put(field('request'), POSTED)
+    if rotates:
+        post_rotate(rotates[0])
 
     def ret(m, value=None):
         if value is not None:
@@ -262,9 +373,16 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
 
     def wait(m):
         target = m.reg_read(UC_ARM64_REG_X0)
-        if engine.launched and engine.regs[0x24] & 1 and get(field('armed')):
+        if not engine.line() and engine.deferred:
+            engine.deferred.pop(0)()                   # the launched operation's own finish, after the stray
+            state['time'] += 5
+        if engine.launched and engine.line() and get(field('armed')):
             # The interrupt: the image's handler runs and returns to the waiter's caller.
             state['irq_entered'] += 1
+            if state['irq_entered'] > STORM:
+                state['storm'] = True                  # the line stayed high through the handler
+                m.emu_stop()
+                return
             m.reg_write(UC_ARM64_REG_PC, image.address('os_g2d_irq'))
             return
         state['time'] = max(state['time'], target)
@@ -335,6 +453,8 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         ccu.write(m, offset, size, value, data)
 
     uc.mmio_map(G2D, 0x1000, mmio_read, None, mmio_write, None)
+    uc.mmio_map(G2D + ROT_CTL, 0x1000, lambda m, o, s, d: engine.read(ROT_CTL + o), None,
+                lambda m, o, s, v, d: engine.write(ROT_CTL + o, v), None)
     uc.mmio_map(CCU, 0x2000, ccu.read, None, ccu_write, None)
     uc.mmio_map(PCK1, 0x1000, pck.read, None, pck.write, None)
     hooks = {
@@ -397,6 +517,7 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         except Exception as error:
             raise AssertionError(f'{name}: {what}: emulation stopped at {hex(uc.reg_read(UC_ARM64_REG_PC))}: {error}; '
                                  f'unmapped access {state["unmapped"]}')
+        assert not state.get('storm'), (name, what, 'interrupt storm: %d handler entries' % state['irq_entered'])
         assert state['stopped'], (name, what, 'the owner did not complete the request', hex(uc.reg_read(UC_ARM64_REG_PC)))
     serve('operation')
     ops = []
@@ -409,6 +530,10 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
                   'page': bytes(uc.mem_read(RCQ, 4096)), 'writes': list(engine.writes)}
         for k in ('irq_count', 'status_after', 'rcq_status', 'iommu_attached', 'output_iova'):
             record[k] = get(done + dl[k])
+        for k in ('rot_ctl', 'rot_ctl_after', 'rot_int', 'rot_int_after', 'rot_timeout', 'stray_finishes',
+                  'stray_word', 'stray_interrupts'):
+            record[k] = get(done + dl[k]) if k in dl else None
+        record['entries'] = state['irq_entered']
         for k in ('update_after', 'mixer_after', 'source_iova', 'status_launch'):
             record[k] = get(done + dl[k]) if k in dl else None
         record['iommu_prefetch'] = [get(done + dl['iommu_prefetch'] + 4 * b) for b in (0, 1)] if 'iommu_prefetch' in dl else None
@@ -425,6 +550,16 @@ def run_case(image, parts, fields, name, width, height, stride, offset, refuse_c
         for op in blits[1:]:
             engine.writes.clear()
             post_blit(op)
+            serve('operation %d' % (len(ops) + 1))
+            ops.append(op_record())
+    if rotates:
+        ops.append(op_record())
+        for op in rotates[1:]:
+            if ops[-1]['result'] != 1:
+                break
+            engine.writes.clear()
+            state['irq_entered'] = 0
+            post_rotate(op)
             serve('operation %d' % (len(ops) + 1))
             ops.append(op_record())
     run = {'result': struct.unpack('<i', uc.mem_read(field('result'), 4))[0], 'phase': get(field('dev.phase')),
@@ -544,6 +679,75 @@ def check_blits(record, state, engine, update_sticks):
             first - at < LINE and at + n - end < LINE, (name, 'maintenance must cover the surface in whole lines', hex(at), n)
 
 
+def check_rotate_op(name, op, o, vendor, stray=None):
+    """One rotate: result 1, the rotator's writes are the status clear and then the vendor's words for the job at the
+    device addresses the service used, the handler writes the finish word back, and the mixer is not touched (no
+    reset pulse, no 0x24 write), except for masking a mixer stray's enable."""
+    rs = ROTATE_SURFACE[2]
+    assert o['result'] == 1 and o['fault_step'] == 0, (name, op, o['result'], o['fault_step'], hex(o['fault_value']))
+    job = dict(source=o['source_iova'], output=o['output_iova'], source_stride=rs, output_stride=rs, format=0,
+               flip=op.get('flip', 0), **{k: op[k] for k in ('sx', 'sy', 'dx', 'dy', 'w', 'h', 'degrees')})
+    words, starts = vendor.vendor_words(*vendor.vendor_inputs(job))
+    assert starts, (name, op, 'the vendor refuses the job')
+    finish = 1 | ROT_INT_ENABLE
+    rot = [(a, v) for a, v in o['writes'] if a >= ROT_CTL]
+    assert rot == [(ROT_INT, 1)] + words + [(ROT_INT, finish)], \
+        (name, op, 'rotator writes', [(hex(a), hex(v)) for a, v in rot])
+    mixer = [(a, v) for a, v in o['writes'] if a < ROT_CTL]
+    assert mixer == ([(0x20, 0)] if stray == 'mixer' else []), (name, op, 'mixer writes in a rotate', mixer)
+    assert o['rot_ctl'] == words[0][1] and o['rot_int'] == finish and o['rot_int_after'] == ROT_INT_ENABLE, \
+        (name, op, hex(o['rot_ctl']), hex(o['rot_int']), hex(o['rot_int_after']))
+    assert o['rot_ctl_after'] == words[0][1], (name, op, 'the model clears the start bit', hex(o['rot_ctl_after']))
+    want = (1, 5) if stray == 'mixer' else (0, 0)
+    assert (o['stray_finishes'], o['stray_word']) == want and o['entries'] == 1 + want[0], \
+        (name, op, 'stray finishes, word and handler entries', o['stray_finishes'], hex(o['stray_word']), o['entries'])
+
+
+def check_rotates(record, state, ops, vendor, stray=None):
+    name, records = record['case'], record['ops']
+    assert len(records) == len(ops) and record['phase'] == OPEN, \
+        (name, [(o['result'], o['fault_step'], hex(o['fault_value'])) for o in records])
+    for n, (op, o) in enumerate(zip(ops, records)):
+        if op.get('op', 'rotate') == 'rotate':
+            check_rotate_op(name, op, o, vendor, stray)
+        else:
+            assert o['result'] == 1 and not any(a >= ROT_CTL for a, _ in o['writes']), \
+                (name, op, o['result'], o['fault_step'], hex(o['fault_value']), o['writes'])
+            assert o['stray_finishes'] == 0 and o['entries'] == 1, (name, op, o['stray_finishes'], o['entries'])
+        assert o['irq_count'] == sum(r['entries'] for r in records[:n + 1]) and o['stray_interrupts'] == 0, \
+            (name, n, 'every handler entry counted, none unarmed', o['irq_count'], o['stray_interrupts'])
+    first = records[0]
+    if ops[0].get('op', 'rotate') == 'rotate':
+        spans = state['attach'][0]
+        assert (spans[0]['iova'], spans[0]['physical'], spans[0]['access']) == \
+            (IOVA_BASE, SURFACE, IOMMU_READ | IOMMU_WRITE), (name, 'output span', spans)
+        assert (spans[1]['iova'], spans[1]['physical'], spans[1]['access']) == \
+            (IOVA_BASE + REGION_BYTES, SOURCE, IOMMU_READ), (name, 'the source must be mapped read-only', spans)
+        assert (first['output_iova'], first['source_iova']) == (IOVA_BASE, IOVA_BASE + REGION_BYTES), \
+            (name, hex(first['output_iova']), hex(first['source_iova']))
+    if all(op.get('op', 'rotate') == 'rotate' for op in ops):
+        # Each rotate cleans and invalidates the output's lines, cleans the source's, and invalidates the output's
+        # again after the finish, over whole lines that cover the surface.
+        cache = state['cache']
+        assert [c for c, _, _ in cache] == [CACHE_CLEAN_INVALIDATE, CACHE_CLEAN, CACHE_CLEAN_INVALIDATE] * len(ops), \
+            (name, cache)
+        size = ROTATE_SURFACE[2] * ROTATE_SURFACE[1]
+        for (_, at, n), base in zip(cache, [SURFACE, SOURCE, SURFACE] * len(ops)):
+            assert at == base and n % LINE == 0 and size <= n < size + LINE, (name, 'maintenance range', hex(at), n)
+
+
+def check_stray_in_mixer(record, vendor):
+    """A rotator stray during an armed fill: masked at the rotate module (ROT_INT written with its enable and status
+    off), counted with its word, and the fill completes on its own finish in a second handler entry."""
+    name, o = record['case'], record['ops'][0]
+    assert o['result'] == 1 and record['phase'] == OPEN, (name, o['result'], o['fault_step'], hex(o['fault_value']))
+    finish = 1 | ROT_INT_ENABLE
+    assert (o['stray_finishes'], o['stray_word'], o['entries']) == (1, finish, 2), \
+        (name, o['stray_finishes'], hex(o['stray_word']), o['entries'])
+    assert [(a, v) for a, v in o['writes'] if a >= ROT_CTL] == [(ROT_INT, 0)], (name, 'masked word', o['writes'])
+    assert o['irq_count'] == 2 and o['stray_interrupts'] == 0, (name, o['irq_count'], o['stray_interrupts'])
+
+
 def check_fills(record):
     """Two fills in one session with an engine that leaves the update bit set: the second one launches."""
     name, ops = record['case'], record['ops']
@@ -615,11 +819,48 @@ def main():
     blits = {'blits-update-sticks': True, 'blits-update-clears': False}
     cases += [(n, STAGE3 + (0,), {'blits': STAGE3_OPS, 'update_sticks': v}) for n, v in blits.items()]
     cases += [('fills-update-sticks', stage2(), {'fills': 2, 'update_sticks': True})]
+    # The rotate module (docs/g2d-os.md#rotate-module): the board stage's four degrees, the flips, rotates between
+    # mixer jobs in one session, a stray of each block during the other's operation, a timeout and its close, and
+    # the refusals.
+    rotate_shape = ROTATE_SURFACE + (0,)
+    rotations = {'rotate-degrees': (ROTATE_OPS, None), 'rotate-flips': (FLIP_OPS, None),
+                 'rotate-mixed': ([FILL_OP, ROTATE_OPS[2], BLIT_OP, ROTATE_OPS[3]], None),
+                 'rotate-mixer-stray': (ROTATE_OPS[:2], 'mixer')}
+    cases += [(n, rotate_shape, {'rotates': o, 'stray': k}) for n, (o, k) in rotations.items()]
+    cases += [('fill-rotator-stray', rotate_shape, {'rotates': [FILL_OP], 'stray': 'rotate'}),
+              ('rotate-timeout-close', rotate_shape, {'rotates': [ROTATE_OPS[2]], 'completes': False, 'close': True})]
+    refusals = {'refuse-fill-degrees': (dict(FILL_OP, degrees=90), 48, 1),
+                'refuse-blit-flip': (dict(BLIT_OP, flip=1), 48, 2),
+                'refuse-rotate-format': (dict(ROTATE_OPS[0], output_format=3), 48, 3),
+                'refuse-rotate-color': (dict(ROTATE_OPS[0], color=1), 48, 3),
+                'refuse-rotate-degree': (dict(ROTATE_OPS[0], degrees=45), 48, 3),
+                'refuse-rotate-flip': (dict(ROTATE_OPS[0], flip=4), 48, 3),
+                'refuse-rotate-fit': (dict(ROTATE_OPS[2], dy=100), 50, 2)}
+    cases += [(n, rotate_shape, {'rotates': [o]}) for n, (o, _, _) in refusals.items()]
+    vendor = rotate_vendor()
     for name, shape, options in cases:
         try:
             record, state, engine = run_case(image, parts, fields, name, *shape, **options)
             if name.startswith('surface'):
                 check_surface(record, state, engine)
+            elif name in rotations:
+                check_rotates(record, state, rotations[name][0], vendor, rotations[name][1])
+            elif name == 'fill-rotator-stray':
+                check_stray_in_mixer(record, vendor)
+            elif name == 'rotate-timeout-close':
+                o, run = record['ops'][0], record['run']
+                assert (run['result'], run['phase'], run['fault_step']) == (-1, FAULT, STEP_RUN_TIMEOUT), (name, run)
+                assert o['fault_value'] == ROT_INT_ENABLE, (name, 'the fault keeps the ROT_INT word', hex(o['fault_value']))
+                assert record['result'] == 1 and record['phase'] == CLOSED and record['fault_step'] == STEP_RUN_TIMEOUT, \
+                    (name, 'close', record['result'], record['phase'], record['fault_step'])
+                assert record['detach'] == [(1 << G2D_MASTER, False)] and 'reset-0' in record['events'], (name, record)
+            elif name in refusals:
+                _, step, value = refusals[name]
+                o = record['ops'][0]
+                assert (o['result'], record['phase'], o['fault_step'], o['fault_value']) == (-1, OPEN, step, value), \
+                    (name, o['result'], record['phase'], o['fault_step'], o['fault_value'])
+                assert not o['writes'] and not state['attach'] and not state['cache'], \
+                    (name, 'a refused job must touch nothing', o['writes'], state['attach'], state['cache'])
             elif name == 'fills-update-sticks':
                 check_fills(record)
             elif name in blits:
@@ -643,15 +884,20 @@ def main():
         'passed': not failures, 'physical_access': False, 'image': str(a.image),
         'image_sha256': hashlib.sha256(a.image.read_bytes()).hexdigest(), 'cases': rows,
         'sources_sha256': {n: hashlib.sha256((Path(__file__).resolve().parents[1] / n).read_bytes()).hexdigest()
-                           for n in ('apps/os/g2d.c', 'apps/os/iommu.c', 'drivers/g2d/a733_g2d.c', 'checks/os-g2d-operation.py')}})
+                           for n in ('apps/os/g2d.c', 'apps/os/iommu.c', 'drivers/g2d/a733_g2d.c',
+                                     'drivers/g2d/a733_g2d_rotate.c', 'checks/os-g2d-operation.py',
+                                     'checks/g2d-rotate-words.py')}})
     if failures:
         for row in rows:
             if not row['passed']:
                 print('FAIL', row['case'], row['error'][:600])
         raise SystemExit(f'{len(failures)} of {len(rows)} cases failed')
-    print(f'PASS G2D operation path: {len(rows) - 3 - len(closes) - len(blits)} surfaces, cache refusal leaves the '
+    surfaces = sum(r['case'].startswith('surface') for r in rows)
+    print(f'PASS G2D operation path: {surfaces} surfaces, cache refusal leaves the '
           f'service open, timeout faults, {len(closes)} closes after a fault, both stage-3 copies in one session, two '
-          f'fills with the update bit left set, and every copy and fill page equal to the qualified image\'s')
+          f'fills with the update bit left set, and every copy and fill page equal to the qualified image\'s; '
+          f'{len(rotations)} rotate sessions with the vendor\'s words, a rotator stray masked during a fill, a rotate '
+          f'timeout and its close, and {len(refusals)} refusals that touch nothing')
 
 
 if __name__ == '__main__':

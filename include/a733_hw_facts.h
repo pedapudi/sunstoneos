@@ -7,15 +7,30 @@
  * and that the facts application returns as its result. tools/hw_facts.py describes the same layout
  * and decodes it; checks/hw-facts.py compares the two. Little-endian. The header is 64 bytes; then
  * HWF_SHARED_SLOTS slots read once by core 0; then HWF_CORES blocks of HWF_CORE_SLOTS slots, one
- * block per core. A slot is 16 bytes. */
+ * block per core. A slot is 16 bytes. Both slot counts are the counts of the generated slot table
+ * (include/a733_hw_facts_table.inc). */
 #include <stddef.h>
 #include <stdint.h>
 
 #define HWF_MAGIC UINT64_C(0x3146574833373341) /* "A733HWF1" */
 #define HWF_VERSION 1u
 #define HWF_CORES 8u
-#define HWF_CORE_SLOTS 64u
-#define HWF_SHARED_SLOTS 96u
+/* The slot counts are those of the generated slot table, so the table is as large as its declared slots. */
+enum hwf_slot_counts {
+    HWF_SHARED_SLOTS = 0
+#define HWF_SHARED(id, aux) + 1
+#define HWF_CORE(id, aux)
+#include "a733_hw_facts_table.inc"
+#undef HWF_SHARED
+#undef HWF_CORE
+    ,
+    HWF_CORE_SLOTS = 0
+#define HWF_SHARED(id, aux)
+#define HWF_CORE(id, aux) + 1
+#include "a733_hw_facts_table.inc"
+#undef HWF_SHARED
+#undef HWF_CORE
+};
 #define HWF_PLATFORM_A733 1u
 #define HWF_PLATFORM_QEMU_OS 2u
 /* Slot flags. */
