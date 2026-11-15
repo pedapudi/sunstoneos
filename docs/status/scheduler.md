@@ -54,6 +54,13 @@ Queues, event groups and stream buffers lock their own hashed slot instead of th
 9. Qualify heterogeneous placement and tickless timing.
 10. Move the control-interrupt measurement off PPI30 the next time it is needed. It uses PPI30 on CPUs 1-7, so its builds keep CPU0's periodic release and do not measure the shipped timer path.
 11. After per-core precise deadlines (stage 7), revisit the woken-frame prefetch (stage 6c, work/sched-stage6-1114). Over three runs it lowered the mean busy wake on every one of CPUs 1-7 and CPU4's and CPU6's worst by about 4 µs, but at a cold wake 0 on CPUs 1-3 it added about 2,200 cycles of interrupt-exit work, which put the whole-phase worst over stage 5's on CPU1 and CPU3. Test skipping the prefetch on the first wake after a phase change, and enabling it only on the cores where it helps.
+12. Explain the A76 cost of a per-core port line before trying it again (work/false-share-1115, 0cd0772ea). The SMP port keeps each core's critical nesting depth, ISR yield flag and interrupt nesting depth in three arrays of eight words. In the latency image the arrays are not line-aligned and span four 64-byte lines that every core writes, two of them shared with boot-only flags and a cause-bench word. The change moved the three words into each core's own `xPortCoreStates` line. Six interleaved runs on 3-1, three of the latency bar image without the change (8c0f8b89) and three with it (6e1300d1), both with `configSS_IRQ_SAVES_FP` 0:
+    - On CPUs 1-5, the change lowered the mean busy wake by 0.7-3.0 µs and kept the three-run worst within the bar (the unchanged image's worst plus 1 µs).
+    - On the A76 cores it missed the bar: CPU6 23.6 against 23.2 µs, CPU7 21.3 against 20.8 µs. CPU7's mean rose by about 1.1 µs in each of the three runs.
+    - The 64-byte layout does not explain the A76 result. In the changed image each core's state is its own aligned line, with no other object in it and the new words at offsets 24-47. CPU7's line is followed by the first `xPortLocks` line in both images.
+    - Two differences remain untested. The repository holds no A76 reference for either:
+      - Pairing of 128-byte-aligned lines: without the change, CPU6's and CPU7's lines form one aligned pair. With it, CPU7's line pairs with the interrupt lock's line and CPU6's with CPU5's.
+      - Code placement: the IRQ handler is 11 instructions shorter, which moves every later function.
 
 ## Evidence
 
