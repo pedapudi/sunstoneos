@@ -32,5 +32,9 @@ Design: [video decoder PLL](../designs/video-pll.md) (`docs/evidence/video-pll.j
 Board results are records in `docs/evidence/video.jsonl`; add one with `tools/evidence.py add`. Earlier prose evidence is in [the historical log](../history/status-video-20261101.md).
 
 <!-- evidence-table:begin -->
-No board result is recorded in `docs/evidence/video.jsonl`.
+1 records in `docs/evidence/video.jsonl`; run `tools/evidence.py sync` to regenerate this table.
+
+| Entry or record | Date | Port | Image | Outcome | Verdict | Measurements |
+| --- | --- | --- | --- | --- | --- | --- |
+| `1794709569136470404-9a7b6a30` | 2026-11-15 | 3-1 | `34e7e5471665` | returned | failed | run_total 46.175 s |
 <!-- evidence-table:end -->
