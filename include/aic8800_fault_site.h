@@ -7,7 +7,10 @@
  * << 12 | source line; include/aic8800_security.h names the files). transport_error: enum aic8800_transport_error.
  * data: bits 3:0 enum aic8800_data_state, 7:4 enum aic8800_data_error. security: bits 3:0 the security worker's state
  * when it first stopped (its state now when it has not), bit 4 it stopped, bits 7:5 enum aic8800_security_operation.
- * slot: the key slot of the last add or delete (0 pairwise, 1 + key ID group). expected_cfm: the confirmation it waits
+ * slot: bits 2:0 the key slot of the last add or delete (0 pairwise, 1 + key ID group), 7:4 why the security worker
+ * first stopped (enum aic8800_security_stop_reason: 0 another worker's fault, 1 its command deadline, 2 a completed
+ * operation left unconsumed, 3 the clock ran backwards, 4 the link left security-pending or the Wi-Fi worker left
+ * ready while a command was outstanding, 5 a new association, 6 the matched confirmation was refused). expected_cfm: the confirmation it waits
  * for or last waited for (37 MM_KEY_ADD_CFM, 39 MM_KEY_DEL_CFM, 5125 ME_SET_CONTROL_PORT_CFM). cfm_bytes and
  * cfm_status: the parameter length and first byte of the confirmation that matched the outstanding request, before
  * it was judged (zero until one matched). supplicant: bits 3:0 enum aic8800_supplicant_state, 7:4 queued actions.
@@ -38,7 +41,7 @@ static inline void aic8800_fault_site_capture(struct aic8800_fault_site *f,const
     if(c){
         unsigned state=c->stopped?c->stop_from:(unsigned)c->state;
         f->security=(uint8_t)((state&15u)|(c->stopped?16u:0)|((unsigned)c->operation&7u)<<5);
-        f->slot=c->slot;f->expected_cfm=c->expected_cfm;
+        f->slot=(uint8_t)((c->slot&7u)|(c->stopped?((unsigned)c->stop_reason&15u)<<4:0));f->expected_cfm=c->expected_cfm;
         f->cfm_bytes=(uint8_t)(c->seen_cfm_bytes>255u?255u:c->seen_cfm_bytes);f->cfm_status=c->seen_cfm_status;
     }
     if(s&&s->initialized){

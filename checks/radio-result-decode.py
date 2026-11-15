@@ -103,13 +103,13 @@ def main():
     faulted = bytearray(full)
     struct.pack_into('<I', faulted, 12, len(RECORD) + len(entry) + 16 + 48 + 16 + 16)
     struct.pack_into('<I', faulted, 36, head_flags | 1024 | 512 | 2048 | 4096)
-    site = struct.pack('<H4BH4BHH', 0x4056, 10, 0x34, 0x12, 0, 37, 0, 0, 0x25, 0xb, 0x4031, 1234)
+    site = struct.pack('<H4BH4BHH', 0x4056, 10, 0x34, 0x12, 1 << 4, 37, 0, 0, 0x25, 0xb, 0x4031, 1234)
     decoded = radio_result.decode(bytes(faulted) + entry + struct.pack('<4I', 3, 12, 2, 4) + tail + rsn + site)
     assert decoded['rsn']['group'] == 'TKIP', decoded['rsn']
     assert decoded['fault_site'] == {
         'transport_site': {'file': 'aic8800_sdio_transport.c', 'line': 0x56}, 'transport_error': 'data',
         'data_state': 'fault', 'data_error': 'transport', 'security_state': 'waiting', 'security_stopped': True,
-        'security_operation': 'add', 'key_slot': 0, 'expected_cfm': 37, 'cfm_bytes': 0, 'cfm_status': 0,
+        'security_operation': 'add', 'key_slot': 0, 'security_stop_reason': 'deadline', 'expected_cfm': 37, 'cfm_bytes': 0, 'cfm_status': 0,
         'supplicant_state': 'fault', 'queued_actions': 2, 'head_action': 'key', 'head_in_flight': True,
         'port_pending': False, 'handshake_completed': True, 'eapol_deferred': False,
         'stop_site': {'file': 'aic8800_sdio_transport.c', 'line': 0x31}, 'ms_mod_65536': 1234}, decoded['fault_site']

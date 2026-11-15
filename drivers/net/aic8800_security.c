@@ -19,15 +19,19 @@ void aic8800_security_stop(struct aic8800_security *s,const void *owner)
     if(s->state!=AIC8800_SECURITY_FAULT&&!s->stopped){s->stop_from=(uint8_t)s->state;s->stopped=1;}
     s->authorized=0;s->state=AIC8800_SECURITY_FAULT;
 }
+static void stop_for(struct aic8800_security *s,const void *owner,enum aic8800_security_stop_reason reason)
+{if(s->state!=AIC8800_SECURITY_FAULT&&!s->stopped)s->stop_reason=(uint8_t)reason;aic8800_security_stop(s,owner);}
 void aic8800_security_observe(struct aic8800_security *s,const void *owner,uint64_t now)
 {
     if(!s||s->owner!=owner||s->state==AIC8800_SECURITY_FAULT)return;
-    if(now<s->last_now||(active(s)&&now>=s->deadline)||(s->completion_deadline&&now>=s->completion_deadline))
-        {aic8800_security_stop(s,owner);return;}
+    if(now<s->last_now){stop_for(s,owner,AIC8800_SECURITY_STOP_CLOCK);return;}
+    if(active(s)&&now>=s->deadline){stop_for(s,owner,AIC8800_SECURITY_STOP_DEADLINE);return;}
+    if(s->completion_deadline&&now>=s->completion_deadline){stop_for(s,owner,AIC8800_SECURITY_STOP_COMPLETION);return;}
     s->last_now=now;s->completion_deadline=0;
     if(!same_link(s)) {
         s->authorized=0;
-        if(s->wifi->association_generation!=s->generation||(!s->retiring&&active(s)))aic8800_security_stop(s,owner);
+        if(s->wifi->association_generation!=s->generation)stop_for(s,owner,AIC8800_SECURITY_STOP_GENERATION);
+        else if(!s->retiring&&active(s))stop_for(s,owner,AIC8800_SECURITY_STOP_LINK);
     }
 }
 int aic8800_security_init(struct aic8800_security *s)
@@ -106,7 +110,7 @@ enum aic8800_codec_result aic8800_security_response(struct aic8800_security *s,c
     }
     aic8800_security_zero(s->request,sizeof(s->request));
     s->completion_deadline=s->deadline;s->state=AIC8800_SECURITY_DONE;return AIC8800_CODEC_OK;
-fail:aic8800_security_stop(s,owner);return AIC8800_CODEC_MALFORMED;
+fail:stop_for(s,owner,AIC8800_SECURITY_STOP_CONFIRMATION);return AIC8800_CODEC_MALFORMED;
 }
 int aic8800_security_open(const struct aic8800_security *s)
 {return s&&s->initialized&&s->state!=AIC8800_SECURITY_FAULT&&s->authorized&&s->port_confirmed&&same_link(s);}

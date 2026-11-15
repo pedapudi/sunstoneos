@@ -294,6 +294,12 @@ int main(int argc,char **argv)
     else if(!strcmp(argv[2],"tx-uncertain")){uncertain_tx=1;inject(5);}
     else if(!strcmp(argv[2],"timeout")){drop_reply=1;inject(5);}
     else if(!strcmp(argv[2],"key-timeout")){inject(5);settled();drop_key_reply=1;inject(7);}
+    else if(!strcmp(argv[2],"key-link")) {
+        /* The link leaves security-pending while a key add awaits its confirmation. */
+        inject(5);settled();drop_key_reply=1;inject(7);
+        for(unsigned i=0;i<5000&&security.state!=AIC8800_SECURITY_WAITING;++i)step();
+        assert(security.state==AIC8800_SECURITY_WAITING);wifi.link=AIC8800_WIFI_DISCONNECTING;
+    }
     else if(!strcmp(argv[2],"generation")){authorized();++wifi.association_generation;}
     else assert(0);
     for(unsigned i=0;i<5000&&transport.state!=AIC8800_TRANSPORT_FAULT;++i)step();
@@ -301,19 +307,21 @@ int main(int argc,char **argv)
     assert(supplicant.owner==&transport&&security.owner==&transport&&!allzero(supplicant.config.pmk,32));
     /* The record's fault site separates a confirmation that never came from one the firmware refused. */
     struct aic8800_fault_site site;aic8800_fault_site_capture(&site,&transport,&supplicant,1234);
-    if(!strcmp(argv[2],"key-timeout")||!strcmp(argv[2],"key-failure")) {
-        unsigned refused=!strcmp(argv[2],"key-failure");
+    if(!strcmp(argv[2],"key-timeout")||!strcmp(argv[2],"key-failure")||!strcmp(argv[2],"key-link")) {
+        unsigned refused=!strcmp(argv[2],"key-failure"),link=!strcmp(argv[2],"key-link");
         fprintf(stderr,"site: transport %#x/%u data %#x security %#x slot %u cfm %u/%u/%u supplicant %#x actions %#x stop %#x\n",
             site.transport_site,site.transport_error,site.data,site.security,site.slot,site.expected_cfm,site.cfm_bytes,
             site.cfm_status,site.supplicant,site.actions,site.stop_site);
         assert(site.transport_error==AIC8800_TRANSPORT_DATA_ERROR&&(site.transport_site>>12)==4u&&site.ms==1234);
         assert((site.security&15u)==AIC8800_SECURITY_WAITING&&(site.security&16u)&&
-            (site.security>>5)==AIC8800_SECURITY_ADD&&site.expected_cfm==37&&site.slot==0);
+            (site.security>>5)==AIC8800_SECURITY_ADD&&site.expected_cfm==37&&(site.slot&7u)==0&&
+            (site.slot>>4)==(refused?AIC8800_SECURITY_STOP_CONFIRMATION:link?AIC8800_SECURITY_STOP_LINK:AIC8800_SECURITY_STOP_DEADLINE));
         assert(refused?site.cfm_bytes==4&&site.cfm_status==7:!site.cfm_bytes&&!site.cfm_status);
         assert((site.supplicant&15u)==AIC8800_SUPPLICANT_FAULT&&(site.actions&1u)&&(site.actions&2u)&&(site.actions&8u));
         /* The security worker stopped first; the transport's fault then stopped the supplicant. */
         assert((site.stop_site>>12)==4u);
-        printf("fault site: %s\n",refused?"refused key add names its status":"unanswered key add names the outstanding confirmation");
+        printf("fault site: %s\n",refused?"refused key add names its status":link?"a link change while a key add waits names the link":
+            "unanswered key add names the outstanding confirmation");
     }
     retained_fault();
     assert(!aic8800_transport_finish_security(&transport));

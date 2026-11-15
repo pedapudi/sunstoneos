@@ -18,6 +18,8 @@ FAULT_BYTES = 16         # struct aic8800_fault_site, present when head flags bi
 # AIC8800_SITE file codes (include/aic8800_security.h).
 SITE_FILES = {0: 'other', 1: 'aic8800_supplicant.c', 2: 'aic8800_supplicant_os.c', 3: 'aic8800_sae.c',
               4: 'aic8800_sdio_transport.c', 5: 'aic8800_security.c'}
+# enum aic8800_security_stop_reason (include/aic8800_security.h).
+STOP_REASONS = ['external', 'deadline', 'completion', 'clock', 'link', 'generation', 'confirmation']
 TRANSPORT_ERRORS = ['none', 'host', 'timeout', 'setup', 'rx-bounds', 'unsupported-irq', 'message', 'firmware',
                     'runtime', 'wifi', 'data']
 # Record versions this decoder reads (A733_RADIO_RESULT_VERSION). Admission refuses an image that writes another.
@@ -213,7 +215,8 @@ def decode_fault_site(raw):
         'transport_site': site(transport_site), 'transport_error': name(TRANSPORT_ERRORS, transport_error),
         'data_state': name(data_states, data_word & 15), 'data_error': name(data_errors, data_word >> 4),
         'security_state': name(security_states, security & 15), 'security_stopped': bool(security & 16),
-        'security_operation': name(operations, security >> 5), 'key_slot': slot, 'expected_cfm': expected,
+        'security_operation': name(operations, security >> 5), 'key_slot': slot & 7,
+        'security_stop_reason': name(STOP_REASONS, slot >> 4) if security & 16 else None, 'expected_cfm': expected,
         'cfm_bytes': cfm_bytes, 'cfm_status': cfm_status,
         'supplicant_state': name(supplicant_states, supplicant & 15), 'queued_actions': supplicant >> 4,
         'head_action': ('key' if actions & 1 else 'eapol') if supplicant >> 4 else None,
