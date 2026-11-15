@@ -347,11 +347,12 @@ def counter_checks(r):
         total = c['value']['dt_rd'] + c['value']['dt_wr']
         check('%s port %d live share at half' % (p[i]['name'], port),
               round((c['live']['dt_rd'] + c['live']['dt_wr']) / total, 3) if total else None, 0.35, 0.65)
-    # Controls: no accelerator job, or only the core-2 stream, moves under 1,000 data units on either port.
-    for i in (0, 3):
+    # Controls. Idle for 100 ms: under 10,000 data units (160 KB) on either port, 0.1% of the GPU phase's traffic in 100 ms.
+    # The core-2 stream reaches DRAM through the CPU ports: under 100,000 units on either port, 0.05% of its bytes.
+    for i, limit in ((0, 9999), (3, 99999)):
         for port in COUNTER_PORTS:
             v = p[i]['counters']['port_%d' % port]['value']
-            check('%s port %d data units' % (p[i]['name'], port), v['dt_rd'] + v['dt_wr'], 0, 999)
+            check('%s port %d data units' % (p[i]['name'], port), v['dt_rd'] + v['dt_wr'], 0, limit)
     # Each accelerator's traffic stays off the other's port: below 1% of its own count.
     g6 = p[1]['counters']['port_6']['value']; g18 = p[1]['counters']['port_18']['value']
     n6 = p[2]['counters']['port_6']['value']; n18 = p[2]['counters']['port_18']['value']
