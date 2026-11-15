@@ -812,7 +812,8 @@ graph's 22 requests and 232 units per 8 rows.
 
 - Both GPU modes repeated their counts per job within 0.1%, and the jobs/s ratio was 1.543.
 - The relu at 176 and 128 values per row repeated its write requests, write units and rate within 0.03%. At 256 the
-  counts repeated within 0.01%, and the rate, 7,793 jobs/s, was 4.8% below the earlier 8,189, inside its 5% range.
+  counts repeated within 0.01%, and the rate, 7,793 jobs/s, was 4.8% below run 3bc9fbc0's 8,189, inside its 5% range.
+  The run ran between two runs of the scheduler's latency series on the same board.
 - Idle and the core-2 stream counted 0 on both ports. Every output matched its reference, including the stride
   graph's 32 bytes of padding in every row. PLL_NPU stayed locked, and the top point held.
 
