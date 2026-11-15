@@ -57,8 +57,8 @@ The verifier reads each rail's enable bit and voltage selector, and passes only 
 
   The blend function is the only difference: the vendor's SRCOVER (0x03010301) against the native COPY (0x00010001). With per-pixel alpha (layer alpha mode 0, as both drivers program it), pipe 1 is off in both, so neither blends with the destination. What a conversion writes to an X byte (formats 4 to 7) is not established on the board yet.
 
-  The blit therefore treats alpha as coverage: a fully transparent pixel loses its colour. It suits composition and display, not data in which the alpha byte is a channel, such as camera frames or packed sensor words. No blender configuration tried copies such data exactly ([Copy paths](#copy-paths)), so an exact copy stays on the CPU until the rotate module qualifies.
-- **Rotate** (`SS_G2D_ROTATE`) copies a rectangle of a source surface into the output, rotated by 0, 90, 180 or 270 degrees and optionally flipped (`SS_G2D_FLIP_H`, `SS_G2D_FLIP_V`), through the rotate module ([Rotate module](#rotate-module)), not the mixer. The source has its own width, height and stride, and the output has the source's format; the rotated rectangle (w and h swapped for 90 and 270) must lie inside the output. A fill or blit that names a degree or flip, and a rotate with a colour, a format change, another degree or a flip above 3, is refused before any mapping. The board has not run a rotate yet.
+  The blit therefore treats alpha as coverage: a fully transparent pixel loses its colour. It suits composition and display, not data in which the alpha byte is a channel, such as camera frames or packed sensor words. No blender configuration tried copies such data exactly ([Copy paths](#copy-paths)). The rotate operation at 0 degrees does (run `1794743298175050163-4ed14c80`, [First rotate stage](#first-rotate-stage)).
+- **Rotate** (`SS_G2D_ROTATE`) copies a rectangle of a source surface into the output, rotated by 0, 90, 180 or 270 degrees and optionally flipped (`SS_G2D_FLIP_H`, `SS_G2D_FLIP_V`), through the rotate module ([Rotate module](#rotate-module)), not the mixer. The source has its own width, height and stride, and the output has the source's format; the rotated rectangle (w and h swapped for 90 and 270) must lie inside the output. A fill or blit that names a degree or flip, and a rotate with a colour, a format change, another degree or a flip above 3, is refused before any mapping. Every pixel is copied exactly, alpha-0 pixels included, at all four degrees (run `1794743298175050163-4ed14c80`); 90 degrees turns clockwise.
 
 Before each launch the owner cleans and invalidates the whole 64-byte lines of the output and cleans those of a blit's source. After the interrupt it cleans and invalidates the output's lines again. [g2d-check-host.py](../checks/g2d-check-host.py) builds the g2d-check application on the host with a CPU model of the copies, and checks that its plan, samples and CRC-32 values equal the decoder's reference. Its two mutant engines copy without converting and copy alpha-0 pixels exactly. The decoder names each outcome, and the second fails both operations' alpha-0 samples.
 
@@ -146,9 +146,20 @@ Images with the stray's enable left on, with no write-back of the finish, or wit
 
 [The decoder](../apps/g2d-rotate/host.py) names the model that each rectangle matches: a placement (identity, half turn, a mirror, clockwise, counter-clockwise or a transpose) with a pixel rule (exact, zeroed or opaque), or the background left unchanged. All 13 candidates of each rotate have distinct CRC-32 values, and a rectangle that matches none is reported as unmatched. [g2d-rotate-host.py](../checks/g2d-rotate-host.py) builds the application on the host and checks the decoder against a CPU rotate and three mutant engines.
 
-The stage measures what the vendor source does not settle:
-- which way degree field 1 (90) turns;
-- whether ROT_CTL bit 31 clears itself;
-- whether a rotate sets anything in 0x24.
+Run `1794743298175050163-4ed14c80` (port 3-1, image 7a078999890f, built at 3a0666e7b) met every prediction:
 
-The stage runs no mixer operation, so no stray occurs. Whether clearing ROT_INT bit 16 lowers the rotator's part of the line stays model-only until a stage that runs a mixer job and a rotate together.
+| Rotate | Degrees | ROT_CTL | Model | Rectangle CRC-32 | Launch to interrupt |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 0 | 0x00000001 | identity/exact | 0x02afc4e4 | 23.5 µs |
+| 2 | 180 | 0x00000021 | rot180/exact | 0x60c144df | 16.3 µs |
+| 3 | 90 | 0x00000011 | cw/exact | 0xb9fa3207 | 18.4 µs |
+| 4 | 270 | 0x00000031 | ccw/exact | 0xc1e60d6c | 18.1 µs |
+
+The output CRC-32 was 0x5e1e0cf1, the one that follows from the four models, so nothing was written outside the rectangles. The source stayed 0x7c121e04. Each corner sample and each pixel before a rectangle matched. The run settled what the vendor source does not:
+- **Direction.** Degree field 1 (90) turns clockwise: output pixel (row r, column c) is source pixel (h - 1 - c, r). Field 3 (270) turns counter-clockwise.
+- **Exact copy.** The 11 alpha-0 pixels were copied exactly at every degree. The blit writes them as 0x00000000 ([Copy paths](#copy-paths)), so the rotate at 0 degrees is the exact copy.
+- **Start bit.** ROT_CTL read back without bit 31 after each finish. The run does not tell a start bit that clears itself from one that never reads back as 1, so a busy check on bit 31 waits for a read during a running job.
+- **Other words.** ROT_TIMEOUT read 0. The mixer's 0x24 read 0 after every rotate: a rotate sets nothing there.
+- **Interrupt.** The handler read ROT_INT 0x00010001 each time, and 0x00010000 after its write-back. irq_count went from 1 to 4, with no stray.
+
+The open and close words equal stage 5's (run `1794732202569746479-c9b5e324`). The stage runs no mixer operation, so no stray occurs. Whether clearing ROT_INT bit 16 lowers the rotator's part of the line stays model-only until a stage that runs a mixer job and a rotate together.
